@@ -1,0 +1,8 @@
+flashpay0734:YOUR_PI_API_KEY_HERE
+
+NOTE: To get the correct Pi validation key:
+1. Go to https://developers.pi.network/
+2. Find your app "flashpay0734"
+3. Look for the API Key or App Key in the dashboard
+4. Replace "YOUR_PI_API_KEY_HERE" with the actual key
+5. This file validates that you control the flashpay0734.pi domain
