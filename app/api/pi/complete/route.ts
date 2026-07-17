@@ -3,7 +3,6 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { config } from "@/lib/config"
 import { recordTransaction } from "@/lib/transaction-service"
 import { recordA2UTransactionAtomic } from "@/lib/db"
-import { initializeSchema } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -39,16 +38,6 @@ interface PiPaymentDTO {
 // Completes the payment with Pi Network and marks it PAID in Redis
 export async function POST(request: NextRequest) {
   console.log("[Pi Webhook] COMPLETE called at", new Date().toISOString())
-
-  // Initialize database schema on first call (if configured)
-  if (config.isPostgresConfigured) {
-    try {
-      await initializeSchema()
-    } catch (error) {
-      console.error("[Pi Webhook] Schema initialization error (non-blocking):", error)
-      // Continue anyway, tables may already exist
-    }
-  }
 
   try {
     const body = await request.json()

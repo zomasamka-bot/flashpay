@@ -446,7 +446,9 @@ export async function updateMerchantBalance(
       `INSERT INTO merchant_balances (merchant_id, settled, unsettled, last_updated)
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (merchant_id) DO UPDATE
-       SET settled = $2, unsettled = $3, last_updated = NOW()
+       SET settled = merchant_balances.settled + EXCLUDED.settled,
+           unsettled = merchant_balances.unsettled + EXCLUDED.unsettled,
+           last_updated = NOW()
        RETURNING *`,
       [merchantId, settled, unsettled]
     )
@@ -716,7 +718,8 @@ export async function recordA2UTransactionAtomic(params: {
             INSERT INTO merchant_balances (merchant_id, settled, unsettled, last_updated)
             VALUES (${params.merchantId}, ${params.amount}, 0, NOW())
             ON CONFLICT (merchant_id) DO UPDATE
-            SET settled = settled + ${params.amount}, last_updated = NOW()
+            SET settled = merchant_balances.settled + EXCLUDED.settled,
+                last_updated = NOW()
           `
         }
         

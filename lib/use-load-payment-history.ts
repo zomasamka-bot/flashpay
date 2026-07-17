@@ -22,8 +22,16 @@ export function useLoadPaymentHistory() {
 
         CoreLogger.info("useLoadPaymentHistory: Loading payment history for merchant:", merchantId)
 
+        const merchantState = unifiedStore.getMerchantState()
+        const accessToken = merchantState.accessToken
+
         const response = await fetch(
-          `${config.appUrl}/api/payments/history?merchantId=${encodeURIComponent(merchantId)}&limit=100`
+          `${config.appUrl}/api/payments/history?merchantId=${encodeURIComponent(merchantId)}&limit=100`,
+          {
+            headers: {
+              'Authorization': accessToken ? `Bearer ${accessToken}` : '',
+            },
+          }
         )
 
         if (!response.ok) {
