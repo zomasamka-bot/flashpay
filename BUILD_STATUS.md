@@ -1,27 +1,34 @@
-# Build Status - UNTESTED CODE
+# Build Status - Syntax Fixed, Awaiting Verification
 
-**Current Status**: NOT BUILT - Code has not passed TypeScript check or build yet
+**Current Status**: A2U route syntax structure fixed. Awaiting TypeScript check and Vercel build verification.
 
-## Known Issues Found During Code Review
+## Latest Fix Applied
 
-1. **Settlement Status Enum Mismatch** - `/lib/db.ts` line 605 checks for `'settlement_failed'` status but SettlementRequest union does not include this value
-2. **Recovery Checkpoint Location** - Recovery state persisted AFTER Horizon submit succeeds, but BEFORE DB transaction attempt is needed
-3. **No Idempotent Recovery Check** - Retry logic missing before Horizon resubmit
-4. **Missing DB Reconciliation Fallback** - If Horizon succeeds but DB fails, no recovery path exists
-5. **Fee Calculation** - Uses `submitResult.fee_charged` (correct), but needs verification against actual transfers
+**`/app/api/pi/a2u/route.ts` Syntax Repair**:
+- Removed orphaned `catch` block that had no matching try
+- Restructured control flow so every try has exactly one catch and/or finally
+- Outer try (line 279) has catch (line 2025) and finally (line 2031) for distributed lock release
+- Inner try for blockchain signing (line 1126) has its own catch (line 2013)
+- Inner try for post-lock re-read (line 388) properly flows within outer try
+- All returns stay inside POST function scope
+- Lock released atomically exactly once from finally block
 
-## Required Actions - IN PROGRESS
+## Critical Next Steps
 
-1. **Build verification** - Must run `pnpm exec tsc --noEmit` and `pnpm run build` to find ALL TypeScript errors
-2. **Fix all compilation errors** - Every error must be fixed before any testing
-3. **Verify settlement status handling** - Ensure settlement_failed is handled correctly
-4. **Test on actual Vercel** - Build same commit SHA on Vercel and verify it passes
-5. **End-to-end flow test** - Test full payment, duplicate Horizon transfer prevention, merchant balance accuracy
-6. **Edge case testing** - Verify no duplicate transfers, no duplicate merchant credits, proper retry handling
+**MUST EXECUTE IN ORDER - NO FURTHER CODING UNTIL VERIFIED**:
+1. Run `pnpm exec tsc --noEmit` to verify all TypeScript errors are resolved
+2. Run `pnpm run build` to verify full build passes
+3. Push exact SHA to Vercel and wait for successful build deployment
+4. Only after Vercel confirms success: test end-to-end flows
+5. Only after all tests pass: report any completion
 
-## Status: NO CODE HAS RUN SUCCESSFULLY YET
+## Known Issues Deferred
 
-Do not report any completion until:
-- Vercel build passes with exact SHA
-- All end-to-end tests pass
-- Edge cases verified (no duplicate Horizon, no duplicate merchant balance)
+These will be checked only AFTER code builds successfully:
+- Settlement status enum usage verification
+- Recovery checkpoint timing
+- DB reconciliation fallback paths
+- Idempotent Horizon retry behavior
+- Duplicate prevention for transfers and merchant credits
+
+**BLOCKERS TO COMPLETION**: Code must compile → Build must pass → Deployment must succeed

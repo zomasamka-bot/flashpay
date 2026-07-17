@@ -54,6 +54,12 @@ export default function PaymentsPage() {
         variant: "destructive" as const,
         icon: XCircle,
         color: "text-red-600",
+        label: "Settlement Failed",
+      },
+      failed: {
+        variant: "destructive" as const,
+        icon: XCircle,
+        color: "text-red-600",
         label: "Failed",
       },
       pending: {

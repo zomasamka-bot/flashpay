@@ -26,7 +26,7 @@ export default function MerchantPaymentsPage() {
   const [payments, setPayments] = useState<MerchantPayment[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [filterStatus, setFilterStatus] = useState<"all" | "settled_to_merchant" | "paid_to_app" | "settlement_pending" | "settlement_failed" | "pending" | "cancelled">("all")
+  const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "failed" | "cancelled" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed">("all")
   const [filterDateFrom, setFilterDateFrom] = useState("")
   const [filterDateTo, setFilterDateTo] = useState("")
 
@@ -83,7 +83,8 @@ export default function MerchantPaymentsPage() {
   const stats = {
     total: payments.length,
     paid: payments.filter((p) => p.status === "settled_to_merchant").length,
-    pending: payments.filter((p) => p.status === "settlement_pending" || p.status === "paid_to_app").length,
+    pending: payments.filter((p) => p.status === "settlement_pending" || p.status === "paid_to_app" || p.status === "pending").length,
+    failed: payments.filter((p) => p.status === "settlement_failed" || p.status === "failed").length,
     totalVolume: payments.filter((p) => p.status === "settled_to_merchant").reduce((sum, p) => sum + p.amount, 0),
   }
 
@@ -96,6 +97,8 @@ export default function MerchantPaymentsPage() {
       case "settlement_pending":
         return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
       case "settlement_failed":
+        return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+      case "failed":
         return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
       case "pending":
         return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
@@ -247,10 +250,11 @@ export default function MerchantPaymentsPage() {
                 className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800"
               >
                 <option value="all">All Status</option>
-                <option value="settled_to_merchant">Settled</option>
-                <option value="paid_to_app">Paid</option>
-                <option value="settlement_pending">Processing</option>
-                <option value="settlement_failed">Failed</option>
+                <option value="settled_to_merchant">Settled to Merchant</option>
+                <option value="paid_to_app">Paid to App</option>
+                <option value="settlement_pending">Settlement Pending</option>
+                <option value="settlement_failed">Settlement Failed</option>
+                <option value="failed">Failed</option>
                 <option value="pending">Pending</option>
                 <option value="cancelled">Cancelled</option>
               </select>

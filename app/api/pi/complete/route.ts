@@ -87,13 +87,18 @@ export async function POST(request: NextRequest) {
     // 3. Comprehensive validation of canonical payment from Pi API
     console.log("[Pi Complete] === VALIDATING CANONICAL PAYMENT FROM PI API ===")
     
-    // Validate identifier (Pi identifier, not our internal paymentId)
+    // Validate identifier (Pi identifier, not our internal paymentId) matches request
     if (!canonicalPayment.identifier || typeof canonicalPayment.identifier !== "string") {
       console.error("[Pi Complete] Missing or invalid identifier:", canonicalPayment.identifier)
       return NextResponse.json({ error: "Invalid Pi payment identifier" }, { status: 400 })
     }
 
-    // Validate amount
+    if (canonicalPayment.identifier !== piPaymentId) {
+      console.error("[Pi Complete] Pi payment identifier mismatch - canonical:", canonicalPayment.identifier, "request:", piPaymentId)
+      return NextResponse.json({ error: "Payment identifier mismatch" }, { status: 400 })
+    }
+
+    // Validate amount is numeric
     if (!canonicalPayment.amount || typeof canonicalPayment.amount !== "number") {
       console.error("[Pi Complete] Invalid amount in canonical payment:", canonicalPayment.amount)
       return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
@@ -105,10 +110,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment direction" }, { status: 400 })
     }
 
-    // Validate cancellation flags
-    if (canonicalPayment.status === "cancelled" || canonicalPayment.is_cancelled === true) {
-      console.error("[Pi Complete] Payment was cancelled")
+    // Validate cancellation flags from nested status object
+    if (canonicalPayment.status?.cancelled === true || canonicalPayment.status?.user_cancelled === true) {
+      console.error("[Pi Complete] Payment was cancelled - cancelled:", canonicalPayment.status?.cancelled, "user_cancelled:", canonicalPayment.status?.user_cancelled)
       return NextResponse.json({ error: "Payment was cancelled" }, { status: 400 })
+    }
+
+    // Validate developer_approved flag from nested status object
+    if (canonicalPayment.status?.developer_approved !== true) {
+      console.error("[Pi Complete] Developer did not approve payment - developer_approved:", canonicalPayment.status?.developer_approved)
+      return NextResponse.json({ error: "Payment not approved" }, { status: 400 })
+    }
+
+    // Validate transaction_verified flag from nested status object
+    if (canonicalPayment.status?.transaction_verified !== true) {
+      console.error("[Pi Complete] Transaction not verified by Pi - transaction_verified:", canonicalPayment.status?.transaction_verified)
+      return NextResponse.json({ error: "Transaction not verified" }, { status: 400 })
+    }
+
+    // Validate developer_completed flag from nested status object if present
+    if (canonicalPayment.status?.developer_completed === false) {
+      console.error("[Pi Complete] Developer did not mark payment as completed - developer_completed:", canonicalPayment.status?.developer_completed)
+      return NextResponse.json({ error: "Payment not marked completed by developer" }, { status: 400 })
     }
 
     // Validate transaction exists and has txid
@@ -118,29 +141,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid transaction ID" }, { status: 400 })
     }
 
-    // Validate transaction txid matches what Pi Wallet sent
+    // Validate transaction txid matches what Pi Wallet sent (u2aTxid)
     if (canonicalTxid !== txid) {
       console.error("[Pi Complete] Transaction txid mismatch - canonical:", canonicalTxid, "wallet:", txid)
       return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
-    }
-
-    // Validate developer_approved flag if present
-    if (canonicalPayment.developer_approved === false) {
-      console.error("[Pi Complete] Developer did not approve payment")
-      return NextResponse.json({ error: "Payment not approved" }, { status: 400 })
-    }
-
-    // Validate transaction_verified flag
-    if (canonicalPayment.transaction?.verified !== true) {
-      console.error("[Pi Complete] Transaction not verified by Pi")
-      return NextResponse.json({ error: "Transaction not verified" }, { status: 400 })
-    }
-
-    // Validate developer_completed flag if applicable
-    // Some payment states may not require this, but if present it must be true
-    if (canonicalPayment.developer_completed === false) {
-      console.error("[Pi Complete] Developer did not mark payment as completed")
-      return NextResponse.json({ error: "Payment not marked completed by developer" }, { status: 400 })
     }
 
     // Derive paymentId ONLY from canonical payment metadata (never trust client)
@@ -180,7 +184,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         status: "settled_to_merchant",
         paymentId,
-        txid: payment.a2uTxid || txid,
+        u2aTxid: payment.u2aTxid || txid,
       })
     }
 
@@ -329,8 +333,49 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete] Customer amount (from A2U):", a2uData.customerAmount)
     console.log("[Pi Complete] Merchant amount (from A2U):", a2uData.merchantAmount)
 
+    // CRITICAL: Validate all financial fields exist BEFORE persisting - NO FALLBACKS
+    // Missing any field is a critical error requiring manual review
+    if (
+      a2uData.customerAmount === undefined ||
+      a2uData.customerAmount === null ||
+      typeof a2uData.customerAmount !== "number"
+    ) {
+      console.error("[Pi Complete] CRITICAL: A2U response missing customerAmount - cannot proceed")
+      return NextResponse.json(
+        { error: "Incomplete A2U response: missing customerAmount", manual_review_required: true },
+        { status: 422 }
+      )
+    }
+
+    if (
+      a2uData.merchantAmount === undefined ||
+      a2uData.merchantAmount === null ||
+      typeof a2uData.merchantAmount !== "number"
+    ) {
+      console.error("[Pi Complete] CRITICAL: A2U response missing merchantAmount - cannot proceed")
+      return NextResponse.json(
+        { error: "Incomplete A2U response: missing merchantAmount", manual_review_required: true },
+        { status: 422 }
+      )
+    }
+
+    if (
+      a2uData.horizonFeeCharged === undefined ||
+      a2uData.horizonFeeCharged === null ||
+      typeof a2uData.horizonFeeCharged !== "number"
+    ) {
+      console.error("[Pi Complete] CRITICAL: A2U response missing horizonFeeCharged - cannot proceed")
+      return NextResponse.json(
+        { error: "Incomplete A2U response: missing horizonFeeCharged", manual_review_required: true },
+        { status: 422 }
+      )
+    }
+
     // CRITICAL: Save A2U identifiers + authoritative financial data atomically BEFORE calling DB
     // This is the recovery state: if anything fails after this, retry uses stored identifiers and amounts
+    // Calculation: appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
+    const calculatedAppNetImpact = a2uData.customerAmount - a2uData.merchantAmount - a2uData.horizonFeeCharged
+
     const settlementCompletePayment = {
       ...updatedPayment,
       status: "settlement_pending",
@@ -338,97 +383,136 @@ export async function POST(request: NextRequest) {
       a2uTxid: a2uData.txid,
       a2uFromAddress: a2uData.fromAddress,
       a2uToAddress: a2uData.toAddress,
-      customerAmount: a2uData.customerAmount || updatedPayment.amount, // From A2U, fallback to payment amount
-      merchantAmount: a2uData.merchantAmount || a2uData.customerAmount || updatedPayment.amount, // Actual A2U transfer
-      horizonFeeCharged: a2uData.horizonFeeCharged || a2uData.feeCharged || 0, // Actual Horizon fee
-      appCommission: a2uData.appCommission || 0, // Explicit commission
-      appNetImpact: a2uData.appNetImpact || (a2uData.customerAmount - a2uData.merchantAmount - (a2uData.horizonFeeCharged || a2uData.feeCharged || 0)), // App's net
+      customerAmount: a2uData.customerAmount, // EXACT: verified U2A amount from A2U
+      merchantAmount: a2uData.merchantAmount, // EXACT: actual Horizon transfer amount
+      horizonFeeCharged: a2uData.horizonFeeCharged, // EXACT: actual Horizon fee
+      appCommission: 0, // Explicit: app commission (default 0)
+      appNetImpact: calculatedAppNetImpact, // EXACT: customerAmount - merchantAmount - horizonFeeCharged
       settlementCompletedAt: new Date().toISOString(),
     }
     
     await redis.set(`payment:${paymentId}`, JSON.stringify(settlementCompletePayment))
     console.log("[Pi Complete] ✓ A2U identifiers persisted to Redis (recovery state)")
 
-    // 10. Now attempt DB transaction - use AUTHORITATIVE values from settlement checkpoint
-    // CRITICAL: These values were persisted from A2U response and saved to Redis above
-    // NO fallbacks - must have all values or error
-    console.log("[Pi Complete] Recording atomic A2U transaction to database")
-    console.log("[Pi Complete] AUTHORITATIVE FINANCIAL DATA FROM SETTLEMENT CHECKPOINT:")
-    console.log("[Pi Complete]   - customerAmount (verified U2A):", settlementCompletePayment.customerAmount)
-    console.log("[Pi Complete]   - merchantAmount (actual A2U):", settlementCompletePayment.merchantAmount)
-    console.log("[Pi Complete]   - horizonFeeCharged (actual fee):", settlementCompletePayment.horizonFeeCharged)
-    console.log("[Pi Complete]   - appCommission:", settlementCompletePayment.appCommission)
-    console.log("[Pi Complete]   - appNetImpact:", settlementCompletePayment.appNetImpact)
+    // 10. Re-read checkpoint from Redis BEFORE any DB write to ensure authoritative data
+    // This guarantees we use the exact values persisted by A2U success
+    console.log("[Pi Complete] Re-reading checkpoint from Redis before DB write")
+    const checkpointJson = await redis.get(`payment:${paymentId}`)
+    if (!checkpointJson) {
+      console.error("[Pi Complete] CRITICAL: Checkpoint disappeared from Redis")
+      return NextResponse.json({ error: "Checkpoint lost - manual review required" }, { status: 500 })
+    }
+
+    const checkpoint = JSON.parse(checkpointJson)
     
-    // Validate that all financial values exist - no silent fallbacks
-    if (!settlementCompletePayment.customerAmount || settlementCompletePayment.customerAmount <= 0) {
-      console.error("[Pi Complete] CRITICAL: customerAmount missing or invalid from checkpoint")
-      return NextResponse.json({ error: "Missing authoritative customer amount" }, { status: 500 })
+    // Validate checkpoint has all required financial fields
+    if (
+      !checkpoint.customerAmount ||
+      !checkpoint.merchantAmount ||
+      checkpoint.horizonFeeCharged === undefined ||
+      !checkpoint.merchantId ||
+      !checkpoint.merchantUid
+    ) {
+      console.error("[Pi Complete] CRITICAL: Checkpoint missing required fields for accounting")
+      console.error("[Pi Complete] Missing:", {
+        customerAmount: !checkpoint.customerAmount,
+        merchantAmount: !checkpoint.merchantAmount,
+        horizonFeeCharged: checkpoint.horizonFeeCharged === undefined,
+        merchantId: !checkpoint.merchantId,
+        merchantUid: !checkpoint.merchantUid,
+      })
+      return NextResponse.json({ error: "Checkpoint incomplete - manual review required" }, { status: 500 })
     }
-    if (!settlementCompletePayment.merchantAmount || settlementCompletePayment.merchantAmount <= 0) {
-      console.error("[Pi Complete] CRITICAL: merchantAmount missing or invalid from checkpoint")
-      return NextResponse.json({ error: "Missing authoritative merchant amount" }, { status: 500 })
-    }
-    if (settlementCompletePayment.horizonFeeCharged === undefined || settlementCompletePayment.horizonFeeCharged < 0) {
-      console.error("[Pi Complete] CRITICAL: horizonFeeCharged missing or invalid from checkpoint")
-      return NextResponse.json({ error: "Missing authoritative horizon fee" }, { status: 500 })
-    }
+
+    // Now attempt DB transaction - use AUTHORITATIVE values from checkpoint
+    // CRITICAL: These values came from verified A2U response and saved to Redis
+    console.log("[Pi Complete] Recording atomic A2U transaction to database")
+    console.log("[Pi Complete] AUTHORITATIVE FINANCIAL DATA FROM CHECKPOINT:")
+    console.log("[Pi Complete]   - customerAmount (verified U2A):", checkpoint.customerAmount)
+    console.log("[Pi Complete]   - merchantAmount (actual A2U):", checkpoint.merchantAmount)
+    console.log("[Pi Complete]   - horizonFeeCharged (actual fee):", checkpoint.horizonFeeCharged)
+    console.log("[Pi Complete]   - appCommission:", checkpoint.appCommission)
+    console.log("[Pi Complete]   - appNetImpact:", checkpoint.appNetImpact)
+    console.log("[Pi Complete]   - Merchant ID:", checkpoint.merchantId)
+    console.log("[Pi Complete]   - Merchant UID:", checkpoint.merchantUid)
     
     const dbResult = await recordA2UTransactionAtomic({
-      u2aIdentifier: updatedPayment.piPaymentId,
-      u2aTxid: updatedPayment.u2aTxid,
-      a2uIdentifier: a2uData.a2uPaymentId,
-      a2uTxid: a2uData.txid,
-      merchantId: canonicalPayment.metadata?.merchantId,
-      merchantUid: canonicalPayment.metadata?.merchantUid,
-      customerAmount: settlementCompletePayment.customerAmount, // Authoritative from checkpoint
-      merchantAmount: settlementCompletePayment.merchantAmount, // Authoritative from checkpoint
-      horizonFeeCharged: settlementCompletePayment.horizonFeeCharged, // Authoritative from checkpoint
-      appCommission: settlementCompletePayment.appCommission || 0, // Explicit commission
+      u2aIdentifier: checkpoint.piPaymentId,
+      u2aTxid: checkpoint.u2aTxid,
+      a2uIdentifier: checkpoint.a2uPaymentId,
+      a2uTxid: checkpoint.a2uTxid,
+      merchantId: checkpoint.merchantId, // From Redis checkpoint, NOT from canonicalPayment.metadata
+      merchantUid: checkpoint.merchantUid, // From Redis checkpoint, NOT from canonicalPayment.metadata
+      customerAmount: checkpoint.customerAmount, // Authoritative from checkpoint
+      merchantAmount: checkpoint.merchantAmount, // Authoritative from checkpoint
+      horizonFeeCharged: checkpoint.horizonFeeCharged, // Authoritative from checkpoint
+      appCommission: checkpoint.appCommission, // From checkpoint (default 0)
     })
 
     if (dbResult.success) {
       console.log("[Pi Complete] ✓ Atomic transaction recorded")
-      console.log("[Pi Complete] Accounting reconciliation (from settlement checkpoint):")
-      const appNetImpact = settlementCompletePayment.customerAmount - settlementCompletePayment.merchantAmount - settlementCompletePayment.horizonFeeCharged
-      console.log("[Pi Complete]   - Customer amount:", settlementCompletePayment.customerAmount)
-      console.log("[Pi Complete]   - Merchant credited:", settlementCompletePayment.merchantAmount)
-      console.log("[Pi Complete]   - Horizon fee:", settlementCompletePayment.horizonFeeCharged)
-      console.log("[Pi Complete]   - App absorbs:", appNetImpact)
-      console.log("[Pi Complete]   - Merchant balance updated in database")
+      console.log("[Pi Complete] Accounting reconciliation (from checkpoint - EXACT VALUES):")
+      console.log("[Pi Complete]   - Customer amount (verified):", checkpoint.customerAmount)
+      console.log("[Pi Complete]   - Merchant credited:", checkpoint.merchantAmount)
+      console.log("[Pi Complete]   - Horizon fee charged:", checkpoint.horizonFeeCharged)
+      console.log("[Pi Complete]   - App net impact:", checkpoint.appNetImpact)
+      console.log("[Pi Complete]   - Merchant balance updated in database (idempotent receipt)")
+      
+      // Verify calculation matches
+      const verifyAppNetImpact = checkpoint.customerAmount - checkpoint.merchantAmount - checkpoint.horizonFeeCharged
+      if (Math.abs(verifyAppNetImpact - checkpoint.appNetImpact) > 0.0001) {
+        console.warn("[Pi Complete] WARNING: appNetImpact calculation mismatch - recorded:", checkpoint.appNetImpact, "recalculated:", verifyAppNetImpact)
+      }
       
       // CRITICAL: Only mark settled AFTER DB commit succeeds
       const finalPayment = {
         ...settlementCompletePayment,
         status: "settled_to_merchant",
         settledAt: new Date().toISOString(),
+        piCompletionPending: false, // Pi /complete finished
+        piCompleted: true, // Settlement fully completed
       }
       
       await redis.set(`payment:${paymentId}`, JSON.stringify(finalPayment))
       console.log("[Pi Complete] ✓ Payment fully settled to merchant - accounting complete")
+      console.log("[Pi Complete] Settlement checkpoint: piCompleted=true, piCompletionPending=false")
 
       return NextResponse.json({ status: "settled_to_merchant", paymentId })
     } else {
       console.error("[Pi Complete] DB transaction failed:", dbResult.error)
+      console.error("[Pi Complete] CRITICAL: A2U succeeded but DB write failed")
+      console.error("[Pi Complete] Known state: a2uTxid =", checkpoint.a2uTxid, "a2uPaymentId =", checkpoint.a2uPaymentId)
       
-      // DB failed but A2U succeeded - recovery state already persisted
-      // Mark requiresDbReconciliation so retry knows to complete DB only
+      // DB failed but A2U succeeded - checkpoint already persisted with full financial data
+      // Mark requiresDbReconciliation so retry knows to complete DB only using checkpoint values
       const reconciliationNeededPayment = {
-        ...settlementCompletePayment,
+        ...checkpoint,
+        status: "settlement_pending", // Stay in pending until DB succeeds
         requiresDbReconciliation: true,
         dbError: dbResult.error,
         dbAttemptedAt: new Date().toISOString(),
+        a2uSucceededAt: new Date().toISOString(), // Mark when A2U was confirmed successful
       }
       
       await redis.set(`payment:${paymentId}`, JSON.stringify(reconciliationNeededPayment))
-      console.log("[Pi Complete] ⚠️  DB failed but A2U succeeded - marked requiresDbReconciliation")
+      console.log("[Pi Complete] ⚠️  DB FAILED but A2U SUCCEEDED - marked requiresDbReconciliation")
+      console.log("[Pi Complete] Manual review needed for payment:", paymentId)
+      console.log("[Pi Complete] Known values for recovery:")
+      console.log("[Pi Complete]   - a2uTxid:", checkpoint.a2uTxid)
+      console.log("[Pi Complete]   - customerAmount:", checkpoint.customerAmount)
+      console.log("[Pi Complete]   - merchantAmount:", checkpoint.merchantAmount)
+      console.log("[Pi Complete]   - horizonFeeCharged:", checkpoint.horizonFeeCharged)
 
       return NextResponse.json(
         {
           status: "settlement_pending",
           paymentId,
           requiresDbReconciliation: true,
-          message: "A2U succeeded but DB write failed - will retry on next check",
+          a2uTxid: checkpoint.a2uTxid,
+          customerAmount: checkpoint.customerAmount,
+          merchantAmount: checkpoint.merchantAmount,
+          horizonFeeCharged: checkpoint.horizonFeeCharged,
+          message: "CRITICAL: A2U succeeded but DB write failed - manual review required. A2U transaction is known and will not be resubmitted.",
         },
         { status: 202 }
       )

@@ -18,6 +18,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
   const [loading, setLoading] = useState(true)
   const [isPaying, setIsPaying] = useState(false)
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
+  const [progressMessage, setProgressMessage] = useState<string>("")
   const [piSDKReady, setPiSDKReady] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [authError, setAuthError] = useState<string>("")
@@ -117,8 +118,8 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
         if (
           payment.status === "settlement_pending" ||
           payment.status === "paid_to_app" ||
-          ((payment as any).requiresDbReconciliation && (payment as any).a2uTxid) ||
-          ((payment as any).horizonSuccessFlag && !(payment as any).requiresDbReconciliation)
+          (payment.requiresDbReconciliation && payment.a2uTxid) ||
+          (payment.horizonSuccessFlag && !payment.requiresDbReconciliation)
         ) {
           console.log("[v0][CustomerView] Recovery state detected - attempting recovery:", payment.status)
           handlePaymentRecovery(
@@ -160,7 +161,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
     console.log("[v0][CustomerView] Authentication will be handled inside createPiPayment")
     
     setIsPaying(true)
-    setPaymentStatus("Opening Pi Wallet...")
+    setProgressMessage("Opening Pi Wallet...")
 
     executePayment(
       payment.id,
@@ -197,6 +198,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
           variant: "destructive",
         })
         setIsPaying(false)
+        setProgressMessage("")
         setPaymentStatus(null)
       },
     )
@@ -307,15 +309,15 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
                   {isPaying ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {paymentStatus || "Processing..."}
+                      {progressMessage || "Processing..."}
                     </>
                   ) : (
                     "Pay with Pi Wallet"
                   )}
                 </Button>
-                {isPaying && paymentStatus && (
+                {isPaying && progressMessage && (
                   <p className="text-xs text-center text-muted-foreground">
-                    {paymentStatus}
+                    {progressMessage}
                   </p>
                 )}
               </>

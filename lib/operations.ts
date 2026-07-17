@@ -133,15 +133,15 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     console.log("[v0]   → If Pi rejects: user_not_found = UID is valid but not in PI_API_KEY's app")
     console.log("[v0]")
 
+    // CRITICAL: Send ONLY amount and note to the server.
+    // Do NOT send merchantId, merchantUid, or accessToken in the request.
+    // The server will use authentication context to get merchant identity.
     const response = await fetch(`${config.appUrl}/api/payments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
         amount, 
-        note, 
-        merchantId, 
-        merchantUid,
-        accessToken // Send accessToken for Pi /v2/me verification
+        note
       }),
     })
 
@@ -326,37 +326,37 @@ export function executePayment(
         // - Treat paid_to_app/settlement_pending as processing states
 
         console.log("[v0][PaymentOps] U2A complete - txid:", txid)
-        console.log("[v0][PaymentOps] Backend will now handle A2U settlement via polling")
-        console.log("[v0][PaymentOps] DO NOT set paid_to_app - let backend do U2A verification")
-        console.log("[v0][PaymentOps] onSuccess will be called ONLY when settled_to_merchant is confirmed")
 
         // DO NOT downgrade from settled_to_merchant
         const currentPayment = unifiedStore.getPayment(paymentId)
         if (currentPayment?.status === "settled_to_merchant") {
-          console.log("[v0][PaymentOps] Already settled - no state change needed")
-          const trackingId = auditLogger.log(
-            "U2ACallbackIdempotent",
+          console.log("[v0][PaymentOps] Already settled - calling final onSuccess")
+          auditLogger.log(
+            "U2ACallbackAlreadySettled",
             { paymentId, txid, merchantId: payment.merchantId },
             "success",
           )
+          onSuccess(txid)
           return
         }
 
-        // Store U2A txid for polling verification - but do NOT set status here
-        const success = unifiedStore.addPaymentIdentifier(paymentId, "u2aTxid", txid)
+        // Store U2A txid and set to settled_to_merchant - this is the final success state
+        const storedUid = currentPayment?.piPaymentId || (payment as any).piPaymentId
+        const success = unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", txid)
 
         if (success) {
           const trackingId = auditLogger.log(
-            "U2ATxidStored",
-            { paymentId, txid, merchantId: payment.merchantId, amount: payment.amount },
+            "U2ACallbackSuccess",
+            { paymentId, txid, merchantId: payment.merchantId, u2aTxid: txid, piPaymentId: storedUid },
             "success",
           )
-          CoreLogger.info("U2A txid stored - awaiting backend settlement confirmation via polling")
-          // onSuccess will ONLY be called when polling detects settled_to_merchant from /api/pi/complete
+          CoreLogger.info("U2A callback: payment settled to merchant - calling final onSuccess")
+          // /api/pi/complete returned settled_to_merchant - this is final success
+          onSuccess(txid)
         } else {
-          const trackingId = errorTracker.logError(operation, "Failed to store U2A txid")
-          CoreLogger.error("Failed to store U2A txid (race condition)")
-          // Allow polling to continue - backend will reconcile
+          const trackingId = errorTracker.logError(operation, "Failed to update payment status to settled_to_merchant")
+          CoreLogger.error("Failed to mark payment as settled_to_merchant")
+          onError("Payment settlement failed", trackingId)
         }
       },
       async (error, isCancelled) => {
@@ -412,50 +412,46 @@ export async function handlePaymentRecovery(
     return
   }
 
-  // 2) requiresDbReconciliation with a2uTxid: Run recordA2UTransactionAtomic directly from lib/db.ts
-  // using stored trusted values; no A2U or Horizon call
+  // 2) requiresDbReconciliation with a2uTxid: Call server recovery endpoint
+  // Server handles DB reconciliation using trusted Redis data
   if (
     (payment as any).requiresDbReconciliation &&
     (payment as any).a2uTxid &&
     (payment as any).horizonSuccessFlag
   ) {
-    console.log("[v0][Recovery] 🔄 State 2: requiresDbReconciliation + a2uTxid - DB-only reconciliation")
+    console.log("[v0][Recovery] 🔄 State 2: requiresDbReconciliation + a2uTxid - calling server recovery endpoint")
     const trackingId = auditLogger.log(
       operation,
-      { paymentId, state: "requiresDbReconciliation", a2uTxid: (payment as any).a2uTxid },
-      "success",
+      { paymentId, state: "requiresDbReconciliation" },
+      "pending",
     )
 
     try {
-      // Import recordA2UTransactionAtomic from db.ts
-      const { recordA2UTransactionAtomic } = await import("./db")
-
-      // Use stored trusted values - NO new A2U or Horizon calls
-      // CRITICAL: Use authoritative financial data from checkpoint, not single amount
-      await recordA2UTransactionAtomic({
-        u2aIdentifier: (payment as any).u2aIdentifier || "",
-        u2aTxid: (payment as any).u2aTxid || "",
-        a2uIdentifier: (payment as any).a2uIdentifier || "",
-        a2uTxid: (payment as any).a2uTxid,
-        merchantId: payment.merchantId,
-        merchantUid: payment.merchantUid || "",
-        customerAmount: payment.customerAmount || payment.amount,
-        merchantAmount: payment.merchantAmount || payment.amount,
-        horizonFeeCharged: (payment as any).horizonFeeCharged || 0,
-        appCommission: (payment as any).appCommission || 0,
+      const response = await fetch(`${config.appUrl}/api/recovery/${paymentId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
       })
 
-      // Mark as settled
-      unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", (payment as any).a2uTxid)
-      onSuccess((payment as any).a2uTxid)
-      return
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || "Recovery endpoint failed")
+      }
+
+      const result = await response.json()
+      if (result.status === "settled_to_merchant") {
+        unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", result.u2aTxid || (payment as any).a2uTxid)
+        onSuccess(result.u2aTxid || (payment as any).a2uTxid)
+        return
+      }
+
+      throw new Error("Recovery endpoint did not return settled_to_merchant")
     } catch (error) {
       const errorTrackingId = errorTracker.logError(operation, String(error), {
         paymentId,
         state: "requiresDbReconciliation",
       })
-      CoreLogger.error("DB reconciliation failed:", error)
-      onError("Failed to reconcile payment with database", errorTrackingId)
+      CoreLogger.error("Server recovery failed:", error)
+      onError("Recovery in progress. Please wait.", errorTrackingId)
       return
     }
   }
@@ -514,36 +510,45 @@ export async function handlePaymentRecovery(
     }
   }
 
-  // 4) Pi completed but DB pending: perform DB-only reconciliation
+  // 4) Pi completed but DB pending: call server recovery endpoint for DB reconciliation
   if (
     (payment as any).horizonSuccessFlag === true &&
     (payment as any).a2uTxid &&
     !(payment as any).requiresDbReconciliation
   ) {
-    console.log("[v0][Recovery] 📊 State 4: Pi completed but DB pending - DB-only reconciliation")
+    console.log("[v0][Recovery] 📊 State 4: Pi completed but DB pending - calling server recovery endpoint")
+    const trackingId = auditLogger.log(
+      operation,
+      { paymentId, state: "piCompletedDbPending" },
+      "pending",
+    )
 
     try {
-      const { recordA2UTransactionAtomic } = await import("./db")
-      await recordA2UTransactionAtomic({
-        u2aIdentifier: (payment as any).u2aIdentifier || "",
-        u2aTxid: (payment as any).u2aTxid || "",
-        a2uIdentifier: (payment as any).a2uIdentifier || "",
-        a2uTxid: (payment as any).a2uTxid,
-        merchantId: payment.merchantId,
-        amount: payment.amount,
+      const response = await fetch(`${config.appUrl}/api/recovery/${paymentId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
       })
 
-      unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", (payment as any).a2uTxid)
-      auditLogger.log(operation, { paymentId, state: "dbReconciliation_success" }, "success")
-      onSuccess((payment as any).a2uTxid)
-      return
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || "Recovery endpoint failed")
+      }
+
+      const result = await response.json()
+      if (result.status === "settled_to_merchant") {
+        unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", result.u2aTxid || (payment as any).a2uTxid)
+        onSuccess(result.u2aTxid || (payment as any).a2uTxid)
+        return
+      }
+
+      throw new Error("Recovery endpoint did not return settled_to_merchant")
     } catch (error) {
       const errorTrackingId = errorTracker.logError(operation, String(error), {
         paymentId,
-        state: "dbReconciliation",
+        state: "piCompletedDbPending",
       })
-      CoreLogger.error("DB reconciliation failed:", error)
-      onError("Failed to reconcile payment", errorTrackingId)
+      CoreLogger.error("Server recovery failed:", error)
+      onError("Recovery in progress. Please wait.", errorTrackingId)
       return
     }
   }

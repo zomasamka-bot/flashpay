@@ -4,12 +4,14 @@
  * Replace with persistent database in production
  */
 
+import type { Payment as PaymentType, PaymentStatus } from "./types"
+
 interface Payment {
   id: string
   merchantId?: string
   amount: number
   note: string
-  status: "pending" | "settled_to_merchant" | "settlement_failed" | "cancelled"
+  status: PaymentStatus
   createdAt: string
   settledAt?: string
   txid?: string

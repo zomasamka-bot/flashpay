@@ -22,6 +22,10 @@ export interface Payment {
   settledAt?: string // When A2U settled_to_merchant (only set when status=settled_to_merchant)
   txid?: string // U2A transaction ID
   
+  // U2A recovery tracking
+  piPaymentId?: string // U2A identifier from Pi webhook
+  u2aTxid?: string // U2A transaction ID (clientTxid from Pi flow)
+  
   // A2U recovery for atomic idempotency
   a2uPaymentId?: string // Pi A2U identifier - stored after Horizon succeeds
   a2uTxid?: string // Horizon transaction ID
@@ -29,9 +33,11 @@ export interface Payment {
   a2uToAddress?: string // Stellar account to address
   
   // Recovery state flags
+  requiresDbReconciliation?: boolean // True if A2U succeeded but DB record needs creation/update
   horizonSuccessFlag?: boolean // True if Horizon submitTransaction succeeded
-  piCompletionPending?: boolean // True if Horizon succeeded but Pi /complete not yet called
   horizonSuccessAt?: string // ISO timestamp when Horizon succeeded
+  piCompletionPending?: boolean // True if Horizon succeeded but Pi /complete not yet called
+  piCompleted?: boolean // True if Pi /complete succeeded
 }
 
 // Transaction types — permanent ledger of all movements

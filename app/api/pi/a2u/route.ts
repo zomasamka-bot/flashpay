@@ -7,8 +7,38 @@ import * as StellarSDK from "@stellar/stellar-sdk"
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
+// STRICT: Accept ONLY paymentId. No merchant data, no amounts, no UIDs, no tokens.
+// All authoritative data comes from verified Redis payment record.
 interface A2UPaymentRequest {
   paymentId: string
+}
+
+// Validate request body contains ONLY paymentId, nothing else
+function validateA2URequestBody(body: unknown): body is A2UPaymentRequest {
+  if (!body || typeof body !== "object") return false
+  
+  const keys = Object.keys(body as Record<string, unknown>)
+  
+  // Must have exactly 1 key: paymentId
+  if (keys.length !== 1) {
+    console.error("[Pi A2U] SECURITY: Request body has", keys.length, "keys, expected exactly 1. Keys:", keys)
+    return false
+  }
+  
+  if (!keys.includes("paymentId")) {
+    console.error("[Pi A2U] SECURITY: Request body missing paymentId. Keys:", keys)
+    return false
+  }
+  
+  const req = body as Record<string, unknown>
+  const paymentId = req.paymentId
+  
+  if (typeof paymentId !== "string" || !paymentId) {
+    console.error("[Pi A2U] SECURITY: paymentId is not a non-empty string")
+    return false
+  }
+  
+  return true
 }
 
 /**
@@ -98,6 +128,7 @@ async function horizonSignAndCheckpoint(
     horizonSuccessAt: new Date().toISOString(),
     horizonSuccessFlag: true,
     piCompletionPending: true,
+    piCompleted: false, // CRITICAL: Pi /complete not yet called
   }
 
   try {
@@ -308,17 +339,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
 
-    // Accept ONLY paymentId from request
-    const body: A2UPaymentRequest = await request.json()
-    const { paymentId } = body
-
-    if (!paymentId) {
-      console.error("[Pi A2U] Missing paymentId in request")
-      return NextResponse.json({ error: "Missing paymentId" }, { status: 400 })
+    // STRICT: Accept ONLY paymentId, reject any other fields
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch (e) {
+      console.error("[Pi A2U] Invalid JSON in request body")
+      return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
     }
+
+    if (!validateA2URequestBody(body)) {
+      console.error("[Pi A2U] SECURITY: Request body validation failed")
+      return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
+    }
+
+    const { paymentId } = body
 
     console.log("[Pi A2U] ===== A2U REQUEST RECEIVED =====")
     console.log("[Pi A2U] Payment ID:", paymentId)
+    console.log("[Pi A2U] Request body validated - contains ONLY paymentId")
 
     // CONCURRENCY: Acquire distributed lock before any Pi/Horizon/signing action
     if (!isRedisConfigured) {
@@ -455,9 +494,7 @@ export async function POST(request: NextRequest) {
       console.log("[Pi A2U] Stored a2uTxid:", payment.a2uTxid)
       console.log("[Pi A2U] This is a DB-only retry - calling recordA2UTransactionAtomic directly")
       
-      // Import and call the DB reconciliation function directly
-      const { recordA2UTransactionAtomic } = await import("@/lib/transaction-pg-service")
-      
+      // Call the DB reconciliation function directly using static import
       const dbResult = await recordA2UTransactionAtomic({
         u2aIdentifier: payment.piPaymentId,
         u2aTxid: payment.txid,
@@ -1169,9 +1206,9 @@ export async function POST(request: NextRequest) {
               let usedFee: string
               try {
                 const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
-                baseFee = String(baseFeeFromHorizon)
+                baseFee = Number(baseFeeFromHorizon)
                 // Use 2x base fee to ensure transaction is accepted
-                usedFee = (Number(baseFeeFromHorizon) * 2).toString()
+                usedFee = Number(baseFeeFromHorizon) * 2
                 console.log("[Pi A2U] ✓ Dynamic fee fetched from Horizon")
                 console.log("[Pi A2U] Base fee (from Horizon):", baseFee, "stroops")
                 console.log("[Pi A2U] Using fee (2x base):", usedFee, "stroops")
@@ -1179,8 +1216,8 @@ export async function POST(request: NextRequest) {
                 console.error("[Pi A2U] ❌ Failed to fetch dynamic fee from Horizon")
                 console.error("[Pi A2U] Error:", feeError instanceof Error ? feeError.message : String(feeError))
                 console.error("[Pi A2U] Falling back to BASE_FEE constant")
-                baseFee = String(StellarSDK.BASE_FEE)
-                usedFee = (Number(StellarSDK.BASE_FEE) * 2).toString()
+                baseFee = Number(StellarSDK.BASE_FEE)
+                usedFee = Number(StellarSDK.BASE_FEE) * 2
                 console.log("[Pi A2U] Fallback base fee:", baseFee, "stroops")
                 console.log("[Pi A2U] Fallback used fee:", usedFee, "stroops")
               }
@@ -1746,9 +1783,9 @@ export async function POST(request: NextRequest) {
       let usedFee: string
       try {
         const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
-        baseFee = String(baseFeeFromHorizon)
+        baseFee = Number(baseFeeFromHorizon)
         // Use 2x base fee to ensure transaction is accepted
-        usedFee = (Number(baseFeeFromHorizon) * 2).toString()
+        usedFee = Number(baseFeeFromHorizon) * 2
         console.log("[Pi A2U] ✓ Dynamic fee fetched from Horizon")
         console.log("[Pi A2U] Base fee (from Horizon):", baseFee, "stroops")
         console.log("[Pi A2U] Using fee (2x base):", usedFee, "stroops")
@@ -1756,8 +1793,8 @@ export async function POST(request: NextRequest) {
         console.error("[Pi A2U] ❌ Failed to fetch dynamic fee from Horizon")
         console.error("[Pi A2U] Error:", feeError instanceof Error ? feeError.message : String(feeError))
         console.error("[Pi A2U] Falling back to BASE_FEE constant")
-        baseFee = String(StellarSDK.BASE_FEE)
-        usedFee = (Number(StellarSDK.BASE_FEE) * 2).toString()
+        baseFee = Number(StellarSDK.BASE_FEE)
+        usedFee = Number(StellarSDK.BASE_FEE) * 2
         console.log("[Pi A2U] Fallback base fee:", baseFee, "stroops")
         console.log("[Pi A2U] Fallback used fee:", usedFee, "stroops")
       }
@@ -2010,18 +2047,19 @@ export async function POST(request: NextRequest) {
         timestamp: new Date().toISOString(),
       })
       
-    } catch (signingError) {
-      console.error("[Pi A2U] ❌ BLOCKCHAIN SIGNING/SUBMISSION FAILED")
-      console.error("[Pi A2U] Error:", signingError instanceof Error ? signingError.message : String(signingError))
-      console.error("[Pi A2U] Stack:", signingError instanceof Error ? signingError.stack : "no stack")
+    } catch (error) {
+      console.error("[Pi A2U] ❌ ERROR IN A2U PROCESSING")
+      console.error("[Pi A2U] Error:", error instanceof Error ? error.message : String(error))
+      console.error("[Pi A2U] Stack:", error instanceof Error ? error.stack : "no stack")
       
-      return NextResponse.json({
-        error: "Blockchain signing or submission failed",
-        step: "blockchain_operation",
-        details: signingError instanceof Error ? signingError.message : String(signingError),
-        success: false,
-      }, { status: 500 })
-    }
+      return NextResponse.json(
+        {
+          error: "Failed to process A2U transfer",
+          details: error instanceof Error ? error.message : String(error),
+          success: false,
+        },
+        { status: 500 }
+      )
     } finally {
       // CONCURRENCY: Release lock atomically using Lua compare-and-delete
       // This is the ONLY place releaseLockAtomic is called
@@ -2030,18 +2068,4 @@ export async function POST(request: NextRequest) {
         await releaseLockAtomic()
       }
     }
-  } catch (error) {
-    console.error("[Pi A2U] ❌ UNEXPECTED ERROR")
-    console.error("[Pi A2U] Error type:", error instanceof Error ? error.constructor.name : typeof error)
-    console.error("[Pi A2U] Error message:", error instanceof Error ? error.message : String(error))
-    console.error("[Pi A2U] Full error:", error)
-    return NextResponse.json(
-      {
-        error: "Failed to process fund transfer",
-        details: error instanceof Error ? error.message : String(error),
-        success: false,
-      },
-      { status: 500 }
-    )
-  }
 }
