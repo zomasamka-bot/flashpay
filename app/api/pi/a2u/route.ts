@@ -295,9 +295,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment validation failed" }, { status: 400 })
     }
 
-    if (payment.status?.toLowerCase() !== "paid") {
-      console.error("[Pi A2U] Payment status is not paid:", payment.status)
-      return NextResponse.json({ error: "Payment not marked as paid" }, { status: 400 })
+    if (payment.status !== "paid_to_app") {
+      console.error("[Pi A2U] Payment status is not paid_to_app:", payment.status)
+      return NextResponse.json({ error: "Payment not marked as paid_to_app" }, { status: 400 })
     }
 
     // If already processed, return success without transfer

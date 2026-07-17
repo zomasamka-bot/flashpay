@@ -287,8 +287,8 @@ export function executePayment(
 
   CoreLogger.guard("Payment existence check", false)
 
-  if (payment.status === "paid") {
-    const trackingId = errorTracker.logError(operation, "Payment already completed", { paymentId })
+  if (payment.status !== "pending" && payment.status !== "settlement_failed") {
+    const trackingId = errorTracker.logError(operation, "Payment already in progress or completed", { paymentId, status: payment.status })
     CoreLogger.guard("Double payment check", true)
     onError("This payment has already been completed", trackingId)
     return
@@ -309,16 +309,18 @@ export function executePayment(
       async (txid) => {
         CoreLogger.operation("Payment success callback", { txid })
 
-        const success = unifiedStore.updatePaymentStatus(paymentId, "paid", txid)
+        // Set initial status to paid_to_app — actual settlement status will be set by /api/pi/complete
+        const success = unifiedStore.updatePaymentStatus(paymentId, "paid_to_app", txid)
 
         if (success) {
           const trackingId = auditLogger.log(
-            "paymentCompleted",
+            "paymentPaidToApp",
             { paymentId, txid, merchantId: payment.merchantId, amount: payment.amount },
             "success",
           )
-          CoreLogger.info("Payment status updated to paid")
-          onSuccess(txid)
+          CoreLogger.info("Payment status updated to paid_to_app - awaiting settlement")
+          // CRITICAL: onSuccess will be called from /api/pi/complete after server confirms final state
+          // Do NOT call onSuccess here — only after backend verifies and records settlement
         } else {
           const trackingId = errorTracker.logError(operation, "Failed to update payment status (race condition)")
           CoreLogger.error("Failed to update payment status (race condition)")

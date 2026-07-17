@@ -147,9 +147,11 @@ export default function HomePage() {
         navigator.vibrate([100, 50, 100])
       }
 
+      // Only show final success toast when payment is fully settled to merchant
+      // While paid_to_app/settlement_pending, show "Processing..." instead
       toast({
         title: "Payment Received!",
-        description: `${payment.amount} Pi paid successfully`,
+        description: `${payment.amount} Pi — settlement completing`,
       })
 
       setTimeout(() => {

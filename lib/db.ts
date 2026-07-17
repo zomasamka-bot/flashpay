@@ -234,6 +234,22 @@ export async function initializeSchema() {
       console.log('[DB] a2u_txid migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
     }
 
+    // Add fee and accounting tracking columns to receipts
+    try {
+      await query(`
+        ALTER TABLE receipts
+        ADD COLUMN IF NOT EXISTS customer_amount NUMERIC(18, 8),
+        ADD COLUMN IF NOT EXISTS horizon_fee_charged NUMERIC(18, 8) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS app_commission NUMERIC(18, 8) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS merchant_amount NUMERIC(18, 8),
+        ADD COLUMN IF NOT EXISTS app_net_impact NUMERIC(18, 8) DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS settlement_status TEXT DEFAULT 'pending'
+      `)
+      console.log('[DB] Fee tracking columns added to receipts (if needed)')
+    } catch (e) {
+      console.log('[DB] Fee tracking migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
+    }
+
     // Create merchant balances table
     await query(`
       CREATE TABLE IF NOT EXISTS merchant_balances (
@@ -646,10 +662,17 @@ export async function recordA2UTransactionAtomic(params: {
   a2uTxid: string            // Horizon transaction ID from A2U flow
   merchantId: string
   merchantUid: string
-  amount: number
+  amount: number             // Customer amount (amount paid in U2A)
+  horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7)
+  appCommission?: number     // App commission (default 0)
   note?: string
   createdAt?: Date
 }): Promise<{ success: boolean; error?: string; transactionId?: string }> {
+  // Calculate merchant amount (what merchant receives after fees)
+  const horizonFee = params.horizonFeeCharged || 0
+  const appCommission = params.appCommission || 0
+  const merchantAmount = params.amount - horizonFee - appCommission
+  const appNetImpact = horizonFee + appCommission
   if (!process.env.DATABASE_URL) {
     console.error('[DB] PostgreSQL not configured for A2U transaction')
     return { success: false, error: 'Database not configured' }
@@ -695,16 +718,18 @@ export async function recordA2UTransactionAtomic(params: {
         // Get the actual transaction ID (new or existing)
         const actualTransactionId = txResult[0]?.id || transactionId
         
-        // 2. Insert receipt idempotently using the actual transaction ID
+        // 2. Insert receipt idempotently with fee tracking using the actual transaction ID
         const receiptResult = await tx`
           INSERT INTO receipts (
             transaction_id, merchant_id, merchant_uid, amount, currency, timestamp, txid,
-            u2a_identifier, u2a_txid, a2u_identifier, a2u_txid, metadata, created_at
+            u2a_identifier, u2a_txid, a2u_identifier, a2u_txid, metadata, created_at,
+            customer_amount, horizon_fee_charged, app_commission, merchant_amount, app_net_impact, settlement_status
           ) VALUES (${actualTransactionId}, ${params.merchantId}, ${params.merchantUid}, ${params.amount},
                     ${'π'}, NOW(), ${params.a2uTxid}, ${params.u2aIdentifier}, ${params.u2aTxid},
                     ${params.a2uIdentifier}, ${params.a2uTxid},
                     ${JSON.stringify({ u2aIdentifier: params.u2aIdentifier, u2aTxid: params.u2aTxid, a2uIdentifier: params.a2uIdentifier, a2uTxid: params.a2uTxid })},
-                    NOW())
+                    NOW(),
+                    ${params.amount}, ${horizonFee}, ${appCommission}, ${merchantAmount}, ${appNetImpact}, ${'completed'})
           ON CONFLICT (transaction_id) DO NOTHING
           RETURNING id
         `

@@ -1,4 +1,4 @@
-export type PaymentStatus = "pending" | "paid" | "failed" | "cancelled"
+export type PaymentStatus = "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "cancelled"
 
 export interface Payment {
   id: string
@@ -6,12 +6,25 @@ export interface Payment {
   merchantAddress?: string // Optional: Pi wallet address where payment is sent
   merchantUid?: string // CRITICAL: Pi user UID for A2U transfers (replaces wallet address)
   accessToken: string // CRITICAL: Needed to verify uid at time of A2U settlement
-  amount: number
+  
+  // Amount tracking - CRITICAL for fee accounting
+  amount: number // Customer amount paid (U2A)
+  horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7)
+  merchantAmount?: number // Amount merchant receives (amount - horizonFeeCharged - appCommission)
+  appCommission?: number // App commission (default 0)
+  
   note: string
   status: PaymentStatus
   createdAt: string
-  paidAt?: string
-  txid?: string
+  paidAt?: string // When U2A was marked paid_to_app
+  settledAt?: string // When A2U settled_to_merchant (only set when status=settled_to_merchant)
+  txid?: string // U2A transaction ID
+  
+  // A2U recovery for atomic idempotency
+  a2uPaymentId?: string // Pi A2U identifier - stored after Horizon succeeds
+  a2uTxid?: string // Horizon transaction ID
+  a2uFromAddress?: string // Stellar account from address
+  a2uToAddress?: string // Stellar account to address
 }
 
 // Transaction types — permanent ledger of all movements
@@ -65,22 +78,35 @@ export interface Receipt {
     address?: string
   }
   
-  // Payment details
-  amount: number
+  // Payment details - CUSTOMER AMOUNT (what customer actually paid)
+  customerAmount: number // Amount paid by customer from U2A (before Horizon fees)
   currency: "π"
   description: string
   reference: string
   
+  // Fee and accounting breakdown - CRITICAL FOR MERCHANT SETTLEMENT
+  horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7) - charged from customer amount
+  appCommission?: number // App commission (default 0) - deducted from customer amount
+  merchantAmount: number // Amount to merchant (customerAmount - horizonFee - appCommission)
+  appNetImpact: number // Net app wallet impact (horizonFee + appCommission) - what app retains
+  
+  // Legacy field for backward compatibility
+  amount?: number // Deprecated - use customerAmount instead
+  
   // Blockchain details - stored and transmitted as ISO string
   timestamp: string
-  txid?: string
-  piPaymentId?: string
+  txid?: string // U2A transaction ID
+  piPaymentId?: string // U2A payment identifier
   
-  // U2A and A2U identifiers
-  u2aIdentifier?: string  // User-to-App payment identifier
-  u2aTxid?: string        // U2A transaction ID
-  a2uIdentifier?: string  // App-to-User payment identifier
-  a2uTxid?: string        // A2U transaction ID
+  // U2A and A2U identifiers for tracing
+  u2aIdentifier?: string  // User-to-App payment identifier from Pi
+  u2aTxid?: string        // U2A transaction ID from Pi
+  a2uIdentifier?: string  // App-to-User payment identifier from Pi
+  a2uTxid?: string        // A2U transaction ID (Horizon txid)
+  
+  // Settlement status
+  settlementStatus?: "pending" | "completed" | "failed"
+  settledAt?: string // When A2U transfer settled
   
   // Additional metadata
   metadata?: {
