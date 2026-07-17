@@ -13,7 +13,7 @@ export function useLoadPaymentHistory() {
   useEffect(() => {
     const loadHistory = async () => {
       try {
-        const merchantId = unifiedStore.state.merchant?.merchantId
+        const merchantId = unifiedStore.getMerchantState().merchantId
         
         if (!merchantId) {
           CoreLogger.info("useLoadPaymentHistory: No merchant ID yet, skipping")
