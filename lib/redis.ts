@@ -1,18 +1,19 @@
 /**
- * Shared Upstash Redis client.
+ * Shared Upstash Redis client (SERVER-ONLY).
  * All API routes must import redis and isRedisConfigured from here.
  * Do NOT initialize Redis directly in route files.
+ * Do NOT import this into client code ("use client" modules).
  */
 
 import { Redis } from "@upstash/redis"
-import { config } from "./config"
+import { serverConfig } from "./server-config"
 
 export const redis = new Redis({
-  url: config.redisUrl,
-  token: config.redisToken,
+  url: serverConfig.redisUrl,
+  token: serverConfig.redisToken,
 })
 
-export const isRedisConfigured = config.isRedisConfigured
+export const isRedisConfigured = serverConfig.isRedisConfigured
 
 /**
  * Retry helper for Redis operations with exponential backoff.

@@ -236,7 +236,18 @@ export const createPiPayment = async (
             const completeData = await response.json()
             console.log("[v0][Pi SDK] /api/pi/complete response:", completeData)
 
-            // CRITICAL: Only call onSuccess when settled_to_merchant
+            // CRITICAL: Processing states (paid_to_app, settlement_pending) are NOT errors
+            // They indicate the payment is in progress and will eventually settle
+            // Do NOT route them to error callback - client should continue polling
+            if (completeData.status === "paid_to_app" || completeData.status === "settlement_pending") {
+              console.warn("[v0][Pi SDK] ⚠ Payment processing:", completeData.status)
+              CoreLogger.info("Payment in processing state", { piPaymentId, txid, paymentId, status: completeData.status })
+              // Processing states should be handled by polling or dedicated processing callback
+              // Do NOT call onSuccess or onError - let client continue polling or use recovery flow
+              return
+            }
+
+            // ONLY call onSuccess when settled_to_merchant
             // Pass the verified U2A txid from Pi Wallet callback to component
             if (completeData.status === "settled_to_merchant") {
               console.log("[v0][Pi SDK] ✅ Settlement complete - calling onSuccess with U2A txid")
@@ -244,15 +255,11 @@ export const createPiPayment = async (
               console.log("[v0][Pi SDK] Passing U2A txid to component callback:", txid)
               // txid here is the verified transaction ID from Pi Wallet (U2A success)
               onSuccess(txid)
-            } else if (completeData.status === "paid_to_app") {
-              console.warn("[v0][Pi SDK] ⚠ Payment received but awaiting settlement")
-              onError("Payment received but settlement is pending", false)
-            } else if (completeData.status === "settlement_pending") {
-              console.warn("[v0][Pi SDK] ⚠ Settlement pending - blockchain signing may be needed")
-              onError("Settlement awaiting blockchain confirmation", false)
             } else if (completeData.status === "settlement_failed") {
-              console.error("[v0][Pi SDK] ❌ Settlement failed")
-              onError("Settlement to merchant failed", false)
+              console.error("[v0][Pi SDK] ❌ Settlement failed - requires manual review")
+              CoreLogger.error("Settlement failed - blocking automated retry", { piPaymentId, txid, paymentId, a2uTxid: completeData.a2uTxid, horizonSuccessFlag: completeData.horizonSuccessFlag })
+              // settlement_failed with a2uTxid and horizonSuccessFlag = terminal state requiring manual review
+              onError("Settlement to merchant failed - requires manual review", false)
             } else {
               console.error("[v0][Pi SDK] ❌ Unexpected completion status:", completeData.status)
               onError("Unexpected payment status: " + completeData.status, false)

@@ -1,48 +1,26 @@
 /**
- * Centralized environment configuration.
- * All environment variable access across the application must go through this file.
- * Do NOT read process.env directly outside of this file.
+ * SECURITY: Configuration split into public and server modules
+ * 
+ * This file provides safe re-exports only.
+ * - publicConfig: Safe for client code ("use client" modules)
+ * - serverConfig: Server-only, MUST NEVER be imported from client
+ * 
+ * If you need server secrets, import from lib/server-config.ts in a server-only context.
+ * If you only need appUrl/ownerUid, import from lib/public-config.ts (safe everywhere).
  */
 
+// Safe for client: only NEXT_PUBLIC values
+export { publicConfig } from "./public-config"
+
+// Server-only: contains PI_API_KEY, A2U_INTERNAL_SECRET, Redis, Database credentials
+// NEVER import this into files with "use client"
+export { serverConfig } from "./server-config"
+
+// Deprecated: config object is split for security
+// Use publicConfig for NEXT_PUBLIC values
+// Use serverConfig for server secrets (server-only context)
 export const config = {
-  // App URL — always points to Vercel backend, never window.location.origin
-  // This is critical: when the app is opened via flashpay0734.pinet.com,
-  // window.location.origin is that PiNet domain, but all APIs live on Vercel.
+  // Re-export from publicConfig for backward compatibility (appUrl, ownerUid safe)
   appUrl: process.env.NEXT_PUBLIC_APP_URL || "https://flashpay-two.vercel.app",
-
-  // Pi Network API key — used by approve and complete webhook endpoints
-  piApiKey: process.env.PI_API_KEY || "",
-
-  // A2U Internal Secret — server-only, used to secure internal A2U calls
-  // Must be set in environment; no fallback - fail closed if missing
-  a2uInternalSecret: process.env.A2U_INTERNAL_SECRET,
-
-  // Owner UID — the only user who can access Operations Console
-  // Set this to your Pi UID to enable owner-only operational features
-  // Example: NEXT_PUBLIC_OWNER_UID=ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa
   ownerUid: process.env.NEXT_PUBLIC_OWNER_UID || "",
-
-  // Upstash Redis
-  redisUrl: process.env.UPSTASH_REDIS_REST_URL || "",
-  redisToken: process.env.UPSTASH_REDIS_REST_TOKEN || "",
-
-  // PostgreSQL (Neon) — for transaction history and receipts
-  databaseUrl: process.env.DATABASE_URL || "",
-
-  // Derived flags
-  get isRedisConfigured(): boolean {
-    return !!(this.redisUrl && this.redisToken)
-  },
-
-  get isPiApiKeyConfigured(): boolean {
-    return !!this.piApiKey
-  },
-
-  get isPostgresConfigured(): boolean {
-    return !!this.databaseUrl
-  },
-
-  get isOwnerConfigured(): boolean {
-    return !!this.ownerUid
-  },
 } as const

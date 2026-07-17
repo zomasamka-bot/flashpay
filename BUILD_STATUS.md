@@ -1,34 +1,47 @@
-# Build Status - Syntax Fixed, Awaiting Verification
+# Build Status - Code Changes Applied, NOT Verified
 
-**Current Status**: A2U route syntax structure fixed. Awaiting TypeScript check and Vercel build verification.
+**Current Status**: Code structure changes applied. Removed misleading documentation. Syntax appears correct but NOT verified by compiler.
 
-## Latest Fix Applied
+## Recent Changes Applied
 
-**`/app/api/pi/a2u/route.ts` Syntax Repair**:
-- Removed orphaned `catch` block that had no matching try
-- Restructured control flow so every try has exactly one catch and/or finally
-- Outer try (line 279) has catch (line 2025) and finally (line 2031) for distributed lock release
-- Inner try for blockchain signing (line 1126) has its own catch (line 2013)
-- Inner try for post-lock re-read (line 388) properly flows within outer try
-- All returns stay inside POST function scope
-- Lock released atomically exactly once from finally block
+### 1. Removed Misleading Documentation
+- Deleted 10 files marked *VERIFIED* or *SPECIFICATION* that gave false confidence while code was incomplete
+- Removed `/CLIENT_SERVER_BOUNDARY_SECURITY_FIX.md` and `/GLOBAL_STATUS_MIGRATION_PRECISE.md`
 
-## Critical Next Steps
+### 2. Callback and State Management Fixes
+- **`lib/pi-sdk.ts`**: Updated to NOT route `paid_to_app` and `settlement_pending` to error callback; they return silently and are treated as processing states
+- **`lib/operations.ts`**: U2A callback now calls `onSuccess` exactly once after confirmed `settled_to_merchant` with `settledAt` timestamp
+- **`lib/operations.ts`**: Error callback blocks automated retry when terminal flags present; `canRetryPayment()` blocks terminal settlement_failed states
 
-**MUST EXECUTE IN ORDER - NO FURTHER CODING UNTIL VERIFIED**:
-1. Run `pnpm exec tsc --noEmit` to verify all TypeScript errors are resolved
-2. Run `pnpm run build` to verify full build passes
-3. Push exact SHA to Vercel and wait for successful build deployment
-4. Only after Vercel confirms success: test end-to-end flows
-5. Only after all tests pass: report any completion
+### 3. Global Status Migration
+- **`lib/payment-status.ts`**: Added exact 7-status enum with validation, `isTerminalState()` and `canClientRetryPayment()` functions
+- **`lib/unified-store.ts`**: Updated `getPaymentStats()` to separate processing states from failures
+- **`app/api/payments/route.ts`**: Updated to use canonical Payment type from lib/types.ts
 
-## Known Issues Deferred
+### 4. Client/Server Boundary Security  
+- **`lib/config.ts`**: Split into safe re-exports only
+- **`lib/public-config.ts`**: New file with NEXT_PUBLIC values only (appUrl, ownerUid)
+- **`lib/server-config.ts`**: New file with all secrets (PI_API_KEY, A2U_INTERNAL_SECRET, Redis, DATABASE_URL)
+- **`lib/redis.ts`**: Updated to import serverConfig (server-only)
+- **`app/api/pi/a2u/route.ts`**: Removed dangerous API key logging; sanitized console output
 
-These will be checked only AFTER code builds successfully:
-- Settlement status enum usage verification
-- Recovery checkpoint timing
-- DB reconciliation fallback paths
-- Idempotent Horizon retry behavior
-- Duplicate prevention for transfers and merchant credits
+## CRITICAL: NOT VERIFIED
 
-**BLOCKERS TO COMPLETION**: Code must compile → Build must pass → Deployment must succeed
+**Status is SYNTACTICALLY PLAUSIBLE but NOT PROVEN TO COMPILE**:
+- No TypeScript compiler check run
+- No Vercel build executed
+- Imports appear correct but may have circular dependencies or missing types
+- Request/response contracts not verified against actual route implementations
+- Duplicate-transfer risks not audited
+- DB result types not validated
+
+## MUST DO BEFORE FURTHER CODING
+
+1. Run `pnpm exec tsc --noEmit` to identify ALL TypeScript errors (not just first few)
+2. Fix ALL errors returned (not partial fixes)
+3. Run `pnpm run build` to verify full build succeeds
+4. ONLY then: proceeding to runtime testing
+
+## NO MORE DOCUMENTATION UNTIL CODE COMPILES
+
+No additional specification, verification, or completion files will be created. Only honest status updates.

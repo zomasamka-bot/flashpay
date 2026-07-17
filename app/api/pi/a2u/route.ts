@@ -1,7 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { config } from "@/lib/config"
+import { serverConfig } from "@/lib/server-config"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { recordA2UTransactionAtomic } from "@/lib/db"
+import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import * as StellarSDK from "@stellar/stellar-sdk"
 
 export const dynamic = "force-dynamic"
@@ -138,11 +139,17 @@ async function horizonSignAndCheckpoint(
     console.log("[Pi A2U] Status: settlement_pending + horizonSuccessFlag=true + piCompletionPending=true")
     console.log("[Pi A2U] Now safe to call Pi /complete")
 
-    return {
-      success: true,
-      txidFromHorizon,
-      horizonFeeCharged,
+    // Build canonical response by re-reading authoritative Redis checkpoint
+    const canonicalResponse = await buildA2USuccessResponse(paymentId)
+    if (!canonicalResponse) {
+      console.error("[Pi A2U] ❌ Failed to build canonical response - checkpoint corrupted")
+      return NextResponse.json(
+        { error: "Response building failed - data corruption detected" },
+        { status: 500 }
+      )
     }
+
+    return NextResponse.json(canonicalResponse)
   } catch (persistError) {
     const errorMsg = persistError instanceof Error ? persistError.message : String(persistError)
     console.error("[Pi A2U] ❌ CRITICAL: Checkpoint persistence failed AFTER Horizon success")
@@ -307,12 +314,31 @@ function validateA2UPayment(
 export async function POST(request: NextRequest) {
   console.log("[Pi A2U] App-to-User payment initiated at", new Date().toISOString())
 
+  let lockToken: string | null = null
+  let lockKey: string | null = null
+  let lockAcquired = false
+  const releaseLockAtomic = async () => {
+    if (!lockAcquired || !lockToken || !lockKey || !isRedisConfigured) return
+    try {
+      const luaScript = `
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+          return redis.call('del', KEYS[1])
+        else
+          return 0
+        end
+      `
+      await redis.eval(luaScript, [lockKey], [lockToken])
+    } catch (error) {
+      console.warn("[Pi A2U] Failed to release lock atomically:", error)
+    }
+  }
+
   try {
     // Validate internal secret header with timing-safe comparison
     const providedSecret = request.headers.get("x-flashpay-internal-secret")
     
     // Fail closed if secret is missing or not a string
-    if (!config.a2uInternalSecret || typeof config.a2uInternalSecret !== "string") {
+    if (!serverConfig.a2uInternalSecret || typeof serverConfig.a2uInternalSecret !== "string") {
       console.error("[Pi A2U] SECURITY: A2U_INTERNAL_SECRET not configured - REJECTING ALL REQUESTS")
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
@@ -323,7 +349,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Timing-safe comparison to prevent timing attacks
-    const secretBuffer = Buffer.from(config.a2uInternalSecret)
+    const secretBuffer = Buffer.from(serverConfig.a2uInternalSecret)
     const providedBuffer = Buffer.from(providedSecret)
     
     if (secretBuffer.length !== providedBuffer.length || !secretBuffer.equals(providedBuffer)) {
@@ -334,7 +360,7 @@ export async function POST(request: NextRequest) {
     console.log("[Pi A2U] ✓ Internal secret validated")
 
     // Reject unauthorized calls before any other processing
-    if (!config.isPiApiKeyConfigured) {
+    if (!serverConfig.isPiApiKeyConfigured) {
       console.error("[Pi A2U] PI_API_KEY not configured")
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
@@ -365,13 +391,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
 
-    const lockToken = crypto.randomUUID()
-    const lockKey = `a2u:lock:${paymentId}`
+    lockToken = crypto.randomUUID()
+    lockKey = `a2u:lock:${paymentId}`
     const lockTtl = 600 // 10 minutes
 
     console.log("[Pi A2U] ===== ACQUIRING CONCURRENCY LOCK =====")
     
-    let lockAcquired = false
     try {
       // Try to acquire lock with SET NX EX
       const lockResult = await redis.set(lockKey, lockToken, { nx: true, ex: lockTtl })
@@ -391,14 +416,19 @@ export async function POST(request: NextRequest) {
       const payment = paymentCheck ? (typeof paymentCheck === "string" ? JSON.parse(paymentCheck) : paymentCheck) : null
       const a2uRecord = a2uCheck ? (typeof a2uCheck === "string" ? JSON.parse(a2uCheck) : a2uCheck) : null
       
-      if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
-        console.log("[Pi A2U] Payment already settled - returning 200 without transfer")
-        // Return exact stored success response at top level
-        if (a2uRecord?.success !== undefined) {
-          return NextResponse.json(a2uRecord)
-        }
-        return NextResponse.json({ success: true, message: "Payment already settled" })
-      }
+  if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
+    console.log("[Pi A2U] Payment already settled - returning canonical response")
+    // Return canonical response from authoritative Redis checkpoint
+    const canonicalResponse = await buildA2USuccessResponse(paymentId)
+    if (!canonicalResponse) {
+      console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
+      return NextResponse.json(
+        { error: "Response building failed - data corruption detected" },
+        { status: 500 }
+      )
+    }
+    return NextResponse.json(canonicalResponse)
+  }
       
       console.error("[Pi A2U] Lock unavailable and payment not complete - cannot proceed")
       return NextResponse.json({ error: "A2U transfer in progress" }, { status: 409 })
@@ -406,48 +436,34 @@ export async function POST(request: NextRequest) {
 
     console.log("[Pi A2U] ✓ Lock acquired:", lockKey)
 
-    // Helper: Atomic Lua-based lock release (compare-and-delete by token)
-    // THIS FUNCTION MUST BE CALLED EXACTLY ONCE FROM finally
-    const releaseLockAtomic = async () => {
-      if (!isRedisConfigured) return
-      try {
-        const luaScript = `
-          if redis.call('get', KEYS[1]) == ARGV[1] then
-            return redis.call('del', KEYS[1])
-          else
-            return 0
-          end
-        `
-        await redis.eval(luaScript, [lockKey], [lockToken])
-      } catch (error) {
-        console.warn("[Pi A2U] Failed to release lock atomically:", error)
-      }
+    // Re-read both records after lock acquisition
+    const paymentData = await redis.get(`payment:${paymentId}`)
+    const a2uData = await redis.get(`a2u:${paymentId}`)
+    
+    if (!paymentData) {
+      console.error("[Pi A2U] Payment not found in Redis:", paymentId)
+      return NextResponse.json({ error: "Payment not found" }, { status: 404 })
     }
 
-    try {
-      // Re-read both records after lock acquisition
-      const paymentData = await redis.get(`payment:${paymentId}`)
-      const a2uData = await redis.get(`a2u:${paymentId}`)
-      
-      if (!paymentData) {
-        console.error("[Pi A2U] Payment not found in Redis:", paymentId)
-        return NextResponse.json({ error: "Payment not found" }, { status: 404 })
-      }
-
-      let payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
-      let a2uRecord = a2uData ? (typeof a2uData === "string" ? JSON.parse(a2uData) : a2uData) : null
-      
-      // Check if already complete after re-read
-      if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
-        console.log("[Pi A2U] Payment already settled after lock - returning 200 without transfer")
-        // Return exact stored success response at top level
-        if (a2uRecord?.success !== undefined) {
-          return NextResponse.json(a2uRecord)
-        }
-        return NextResponse.json({ success: true, message: "Payment already settled" })
-      }
-      
-      console.log("[Pi A2U] ✓ Payment loaded from Redis after lock")
+    let payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
+    let a2uRecord = a2uData ? (typeof a2uData === "string" ? JSON.parse(a2uData) : a2uData) : null
+    
+  // Check if already complete after re-read
+  if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
+    console.log("[Pi A2U] Payment already settled after lock - returning canonical response")
+    // Return canonical response from authoritative Redis checkpoint
+    const canonicalResponse = await buildA2USuccessResponse(paymentId)
+    if (!canonicalResponse) {
+      console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
+      return NextResponse.json(
+        { error: "Response building failed - data corruption detected" },
+        { status: 500 }
+      )
+    }
+    return NextResponse.json(canonicalResponse)
+  }
+    
+    console.log("[Pi A2U] ✓ Payment loaded from Redis after lock")
 
     // === RECOVERY CHECKS MUST RUN BEFORE STATUS VALIDATION ===
     // Recovery logic must be reachable for settlement_pending and requiresDbReconciliation states
@@ -458,15 +474,20 @@ export async function POST(request: NextRequest) {
     console.log("[Pi A2U] Has a2uTxid:", !!payment.a2uTxid)
     console.log("[Pi A2U] requiresDbReconciliation:", payment.requiresDbReconciliation)
     
-    // Recovery: settled_to_merchant - payment is already final
-    if (payment.status === "settled_to_merchant" || payment.a2uStatus === "settled_to_merchant") {
-      console.log("[Pi A2U] RECOVERY: Payment already settled_to_merchant")
-      return NextResponse.json({
-        success: true,
-        message: "Payment already settled_to_merchant",
-        status: "settled_to_merchant",
-      })
+  // Recovery: settled_to_merchant - payment is already final
+  if (payment.status === "settled_to_merchant" || payment.a2uStatus === "settled_to_merchant") {
+    console.log("[Pi A2U] RECOVERY: Payment already settled_to_merchant")
+    // Return canonical response from authoritative Redis checkpoint
+    const canonicalResponse = await buildA2USuccessResponse(paymentId)
+    if (!canonicalResponse) {
+      console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
+      return NextResponse.json(
+        { error: "Response building failed - data corruption detected" },
+        { status: 500 }
+      )
     }
+    return NextResponse.json(canonicalResponse)
+  }
 
     // Recovery: settlement_pending with A2U identifiers - reuse the stored transfer
     if (payment.status === "settlement_pending" && payment.a2uPaymentId && payment.a2uTxid) {
@@ -476,12 +497,26 @@ export async function POST(request: NextRequest) {
       console.log("[Pi A2U] SKIPPING Horizon - returning stored transaction identifiers")
       
       // Return success with stored identifiers - no blockchain resubmission
+      // CRITICAL: All fields must exist in checkpoint
+      if (!payment.horizonFeeCharged || !payment.a2uFromAddress || !payment.a2aToAddress) {
+        console.error("[Pi A2U] CRITICAL: Stored checkpoint missing required fields")
+        console.error("[Pi A2U] horizonFeeCharged:", payment.horizonFeeCharged)
+        console.error("[Pi A2U] a2uFromAddress:", payment.a2uFromAddress)
+        console.error("[Pi A2U] a2uToAddress:", payment.a2uToAddress)
+        return NextResponse.json({
+          success: false,
+          error: "Incomplete checkpoint - manual review required",
+          txidFromHorizon: payment.a2uTxid,
+          requiresManualReview: true,
+        }, { status: 500 })
+      }
+
       return NextResponse.json({
         success: true,
         message: "Idempotent recovery - reusing stored A2U transfer",
         a2uPaymentId: payment.a2uPaymentId,
         txid: payment.a2uTxid,
-        feeCharged: payment.horizonFeeCharged || 0,
+        feeCharged: payment.horizonFeeCharged,
         fromAddress: payment.a2uFromAddress,
         toAddress: payment.a2uToAddress,
       }, { status: 200 })
@@ -494,6 +529,28 @@ export async function POST(request: NextRequest) {
       console.log("[Pi A2U] Stored a2uTxid:", payment.a2uTxid)
       console.log("[Pi A2U] This is a DB-only retry - calling recordA2UTransactionAtomic directly")
       
+      // CRITICAL: Validate all required fields exist from checkpoint
+      if (
+        !payment.merchantId ||
+        !payment.merchantUid ||
+        !payment.customerAmount ||
+        !payment.merchantAmount ||
+        payment.horizonFeeCharged === undefined
+      ) {
+        console.error("[Pi A2U] CRITICAL: Checkpoint missing required fields for DB reconciliation")
+        console.error("[Pi A2U] merchantId:", payment.merchantId)
+        console.error("[Pi A2U] merchantUid:", payment.merchantUid)
+        console.error("[Pi A2U] customerAmount:", payment.customerAmount)
+        console.error("[Pi A2U] merchantAmount:", payment.merchantAmount)
+        console.error("[Pi A2U] horizonFeeCharged:", payment.horizonFeeCharged)
+        return NextResponse.json({
+          success: false,
+          error: "Incomplete checkpoint for DB reconciliation - manual review required",
+          txidFromHorizon: payment.a2uTxid,
+          requiresManualReview: true,
+        }, { status: 500 })
+      }
+      
       // Call the DB reconciliation function directly using static import
       const dbResult = await recordA2UTransactionAtomic({
         u2aIdentifier: payment.piPaymentId,
@@ -502,9 +559,9 @@ export async function POST(request: NextRequest) {
         a2uTxid: payment.a2uTxid,
         merchantId: payment.merchantId,
         merchantUid: payment.merchantUid,
-        customerAmount: payment.amount,
-        merchantAmount: payment.merchantAmount || payment.amount,
-        horizonFeeCharged: payment.horizonFeeCharged || 0,
+        customerAmount: payment.customerAmount,
+        merchantAmount: payment.merchantAmount,
+        horizonFeeCharged: payment.horizonFeeCharged,
         appCommission: payment.appCommission || 0,
       })
       
@@ -588,17 +645,13 @@ export async function POST(request: NextRequest) {
     // ===== ENVIRONMENT VERIFICATION =====
     console.log("[Pi A2U]")
     console.log("[Pi A2U] ===== ENVIRONMENT VERIFICATION =====")
-    console.log("[Pi A2U] PI_API_KEY loaded:", config.piApiKey ? "YES" : "NO")
-    if (config.piApiKey) {
-      console.log("[Pi A2U] PI_API_KEY first 8 chars:", config.piApiKey.substring(0, 8))
-      console.log("[Pi A2U] PI_API_KEY last 8 chars:", config.piApiKey.substring(config.piApiKey.length - 8))
-      console.log("[Pi A2U] PI_API_KEY length:", config.piApiKey.length)
-    } else {
+    if (!serverConfig.piApiKey) {
       console.error("[Pi A2U] ❌ PI_API_KEY IS NOT CONFIGURED!")
+    } else {
+      console.log("[Pi A2U] PI_API_KEY configured: YES")
     }
     console.log("[Pi A2U] API base URL: https://api.minepi.com")
     console.log("[Pi A2U] Environment: Production (Testnet support via app credentials)")
-    console.log("[Pi A2U] App URL: " + config.appUrl)
     console.log("[Pi A2U]")
 
     // Validate required fields
@@ -750,7 +803,7 @@ export async function POST(request: NextRequest) {
     
     console.log("[Pi A2U] ===== SENDING TO PI PRODUCTION API (A2U Creation) =====")
     console.log("[Pi A2U] URL: https://api.minepi.com/v2/payments")
-    console.log("[Pi A2U] Authorization: Key [" + config.piApiKey.substring(0, 8) + "..." + config.piApiKey.substring(config.piApiKey.length - 4) + "]")
+    console.log("[Pi A2U] Authorization: Key [***]")
     console.log("[Pi A2U] Content-Type: application/json")
     console.log("[Pi A2U]")
     console.log("[Pi A2U] CRITICAL APP CONTEXT FOR A2U:")
@@ -778,7 +831,7 @@ export async function POST(request: NextRequest) {
     console.log("[Pi A2U]   - username:", verifiedUser.username)
     console.log("[Pi A2U]")
     console.log("[Pi A2U] Server PI_API_KEY context:")
-    console.log("[Pi A2U]   - PI_API_KEY configured:", config.piApiKey ? "YES" : "NO")
+    console.log("[Pi A2U]   - PI_API_KEY configured:", serverConfig.piApiKey ? "YES" : "NO")
     console.log("[Pi A2U]   - PI_API_KEY is registered to a specific app in Pi Developer Portal")
     console.log("[Pi A2U]   - That app_id must match user's app_id from /v2/me")
     console.log("[Pi A2U]")
@@ -799,7 +852,7 @@ export async function POST(request: NextRequest) {
       a2uResponse = await fetch("https://api.minepi.com/v2/payments", {
         method: "POST",
         headers: {
-          Authorization: `Key ${config.piApiKey}`,
+          Authorization: `Key ${serverConfig.piApiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
@@ -897,7 +950,7 @@ export async function POST(request: NextRequest) {
             const getPaymentResponse = await fetch(`https://api.minepi.com/v2/payments/${ongoingPaymentId}`, {
               method: "GET",
               headers: {
-                Authorization: `Key ${config.piApiKey}`,
+                Authorization: `Key ${serverConfig.piApiKey}`,
                 "Content-Type": "application/json",
               },
             })
@@ -1202,8 +1255,8 @@ export async function POST(request: NextRequest) {
               // CRITICAL: Fetch dynamic base fee from Horizon (not fixed BASE_FEE)
               console.log("[Pi A2U]")
               console.log("[Pi A2U] ===== FETCHING DYNAMIC FEE FROM HORIZON =====")
-              let baseFee: string
-              let usedFee: string
+              let baseFee: number
+              let usedFee: number
               try {
                 const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
                 baseFee = Number(baseFeeFromHorizon)
@@ -1365,7 +1418,7 @@ export async function POST(request: NextRequest) {
               const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${a2uPayment.identifier}/complete`, {
                 method: "POST",
                 headers: {
-                  Authorization: `Key ${config.piApiKey}`,
+                  Authorization: `Key ${serverConfig.piApiKey}`,
                   "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
@@ -1390,7 +1443,7 @@ export async function POST(request: NextRequest) {
                   const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${a2uPayment.identifier}`, {
                     method: "GET",
                     headers: {
-                      Authorization: `Key ${config.piApiKey}`,
+                      Authorization: `Key ${serverConfig.piApiKey}`,
                       "Content-Type": "application/json",
                     },
                   })
@@ -1862,11 +1915,42 @@ export async function POST(request: NextRequest) {
       if (!checkpointResult.success) {
         console.error("[Pi A2U] ❌ Checkpoint function failed:", checkpointResult.error)
         
-        // If Horizon succeeded but checkpoint failed, return manual-review with txid
+        // If Horizon succeeded but checkpoint failed, PERSIST critical flags to Redis before returning
         if (checkpointResult.txidFromHorizon) {
           console.error("[Pi A2U] Horizon succeeded with txid:", checkpointResult.txidFromHorizon)
           console.error("[Pi A2U] But checkpoint persistence failed")
-          console.error("[Pi A2U] DO NOT call Pi /complete - must return manual-review")
+          console.error("[Pi A2U] CRITICAL: Persisting partial success flags to Redis")
+          
+          // CRITICAL: Save the a2uTxid and horizon success flags to preserve recovery state
+          // This record is now BLOCKED from createPayment and cannot be resubmitted to Horizon
+          const partialSuccessPayment = {
+            ...payment,
+            status: "settlement_pending", // Keep as pending, not settlement_failed
+            a2uPaymentId: a2uPayment.identifier,
+            a2uTxid: checkpointResult.txidFromHorizon, // PRESERVE the known txid from Horizon
+            a2uFromAddress: transaction.source,
+            a2uToAddress: a2uPayment.to_address,
+            customerAmount,
+            merchantAmount: Number(a2uPayment.amount),
+            horizonFeeCharged: checkpointResult.horizonFeeCharged || 0,
+            appCommission: 0,
+            appNetImpact: customerAmount - Number(a2uPayment.amount) - (checkpointResult.horizonFeeCharged || 0),
+            horizonSuccessFlag: true, // MARKS: Horizon succeeded - block from resubmission
+            checkpointPersistenceFailed: true, // MARKS: Redis checkpoint failed
+            requiresManualReview: true, // MARKS: Human review needed
+            piCompletionPending: false, // DO NOT call Pi /complete after this failure
+            piCompleted: false,
+            horizonSuccessAt: new Date().toISOString(),
+            checkpointFailureAt: new Date().toISOString(),
+          }
+          
+          try {
+            await redis.set(`payment:${paymentId}`, JSON.stringify(partialSuccessPayment))
+            console.log("[Pi A2U] ✓ Partial success flags persisted - record now blocked from resubmission")
+          } catch (persistFlagError) {
+            console.error("[Pi A2U] CRITICAL: Failed to persist partial success flags:", persistFlagError)
+            // Even if this fails, we MUST alert with the txid and require manual review
+          }
           
           return NextResponse.json({
             success: false,
@@ -1878,7 +1962,7 @@ export async function POST(request: NextRequest) {
           }, { status: 500 })
         }
         
-        // Horizon failed
+        // Horizon failed (no txid)
         return NextResponse.json({
           error: "Failed to submit signed transaction to Horizon",
           step: "horizonSubmit",
@@ -1902,7 +1986,7 @@ export async function POST(request: NextRequest) {
       const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${a2uPayment.identifier}/complete`, {
         method: "POST",
         headers: {
-          Authorization: `Key ${config.piApiKey}`,
+          Authorization: `Key ${serverConfig.piApiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1927,7 +2011,7 @@ export async function POST(request: NextRequest) {
           const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${a2uPayment.identifier}`, {
             method: "GET",
             headers: {
-              Authorization: `Key ${config.piApiKey}`,
+              Authorization: `Key ${serverConfig.piApiKey}`,
               "Content-Type": "application/json",
             },
           })

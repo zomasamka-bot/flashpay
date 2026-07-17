@@ -6,6 +6,7 @@ import type { Payment } from "./types"
 import { CoreLogger } from "./core"
 import { SecurityGuard, InputValidator, rateLimiter, errorTracker, auditLogger } from "./security"
 import { config } from "./config"
+import { isProcessingStatus, isTerminalState } from "./payment-status"
 
 function generateUUID(): string {
   if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
@@ -133,15 +134,16 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     console.log("[v0]   → If Pi rejects: user_not_found = UID is valid but not in PI_API_KEY's app")
     console.log("[v0]")
 
-    // CRITICAL: Send ONLY amount and note to the server.
-    // Do NOT send merchantId, merchantUid, or accessToken in the request.
-    // The server will use authentication context to get merchant identity.
+    // CRITICAL: Send amount, note, and accessToken for server verification.
+    // Do NOT send merchantId or merchantUid - server will verify from /v2/me call.
+    // The server will call Pi /v2/me with the accessToken to derive verified username and UID.
     const response = await fetch(`${config.appUrl}/api/payments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
         amount, 
-        note
+        note,
+        accessToken
       }),
     })
 
@@ -156,16 +158,17 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     }
 
     const result = await response.json()
-    // Pass merchantId, merchantAddress, and merchantUid to ensure they match what was created
+    // CRITICAL: Use VERIFIED merchantId and merchantUid from server response, not client values
+    // The server verified the identity via Pi /v2/me and derived the authoritative username and UID
     const payment = unifiedStore.createPaymentWithId(
       result.payment.id, 
       amount, 
       note, 
       result.payment.createdAt,
-      merchantId,           // Pass the EXACT merchantId that was sent to API
-      result.payment.merchantAddress || undefined, // Use API response if available
-      result.payment.merchantUid || merchantUid,   // Pass merchantUid for A2U transfers
-      accessToken           // Pass accessToken for A2U verification at settlement time
+      result.payment.merchantId,           // VERIFIED by server via /v2/me
+      result.payment.merchantAddress || undefined,
+      result.payment.merchantUid,          // VERIFIED by server via /v2/me, no fallback
+      accessToken           // Store accessToken for A2U verification at settlement time
     )
 
     const trackingId = auditLogger.log(
@@ -310,48 +313,54 @@ export function executePayment(
         CoreLogger.operation("U2A callback from Pi Wallet", { txid })
 
         // CRITICAL FLOW:
-        // 1. This callback fires ONLY when Pi Wallet confirms U2A to app is complete
-        // 2. Backend /api/pi/complete will be called by Pi with piPaymentId + txid
-        // 3. Backend will call /api/pi/a2u to settle to merchant
-        // 4. Backend will eventually return settled_to_merchant via polling
-        // 5. We ONLY call onSuccess when polling detects settled_to_merchant
-        //
-        // DO NOT:
-        // - Set paid_to_app here (only U2A verified stage before A2U may do this)
-        // - Call onSuccess here (must wait for settled_to_merchant confirmation)
+        // 1. Pi Wallet callback fires when U2A to app is complete
+        // 2. /api/pi/complete endpoint processes settlement (may take time)
+        // 3. /api/pi/complete returns status: paid_to_app, settlement_pending, or settled_to_merchant
+        // 4. Processing states (paid_to_app, settlement_pending) do NOT trigger callback
+        // 5. ONLY settled_to_merchant status triggers onSuccess
+        // 6. onSuccess called exactly once with verified U2A txid + settledAt timestamp
         //
         // DO:
-        // - Preserve verified U2A identifiers (piPaymentId, u2aTxid)
-        // - Clear isPaying to allow polling
-        // - Treat paid_to_app/settlement_pending as processing states
+        // - Store verified U2A identifiers (piPaymentId, u2aTxid, a2uTxid if present)
+        // - Preserve settlement timestamps and status flags
+        // - Call onSuccess only after Pi /complete confirms settled_to_merchant
+        // - Call onSuccess exactly once with final txid
+        //
+        // DO NOT:
+        // - Call onSuccess for paid_to_app or settlement_pending (processing states)
+        // - Downgrade from settled_to_merchant
+        // - Restart createPiPayment for settlement_failed with a2uTxid
 
-        console.log("[v0][PaymentOps] U2A complete - txid:", txid)
+        console.log("[v0][PaymentOps] U2A callback fired - txid from Pi Wallet:", txid)
 
         // DO NOT downgrade from settled_to_merchant
         const currentPayment = unifiedStore.getPayment(paymentId)
         if (currentPayment?.status === "settled_to_merchant") {
-          console.log("[v0][PaymentOps] Already settled - calling final onSuccess")
+          console.log("[v0][PaymentOps] Already in settled_to_merchant - returning stored success")
           auditLogger.log(
             "U2ACallbackAlreadySettled",
             { paymentId, txid, merchantId: payment.merchantId },
             "success",
           )
+          // Call onSuccess exactly once with the U2A txid
           onSuccess(txid)
           return
         }
 
-        // Store U2A txid and set to settled_to_merchant - this is the final success state
-        const storedUid = currentPayment?.piPaymentId || (payment as any).piPaymentId
+        // Store U2A txid and set to settled_to_merchant - this is the final success state after Pi /complete
+        // Set settledAt timestamp for accounting precision
+        const settledAt = new Date().toISOString()
         const success = unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", txid)
 
         if (success) {
           const trackingId = auditLogger.log(
             "U2ACallbackSuccess",
-            { paymentId, txid, merchantId: payment.merchantId, u2aTxid: txid, piPaymentId: storedUid },
+            { paymentId, txid, merchantId: payment.merchantId, u2aTxid: txid, settledAt },
             "success",
           )
-          CoreLogger.info("U2A callback: payment settled to merchant - calling final onSuccess")
-          // /api/pi/complete returned settled_to_merchant - this is final success
+          CoreLogger.info("U2A callback: payment settled to merchant - calling final onSuccess exactly once")
+          // Pi /complete confirmed settled_to_merchant - this is the final success state
+          // Call onSuccess exactly once with verified U2A txid
           onSuccess(txid)
         } else {
           const trackingId = errorTracker.logError(operation, "Failed to update payment status to settled_to_merchant")
@@ -361,7 +370,20 @@ export function executePayment(
       },
       async (error, isCancelled) => {
         const status = isCancelled ? "cancelled" : "failed"
-        const prevStatus = unifiedStore.getPayment(paymentId)?.status
+        const currentPayment = unifiedStore.getPayment(paymentId)
+        const prevStatus = currentPayment?.status
+        
+        // CRITICAL: Do NOT restart createPiPayment for settlement_failed with a2uTxid or horizonSuccessFlag
+        // These are terminal states requiring manual review
+        if (prevStatus === "settlement_failed") {
+          const hasTerminalFlags = (currentPayment as any)?.a2uTxid || (currentPayment as any)?.horizonSuccessFlag
+          if (hasTerminalFlags) {
+            console.error("[v0][PaymentOps] ERROR: Ignoring error callback for terminal settlement_failed state")
+            console.error("[v0][PaymentOps] This state requires manual review - blocking automated retry")
+            // Do NOT call onError - this payment is locked from automated retry
+            return
+          }
+        }
         
         // Only set failed for pre-settlement failures
         // settlement_failed is reserved for A2U failure before Horizon
@@ -384,7 +406,28 @@ export function isPaymentPaid(id: string): boolean {
 
 export function canRetryPayment(id: string): boolean {
   const payment = unifiedStore.getPayment(id)
-  return payment?.status === "settlement_failed" || payment?.status === "cancelled"
+  
+  if (!payment) {
+    return false
+  }
+  
+  // CRITICAL: Block retry if settlement_failed has terminal flags (a2uTxid or horizonSuccessFlag)
+  // These states require server recovery, not client retry
+  if (payment.status === "settlement_failed") {
+    const hasTerminalFlags = (payment as any)?.a2uTxid || (payment as any)?.horizonSuccessFlag
+    if (hasTerminalFlags) {
+      CoreLogger.guard("Blocked retry - terminal settlement_failed state", true)
+      console.log("[v0] canRetryPayment: Blocking retry - terminal settlement_failed detected")
+      return false
+    }
+    // settlement_failed without terminal flags CAN be retried (pre-Horizon A2U failure)
+    return true
+  }
+  
+  // Only failed and cancelled can be retried by client
+  // pending, paid_to_app, settlement_pending are in-flight, not retryable
+  // settled_to_merchant is final success, not retryable
+  return payment.status === "failed" || payment.status === "cancelled"
 }
 
 /**
@@ -429,7 +472,10 @@ export async function handlePaymentRecovery(
     try {
       const response = await fetch(`${config.appUrl}/api/recovery/${paymentId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-flashpay-internal-secret": config.a2uInternalSecret,
+        },
       })
 
       if (!response.ok) {
@@ -526,7 +572,10 @@ export async function handlePaymentRecovery(
     try {
       const response = await fetch(`${config.appUrl}/api/recovery/${paymentId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-flashpay-internal-secret": config.a2uInternalSecret,
+        },
       })
 
       if (!response.ok) {

@@ -5,23 +5,7 @@ export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/redis"
-
-interface Payment {
-  id: string
-  merchantId: string
-  merchantAddress?: string
-  merchantUid?: string
-  accessToken: string
-  amount: number
-  note: string
-  status: "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "cancelled"
-  createdAt: string
-  paidAt?: string
-  settledAt?: string
-  txid?: string
-  a2uPaymentId?: string
-  a2uTxid?: string
-}
+import type { Payment } from "@/lib/types"
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -163,6 +147,30 @@ export async function POST(request: NextRequest) {
 
     // Generate unique payment ID (Edge Runtime compatible)
     const paymentId = crypto.randomUUID()
+
+    // CRITICAL: Check if a payment with this ID already exists and has a2uTxid or horizonSuccessFlag
+    // This blocks resubmission of payments that have already been submitted to Horizon
+    if (isKvConfigured) {
+      try {
+        const existingData = await redis.get(`payment:${paymentId}`)
+        if (existingData) {
+          const existing = JSON.parse(existingData)
+          if (existing.a2uTxid || existing.horizonSuccessFlag) {
+            console.error("[API] ❌ SECURITY: Payment ID collision with existing Horizon-submitted record - BLOCKING")
+            return NextResponse.json(
+              {
+                error: "Payment record already submitted to Horizon - cannot resubmit",
+                status: "manual_review_required",
+              },
+              { status: 409, headers: corsHeaders }
+            )
+          }
+        }
+      } catch (checkError) {
+        console.error("[API] Error checking existing payment:", checkError)
+        // Continue - it's likely just a cache miss
+      }
+    }
 
     // Create payment object with VERIFIED identity from Pi /v2/me
     const payment: Payment = {

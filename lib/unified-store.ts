@@ -562,19 +562,35 @@ class UnifiedStateStore {
 
   getPaymentStats() {
     // Return stats for all payments (no filtering by currentMerchantId which may vary)
+    // CRITICAL: Only settled_to_merchant counts as PAID (success)
+    // paid_to_app and settlement_pending are processing states
+    // settlement_failed with terminal flags (a2uTxid/horizonSuccessFlag) blocks retry
     const all = this.state.payments
+    
+    // ONLY settled_to_merchant is successfully paid
     const paid = all.filter((p) => p.status === "settled_to_merchant")
-    const pending = all.filter((p) => p.status === "pending" || p.status === "paid_to_app" || p.status === "settlement_pending")
-    const failed = all.filter((p) => p.status === "settlement_failed")
+    
+    // Processing states (NOT errors, NOT failures)
+    const processing = all.filter((p) => p.status === "paid_to_app" || p.status === "settlement_pending")
+    
+    // Pre-settlement failures (retryable if no a2uTxid/horizonSuccessFlag)
+    const failed = all.filter((p) => p.status === "failed")
+    
+    // settlement_failed can have both retryable and terminal variants
+    const settlementFailed = all.filter((p) => p.status === "settlement_failed")
+    
+    // Cancelled (user initiated)
     const cancelled = all.filter((p) => p.status === "cancelled")
+    
     const totalAmount = paid.reduce((sum, p) => sum + p.amount, 0)
     const conversionRate = all.length > 0 ? (paid.length / all.length) * 100 : 0
 
     return {
       totalPayments: all.length,
       paidPayments: paid.length,
-      pendingPayments: pending.length,
+      processingPayments: processing.length,
       failedPayments: failed.length,
+      settlementFailedPayments: settlementFailed.length,
       cancelledPayments: cancelled.length,
       totalAmount,
       conversionRate,

@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { config } from "@/lib/config"
 import { recordA2UTransactionAtomic } from "@/lib/db"
+import { buildA2USuccessResponse } from "@/lib/a2u-response"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -203,7 +204,7 @@ export async function POST(request: NextRequest) {
       console.log("[Pi Complete] Retry: reattempting settlement_pending transfer")
       console.log("[Pi Complete] Reusing A2U payment ID:", payment.a2uPaymentId)
       
-      // Call A2U complete endpoint to verify/finalize
+      // Call A2U endpoint with ONLY paymentId (strict validation enforced server-side)
       const a2uCompleteResponse = await fetch(`${config.appUrl}/api/pi/a2u`, {
         method: "POST",
         headers: {
@@ -211,8 +212,6 @@ export async function POST(request: NextRequest) {
           "x-flashpay-internal-secret": config.a2uInternalSecret,
         },
         body: JSON.stringify({
-          action: "verify_and_complete",
-          a2uPaymentId: payment.a2uPaymentId,
           paymentId,
         }),
       })
@@ -230,8 +229,17 @@ export async function POST(request: NextRequest) {
               settlementCompletedAt: new Date().toISOString(),
             })
           )
-          console.log("[Pi Complete] Retry succeeded - marked settled_to_merchant")
-          return NextResponse.json({ status: "settled_to_merchant", paymentId })
+        console.log("[Pi Complete] Retry succeeded - marked settled_to_merchant")
+        // Return canonical response from authoritative Redis checkpoint
+        const canonicalResponse = await buildA2USuccessResponse(paymentId)
+        if (!canonicalResponse) {
+          console.error("[Pi Complete] ❌ Failed to build canonical response for settled payment")
+          return NextResponse.json(
+            { error: "Response building failed - data corruption detected" },
+            { status: 500 }
+          )
+        }
+        return NextResponse.json(canonicalResponse)
         }
       }
       
@@ -474,10 +482,19 @@ export async function POST(request: NextRequest) {
       }
       
       await redis.set(`payment:${paymentId}`, JSON.stringify(finalPayment))
-      console.log("[Pi Complete] ✓ Payment fully settled to merchant - accounting complete")
-      console.log("[Pi Complete] Settlement checkpoint: piCompleted=true, piCompletionPending=false")
-
-      return NextResponse.json({ status: "settled_to_merchant", paymentId })
+    console.log("[Pi Complete] ✓ Payment fully settled to merchant - accounting complete")
+    console.log("[Pi Complete] Settlement checkpoint: piCompleted=true, piCompletionPending=false")
+    
+    // Return canonical response from authoritative Redis checkpoint
+    const canonicalResponse = await buildA2USuccessResponse(paymentId)
+    if (!canonicalResponse) {
+      console.error("[Pi Complete] ❌ Failed to build canonical response for settled payment")
+      return NextResponse.json(
+        { error: "Response building failed - data corruption detected" },
+        { status: 500 }
+      )
+    }
+    return NextResponse.json(canonicalResponse)
     } else {
       console.error("[Pi Complete] DB transaction failed:", dbResult.error)
       console.error("[Pi Complete] CRITICAL: A2U succeeded but DB write failed")
