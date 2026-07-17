@@ -1,7 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { config } from "@/lib/config"
-import { recordTransaction } from "@/lib/transaction-service"
 import { recordA2UTransactionAtomic } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
@@ -35,7 +34,10 @@ interface PiPaymentDTO {
 }
 
 // POST /api/pi/complete — Called by Pi SDK (onReadyForServerCompletion)
-// Completes the payment with Pi Network and marks it PAID in Redis
+// 1. Validates Pi payment via server API key
+// 2. Calls A2U to settle funds to merchant wallet
+// 3. Records atomic transaction in DB ONLY when settlement succeeds
+// 4. Returns SETTLED_TO_MERCHANT status to client for onSuccess
 export async function POST(request: NextRequest) {
   console.log("[Pi Webhook] COMPLETE called at", new Date().toISOString())
 
@@ -44,7 +46,6 @@ export async function POST(request: NextRequest) {
     const identifier = body.identifier
     const clientTxid = body.transaction?.txid || body.txid
 
-    // Require identifier and txid
     if (!identifier) {
       console.error("[Pi Webhook] Missing identifier in request")
       return NextResponse.json({ error: "Missing identifier" }, { status: 400 })
@@ -88,7 +89,7 @@ export async function POST(request: NextRequest) {
     }
 
     const paymentDTO: PiPaymentDTO = piPayment
-    
+
     // Retrieve payment from Redis
     if (!isRedisConfigured) {
       console.error("[Pi Webhook] Redis not configured")
@@ -145,12 +146,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Amount mismatch" }, { status: 400 })
     }
 
-    // Extract and verify merchant data BEFORE paid/reconciliation check (needed for all paths)
+    // Extract merchant data
     const merchantId = existingPayment.merchantId
     const merchantUid = existingPayment.merchantUid
     const createdAt = existingPayment.createdAt || new Date().toISOString()
-    
-    // Validate Date for DB helper (keeps Redis/in-memory as ISO strings)
     const parsedCreatedAt = new Date(createdAt)
     const createdAtDate = Number.isNaN(parsedCreatedAt.getTime()) ? new Date() : parsedCreatedAt
 
@@ -159,171 +158,192 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
     }
 
-    if (!merchantUid || typeof merchantUid !== "string") {
-      console.error("[Pi Webhook] No merchantUid in Redis for A2U")
-      return NextResponse.json({ error: "Cannot perform A2U transfer" }, { status: 400 })
+    // Check: Redis status is pending
+    if (existingPayment.status !== "pending") {
+      console.error("[Pi Webhook] Unexpected payment status:", existingPayment.status)
+      return NextResponse.json({ error: "Unexpected payment status" }, { status: 400 })
     }
 
-    // Store verified Pi payment identifiers BEFORE any branching
+    // STEP 1: Mark as paid_to_app in Redis after Pi confirms
     const u2aIdentifier = identifier
     const u2aTxid = clientTxid
 
-    // Check: Redis status is pending or handle already-paid/settling cases
-    if (existingPayment.status === "paid_to_app" || existingPayment.status === "settlement_pending" || existingPayment.status === "settled_to_merchant" || existingPayment.status === "settlement_failed") {
-      // Already marked as paid/settling/settled - require both same piPaymentId AND txid
-      if (existingPayment.piPaymentId === identifier && existingPayment.txid === clientTxid) {
-        // Check if this is a DB reconciliation retry
-        if (existingPayment.requiresDbReconciliation) {
-          console.log("[Pi Webhook] Payment already paid - DB reconciliation required, retrying DB write only (NO A2U repeat)")
-          
-          // Perform DB reconciliation using only stored verified data, never repeat A2U
-          const dbResult = await recordA2UTransactionAtomic({
-            u2aIdentifier: u2aIdentifier,                   // Use verified U2A identifier from line 172
-            u2aTxid: u2aTxid,                               // Use verified U2A txid from line 173
-            a2uIdentifier: existingPayment.a2uIdentifier,  // Use stored A2U identifier
-            a2uTxid: existingPayment.a2uTxid,              // Use stored A2U txid (NO new A2U request)
-            merchantId: merchantId,
-            merchantUid: merchantUid,
-            amount: existingPayment.amount,
-            note: existingPayment.note || "A2U Settlement",
-            createdAt: createdAtDate,
-          })
-          
-          if (dbResult.success) {
-            console.log("[Pi Webhook] ✅ Atomic transaction committed successfully")
-            console.log("[Pi Webhook] - Transaction ID:", dbResult.transactionId)
-            console.log("[Pi Webhook] - U2A identifier:", paymentForRecording.id)
-            console.log("[Pi Webhook] - A2U identifier:", paymentDTO.identifier)
-            console.log("[Pi Webhook] - A2U txid:", a2uData.txid)
-            console.log("[Pi Webhook] - Merchant balance updated: +", paymentForRecording.amount, "π")
-            
-            // CRITICAL: Only now mark as settled_to_merchant - DB commit succeeded
-            if (isRedisConfigured) {
-              await redis.set(
-                `payment:${paymentId}`,
-                JSON.stringify({
-                  ...updatedPayment,
-                  status: "settled_to_merchant" as const,
-                  a2uPaymentId: a2uData.a2uPaymentId,
-                  a2uTxid: a2uData.txid,
-                  a2uFromAddress: a2uData.fromAddress,
-                  a2uToAddress: a2uData.toAddress,
-                  a2uStatus: "complete",
-                  settledAt: new Date().toISOString(),
-                })
-              )
-              console.log("[Pi Webhook] ✓ Payment marked as SETTLED_TO_MERCHANT after DB commit")
-            }
-        } else if (a2uResponse.status === 202 && (a2uData.status === "pending_signing" || a2uData.status === "pending_implementation" || a2uData.status === "reusing_ongoing")) {
-          // A2U is waiting for blockchain signing - not a failure, awaiting configuration or implementation
-          const statusDesc = 
-            a2uData.status === "pending_signing" ? "AWAITING_PRIVATE_KEY" :
-            a2uData.status === "reusing_ongoing" ? "REUSING_ONGOING_PAYMENT" :
-            "IMPLEMENTATION_PENDING"
-          
-          console.warn("[A2U-PENDING] ⏳ A2U PENDING - " + statusDesc)
-          console.warn("[A2U-PENDING] A2U payment status:", a2uData.status)
-          console.warn("[A2U-PENDING] Pi payment identifier:", a2uData.a2uPaymentId)
-          
-          if (a2uData.status === "pending_signing") {
-            console.warn("[A2U-PENDING] Awaiting PI_PRIVATE_SEED environment variable for blockchain signing")
-          } else if (a2uData.status === "reusing_ongoing") {
-            console.warn("[A2U-PENDING] Reusing existing ongoing A2U payment - will complete when signing is available")
-          } else {
-            console.warn("[A2U-PENDING] Awaiting implementation of blockchain signing step")
-          }
-          
-          // Mark payment as settlement pending with a2uPaymentId - U2A complete, A2U awaiting signing
-          if (isRedisConfigured) {
-            await redis.set(
-              `payment:${paymentId}`,
-              JSON.stringify({
-                ...updatedPayment,
-                status: "settlement_pending" as const,
-                a2uPaymentId: a2uData.a2uPaymentId,
-                a2uStatus: a2uData.status, // "pending_signing", "pending_implementation", or "reusing_ongoing"
-                a2uFromAddress: a2uData.fromAddress,
-                a2uToAddress: a2uData.toAddress,
-                requiresManualReview: a2uData.requiresManualReview || false,
-                note: a2uData.details || "Awaiting blockchain signing",
-              })
-            )
-          }
-          
-          // For pending A2U (awaiting signing), still record transaction for audit trail but balance won't be settled yet
-          // The atomic transaction will only update balance when A2U actually completes
-          console.log("[Pi Webhook] A2U pending - recording audit transaction (balance not settled yet)")
-        } else {
-          // A2U actually failed - mark as settlement_failed
-          console.error("[A2U-FAILURE] ❌ A2U TRANSFER FAILED")
-          console.error("[A2U-FAILURE] Response status:", a2uResponse.status)
-          console.error("[A2U-FAILURE] Error:", a2uData.error)
-          console.error("[A2U-FAILURE] Error details:", a2uData.details)
-          console.error("[A2U-FAILURE] Failed step:", a2uData.step)
-          console.error("[A2U-FAILURE] Payment marked as PAID_TO_APP but settlement FAILED")
-          console.error("[A2U-FAILURE] Merchant will NOT receive funds - requires manual intervention or retry")
-          
-          // Mark payment as settlement_failed - U2A succeeded but A2U failed
-          // Store all A2U identifiers if they were created before failure
-          if (isRedisConfigured) {
-            await redis.set(
-              `payment:${paymentId}`,
-              JSON.stringify({
-                ...updatedPayment,
-                status: "settlement_failed" as const,
-                a2uPaymentId: a2uData.a2uPaymentId || undefined, // May be set if createPayment succeeded
-                a2uStatus: "failed",
-                a2uFailedStep: a2uData.step || "unknown",
-                a2uError: a2uData.error || "Unknown error",
-                a2uFromAddress: a2uData.fromAddress,
-                a2uToAddress: a2uData.toAddress,
-                requiresManualReview: true,
-                failedAt: new Date().toISOString(),
-              })
-            )
-          }
-        }
-      } catch (a2uError) {
-        console.error("[A2U-ERROR] ❌ A2U request failed:")
-        console.error("[A2U-ERROR] Error:", a2uError instanceof Error ? a2uError.message : String(a2uError))
-        console.error("[A2U-ERROR] Payment marked as PAID_TO_APP but A2U failed - needs manual resolution")
-        
-        // Mark payment as settlement_failed on unexpected error
-        if (isRedisConfigured) {
-          await redis.set(
-            `payment:${paymentId}`,
-            JSON.stringify({
-              ...updatedPayment,
-              status: "settlement_failed" as const,
-              a2uStatus: "error",
-              a2uError: a2uError instanceof Error ? a2uError.message : String(a2uError),
-              requiresManualReview: true,
-              errorAt: new Date().toISOString(),
-            })
-          )
-        }
-        }
-      }
-    } else {
-      console.warn("[A2U-INIT] ⚠️ SKIPPED - Merchant UID is empty or missing")
-      console.warn("[A2U-INIT] existingPayment.merchantUid =", existingPayment.merchantUid)
-      console.warn("[A2U-INIT] Payment marked PAID but cannot settle - needs manual resolution")
-      
-      // Mark payment with missing UID for manual review
-      if (isRedisConfigured) {
-        await redis.set(
-          `payment:${paymentForRecording.id}`,
-          JSON.stringify({
-            ...paymentForRecording,
-            a2uStatus: "skipped",
-            a2uError: "Merchant UID is missing",
-            requiresManualReview: true,
-          })
-        )
-      }
+    const paidToAppPayment = {
+      ...existingPayment,
+      status: "paid_to_app" as const,
+      paidAt: new Date().toISOString(),
+      txid: clientTxid,
+      piPaymentId: identifier,
+      u2aIdentifier: u2aIdentifier,
+      u2aTxid: u2aTxid,
     }
 
-    return response
+    await redis.set(`payment:${paymentId}`, JSON.stringify(paidToAppPayment))
+    console.log("[Pi Webhook] ✓ Payment marked as PAID_TO_APP in Redis after Pi confirmation")
+
+    // STEP 2: If merchantUid missing, stop here - cannot settle
+    if (!merchantUid || typeof merchantUid !== "string") {
+      console.warn("[Pi Webhook] ⚠️ Merchant UID missing - cannot perform A2U settlement")
+      console.warn("[Pi Webhook] Payment marked PAID_TO_APP but requires manual merchant setup")
+      return NextResponse.json({
+        status: "paid_to_app",
+        message: "Payment received but merchant wallet not configured",
+      })
+    }
+
+    // STEP 3: Call A2U endpoint to initiate settlement
+    console.log("[Pi Webhook] Initiating A2U settlement...")
+    const a2uUrl = `${process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "http://localhost:3000"}/api/pi/a2u`
+
+    const a2uResponse = await fetch(a2uUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        paymentId: paymentId,
+        merchantUid: merchantUid,
+        amount: existingPayment.amount,
+        note: existingPayment.note || "Payment Settlement",
+      }),
+    })
+
+    const a2uData = await a2uResponse.json()
+    console.log("[Pi Webhook] A2U response:", a2uData)
+
+    // STEP 4a: A2U PENDING - awaiting blockchain signing
+    if (a2uResponse.status === 202 && (a2uData.status === "pending_signing" || a2uData.status === "pending_implementation" || a2uData.status === "reusing_ongoing")) {
+      console.warn("[A2U-PENDING] ⏳ A2U awaiting blockchain signing")
+      console.warn("[A2U-PENDING] A2U status:", a2uData.status)
+      console.warn("[A2U-PENDING] Pi payment identifier:", a2uData.a2uPaymentId)
+
+      // Store A2U identifiers atomically BEFORE Pi /complete completes
+      // This is critical for retry logic - if Pi fails next, we have A2U info stored
+      const settlementPendingPayment = {
+        ...paidToAppPayment,
+        status: "settlement_pending" as const,
+        a2uPaymentId: a2uData.a2uPaymentId,
+        a2uStatus: a2uData.status,
+        a2uFromAddress: a2uData.fromAddress,
+        a2uToAddress: a2uData.toAddress,
+      }
+
+      await redis.set(`payment:${paymentId}`, JSON.stringify(settlementPendingPayment))
+      console.log("[Pi Webhook] ✓ A2U identifiers stored - payment in SETTLEMENT_PENDING")
+
+      return NextResponse.json({
+        status: "settlement_pending",
+        message: "Awaiting blockchain signing for settlement",
+        a2uPaymentId: a2uData.a2uPaymentId,
+      })
+    }
+
+    // STEP 4b: A2U FAILED
+    if (!a2uResponse.ok || !a2uData.success) {
+      console.error("[A2U-FAILURE] ❌ A2U settlement failed")
+      console.error("[A2U-FAILURE] Response status:", a2uResponse.status)
+      console.error("[A2U-FAILURE] Error:", a2uData.error)
+      console.error("[A2U-FAILURE] Details:", a2uData.details)
+
+      // Store failed state with A2U identifiers if available
+      const failedPayment = {
+        ...paidToAppPayment,
+        status: "settlement_failed" as const,
+        a2uPaymentId: a2uData.a2uPaymentId || undefined,
+        a2uStatus: "failed",
+        a2uError: a2uData.error,
+        a2uFromAddress: a2uData.fromAddress,
+        a2uToAddress: a2uData.toAddress,
+        requiresManualReview: true,
+        failedAt: new Date().toISOString(),
+      }
+
+      await redis.set(`payment:${paymentId}`, JSON.stringify(failedPayment))
+      console.log("[Pi Webhook] ✓ Payment marked as SETTLEMENT_FAILED")
+
+      return NextResponse.json({
+        status: "settlement_failed",
+        error: a2uData.error,
+        message: "Settlement to merchant failed",
+      }, { status: 400 })
+    }
+
+    // STEP 4c: A2U SUCCEEDED - now record to DB atomically
+    console.log("[A2U-SUCCESS] ✅ A2U transfer completed")
+    console.log("[A2U-SUCCESS] Horizon txid:", a2uData.txid)
+    console.log("[A2U-SUCCESS] Recording atomic transaction...")
+
+    // Calculate fees and merchant amount
+    const horizonFeeCharged = a2uData.horizonFeeCharged || 0
+    const appCommission = a2uData.appCommission || 0
+    const merchantAmount = existingPayment.amount - horizonFeeCharged - appCommission
+
+    // Record to DB with fee tracking
+    const dbResult = await recordA2UTransactionAtomic({
+      u2aIdentifier: u2aIdentifier,
+      u2aTxid: u2aTxid,
+      a2uIdentifier: a2uData.a2uPaymentId,
+      a2uTxid: a2uData.txid,
+      merchantId: merchantId,
+      merchantUid: merchantUid,
+      amount: existingPayment.amount,
+      horizonFeeCharged: horizonFeeCharged,
+      appCommission: appCommission,
+      note: existingPayment.note || "Payment Settlement",
+      createdAt: createdAtDate,
+    })
+
+    if (!dbResult.success) {
+      console.error("[Pi Webhook] DB atomic write failed:", dbResult.error)
+      
+      // Atomically save A2U identifiers for retry - do NOT re-submit A2U
+      const retryablePayment = {
+        ...paidToAppPayment,
+        status: "settlement_pending" as const,
+        a2uPaymentId: a2uData.a2uPaymentId,
+        a2uTxid: a2uData.txid,
+        a2uFromAddress: a2uData.fromAddress,
+        a2uToAddress: a2uData.toAddress,
+        horizonFeeCharged: horizonFeeCharged,
+        merchantAmount: merchantAmount,
+        appCommission: appCommission,
+        requiresDbReconciliation: true,
+      }
+
+      await redis.set(`payment:${paymentId}`, JSON.stringify(retryablePayment))
+      console.log("[Pi Webhook] ✓ A2U identifiers stored for DB retry (NO A2U resubmission)")
+
+      return NextResponse.json({
+        status: "settlement_pending",
+        message: "Horizon settlement succeeded but DB write failed - will retry",
+        a2uPaymentId: a2uData.a2uPaymentId,
+      }, { status: 202 })
+    }
+
+    // ONLY NOW: Mark as settled_to_merchant after successful DB commit
+    const settledPayment = {
+      ...paidToAppPayment,
+      status: "settled_to_merchant" as const,
+      a2uPaymentId: a2uData.a2uPaymentId,
+      a2uTxid: a2uData.txid,
+      a2uFromAddress: a2uData.fromAddress,
+      a2uToAddress: a2uData.toAddress,
+      horizonFeeCharged: horizonFeeCharged,
+      merchantAmount: merchantAmount,
+      appCommission: appCommission,
+      settledAt: new Date().toISOString(),
+    }
+
+    await redis.set(`payment:${paymentId}`, JSON.stringify(settledPayment))
+    console.log("[Pi Webhook] ✅ Payment marked as SETTLED_TO_MERCHANT after DB commit")
+    console.log("[Pi Webhook] - Merchant received:", merchantAmount, "π")
+    console.log("[Pi Webhook] - Horizon fee:", horizonFeeCharged, "π")
+
+    return NextResponse.json({
+      status: "settled_to_merchant",
+      message: "Payment successfully settled to merchant",
+      a2uPaymentId: a2uData.a2uPaymentId,
+      a2uTxid: a2uData.txid,
+      merchantAmount: merchantAmount,
+    })
   } catch (error) {
     console.error("[Pi Webhook] COMPLETE error:", error)
     return NextResponse.json({ error: "Failed to complete payment" }, { status: 500 })

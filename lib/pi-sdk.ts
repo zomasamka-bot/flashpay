@@ -181,6 +181,8 @@ export const createPiPayment = async (
 
         CoreLogger.info("Payment ready for approval", { piPaymentId, paymentId, merchantId, merchantAddress })
 
+        // Call approval endpoint - this marks payment as approved but does NOT complete it
+        // The actual settlement happens in onReadyForServerCompletion
         fetch(`${config.appUrl}/api/pi/approve`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -191,33 +193,18 @@ export const createPiPayment = async (
             metadata: { paymentId, merchantId, merchantAddress },
           }),
         })
-          .then(async (response) => {
+          .then((response) => {
             if (response.ok) {
-              CoreLogger.info("Payment completed on backend", { piPaymentId, paymentId, txid })
-              // CRITICAL: Only call onSuccess after server confirms final state
-              // This prevents marking payment as paid until all backend reconciliation is complete
-              const completionData = await response.json()
-              if (completionData.success === true || completionData.status === "settled_to_merchant") {
-                console.log("[v0][Pi SDK] ✓ Backend confirmed payment - calling onSuccess")
-                onSuccess(txid)
-              } else {
-                console.warn("[v0][Pi SDK] ⚠ Backend returned non-success state", completionData)
-                onError("Server did not confirm payment settlement", false)
-              }
+              CoreLogger.info("Payment approved on backend", { piPaymentId, paymentId })
+              console.log("[v0][Pi SDK] ✓ Payment approved - awaiting completion")
             } else {
-              CoreLogger.error("Completion failed", { status: response.status, piPaymentId })
-              const errorData = await response.json().catch(() => ({}))
-              onError(`Server completion failed: ${errorData.error || response.statusText}`, false)
+              CoreLogger.error("Approval failed", { status: response.status, piPaymentId })
+              onError(`Approval failed: ${response.statusText}`, false)
             }
           })
           .catch((error) => {
-            CoreLogger.error("Completion call failed", { error, piPaymentId })
-            // Store A2U state for atomic recovery on retry
-            console.warn("[v0][Pi SDK] ⚠ Completion request failed - payment may need reconciliation")
-            onError(`Backend completion failed: ${error instanceof Error ? error.message : String(error)}`, false)
-          })
-          .catch((error) => {
             CoreLogger.error("Approval call failed", { error, piPaymentId })
+            onError(`Approval request failed: ${error instanceof Error ? error.message : String(error)}`, false)
           })
       },
 
@@ -235,8 +222,8 @@ export const createPiPayment = async (
 
         CoreLogger.info("Payment ready for completion", { piPaymentId, txid, paymentId, merchantId })
 
-        // Complete on backend and wait for verification before calling onSuccess
-        // This ensures payments are not marked as paid until server confirms final state
+        // Complete on backend and ONLY call onSuccess when status is settled_to_merchant
+        // This is CRITICAL: do not mark payment as paid until server confirms A2U settlement complete
         fetch(`${config.appUrl}/api/pi/complete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -248,15 +235,32 @@ export const createPiPayment = async (
             transaction: { txid, verified: true },
           }),
         })
-          .then((response) => {
-            if (response.ok) {
-              CoreLogger.info("Payment completed on backend", { piPaymentId, txid, paymentId })
+          .then(async (response) => {
+            const completeData = await response.json()
+            console.log("[v0][Pi SDK] /api/pi/complete response:", completeData)
+
+            // CRITICAL: Only call onSuccess when settled_to_merchant
+            if (completeData.status === "settled_to_merchant") {
+              console.log("[v0][Pi SDK] ✅ Settlement complete - calling onSuccess")
+              CoreLogger.info("Payment settled to merchant", { piPaymentId, txid, paymentId })
+              onSuccess(txid)
+            } else if (completeData.status === "paid_to_app") {
+              console.warn("[v0][Pi SDK] ⚠ Payment received but awaiting settlement")
+              onError("Payment received but settlement is pending", false)
+            } else if (completeData.status === "settlement_pending") {
+              console.warn("[v0][Pi SDK] ⚠ Settlement pending - blockchain signing may be needed")
+              onError("Settlement awaiting blockchain confirmation", false)
+            } else if (completeData.status === "settlement_failed") {
+              console.error("[v0][Pi SDK] ❌ Settlement failed")
+              onError("Settlement to merchant failed", false)
             } else {
-              CoreLogger.error("Backend completion failed", { status: response.statusText })
+              console.error("[v0][Pi SDK] ❌ Unexpected completion status:", completeData.status)
+              onError("Unexpected payment status: " + completeData.status, false)
             }
           })
           .catch((error) => {
             CoreLogger.error("Failed to call /api/pi/complete", { error, piPaymentId, txid })
+            onError(`Backend completion failed: ${error instanceof Error ? error.message : String(error)}`, false)
           })
       },
 
