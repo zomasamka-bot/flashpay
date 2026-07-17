@@ -52,22 +52,24 @@ export async function GET(request: NextRequest) {
 
     console.log("[Merchant Payments API] Fetching PAID payments from PostgreSQL for verified merchant:", verifiedUsername)
 
-    // Build query for PostgreSQL
+    // Build query for PostgreSQL - only return settled_to_merchant payments
     let sql = `
       SELECT 
         t.payment_id as id,
         t.merchant_id as merchantId,
         t.amount,
         t.description as note,
-        'paid' as status,
+        'settled_to_merchant' as status,
         t.created_at as createdAt,
-        t.completed_at as paidAt,
+        t.completed_at as settledAt,
         r.txid,
         t.id as transaction_id,
-        r.timestamp as receipt_timestamp
+        r.timestamp as receipt_timestamp,
+        r.merchant_amount,
+        r.horizon_fee_charged
       FROM transactions t
       LEFT JOIN receipts r ON t.id = r.transaction_id
-      WHERE t.merchant_id = $1
+      WHERE t.merchant_id = $1 AND t.status = 'settled_to_merchant'
     `
     
     const params: any[] = [verifiedUsername]
@@ -108,14 +110,15 @@ export async function GET(request: NextRequest) {
     const transformedPayments = (payments || []).map((p: any) => ({
       id: p.id,
       merchantId: p.merchantId,
-      amount: Number(p.amount),
+      amount: Number(p.merchant_amount || p.amount),
       note: p.note,
       status: p.status,
       createdAt: p.createdAt,
-      paidAt: p.paidAt,
+      settledAt: p.settledAt,
       txid: p.txid,
       transactionId: p.transaction_id,
       receiptTimestamp: p.receipt_timestamp,
+      horizonFeeCharged: p.horizon_fee_charged,
     }))
 
     // Calculate total balance from payments

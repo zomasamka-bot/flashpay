@@ -31,24 +31,36 @@ export default function PaymentsPage() {
   const payments = usePayments()
 
   const PaymentCard = ({ payment }: { payment: Payment }) => {
-    const statusConfig = {
-      paid: {
+    const statusConfig: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; icon: typeof Clock; color: string; label: string }> = {
+      settled_to_merchant: {
         variant: "default" as const,
         icon: CheckCircle,
         color: "text-green-600",
+        label: "Settled",
+      },
+      paid_to_app: {
+        variant: "secondary" as const,
+        icon: Clock,
+        color: "text-blue-600",
         label: "Paid",
+      },
+      settlement_pending: {
+        variant: "secondary" as const,
+        icon: Clock,
+        color: "text-yellow-600",
+        label: "Processing",
+      },
+      settlement_failed: {
+        variant: "destructive" as const,
+        icon: XCircle,
+        color: "text-red-600",
+        label: "Failed",
       },
       pending: {
         variant: "secondary" as const,
         icon: Clock,
         color: "text-yellow-600",
         label: "Pending",
-      },
-      failed: {
-        variant: "destructive" as const,
-        icon: XCircle,
-        color: "text-red-600",
-        label: "Failed",
       },
       cancelled: {
         variant: "outline" as const,
@@ -58,7 +70,7 @@ export default function PaymentsPage() {
       },
     }
 
-    const config = statusConfig[payment.status]
+    const config = statusConfig[payment.status] || statusConfig.pending
     const StatusIcon = config.icon
 
     return (
@@ -74,8 +86,8 @@ export default function PaymentsPage() {
                 <div className="text-2xl font-bold text-primary mb-1">{payment.amount.toFixed(2)} π</div>
                 {payment.note && <p className="text-sm text-muted-foreground line-clamp-2 mb-2">{payment.note}</p>}
                 <p className="text-xs text-muted-foreground">
-                  {payment.status === "paid"
-                    ? `Paid ${formatStringDate(payment.paidAt)}`
+                  {payment.status === "settled_to_merchant"
+                    ? `Settled ${formatStringDate(payment.settledAt)}`
                     : `Created ${formatStringDate(payment.createdAt)}`}
                 </p>
               </div>

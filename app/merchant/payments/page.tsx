@@ -26,7 +26,7 @@ export default function MerchantPaymentsPage() {
   const [payments, setPayments] = useState<MerchantPayment[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [filterStatus, setFilterStatus] = useState<"all" | "paid" | "pending" | "failed" | "cancelled">("all")
+  const [filterStatus, setFilterStatus] = useState<"all" | "settled_to_merchant" | "paid_to_app" | "settlement_pending" | "settlement_failed" | "pending" | "failed" | "cancelled">("all")
   const [filterDateFrom, setFilterDateFrom] = useState("")
   const [filterDateTo, setFilterDateTo] = useState("")
 
@@ -82,15 +82,21 @@ export default function MerchantPaymentsPage() {
 
   const stats = {
     total: payments.length,
-    paid: payments.filter((p) => p.status === "paid").length,
-    pending: payments.filter((p) => p.status === "pending").length,
-    totalVolume: payments.filter((p) => p.status === "paid").reduce((sum, p) => sum + p.amount, 0),
+    paid: payments.filter((p) => p.status === "settled_to_merchant").length,
+    pending: payments.filter((p) => p.status === "settlement_pending" || p.status === "paid_to_app").length,
+    totalVolume: payments.filter((p) => p.status === "settled_to_merchant").reduce((sum, p) => sum + p.amount, 0),
   }
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
-      case "paid":
+      case "settled_to_merchant":
         return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+      case "paid_to_app":
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+      case "settlement_pending":
+        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+      case "settlement_failed":
+        return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
       case "pending":
         return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
       case "failed":
@@ -243,9 +249,11 @@ export default function MerchantPaymentsPage() {
                 className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800"
               >
                 <option value="all">All Status</option>
-                <option value="paid">Paid</option>
+                <option value="settled_to_merchant">Settled</option>
+                <option value="paid_to_app">Paid</option>
+                <option value="settlement_pending">Processing</option>
+                <option value="settlement_failed">Failed</option>
                 <option value="pending">Pending</option>
-                <option value="failed">Failed</option>
                 <option value="cancelled">Cancelled</option>
               </select>
 
