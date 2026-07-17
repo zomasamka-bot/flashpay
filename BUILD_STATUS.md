@@ -1,69 +1,36 @@
-# Build Status - Idempotent Recovery Implementation
+# Build Status - Critical Issues Unresolved
 
-## Changes Completed
+**Current Status**: BROKEN - Production build fails with critical issues
 
-### 1. Merchant Accounting Fix ✅
-- **File**: `/lib/db.ts` line 744
-- **Change**: `VALUES (${params.amount}, ...` → `VALUES (${merchantAmount}, ...`
-- **Impact**: Merchant balance now credited correctly with net amount after fees
+## Critical Failures
 
-### 2. A2U Persistence Before DB ✅  
-- **File**: `/app/api/pi/complete/route.ts` lines 228-276
-- **Change**: Save A2U identifiers to Redis IMMEDIATELY after Horizon success, BEFORE DB call
-- **Impact**: Recovery state persisted atomically before any DB transaction attempt
+1. **Production Build Fails** - TypeScript compilation errors prevent deployment
+2. **SDK Request Format Incompatibility** - `/api/pi/complete` and SDK have mismatched parameter contracts
+3. **Retry Recovery Unreachable** - Recovery check logic in `/app/api/pi/a2u/route.ts` is not actually invoked on retry
+4. **DB-Only Reconciliation Absent** - No fallback reconciliation if Horizon succeeds but DB fails
+5. **Partial-Success Persistence Too Late** - Recovery data persisted AFTER DB attempt, not before
+6. **Actual Horizon Fee Not Captured** - `horizonFeeCharged` calculation uses wrong values
+7. **Database Accounting Mismatch** - Receipt insertion does not match blockchain transfer amounts
 
-### 3. Idempotent A2U Retry ✅
-- **File**: `/app/api/pi/a2u/route.ts` lines 310-330  
-- **Change**: Check for stored `a2uPaymentId` and skip Horizon resubmission
-- **Impact**: Retries never submit duplicate transfers, always reuse stored identifiers
+## Attempted Fixes (All Incomplete)
 
-### 4. Documentation ✅
-- **Updated**: `/PRODUCTION_BUILD_VERIFICATION.md` - removed false claims, documented actual issues
-- **Created**: `/IDEMPOTENT_RECOVERY_IMPLEMENTATION.md` - detailed implementation guide
+These changes were started but require verification and likely additional fixes:
 
-## Next Step: Build Verification
+- **`/lib/db.ts`**: Parameters changed to accept `customerAmount` and `merchantAmount` separately, but caller may not be passing correct values
+- **`/app/api/pi/a2u/route.ts`**: Recovery state persistence added, but placed after Horizon submit, not before DB call
+- **`/app/api/pi/complete/route.ts`**: Call to `recordA2UTransactionAtomic` updated with new parameter names, but receipt INSERT not verified
 
-**CRITICAL**: Must run build and verify zero TypeScript errors before any claim of completion.
+## Next Steps (Do Not Report Complete)
 
-```bash
-pnpm run build
-```
+1. Fix TypeScript compilation errors
+2. Verify SDK parameter compatibility between request and handler
+3. Implement actual idempotent recovery check before Horizon submit
+4. Add DB reconciliation fallback logic
+5. Move recovery persistence to BEFORE DB transaction attempt
+6. Use actual `submitResult.fee_charged` for horizon fee
+7. Verify all accounting calculations match blockchain transfer
+8. Run `pnpm run build` - must pass with zero errors
+9. Deploy to test environment and verify end-to-end
+10. Only then remove these status warnings
 
-This will:
-1. Check TypeScript compilation
-2. Verify all imports and types
-3. Bundle the Next.js app
-4. Catch any runtime errors
-
-## Expected Build Output
-
-✅ **Zero TypeScript errors**  
-✅ **Successful Next.js build**  
-✅ **All files compiled correctly**
-
-## After Build Passes
-
-1. Commit changes to git
-2. Push to GitHub
-3. Deploy to Vercel
-4. Verify deployment succeeds
-5. Only THEN mark task complete
-
-## Files Changed Summary
-
-| File | Lines | Change Type |
-|------|-------|------------|
-| `/lib/db.ts` | 1 | Bug fix (accounting) |
-| `/app/api/pi/complete/route.ts` | ~48 | Enhancement (persistence) |
-| `/app/api/pi/a2u/route.ts` | ~21 | Enhancement (idempotency) |
-| `/PRODUCTION_BUILD_VERIFICATION.md` | -95 | Documentation fix |
-| `/IDEMPOTENT_RECOVERY_IMPLEMENTATION.md` | +221 | Documentation addition |
-
-## DO NOT REPORT COMPLETE UNTIL
-
-- ✅ Build runs successfully
-- ✅ No TypeScript errors
-- ✅ Commit pushed to git
-- ✅ Vercel deployment passes
-
-Current Status: **Code changes complete, awaiting build verification**
+**DO NOT DEPLOY** - Application still broken.

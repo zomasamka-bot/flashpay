@@ -26,7 +26,7 @@ export default function MerchantPaymentsPage() {
   const [payments, setPayments] = useState<MerchantPayment[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [filterStatus, setFilterStatus] = useState<"all" | "settled_to_merchant" | "paid_to_app" | "settlement_pending" | "settlement_failed" | "pending" | "failed" | "cancelled">("all")
+  const [filterStatus, setFilterStatus] = useState<"all" | "settled_to_merchant" | "paid_to_app" | "settlement_pending" | "settlement_failed" | "pending" | "cancelled">("all")
   const [filterDateFrom, setFilterDateFrom] = useState("")
   const [filterDateTo, setFilterDateTo] = useState("")
 
@@ -99,8 +99,6 @@ export default function MerchantPaymentsPage() {
         return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
       case "pending":
         return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
-      case "failed":
-        return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
       case "cancelled":
         return "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400"
       default:

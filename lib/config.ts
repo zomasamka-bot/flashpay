@@ -14,8 +14,8 @@ export const config = {
   piApiKey: process.env.PI_API_KEY || "",
 
   // A2U Internal Secret — server-only, used to secure internal A2U calls
-  // Must be set in environment; fail closed if missing
-  a2uInternalSecret: process.env.A2U_INTERNAL_SECRET || "",
+  // Must be set in environment; no fallback - fail closed if missing
+  a2uInternalSecret: process.env.A2U_INTERNAL_SECRET,
 
   // Owner UID — the only user who can access Operations Console
   // Set this to your Pi UID to enable owner-only operational features

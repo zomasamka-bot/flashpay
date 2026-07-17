@@ -9,18 +9,19 @@ import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { executePayment, getPaymentFromServer } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
-import type { Payment } from "@/lib/types"
+import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
+import type { Payment, PaymentStatus } from "@/lib/types"
 
 export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
   const { toast } = useToast()
   const [payment, setPayment] = useState<Payment | null>(null)
   const [loading, setLoading] = useState(true)
   const [isPaying, setIsPaying] = useState(false)
-  const [paymentStatus, setPaymentStatus] = useState<string>("")
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
   const [piSDKReady, setPiSDKReady] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [authError, setAuthError] = useState<string>("")
-  const [isPaid, setIsPaid] = useState(false)
+  const [isPaymentPaid, setIsPaymentPaid] = useState(false)
   const [isInPiBrowser, setIsInPiBrowser] = useState(true)
 
   useEffect(() => {
@@ -68,7 +69,17 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
       const serverPayment = await getPaymentFromServer(paymentId)
 
       if (serverPayment) {
-        console.log("[v0][CustomerView] Payment status:", serverPayment.status)
+        console.log("[v0][CustomerView] Payment status from server:", serverPayment.status)
+        
+        // CRITICAL: Never downgrade from settled_to_merchant
+        // If local state is already settled, preserve it and its transaction identifiers
+        const currentStatus = payment?.status
+        if (currentStatus === "settled_to_merchant" && serverPayment.status !== "settled_to_merchant") {
+          console.log("[v0][CustomerView] ⚠️ PROTECTION: Ignoring server status downgrade")
+          console.log("[v0][CustomerView] Local settled_to_merchant preserved, server returned:", serverPayment.status)
+          return
+        }
+        
         setPayment(serverPayment)
         
         // Store in unifiedStore for executePayment
@@ -85,7 +96,8 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
           )
         }
 
-        setIsPaid(serverPayment.status === "settled_to_merchant")
+        setPaymentStatus(serverPayment.status)
+        setIsPaymentPaid(isPaymentSettled(serverPayment.status))
       } else {
         console.log("[v0][CustomerView] Payment not found")
         setPayment(null)
@@ -98,7 +110,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
 
     // Poll for payment status updates every 2 seconds while payment is not completed
     const intervalId = setInterval(() => {
-      if (payment && !isPaid && !isPaying) {
+      if (payment && !isPaymentPaid && !isPaying) {
         console.log("[v0][CustomerView] Polling payment status...")
         fetchPayment()
       }
@@ -123,17 +135,29 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
 
     executePayment(
       payment.id,
-      (txid) => {
-        console.log("[v0][CustomerView] Payment successful:", txid)
-        setPaymentStatus("Payment complete!")
-        toast({
-          title: "Payment Successful",
-          description: `Transaction ID: ${txid}`,
-        })
+      (u2aTxid) => {
+        console.log("[v0][CustomerView] Backend confirmed settled_to_merchant - U2A txid:", u2aTxid)
+        
+        // CRITICAL: Backend has confirmed settled_to_merchant via /api/pi/complete
+        // Update local state with final status and verified transaction identifiers
+        // Never downgrade from settled_to_merchant
+        const finalPayment: Payment = {
+          ...payment,
+          status: "settled_to_merchant",
+          txid: u2aTxid,
+          paidAt: new Date().toISOString(),
+          settledAt: new Date().toISOString(),
+        }
+        
+        setPaymentStatus("settled_to_merchant")
+        setPayment(finalPayment)
+        setIsPaymentPaid(true)
         setIsPaying(false)
         
-        setPayment({ ...payment, status: "paid", txid })
-        setIsPaid(true)
+        toast({
+          title: "Payment Successful",
+          description: `Settlement complete. Transaction: ${u2aTxid}`,
+        })
       },
       (error) => {
         console.log("[v0][CustomerView] Payment error:", error)
@@ -144,7 +168,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
           variant: "destructive",
         })
         setIsPaying(false)
-        setPaymentStatus("")
+        setPaymentStatus(null)
       },
     )
   }
@@ -188,8 +212,8 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>Payment Request</CardTitle>
-            <Badge variant={isPaid ? "default" : "secondary"}>
-              {payment.status.toUpperCase()}
+            <Badge variant={getStatusColor(payment.status)}>
+              {getStatusLabel(payment.status)}
             </Badge>
           </div>
         </CardHeader>
@@ -219,7 +243,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
           )}
 
           <div className="space-y-2">
-            {!isInPiBrowser && !isPaid && (
+            {!isInPiBrowser && !isPaymentPaid && (
               <div className="space-y-3 p-4 bg-primary/10 border border-primary/20 rounded-lg">
                 <div className="text-center space-y-2">
                   <p className="font-medium text-primary">Pi Browser Required</p>
@@ -243,7 +267,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
               </div>
             )}
 
-            {isInPiBrowser && !isPaid && piSDKReady && (
+            {isInPiBrowser && !isPaymentPaid && piSDKReady && (
               <>
                 <Button
                   onClick={handlePay}
@@ -268,7 +292,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
               </>
             )}
 
-            {isInPiBrowser && !piSDKReady && !isPaid && (
+            {isInPiBrowser && !piSDKReady && !isPaymentPaid && (
               <div className="text-center text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin mx-auto mb-2" />
                 Connecting to Pi Network...
@@ -277,7 +301,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
 
 
 
-            {isPaid && (
+            {isPaymentPaid && (
               <div className="text-center text-sm text-muted-foreground">
                 This payment has been completed
               </div>

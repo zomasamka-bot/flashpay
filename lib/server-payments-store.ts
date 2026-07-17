@@ -9,9 +9,9 @@ interface Payment {
   merchantId?: string
   amount: number
   note: string
-  status: "pending" | "paid" | "failed" | "cancelled"
+  status: "pending" | "settled_to_merchant" | "settlement_failed" | "cancelled"
   createdAt: string
-  paidAt?: string
+  settledAt?: string
   txid?: string
 }
 

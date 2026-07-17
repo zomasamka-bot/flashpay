@@ -662,17 +662,30 @@ export async function recordA2UTransactionAtomic(params: {
   a2uTxid: string            // Horizon transaction ID from A2U flow
   merchantId: string
   merchantUid: string
-  amount: number             // Customer amount (amount paid in U2A)
-  horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7)
+  customerAmount: number     // Verified U2A amount (what customer sent)
+  merchantAmount: number     // Actual amount in A2U blockchain transfer (what was sent on Stellar)
+  horizonFeeCharged: number  // Actual submitResult.fee_charged / 10_000_000 (in Pi)
   appCommission?: number     // App commission (default 0)
   note?: string
   createdAt?: Date
 }): Promise<{ success: boolean; error?: string; transactionId?: string }> {
-  // Calculate merchant amount (what merchant receives after fees)
-  const horizonFee = params.horizonFeeCharged || 0
+  // CRITICAL: Use actual amounts from blockchain, not calculated amounts
+  const customerAmount = params.customerAmount
+  const merchantAmount = params.merchantAmount
+  const horizonFeeCharged = params.horizonFeeCharged
   const appCommission = params.appCommission || 0
-  const merchantAmount = params.amount - horizonFee - appCommission
-  const appNetImpact = horizonFee + appCommission
+  
+  // Calculate app net impact: what the app absorbs (may be negative if app bears fees)
+  // appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
+  // The merchant is credited ONLY with merchantAmount (actual blockchain transfer)
+  const appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
+  
+  console.log('[DB] Accounting breakdown:')
+  console.log('[DB]   - customerAmount:', customerAmount, '(what customer sent)')
+  console.log('[DB]   - merchantAmount:', merchantAmount, '(actual blockchain transfer to merchant)')
+  console.log('[DB]   - horizonFeeCharged:', horizonFeeCharged, '(actual Horizon fee)')
+  console.log('[DB]   - appCommission:', appCommission)
+  console.log('[DB]   - appNetImpact:', appNetImpact, '(app absorbs this: may be negative if app bears fees)')
   if (!process.env.DATABASE_URL) {
     console.error('[DB] PostgreSQL not configured for A2U transaction')
     return { success: false, error: 'Database not configured' }
@@ -719,17 +732,18 @@ export async function recordA2UTransactionAtomic(params: {
         const actualTransactionId = txResult[0]?.id || transactionId
         
         // 2. Insert receipt idempotently with fee tracking using the actual transaction ID
+        // CRITICAL: Store customerAmount, merchantAmount (what was actually sent on blockchain), and horizonFeeCharged
         const receiptResult = await tx`
           INSERT INTO receipts (
             transaction_id, merchant_id, merchant_uid, amount, currency, timestamp, txid,
             u2a_identifier, u2a_txid, a2u_identifier, a2u_txid, metadata, created_at,
             customer_amount, horizon_fee_charged, app_commission, merchant_amount, app_net_impact, settlement_status
-          ) VALUES (${actualTransactionId}, ${params.merchantId}, ${params.merchantUid}, ${params.amount},
+          ) VALUES (${actualTransactionId}, ${params.merchantId}, ${params.merchantUid}, ${merchantAmount},
                     ${'π'}, NOW(), ${params.a2uTxid}, ${params.u2aIdentifier}, ${params.u2aTxid},
                     ${params.a2uIdentifier}, ${params.a2uTxid},
                     ${JSON.stringify({ u2aIdentifier: params.u2aIdentifier, u2aTxid: params.u2aTxid, a2uIdentifier: params.a2uIdentifier, a2uTxid: params.a2uTxid })},
                     NOW(),
-                    ${params.amount}, ${horizonFee}, ${appCommission}, ${merchantAmount}, ${appNetImpact}, ${'completed'})
+                    ${customerAmount}, ${horizonFeeCharged}, ${appCommission}, ${merchantAmount}, ${appNetImpact}, ${'completed'})
           ON CONFLICT (transaction_id) DO NOTHING
           RETURNING id
         `
@@ -738,8 +752,13 @@ export async function recordA2UTransactionAtomic(params: {
         const receiptWasInserted = receiptResult && receiptResult.length > 0
 
         // 3. Update merchant balance - only increment if receipt is new
-        // CRITICAL: Credit ONLY the merchant_amount (after fees deducted), NOT the customer_amount
+        // CRITICAL: Credit ONLY the actual blockchain transfer amount (merchantAmount), NOT customerAmount
         if (receiptWasInserted) {
+          console.log('[DB] Crediting merchant balance:')
+          console.log('[DB]   - Merchant ID:', params.merchantId)
+          console.log('[DB]   - Credit amount:', merchantAmount, '(actual blockchain transfer)')
+          console.log('[DB]   - App absorbs:', appNetImpact)
+          
           await tx`
             INSERT INTO merchant_balances (merchant_id, settled, unsettled, last_updated)
             VALUES (${params.merchantId}, ${merchantAmount}, 0, NOW())
@@ -747,6 +766,10 @@ export async function recordA2UTransactionAtomic(params: {
             SET settled = merchant_balances.settled + EXCLUDED.settled,
                 last_updated = NOW()
           `
+          
+          console.log('[DB] ✓ Merchant balance updated with actual blockchain transfer amount')
+        } else {
+          console.log('[DB] Receipt was not newly inserted (idempotent retry) - skipping duplicate merchant balance credit')
         }
         
         return actualTransactionId

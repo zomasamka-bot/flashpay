@@ -328,7 +328,7 @@ export function executePayment(
         }
       },
       async (error, isCancelled) => {
-        const status = isCancelled ? "cancelled" : "failed"
+        const status = isCancelled ? "cancelled" : "settlement_failed"
         unifiedStore.updatePaymentStatus(paymentId, status)
 
         const trackingId = errorTracker.logError(operation, error, { paymentId, merchantId: payment.merchantId, status })

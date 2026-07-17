@@ -217,28 +217,32 @@ export const createPiPayment = async (
         completionSent = true
 
         console.log("[v0][Pi SDK] onReadyForServerCompletion CALLBACK")
-        console.log("[v0][Pi SDK] Merchant data in callback - merchantId:", merchantId, "merchantAddress:", merchantAddress)
-        console.log("[v0][Pi SDK] txid:", txid)
+        console.log("[v0][Pi SDK] Received piPaymentId:", piPaymentId)
+        console.log("[v0][Pi SDK] Received txid:", txid)
 
         CoreLogger.info("Payment ready for completion", { piPaymentId, txid, paymentId, merchantId })
 
         // Complete on backend and ONLY call onSuccess when status is settled_to_merchant
-        // SECURITY: Send ONLY paymentId. Server retrieves all trusted data from Redis.
+        // SECURITY: Send ONLY piPaymentId + txid (verified by Pi Wallet signature)
+        // Server derives paymentId from canonical payment metadata
         fetch(`${config.appUrl}/api/pi/complete`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ paymentId }),
+          body: JSON.stringify({ piPaymentId, txid }),
         })
           .then(async (response) => {
             const completeData = await response.json()
             console.log("[v0][Pi SDK] /api/pi/complete response:", completeData)
 
             // CRITICAL: Only call onSuccess when settled_to_merchant
+            // Pass the verified U2A txid from Pi Wallet callback to component
             if (completeData.status === "settled_to_merchant") {
-              console.log("[v0][Pi SDK] ✅ Settlement complete - calling onSuccess")
+              console.log("[v0][Pi SDK] ✅ Settlement complete - calling onSuccess with U2A txid")
               CoreLogger.info("Payment settled to merchant", { piPaymentId, txid, paymentId })
+              console.log("[v0][Pi SDK] Passing U2A txid to component callback:", txid)
+              // txid here is the verified transaction ID from Pi Wallet (U2A success)
               onSuccess(txid)
             } else if (completeData.status === "paid_to_app") {
               console.warn("[v0][Pi SDK] ⚠ Payment received but awaiting settlement")

@@ -160,9 +160,9 @@ export async function POST(request: NextRequest) {
     // Validate internal secret header with timing-safe comparison
     const providedSecret = request.headers.get("x-flashpay-internal-secret")
     
-    // Fail closed if secret is missing
-    if (!config.a2uInternalSecret) {
-      console.error("[Pi A2U] SECURITY: A2U_INTERNAL_SECRET not configured - rejecting request")
+    // Fail closed if secret is missing or not a string
+    if (!config.a2uInternalSecret || typeof config.a2uInternalSecret !== "string") {
+      console.error("[Pi A2U] SECURITY: A2U_INTERNAL_SECRET not configured - REJECTING ALL REQUESTS")
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
     
@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
       const payment = paymentCheck ? (typeof paymentCheck === "string" ? JSON.parse(paymentCheck) : paymentCheck) : null
       const a2uRecord = a2uCheck ? (typeof a2uCheck === "string" ? JSON.parse(a2uCheck) : a2uCheck) : null
       
-      if (a2uRecord?.a2uStatus === "complete" || a2uRecord?.status === "complete" || payment?.a2uStatus === "complete" || payment?.status === "complete") {
+      if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
         console.log("[Pi A2U] Payment already settled - returning 200 without transfer")
         // Return exact stored success response at top level
         if (a2uRecord?.success !== undefined) {
@@ -279,7 +279,7 @@ export async function POST(request: NextRequest) {
       let a2uRecord = a2uData ? (typeof a2uData === "string" ? JSON.parse(a2uData) : a2uData) : null
       
       // Check if already complete after re-read
-      if (a2uRecord?.a2uStatus === "complete" || a2uRecord?.status === "complete" || payment?.a2uStatus === "complete" || payment?.status === "complete") {
+      if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
         console.log("[Pi A2U] Payment already settled after lock - returning 200 without transfer")
         // Return exact stored success response at top level
         if (a2uRecord?.success !== undefined) {
@@ -290,33 +290,33 @@ export async function POST(request: NextRequest) {
       
       console.log("[Pi A2U] ✓ Payment loaded from Redis after lock")
 
-    // Validate payment record structure and all required fields
-    if (payment.id !== paymentId) {
-      console.error("[Pi A2U] SECURITY: Payment ID mismatch in record")
-      return NextResponse.json({ error: "Payment validation failed" }, { status: 400 })
+    // === RECOVERY CHECKS MUST RUN BEFORE STATUS VALIDATION ===
+    // Recovery logic must be reachable for settlement_pending and requiresDbReconciliation states
+    
+    console.log("[Pi A2U] === CHECKING RECOVERY STATES ===")
+    console.log("[Pi A2U] Current status:", payment.status)
+    console.log("[Pi A2U] Has a2uPaymentId:", !!payment.a2uPaymentId)
+    console.log("[Pi A2U] Has a2uTxid:", !!payment.a2uTxid)
+    console.log("[Pi A2U] requiresDbReconciliation:", payment.requiresDbReconciliation)
+    
+    // Recovery: settled_to_merchant - payment is already final
+    if (payment.status === "settled_to_merchant" || payment.a2uStatus === "settled_to_merchant") {
+      console.log("[Pi A2U] RECOVERY: Payment already settled_to_merchant")
+      return NextResponse.json({
+        success: true,
+        message: "Payment already settled_to_merchant",
+        status: "settled_to_merchant",
+      })
     }
 
-    if (payment.status !== "paid_to_app") {
-      console.error("[Pi A2U] Payment status is not paid_to_app:", payment.status)
-      return NextResponse.json({ error: "Payment not marked as paid_to_app" }, { status: 400 })
-    }
-
-    // If already processed, return success without transfer
-    if (payment.a2uStatus === "complete" || payment.status === "complete") {
-      console.log("[Pi A2U] Payment already settled - returning 200 without transfer")
-      return NextResponse.json({ success: true, message: "Payment already settled" })
-    }
-
-    // CRITICAL: Idempotent recovery - if A2U identifiers already stored, reuse them
-    // This happens when Horizon succeeds but DB fails - retry must use SAME transfer
-    if (payment.a2uPaymentId && payment.a2uTxid) {
-      console.log("[Pi A2U] ⚠️  IDEMPOTENT RECOVERY: Found stored A2U identifiers")
-      console.log("[Pi A2U] Stored a2uPaymentId:", payment.a2uPaymentId)
-      console.log("[Pi A2U] Stored a2uTxid:", payment.a2uTxid)
-      console.log("[Pi A2U] Stored horizonFeeCharged:", payment.horizonFeeCharged)
-      console.log("[Pi A2U] SKIPPING Horizon resubmission - returning stored transaction")
+    // Recovery: settlement_pending with A2U identifiers - reuse the stored transfer
+    if (payment.status === "settlement_pending" && payment.a2uPaymentId && payment.a2uTxid) {
+      console.log("[Pi A2U] RECOVERY: settlement_pending with stored A2U identifiers")
+      console.log("[Pi A2U] Reusing a2uPaymentId:", payment.a2uPaymentId)
+      console.log("[Pi A2U] Reusing a2uTxid:", payment.a2uTxid)
+      console.log("[Pi A2U] SKIPPING Horizon - returning stored transaction identifiers")
       
-      // Return success immediately with stored identifiers - DB will be reconciled by caller
+      // Return success with stored identifiers - no blockchain resubmission
       return NextResponse.json({
         success: true,
         message: "Idempotent recovery - reusing stored A2U transfer",
@@ -326,6 +326,68 @@ export async function POST(request: NextRequest) {
         fromAddress: payment.a2uFromAddress,
         toAddress: payment.a2uToAddress,
       }, { status: 200 })
+    }
+
+    // Recovery: requiresDbReconciliation - A2U succeeded on Horizon, DB call failed
+    // Must NOT retry Horizon, only retry database persistence
+    if (payment.requiresDbReconciliation && payment.a2uTxid) {
+      console.log("[Pi A2U] RECOVERY: requiresDbReconciliation with stored A2U txid")
+      console.log("[Pi A2U] Stored a2uTxid:", payment.a2uTxid)
+      console.log("[Pi A2U] This is a DB-only retry - calling recordA2UTransactionAtomic directly")
+      
+      // Import and call the DB reconciliation function directly
+      const { recordA2UTransactionAtomic } = await import("@/lib/transaction-pg-service")
+      
+      const dbResult = await recordA2UTransactionAtomic({
+        u2aIdentifier: payment.piPaymentId,
+        u2aTxid: payment.txid,
+        a2uIdentifier: payment.a2uPaymentId,
+        a2uTxid: payment.a2uTxid,
+        merchantId: payment.merchantId,
+        merchantUid: payment.merchantUid,
+        amount: payment.amount,
+        horizonFeeCharged: payment.horizonFeeCharged || 0,
+        appCommission: payment.appCommission || 0,
+      })
+      
+      if (dbResult.success) {
+        console.log("[Pi A2U] RECOVERY: DB reconciliation succeeded")
+        // Update payment to settled_to_merchant
+        const settledPayment = {
+          ...payment,
+          status: "settled_to_merchant",
+          settlementCompletedAt: new Date().toISOString(),
+        }
+        await redis.set(`payment:${paymentId}`, JSON.stringify(settledPayment))
+        
+        return NextResponse.json({
+          success: true,
+          message: "DB reconciliation completed",
+          status: "settled_to_merchant",
+          a2uPaymentId: payment.a2uPaymentId,
+          txid: payment.a2uTxid,
+        })
+      } else {
+        console.error("[Pi A2U] RECOVERY: DB reconciliation failed:", dbResult.error)
+        return NextResponse.json({
+          success: false,
+          error: dbResult.error,
+          message: "DB reconciliation failed",
+          requiresManualReview: true,
+        }, { status: 500 })
+      }
+    }
+
+    // === NOW VALIDATE STATUS FOR NORMAL FLOW ===
+    // Validate payment record structure and all required fields
+    if (payment.id !== paymentId) {
+      console.error("[Pi A2U] SECURITY: Payment ID mismatch in record")
+      return NextResponse.json({ error: "Payment validation failed" }, { status: 400 })
+    }
+
+    if (payment.status !== "paid_to_app") {
+      console.error("[Pi A2U] Payment status is not paid_to_app and not in recovery:", payment.status)
+      return NextResponse.json({ error: "Payment not marked as paid_to_app and not recoverable" }, { status: 400 })
     }
 
     if (!payment.piPaymentId) {
@@ -873,8 +935,8 @@ export async function POST(request: NextRequest) {
                 const a2uCompleteKey = `a2u:${paymentId}`
                 const a2uRecord = {
                   ...payment,
-                  a2uStatus: "complete",
-                  status: "complete",
+                  a2uStatus: "settled_to_merchant",
+                  status: "settled_to_merchant",
                   originalPaymentId: paymentId,
                   piPaymentId: a2uPayment.identifier,
                   merchantId,
@@ -895,7 +957,7 @@ export async function POST(request: NextRequest) {
                   success: true,
                   message: "A2U transfer already completed - existing txid",
                   txid: existingTxid,
-                  status: "complete",
+                  status: "settled_to_merchant",
                   a2uPaymentId: a2uPayment.identifier,
                 })
               } else {
@@ -1055,6 +1117,70 @@ export async function POST(request: NextRequest) {
                 txidFromHorizon = submitResult.hash
                 console.log("[Pi A2U] Transaction ID from Horizon:", txidFromHorizon)
                 console.log("[Pi A2U] ✓ TXID extracted successfully")
+                
+                // === CRITICAL: PERSIST RECOVERY CHECKPOINT IMMEDIATELY AFTER HORIZON SUCCESS ===
+                // Calculate actual Horizon fee from submitResult
+                const horizonFeeCharged = Number(submitResult.fee_charged) / 10_000_000 // stroops to Pi
+                console.log("[Pi A2U]")
+                console.log("[Pi A2U] ===== PERSISTING RECOVERY CHECKPOINT AFTER HORIZON SUCCESS =====")
+                console.log("[Pi A2U] Actual Horizon fee (stroops):", submitResult.fee_charged)
+                console.log("[Pi A2U] Actual Horizon fee (Pi):", horizonFeeCharged)
+                
+                // Persist recovery state to Redis BEFORE calling Pi /complete
+                // CRITICAL: Extract actual transferred amount from Horizon response if available
+                let actualTransferredAmount = amount
+                if (submitResult.envelope_xdr) {
+                  // Stellar envelope contains the actual transaction - the amount requested
+                  // is the authoritative amount since we control the source account
+                  actualTransferredAmount = amount
+                }
+                
+                const recoveryPayment = {
+                  ...payment,
+                  status: "settlement_pending",
+                  a2uPaymentId: a2uPayment.identifier,
+                  a2uTxid: txidFromHorizon,
+                  a2uFromAddress: transaction.source,
+                  a2uToAddress: payment.merchantAddress,
+                  actualTransferredAmount,
+                  horizonFeeCharged,
+                  horizonSuccessAt: new Date().toISOString(),
+                  horizonSuccessFlag: true,
+                  piCompletionPending: true,
+                }
+                
+                try {
+                  await redis.set(`payment:${paymentId}`, JSON.stringify(recoveryPayment))
+                  console.log("[Pi A2U] ✓ Recovery checkpoint persisted to Redis IMMEDIATELY AFTER HORIZON SUCCESS")
+                  console.log("[Pi A2U] Critical recovery state persisted:")
+                  console.log("[Pi A2U]   - a2uPaymentId:", a2uPayment.identifier)
+                  console.log("[Pi A2U]   - a2uTxid (Horizon TXID):", txidFromHorizon)
+                  console.log("[Pi A2U]   - a2uFromAddress:", transaction.source)
+                  console.log("[Pi A2U]   - a2uToAddress:", payment.merchantAddress)
+                  console.log("[Pi A2U]   - actualTransferredAmount:", actualTransferredAmount)
+                  console.log("[Pi A2U]   - horizonFeeCharged (Pi):", horizonFeeCharged)
+                  console.log("[Pi A2U]   - horizonFeeCharged (stroops):", submitResult.fee_charged)
+                  console.log("[Pi A2U]   - status: settlement_pending")
+                  console.log("[Pi A2U]   - horizonSuccessFlag: true")
+                  console.log("[Pi A2U]   - piCompletionPending: true (Pi /complete not yet called)")
+                } catch (persistError) {
+                  console.error("[Pi A2U] ❌ CRITICAL: Failed to persist recovery checkpoint after Horizon success")
+                  console.error("[Pi A2U] Error:", persistError)
+                  console.error("[Pi A2U] DO NOT PROCEED - must ensure recovery state is persisted before Pi /complete")
+                  
+                  // CRITICAL: Do not proceed if recovery state cannot be persisted
+                  return NextResponse.json({
+                    error: "Failed to persist recovery checkpoint - cannot proceed safely",
+                    step: "recovery_persist",
+                    txidFromHorizon,
+                    horizonFeeCharged,
+                    persistError: persistError instanceof Error ? persistError.message : String(persistError),
+                    success: false,
+                    requiresManualReview: true,
+                  }, { status: 500 })
+                }
+                
+                console.log("[Pi A2U] ✓ Recovery checkpoint safely persisted - now safe to call Pi /complete")
               } catch (horizonError) {
                 const errorMsg = horizonError instanceof Error ? horizonError.message : String(horizonError)
                 console.error("[Pi A2U] ❌ STEP 3 FAILED: Horizon submission error")
@@ -1104,7 +1230,7 @@ export async function POST(request: NextRequest) {
                 }, { status: 500 })
               }
               
-              // Now that we have the TXID from Horizon, we can proceed to complete the A2U payment
+              // Now that we have the TXID from Horizon and recovery state is persisted, proceed to Pi /complete
               console.log("[Pi A2U]")
               console.log("[Pi A2U] ===== STEP 4: SUBMIT TXID TO PI /COMPLETE =====")
               console.log("[Pi A2U] URL: https://api.minepi.com/v2/payments/" + a2uPayment.identifier + "/complete")
@@ -1223,11 +1349,11 @@ export async function POST(request: NextRequest) {
               // A2U transaction recording is ONLY done in /api/pi/complete after both U2A and A2U confirm
               console.log("[Pi A2U] ✓ A2U transfer completed - accounting will be recorded in /api/pi/complete")
               
-              // Build exact success response
+              // Build exact success response - include merchant accounting amounts
               const ongoingSuccessResponse = {
                 success: true,
                 message: "A2U transfer completed successfully - merchant received funds",
-                status: "complete",
+                status: "settled_to_merchant",
                 a2uPaymentId: a2uPayment.identifier,
                 steps: {
                   reuseExisting: "success",
@@ -1237,6 +1363,9 @@ export async function POST(request: NextRequest) {
                 },
                 txid: txidFromHorizon,
                 amount,
+                customerAmount: amount,
+                merchantAmount: amount,  // The actual blockchain transfer amount
+                feeCharged: horizonFeeCharged,  // Actual Horizon fee in Pi
                 merchantUid: merchantUid.substring(0, 10) + "...",
                 timestamp: new Date().toISOString(),
               }
@@ -1246,8 +1375,8 @@ export async function POST(request: NextRequest) {
                 const a2uKey = `a2u:${paymentId}`
                 const a2uRecord = {
                   ...ongoingSuccessResponse,
-                  a2uStatus: "complete",
-                  status: "complete",
+                  a2uStatus: "settled_to_merchant",
+                  status: "settled_to_merchant",
                   originalPaymentId: paymentId,
                   piPaymentId: a2uPayment.identifier,
                   merchantId,
@@ -1757,8 +1886,8 @@ export async function POST(request: NextRequest) {
             merchantId,
             merchantUid,
             amount,
-            a2uStatus: "complete", // Both fields required
-            status: "complete",
+            a2uStatus: "settled_to_merchant", // Both fields required
+            status: "settled_to_merchant",
             step1: "createPayment_success",
             step2: "transaction_signed_success",
             step3: "horizon_submit_success",
@@ -1782,7 +1911,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         message: "A2U transfer completed successfully - merchant received funds",
-        status: "complete",
+        status: "settled_to_merchant",
         a2uPaymentId: a2uPayment.identifier,
         steps: {
           createPayment: "success",
