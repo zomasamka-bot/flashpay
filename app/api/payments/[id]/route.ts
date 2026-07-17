@@ -14,10 +14,13 @@ interface Payment {
   accessToken: string
   amount: number
   note: string
-  status: "pending" | "paid" | "failed" | "cancelled"
+  status: "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "cancelled"
   createdAt: string
   paidAt?: string
+  settledAt?: string
   txid?: string
+  a2uPaymentId?: string
+  a2uTxid?: string
 }
 
 // Helper: Filter payment to only include public-safe fields

@@ -519,15 +519,18 @@ class UnifiedStateStore {
       return false
     }
 
-    if (payment.status === "paid") {
+    if (payment.status === "settled_to_merchant") {
       CoreLogger.guard("Double payment attempt", true)
       return false
     }
 
     payment.status = status
-    if (status === "paid") {
+    if (status === "paid_to_app") {
       payment.paidAt = new Date().toISOString()
       payment.txid = txid
+    }
+    if (status === "settled_to_merchant") {
+      payment.settledAt = new Date().toISOString()
     }
 
     this.saveToStorage()
@@ -542,9 +545,9 @@ class UnifiedStateStore {
   getPaymentStats() {
     // Return stats for all payments (no filtering by currentMerchantId which may vary)
     const all = this.state.payments
-    const paid = all.filter((p) => p.status === "paid")
-    const pending = all.filter((p) => p.status === "pending")
-    const failed = all.filter((p) => p.status === "failed")
+    const paid = all.filter((p) => p.status === "settled_to_merchant")
+    const pending = all.filter((p) => p.status === "pending" || p.status === "paid_to_app" || p.status === "settlement_pending")
+    const failed = all.filter((p) => p.status === "settlement_failed")
     const cancelled = all.filter((p) => p.status === "cancelled")
     const totalAmount = paid.reduce((sum, p) => sum + p.amount, 0)
     const conversionRate = all.length > 0 ? (paid.length / all.length) * 100 : 0
@@ -628,7 +631,7 @@ class UnifiedStateStore {
       const stats = merchantStatsMap.get(payment.merchantId)!
       stats.totalPayments++
 
-      if (payment.status === "paid") {
+      if (payment.status === "settled_to_merchant") {
         stats.paidPayments++
         stats.totalAmount += payment.amount
       }

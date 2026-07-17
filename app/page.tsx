@@ -133,7 +133,7 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    if (payment?.status === "paid" && showQR && !hasShownSuccessRef.current) {
+    if (payment?.status === "settled_to_merchant" && showQR && !hasShownSuccessRef.current) {
       hasShownSuccessRef.current = true
 
       try {

@@ -125,10 +125,10 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Idempotency check: Return 200 for already-paid only when piPaymentId matches identifier
-    if (redisPayment.status?.toLowerCase() === "paid") {
+    // Idempotency check: Return 200 for already-paid-to-app only when piPaymentId matches identifier
+    if (redisPayment.status === "paid_to_app") {
       if (redisPayment.piPaymentId === identifier) {
-        console.log("[Pi Webhook] ✓ Payment already paid - piPaymentId matches identifier, returning 200")
+        console.log("[Pi Webhook] ✓ Payment already paid to app - piPaymentId matches identifier, returning 200")
         return new Response(null, { status: 200 })
       } else {
         console.error("[Pi Webhook] SECURITY: Paid payment piPaymentId mismatch - rejecting")

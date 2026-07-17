@@ -354,7 +354,7 @@ export class SystemMonitor {
       },
       metrics: {
         totalPayments: payments.length,
-        paidPayments: payments.filter((p) => p.status === "paid").length,
+        paidPayments: payments.filter((p) => p.status === "settled_to_merchant").length,
         recentErrors: recentErrors.length,
         walletConnected: wallet.isConnected,
       },

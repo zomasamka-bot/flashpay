@@ -306,8 +306,8 @@ export default function PaymentContentWithId({
             console.log("[v0] Updated payment status:", updated.status)
             setPayment(updated)
             
-            if (updated.status === "paid") {
-              console.log("[v0] ✅ Payment confirmed on blockchain!")
+            if (updated.status === "settled_to_merchant") {
+              console.log("[v0] ✅ Payment confirmed and settled to merchant!")
               clearInterval(pollInterval)
               setIsPaying(false)
               toast({

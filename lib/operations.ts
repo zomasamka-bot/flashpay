@@ -341,7 +341,7 @@ export function executePayment(
 
 export function isPaymentPaid(id: string): boolean {
   const payment = unifiedStore.getPayment(id)
-  return payment?.status === "paid"
+  return payment?.status === "settled_to_merchant"
 }
 
 export function canRetryPayment(id: string): boolean {
