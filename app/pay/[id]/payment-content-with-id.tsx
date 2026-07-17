@@ -424,7 +424,7 @@ export default function PaymentContentWithId({
     )
   }
 
-  const isPaid = payment.status === "paid"
+  const isPaid = payment.status === "settled_to_merchant"
   const paymentQR = getPiNetUrl(paymentId)
   
   // CRITICAL: Log the origin context to diagnose app_id mismatches

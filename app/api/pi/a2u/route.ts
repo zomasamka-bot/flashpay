@@ -131,10 +131,10 @@ function validateA2UPayment(
  * Accepts ONLY paymentId; derives all A2U data from Redis payment record.
  * 
  * REQUIREMENTS:
- * 1. x-flashpay-internal-secret header must match A2U_INTERNAL_SECRET
+ * 1. x-flashpay-internal-secret header must match A2U_INTERNAL_SECRET from environment
  * 2. paymentId in request body must exist in Redis
  * 3. Redis payment:${paymentId} must contain:
- *    - status: "paid"
+ *    - status: "paid_to_app" (set by /api/pi/complete after U2A verification)
  *    - piPaymentId (Pi identifier)
  *    - txid (Pi transaction)
  *    - amount > 0
@@ -143,11 +143,12 @@ function validateA2UPayment(
  *    - accessToken
  *
  * FLOW:
- * 1. /api/pi/complete completes Pi U2A → marks PAID in Redis
- * 2. /api/pi/complete calls /api/pi/a2u with only paymentId + internal secret
- * 3. A2U loads payment from Redis (trusts only Redis data)
- * 4. Verifies all required fields and constraints
- * 5. Calls Pi API to transfer funds to merchant wallet
+ * 1. Pi Wallet confirms U2A payment → client calls /api/pi/complete
+ * 2. /api/pi/complete verifies payment, sets status to paid_to_app
+ * 3. /api/pi/complete calls /api/pi/a2u with only paymentId + A2U_INTERNAL_SECRET
+ * 4. A2U loads payment from Redis (trusts only Redis data)
+ * 5. Verifies all required fields and constraints
+ * 6. Calls Pi API to transfer funds to merchant wallet
  */
 
 // POST /api/pi/a2u — Internal App-to-User payment endpoint
@@ -304,6 +305,27 @@ export async function POST(request: NextRequest) {
     if (payment.a2uStatus === "complete" || payment.status === "complete") {
       console.log("[Pi A2U] Payment already settled - returning 200 without transfer")
       return NextResponse.json({ success: true, message: "Payment already settled" })
+    }
+
+    // CRITICAL: Idempotent recovery - if A2U identifiers already stored, reuse them
+    // This happens when Horizon succeeds but DB fails - retry must use SAME transfer
+    if (payment.a2uPaymentId && payment.a2uTxid) {
+      console.log("[Pi A2U] ⚠️  IDEMPOTENT RECOVERY: Found stored A2U identifiers")
+      console.log("[Pi A2U] Stored a2uPaymentId:", payment.a2uPaymentId)
+      console.log("[Pi A2U] Stored a2uTxid:", payment.a2uTxid)
+      console.log("[Pi A2U] Stored horizonFeeCharged:", payment.horizonFeeCharged)
+      console.log("[Pi A2U] SKIPPING Horizon resubmission - returning stored transaction")
+      
+      // Return success immediately with stored identifiers - DB will be reconciled by caller
+      return NextResponse.json({
+        success: true,
+        message: "Idempotent recovery - reusing stored A2U transfer",
+        a2uPaymentId: payment.a2uPaymentId,
+        txid: payment.a2uTxid,
+        feeCharged: payment.horizonFeeCharged || 0,
+        fromAddress: payment.a2uFromAddress,
+        toAddress: payment.a2uToAddress,
+      }, { status: 200 })
     }
 
     if (!payment.piPaymentId) {

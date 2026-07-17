@@ -346,5 +346,5 @@ export function isPaymentPaid(id: string): boolean {
 
 export function canRetryPayment(id: string): boolean {
   const payment = unifiedStore.getPayment(id)
-  return payment?.status === "failed" || payment?.status === "cancelled"
+  return payment?.status === "settlement_failed" || payment?.status === "cancelled"
 }

@@ -602,7 +602,7 @@ export async function updateSettlementStatus(
       }
     }
 
-    if (status === 'failed' && errorMessage) {
+    if (status === 'settlement_failed' && errorMessage) {
       updates.push(`error_message = $${paramIndex}`)
       params.push(errorMessage)
       paramIndex++
@@ -738,10 +738,11 @@ export async function recordA2UTransactionAtomic(params: {
         const receiptWasInserted = receiptResult && receiptResult.length > 0
 
         // 3. Update merchant balance - only increment if receipt is new
+        // CRITICAL: Credit ONLY the merchant_amount (after fees deducted), NOT the customer_amount
         if (receiptWasInserted) {
           await tx`
             INSERT INTO merchant_balances (merchant_id, settled, unsettled, last_updated)
-            VALUES (${params.merchantId}, ${params.amount}, 0, NOW())
+            VALUES (${params.merchantId}, ${merchantAmount}, 0, NOW())
             ON CONFLICT (merchant_id) DO UPDATE
             SET settled = merchant_balances.settled + EXCLUDED.settled,
                 last_updated = NOW()

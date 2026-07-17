@@ -85,7 +85,7 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
           )
         }
 
-        setIsPaid(serverPayment.status.toLowerCase() === "paid")
+        setIsPaid(serverPayment.status === "settled_to_merchant")
       } else {
         console.log("[v0][CustomerView] Payment not found")
         setPayment(null)

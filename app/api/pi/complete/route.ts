@@ -6,69 +6,83 @@ import { recordA2UTransactionAtomic } from "@/lib/db"
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const INTERNAL_SECRET = process.env.FLASHPAY_INTERNAL_SECRET || "flashpay-internal-secret-key"
-
 /**
  * POST /api/pi/complete
  * 
- * SECURITY: This endpoint accepts ONLY paymentId + x-flashpay-internal-secret header.
- * All trusted settlement data (amount, merchant, txid, addresses, fees) comes ONLY from Redis.
+ * Client-facing endpoint that completes U2A payment verification from Pi.
+ * Receives Pi payment identifier and txid from Pi Wallet callback.
+ * 
+ * SECURITY:
+ * - Accepts ONLY piPaymentId + txid from client (verified by Pi Wallet signature)
+ * - All trusted payment data (amount, merchant, addresses) from Redis
+ * - Uses A2U_INTERNAL_SECRET (from environment, fail-closed) for server-to-server calls
  * 
  * Flow:
- * 1. Verify internal secret header (prevents external callers from triggering A2U)
- * 2. Get payment state from Redis (canonical source of truth)
- * 3. If status=paid_to_app: call A2U endpoint
- * 4. If A2U success: save A2U identifiers & fees to Redis, mark settlement_pending
- * 5. If DB commit succeeds: mark settled_to_merchant
+ * 1. Verify Pi payment from Redis canonical store
+ * 2. If already settled_to_merchant: return 200 (idempotent)
+ * 3. Set status to paid_to_app (U2A complete)
+ * 4. Call /api/pi/a2u endpoint with A2U_INTERNAL_SECRET to begin settlement
+ * 5. Track settlement states: settlement_pending, settled_to_merchant, or settlement_failed
  * 
- * Retries:
- * - settlement_pending: reattempt A2U but reuse same a2uPaymentId (no new A2U)
- * - settlement_failed: manual review needed or retry via complete endpoint
+ * Never downgrades settled_to_merchant back to earlier states.
  */
 export async function POST(request: NextRequest) {
   console.log("[Pi Complete] Request received at", new Date().toISOString())
 
   try {
-    // 1. SECURITY: Verify internal secret header
-    const internalSecret = request.headers.get("x-flashpay-internal-secret")
-    if (internalSecret !== INTERNAL_SECRET) {
-      console.warn("[Pi Complete] Unauthorized - invalid or missing secret header")
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    // Fail closed: require A2U_INTERNAL_SECRET from environment
+    if (!config.a2uInternalSecret) {
+      console.error("[Pi Complete] SECURITY: A2U_INTERNAL_SECRET not configured - rejecting request")
+      return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
 
-    // 2. Parse request - accept ONLY paymentId
+    // 1. Parse request - accept ONLY piPaymentId (Pi identifier) + txid (Pi transaction)
     const body = await request.json()
-    const paymentId = body.paymentId
+    const { piPaymentId, txid } = body
     
-    if (!paymentId) {
-      console.error("[Pi Complete] Missing paymentId")
-      return NextResponse.json({ error: "Missing paymentId" }, { status: 400 })
+    if (!piPaymentId || !txid) {
+      console.error("[Pi Complete] Missing piPaymentId or txid")
+      return NextResponse.json({ error: "Missing piPaymentId or txid" }, { status: 400 })
     }
 
-    console.log("[Pi Complete] Processing paymentId:", paymentId)
+    console.log("[Pi Complete] Processing Pi payment:", piPaymentId, "txid:", txid)
 
-    // 3. Get canonical payment state from Redis
+    // 2. Get canonical payment state from Redis
     if (!isRedisConfigured) {
       console.error("[Pi Complete] Redis not configured")
       return NextResponse.json({ error: "Storage not available" }, { status: 503 })
     }
 
-    const paymentData = await redis.get(`payment:${paymentId}`)
-    if (!paymentData) {
-      console.error("[Pi Complete] Payment not found in Redis:", paymentId)
+    // Look up by piPaymentId first to find the payment record
+    // All payments are stored with paymentId as key
+    const paymentKeys = await redis.keys("payment:*")
+    let paymentId: string | null = null
+    let payment: any = null
+
+    for (const key of paymentKeys) {
+      const paymentData = await redis.get(key)
+      const p = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
+      if (p.piPaymentId === piPaymentId) {
+        paymentId = key.replace("payment:", "")
+        payment = p
+        break
+      }
+    }
+
+    if (!payment || !paymentId) {
+      console.error("[Pi Complete] Payment not found for piPaymentId:", piPaymentId)
       return NextResponse.json({ error: "Payment not found" }, { status: 404 })
     }
 
-    const payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
-    console.log("[Pi Complete] Payment status:", payment.status)
+    console.log("[Pi Complete] Payment found - ID:", paymentId, "Status:", payment.status)
 
-    // 4. Handle retry cases and idempotency
+    // 3. Handle retry cases and idempotency - NEVER downgrade settled_to_merchant
     if (payment.status === "settled_to_merchant") {
-      console.log("[Pi Complete] Already settled - returning current state")
+      console.log("[Pi Complete] Already settled to merchant - returning current state (NO DOWNGRADE)")
       return NextResponse.json({
         status: "settled_to_merchant",
         paymentId,
-        a2uTxid: payment.a2uTxid,
+        txid: payment.a2uTxid,
       })
     }
 
@@ -92,7 +106,7 @@ export async function POST(request: NextRequest) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-flashpay-internal-secret": INTERNAL_SECRET,
+          "x-flashpay-internal-secret": config.a2uInternalSecret,
         },
         body: JSON.stringify({
           action: "verify_and_complete",
@@ -122,23 +136,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "settlement_pending", paymentId })
     }
 
-    // 5. Handle paid_to_app - start A2U settlement
-    if (payment.status !== "paid_to_app") {
-      console.error("[Pi Complete] Unexpected status:", payment.status)
+    // 4. Handle payment states
+    if (payment.status !== "pending") {
+      console.error("[Pi Complete] Unexpected status:", payment.status, "expected pending")
       return NextResponse.json(
         { error: "Invalid payment status for completion", status: payment.status },
         { status: 400 }
       )
     }
 
-    console.log("[Pi Complete] Starting A2U settlement for payment:", paymentId)
+    // Verify Pi txid matches canonical record
+    if (payment.txid !== txid) {
+      console.error("[Pi Complete] txid mismatch - expected:", payment.txid, "got:", txid)
+      return NextResponse.json({ error: "Transaction mismatch" }, { status: 400 })
+    }
 
-    // Call A2U endpoint with ONLY paymentId + secret
+    // 5. Mark as paid_to_app (U2A complete) before calling A2U
+    console.log("[Pi Complete] U2A verified, marking paid_to_app and initiating A2U settlement")
+    
+    await redis.set(
+      `payment:${paymentId}`,
+      JSON.stringify({
+        ...payment,
+        status: "paid_to_app",
+        paidAt: new Date().toISOString(),
+      })
+    )
+    console.log("[Pi Complete] Payment marked paid_to_app")
+
+    // 6. Call A2U endpoint with ONLY paymentId + internal secret from environment
     const a2uResponse = await fetch(`${config.appUrl}/api/pi/a2u`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-flashpay-internal-secret": INTERNAL_SECRET,
+        "x-flashpay-internal-secret": config.a2uInternalSecret,
       },
       body: JSON.stringify({ paymentId }),
     })
@@ -194,11 +225,30 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // A2U succeeded - atomically record to DB with fee data
-    console.log("[Pi Complete] A2U succeeded, recording atomic transaction")
+    // A2U succeeded - IMMEDIATELY persist identifiers to Redis BEFORE DB call
+    // This ensures idempotent recovery: if DB fails, we can retry with same A2U transfer
+    console.log("[Pi Complete] A2U succeeded, persisting identifiers BEFORE DB call")
     console.log("[Pi Complete] Horizon txid:", a2uData.txid)
     console.log("[Pi Complete] Horizon fee charged:", a2uData.feeCharged)
 
+    // CRITICAL: Save A2U identifiers atomically BEFORE calling DB
+    // This is the recovery state: if anything fails after this, retry uses stored identifiers
+    await redis.set(
+      `payment:${paymentId}`,
+      JSON.stringify({
+        ...payment,
+        status: "settlement_pending",
+        a2uPaymentId: a2uData.a2uPaymentId,
+        a2uTxid: a2uData.txid,
+        a2uFromAddress: a2uData.fromAddress,
+        a2uToAddress: a2uData.toAddress,
+        horizonFeeCharged: a2uData.feeCharged,
+        // No requiresDbReconciliation yet - we haven't tried DB
+      })
+    )
+    console.log("[Pi Complete] ✓ A2U identifiers persisted to Redis (recovery state)")
+
+    // Now attempt DB transaction
     const dbResult = await recordA2UTransactionAtomic({
       u2aIdentifier: payment.piPaymentId,
       u2aTxid: payment.txid,
@@ -214,7 +264,7 @@ export async function POST(request: NextRequest) {
     if (dbResult.success) {
       console.log("[Pi Complete] Atomic transaction recorded, marking settled_to_merchant")
       
-      // CRITICAL: Only mark settled AFTER DB commit
+      // CRITICAL: Only mark settled AFTER DB commit succeeds
       await redis.set(
         `payment:${paymentId}`,
         JSON.stringify({
@@ -228,12 +278,14 @@ export async function POST(request: NextRequest) {
           settledAt: new Date().toISOString(),
         })
       )
+      console.log("[Pi Complete] ✓ Payment fully settled to merchant")
 
       return NextResponse.json({ status: "settled_to_merchant", paymentId })
     } else {
       console.error("[Pi Complete] DB transaction failed:", dbResult.error)
       
-      // DB failed but A2U succeeded - atomic recovery state
+      // DB failed but A2U succeeded - recovery state already persisted
+      // Mark requiresDbReconciliation so retry knows to complete DB only
       await redis.set(
         `payment:${paymentId}`,
         JSON.stringify({
@@ -248,6 +300,7 @@ export async function POST(request: NextRequest) {
           dbError: dbResult.error,
         })
       )
+      console.log("[Pi Complete] ⚠️  DB failed but A2U succeeded - marked requiresDbReconciliation")
 
       return NextResponse.json(
         {

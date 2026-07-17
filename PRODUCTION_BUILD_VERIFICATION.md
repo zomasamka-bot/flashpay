@@ -1,117 +1,82 @@
 # FlashPay Production Build Verification
 
-## Critical Changes Applied
+## ⚠️ CRITICAL ISSUES - NOT PRODUCTION READY
 
-### 1. Secure API Endpoint `/api/pi/complete` ✅
-**Status**: RESTORED - ONLY accepts `paymentId` + `x-flashpay-internal-secret` header
-- All trusted data (amount, merchant, addresses) retrieved from **Redis only** (canonical source)
-- External callers cannot trigger A2U without valid secret
-- Returns early if payment not found in Redis
+### Issue 1: A2U Recovery NOT Idempotent ❌
+**Problem**: A2U never reuses stored identifiers on retry
+- `settlement_pending` state saved but `/api/pi/a2u` always submits NEW transfer
+- No check for existing `a2uPaymentId` before calling Horizon
+- **Risk**: Duplicate A2U transfers if retry occurs after Horizon succeeds
 
-### 2. Payment Status Migration ✅
-**Replaced**: `paid` status
-**New statuses**:
-- `pending` → Initial state (U2A not yet confirmed)
-- `paid_to_app` → U2A confirmed by Pi, awaiting settlement
-- `settlement_pending` → A2U initiated, signing/settlement in progress
-- `settled_to_merchant` → **FINAL SUCCESS** (A2U completed + DB recorded)
-- `settlement_failed` → A2U failed, manual review needed
+**Root Cause**: `/api/pi/a2u` missing logic to detect stored recovery state
+**Fix Required**: Check for `a2uPaymentId` in Redis before submitting, skip Horizon if already exists
 
-**Files updated**:
-- `/app/payments/page.tsx` - Status config + display logic
-- `/app/merchant/payments/page.tsx` - Status filter + stats calculation
-- `/app/api/merchant/payments/route.ts` - Only return `settled_to_merchant` payments
-- `/app/api/payments/history/route.ts` - Only return `settled_to_merchant` payments
+### Issue 2: Merchant Accounting WRONG ❌
+**Problem**: Merchant credited with full customer amount instead of net
+- Line 744 in `/lib/db.ts`: `VALUES (${params.amount}, ...` — wrong!
+- Should credit merchant with `${merchantAmount}` after fees deducted
+- **Loss**: App losing settlement fees to merchant overpayment
 
-### 3. Client-Side Payment Flow `/lib/pi-sdk.ts` ✅
-**onReadyForServerApproval**: Only calls approval endpoint, does NOT check completion status
-**onReadyForServerCompletion**: 
-- Sends ONLY `paymentId` + internal-secret header to `/api/pi/complete`
-- **CRITICAL**: Only calls `onSuccess(txid)` when server returns `settled_to_merchant`
-- Intermediate statuses return errors with `false` flag (no retry loop client-side)
+**Root Cause**: Wrong field passed to merchant balance update
+**Fix Required**: Use `merchantAmount` (amount - horizonFee - appCommission) for merchant credit
 
-### 4. Atomic A2U Failure Recovery ✅
-**Saved to Redis BEFORE returning if Horizon succeeds but Pi /complete fails**:
-- `a2uPaymentId` - Pi A2U identifier
-- `a2uTxid` - Horizon transaction ID
-- `a2uFromAddress`, `a2uToAddress` - Stellar account addresses
-- `horizonFeeCharged` - Actual fee from Horizon
-- `requiresDbReconciliation` flag
+### Issue 3: A2U Persistence Too Late ❌
+**Problem**: Identifiers saved AFTER DB commit in `/api/pi/complete`
+- If DB succeeds but Redis fails, loss of recovery data
+- No atomic guarantee between A2U success and Redis persistence
+- **Risk**: Unrecoverable duplicate transfers
 
-**On retry**: Never resubmits A2U, only reconciles DB state
+**Root Cause**: Redis update at end of `/api/pi/complete` after DB transaction
+**Fix Required**: Save A2U identifiers to Redis IMMEDIATELY after Horizon succeeds, BEFORE DB call
 
-### 5. Idempotent Retries ✅
-**Handles all status states**:
-- `settled_to_merchant` → Returns current state (already done)
-- `settlement_failed` → Returns error (requires manual review)
-- `settlement_pending` + `a2uPaymentId` → Reattempts completion SAME transfer only
-- `paid_to_app` → Starts fresh A2U
+### Issue 4: False Claims in Verification Document ❌
+**Problem**: This file claims fixes are applied but code is broken
+- Idempotent recovery section marked ✅ but not implemented
+- Atomic failure recovery section marked ✅ but timing is wrong
+- Database accounting marked ✅ but calculation uses wrong field
 
-## TypeScript Build Verification Required
+**Root Cause**: Document written before implementation completed
+**Fix Required**: Remove all false ✅ checkmarks, document actual state
 
-**Before pushing**: Run full production build to catch errors:
-```bash
-npm run build
-# or
-yarn build
-```
+## Actual Implementation Status
 
-**Expected outcome**: Zero TypeScript errors, successful bundle
+### A2U Flow (BROKEN)
+1. ❌ Horizon submits transfer → returns txid + fee
+2. ❌ identifiers NOT saved to Redis yet
+3. ✅ DB transaction begins
+4. ❌ If DB succeeds → Redis save (too late)
+5. ❌ If DB fails after Horizon succeeded → NO recovery state in Redis
+6. ❌ Retry never reuses A2U, always submits new transfer
 
-## Security Checklist
+### Merchant Accounting (WRONG)
+- **Actual**: merchant_amount NOT used when crediting balance
+- **Expected**: merchant_amount = customer_amount - horizonFee - appCommission
+- **Impact**: All merchant balances inflated by full fee amounts
 
-- [ ] `/api/pi/complete` validates `x-flashpay-internal-secret` header
-- [ ] `/api/pi/complete` only accepts `paymentId` parameter
-- [ ] No merchant data passed in request body to `/api/pi/complete`
-- [ ] All trusted settlement data retrieved from Redis
-- [ ] Client sends secret header correctly in pi-sdk.ts
-- [ ] `/api/pi/a2u` only callable with valid secret header
-- [ ] No plain-text secret in client code
+### Required Fixes (Before Any Production Push)
 
-## Database Schema Changes Applied
+1. **Save A2U identifiers BEFORE DB call**
+   - After Horizon succeeds, atomically save to Redis:
+     - `a2uPaymentId`
+     - `a2uTxid`
+     - `horizonFeeCharged`
+     - `a2uFromAddress`, `a2uToAddress`
+   - Only then proceed to DB
 
-**PostgreSQL receipts table**:
-- Added: `customer_amount NUMERIC(18, 8)`
-- Added: `horizon_fee_charged NUMERIC(18, 8) DEFAULT 0`
-- Added: `app_commission NUMERIC(18, 8) DEFAULT 0`
-- Added: `merchant_amount NUMERIC(18, 8)`
-- Added: `app_net_impact NUMERIC(18, 8) DEFAULT 0`
-- Added: `settlement_status TEXT DEFAULT 'pending'`
+2. **Implement idempotent recovery in A2U endpoint**
+   - Check for existing `a2uPaymentId` in payment record
+   - If exists → skip Horizon, go straight to status check
+   - Never submit second A2U transfer
 
-**Merchant balance**: Incremented by `merchant_amount` only (after fees deducted)
+3. **Fix merchant balance credit**
+   - Change `/lib/db.ts` line 744 from `${params.amount}` to `${merchantAmount}`
+   - Verify appNetImpact is calculated correctly
+   - Test merchant receives correct net amount
 
-## Test Scenarios
+4. **Build and Deploy**
+   - Run `pnpm run build` until zero TypeScript errors
+   - Deploy to Vercel
+   - Verify commit passes all checks
+   - Only then mark complete
 
-### Happy Path
-1. User approves in Pi Wallet → `paid_to_app`
-2. A2U submitted → `settlement_pending`
-3. Horizon succeeds → A2U identifiers saved to Redis
-4. DB commit succeeds → `settled_to_merchant`
-5. Client calls `onSuccess(txid)` ✅
-
-### Failure Scenarios
-1. A2U fails (Horizon rejects) → `settlement_failed` (manual review)
-2. Horizon succeeds but DB fails → `settlement_pending` + `requiresDbReconciliation`
-   - Retry via `/api/pi/complete` reuses same A2U transfer
-   - Never submits new A2U payment
-
-## End-to-End Verification
-
-1. ✅ Build passes (zero TypeScript errors)
-2. ✅ Secure header validation works
-3. ✅ Status transitions follow spec
-4. ✅ Fee accounting is mathematically consistent
-5. ✅ Merchant receives correct settlement amount
-6. ✅ Atomic A2U recovery prevents duplicate transfers
-7. ✅ Idempotent retries don't repeat work
-
-## Deployment Readiness
-
-- [ ] All TypeScript errors resolved
-- [ ] Database schema migrations run
-- [ ] `/api/pi/complete` secret configured in production environment
-- [ ] Redis connection verified
-- [ ] Pi API key configured
-- [ ] All frontend status checks updated
-- [ ] Merchant dashboard displays correct balances
-- [ ] End-to-end payment flow tested
+## DO NOT DEPLOY UNTIL ALL FIXED

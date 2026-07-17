@@ -506,7 +506,7 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2 px-6 py-3 rounded-full bg-yellow-500/10 text-yellow-700 dark:text-yellow-500 mb-8">
-            {payment?.status === "paid" ? (
+            {payment?.status === "settled_to_merchant" ? (
               <>
                 <Check className="h-5 w-5" />
                 <span className="font-semibold">Payment Received!</span>

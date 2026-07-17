@@ -223,12 +223,11 @@ export const createPiPayment = async (
         CoreLogger.info("Payment ready for completion", { piPaymentId, txid, paymentId, merchantId })
 
         // Complete on backend and ONLY call onSuccess when status is settled_to_merchant
-        // SECURITY: Send ONLY paymentId + internal-secret header. Server retrieves all trusted data from Redis.
+        // SECURITY: Send ONLY paymentId. Server retrieves all trusted data from Redis.
         fetch(`${config.appUrl}/api/pi/complete`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-flashpay-internal-secret": "flashpay-internal-secret-key",
           },
           body: JSON.stringify({ paymentId }),
         })
