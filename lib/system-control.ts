@@ -31,8 +31,33 @@ export async function getSystemState(): Promise<SystemState> {
   }
 
   try {
-    const state = await redis.get<SystemState>(SYSTEM_STATE_KEY)
-    return state || DEFAULT_STATE
+    const data = await redis.get(SYSTEM_STATE_KEY)
+    if (!data) return DEFAULT_STATE
+    
+    // Parse Redis response (could be string or object)
+    let parsed: unknown
+    if (typeof data === 'string') {
+      parsed = JSON.parse(data)
+    } else {
+      parsed = data
+    }
+    
+    // Validate as SystemState
+    if (typeof parsed !== 'object' || parsed === null) return DEFAULT_STATE
+    const obj = parsed as Record<string, unknown>
+    
+    if (typeof obj.killSwitchEnabled === 'boolean' &&
+        typeof obj.maintenanceMessage === 'string' &&
+        typeof obj.lastToggleTime === 'number') {
+      return {
+        killSwitchEnabled: obj.killSwitchEnabled,
+        maintenanceMessage: obj.maintenanceMessage,
+        lastToggleTime: obj.lastToggleTime,
+        toggledBy: typeof obj.toggledBy === 'string' ? obj.toggledBy : undefined,
+      }
+    }
+    
+    return DEFAULT_STATE
   } catch (error) {
     console.error("[System Control] Failed to fetch system state:", error)
     return DEFAULT_STATE
@@ -63,7 +88,7 @@ export async function enableKillSwitch(message?: string): Promise<SystemState> {
   }
 
   try {
-    await redis.set(SYSTEM_STATE_KEY, newState, { ex: 86400 }) // 24 hour expiry for safety
+    await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState), { ex: 86400 }) // 24 hour expiry for safety
     console.log("[System Control] Kill switch ENABLED")
     return newState
   } catch (error) {
@@ -88,7 +113,7 @@ export async function disableKillSwitch(): Promise<SystemState> {
   }
 
   try {
-    await redis.set(SYSTEM_STATE_KEY, newState)
+    await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState))
     console.log("[System Control] Kill switch DISABLED")
     return newState
   } catch (error) {

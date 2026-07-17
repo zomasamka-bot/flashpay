@@ -218,16 +218,16 @@ export async function getMerchantTransactions(
     const offset = options?.offset || 0
 
     // Get transaction IDs from sorted set (most recent first)
-    const transactionIds = await redis.zrevrange(`merchant:${merchantId}:transactions`, offset, offset + limit - 1)
+    const transactionIds = await redis.zrange(`merchant:${merchantId}:transactions`, offset, offset + limit - 1, { rev: true })
 
-    if (!transactionIds || transactionIds.length === 0) {
+    if (!Array.isArray(transactionIds) || transactionIds.length === 0) {
       return []
     }
 
     // Fetch each transaction
     const transactions: Transaction[] = []
     for (const txnId of transactionIds) {
-      // Validate transaction ID is a string
+      // Validate transaction ID is a string (zrange members must be strings)
       if (typeof txnId !== 'string') {
         console.warn("[Transaction Service] Invalid transaction ID from sorted-set, skipping", { txnId })
         continue

@@ -284,7 +284,7 @@ export async function POST(request: NextRequest) {
     if (isRedisConfigured) {
       try {
         const approvalCacheKey = `pi:approval:${identifier}`
-        await redis.setex(approvalCacheKey, 86400, "approved") // Cache for 24 hours
+        await redis.set(approvalCacheKey, "approved", { ex: 86400 }) // Cache for 24 hours
         console.log("[Pi Webhook] Cached approval status")
       } catch (cacheError) {
         console.warn("[Pi Webhook] Could not cache approval status:", cacheError)

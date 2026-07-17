@@ -202,8 +202,6 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 /**
-<<<<<<< HEAD
-=======
  * Validate TransactionType
  */
 function isTransactionType(value: unknown): value is TransactionType {
@@ -225,7 +223,6 @@ function isUserType(value: unknown): value is 'merchant' | 'customer' {
 }
 
 /**
->>>>>>> 4a5563c (update)
  * Parse and validate Transaction from Redis
  */
 export function parseTransaction(data: unknown): Transaction | null {
@@ -235,15 +232,6 @@ export function parseTransaction(data: unknown): Transaction | null {
   
   // Validate required string fields
   if (typeof obj.transactionId !== 'string') return null
-<<<<<<< HEAD
-  if (typeof obj.type !== 'string' || !['payment', 'settlement', 'refund', 'adjustment'].includes(obj.type)) return null
-  if (typeof obj.fromId !== 'string') return null
-  if (typeof obj.fromType !== 'string' || !['merchant', 'customer'].includes(obj.fromType)) return null
-  if (typeof obj.paymentId !== 'string') return null
-  if (typeof obj.description !== 'string') return null
-  if (typeof obj.reference !== 'string') return null
-  if (typeof obj.status !== 'string' || !['pending', 'completed', 'failed'].includes(obj.status)) return null
-=======
   if (!isTransactionType(obj.type)) return null
   if (typeof obj.fromId !== 'string') return null
   if (!isUserType(obj.fromType)) return null
@@ -251,7 +239,6 @@ export function parseTransaction(data: unknown): Transaction | null {
   if (typeof obj.description !== 'string') return null
   if (typeof obj.reference !== 'string') return null
   if (!isTransactionStatus(obj.status)) return null
->>>>>>> 4a5563c (update)
   
   // Validate required numeric field
   if (!isFiniteNumber(obj.amount)) return null
@@ -264,18 +251,6 @@ export function parseTransaction(data: unknown): Transaction | null {
   
   // Validate optional fields
   if (obj.toId !== undefined && typeof obj.toId !== 'string') return null
-<<<<<<< HEAD
-  if (obj.toType !== undefined && (typeof obj.toType !== 'string' || !['merchant', 'customer'].includes(obj.toType))) return null
-  if (obj.completedAt !== undefined && !isValidISODate(obj.completedAt)) return null
-  
-  return {
-    transactionId: obj.transactionId,
-    type: obj.type as TransactionType,
-    fromId: obj.fromId,
-    fromType: obj.fromType as 'merchant' | 'customer',
-    toId: obj.toId as string | undefined,
-    toType: obj.toType as 'merchant' | 'customer' | undefined,
-=======
   if (obj.toType !== undefined && !isUserType(obj.toType)) return null
   if (obj.completedAt !== undefined && !isValidISODate(obj.completedAt)) return null
   
@@ -287,20 +262,14 @@ export function parseTransaction(data: unknown): Transaction | null {
     fromType: obj.fromType,
     toId: obj.toId,
     toType: obj.toType,
->>>>>>> 4a5563c (update)
     amount: obj.amount,
     currency: 'π',
     paymentId: obj.paymentId,
     description: obj.description,
     reference: obj.reference,
     createdAt: obj.createdAt,
-<<<<<<< HEAD
-    completedAt: obj.completedAt as string | undefined,
-    status: obj.status as TransactionStatus,
-=======
     completedAt: obj.completedAt,
     status: obj.status,
->>>>>>> 4a5563c (update)
   }
 }
 
@@ -324,14 +293,6 @@ export function parseReceipt(data: unknown): Receipt | null {
   // Validate currency
   if (obj.currency !== 'π') return null
   
-<<<<<<< HEAD
-  // Validate merchant object
-  if (!obj.merchant || typeof obj.merchant !== 'object') return null
-  const merchant = obj.merchant as Record<string, unknown>
-  if (typeof merchant.id !== 'string' || typeof merchant.name !== 'string') return null
-  
-  // Validate payer object
-=======
   // Validate merchant object and all nested fields
   if (!obj.merchant || typeof obj.merchant !== 'object') return null
   const merchant = obj.merchant as Record<string, unknown>
@@ -339,7 +300,6 @@ export function parseReceipt(data: unknown): Receipt | null {
   if (merchant.walletAddress !== undefined && typeof merchant.walletAddress !== 'string') return null
   
   // Validate payer object and all nested fields
->>>>>>> 4a5563c (update)
   if (!obj.payer || typeof obj.payer !== 'object') return null
   const payer = obj.payer as Record<string, unknown>
   if (payer.username !== undefined && typeof payer.username !== 'string') return null
@@ -353,24 +313,12 @@ export function parseReceipt(data: unknown): Receipt | null {
   if (obj.a2uIdentifier !== undefined && typeof obj.a2uIdentifier !== 'string') return null
   if (obj.a2uTxid !== undefined && typeof obj.a2uTxid !== 'string') return null
   
-<<<<<<< HEAD
-=======
   // After validation, no casts needed
->>>>>>> 4a5563c (update)
   return {
     receiptId: obj.receiptId,
     transactionId: obj.transactionId,
     merchantId: obj.merchantId,
     merchant: {
-<<<<<<< HEAD
-      id: merchant.id as string,
-      name: merchant.name as string,
-      walletAddress: merchant.walletAddress as string | undefined,
-    },
-    payer: {
-      username: payer.username as string | undefined,
-      address: payer.address as string | undefined,
-=======
       id: merchant.id,
       name: merchant.name,
       walletAddress: merchant.walletAddress,
@@ -378,28 +326,18 @@ export function parseReceipt(data: unknown): Receipt | null {
     payer: {
       username: payer.username,
       address: payer.address,
->>>>>>> 4a5563c (update)
     },
     amount: obj.amount,
     currency: 'π',
     description: obj.description,
     reference: obj.reference,
     timestamp: obj.timestamp,
-<<<<<<< HEAD
-    txid: obj.txid as string | undefined,
-    piPaymentId: obj.piPaymentId as string | undefined,
-    u2aIdentifier: obj.u2aIdentifier as string | undefined,
-    u2aTxid: obj.u2aTxid as string | undefined,
-    a2uIdentifier: obj.a2uIdentifier as string | undefined,
-    a2uTxid: obj.a2uTxid as string | undefined,
-=======
     txid: obj.txid,
     piPaymentId: obj.piPaymentId,
     u2aIdentifier: obj.u2aIdentifier,
     u2aTxid: obj.u2aTxid,
     a2uIdentifier: obj.a2uIdentifier,
     a2uTxid: obj.a2uTxid,
->>>>>>> 4a5563c (update)
   }
 }
 
@@ -411,13 +349,8 @@ export function parseMerchantBalance(data: unknown, merchantId: string): Merchan
   
   const obj = data as Record<string, unknown>
   
-<<<<<<< HEAD
-  // Validate required string
-  if (typeof obj.merchantId !== 'string') return null
-=======
   // Validate required string and verify merchantId identity
   if (typeof obj.merchantId !== 'string' || obj.merchantId !== merchantId) return null
->>>>>>> 4a5563c (update)
   
   // Validate required numbers
   if (!isFiniteNumber(obj.settled)) return null
@@ -427,19 +360,12 @@ export function parseMerchantBalance(data: unknown, merchantId: string): Merchan
   // Validate optional date
   if (obj.lastUpdated !== undefined && !isValidISODate(obj.lastUpdated)) return null
   
-<<<<<<< HEAD
-=======
   // After validation, no casts needed
->>>>>>> 4a5563c (update)
   return {
     merchantId: obj.merchantId,
     settled: obj.settled,
     unsettled: obj.unsettled,
     total: obj.total,
-<<<<<<< HEAD
-    lastUpdated: (obj.lastUpdated as string) || new Date().toISOString(),
-=======
     lastUpdated: obj.lastUpdated || new Date().toISOString(),
->>>>>>> 4a5563c (update)
   }
 }
