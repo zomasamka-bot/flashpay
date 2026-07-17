@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { ExternalLink, XCircle, Loader2 } from "lucide-react"
 import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
-import { executePayment, getPaymentFromServer } from "@/lib/operations"
+import { executePayment, getPaymentFromServer, handlePaymentRecovery } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
 import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
 import type { Payment, PaymentStatus } from "@/lib/types"
@@ -112,7 +112,36 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
     const intervalId = setInterval(() => {
       if (payment && !isPaymentPaid && !isPaying) {
         console.log("[v0][CustomerView] Polling payment status...")
-        fetchPayment()
+        
+        // Check for recovery states during polling
+        if (
+          payment.status === "settlement_pending" ||
+          payment.status === "paid_to_app" ||
+          ((payment as any).requiresDbReconciliation && (payment as any).a2uTxid) ||
+          ((payment as any).horizonSuccessFlag && !(payment as any).requiresDbReconciliation)
+        ) {
+          console.log("[v0][CustomerView] Recovery state detected - attempting recovery:", payment.status)
+          handlePaymentRecovery(
+            payment,
+            (txid) => {
+              console.log("[v0][CustomerView] Recovery successful - calling onSuccess")
+              setPaymentStatus("settled_to_merchant")
+              setIsPaymentPaid(true)
+              setIsPaying(false)
+              toast({
+                title: "Payment Completed",
+                description: `Settlement confirmed. Transaction: ${txid}`,
+              })
+            },
+            (error) => {
+              console.log("[v0][CustomerView] Recovery failed:", error)
+              // Continue polling, don't fail yet
+            },
+          )
+        } else {
+          // Normal polling
+          fetchPayment()
+        }
       }
     }, 2000)
 

@@ -89,7 +89,7 @@ export async function GET(request: NextRequest) {
             merchantId: row.merchant_id,
             merchantUid: row.merchant_uid,
             amount: parseFloat(row.amount),
-            status: row.status === "settled_to_merchant" ? row.status : "processing",
+            status: row.status,
             createdAt: row.created_at,
             receipt: row.receipt_id ? {
               id: row.receipt_id,

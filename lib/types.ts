@@ -1,4 +1,4 @@
-export type PaymentStatus = "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "cancelled"
+export type PaymentStatus = "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "failed" | "cancelled"
 
 export interface Payment {
   id: string
@@ -9,9 +9,11 @@ export interface Payment {
   
   // Amount tracking - CRITICAL for fee accounting
   amount: number // Customer amount paid (U2A)
-  horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7)
-  merchantAmount?: number // Amount merchant receives (amount - horizonFeeCharged - appCommission)
+  customerAmount?: number // Verified U2A amount (for explicit tracking)
+  merchantAmount?: number // Actual amount in A2U blockchain transfer
+  horizonFeeCharged?: number // Actual Horizon fee in Pi (stroops / 1e7)
   appCommission?: number // App commission (default 0)
+  appNetImpact?: number // What app absorbs (customerAmount - merchantAmount - horizonFeeCharged)
   
   note: string
   status: PaymentStatus
@@ -25,6 +27,11 @@ export interface Payment {
   a2uTxid?: string // Horizon transaction ID
   a2uFromAddress?: string // Stellar account from address
   a2uToAddress?: string // Stellar account to address
+  
+  // Recovery state flags
+  horizonSuccessFlag?: boolean // True if Horizon submitTransaction succeeded
+  piCompletionPending?: boolean // True if Horizon succeeded but Pi /complete not yet called
+  horizonSuccessAt?: string // ISO timestamp when Horizon succeeded
 }
 
 // Transaction types — permanent ledger of all movements

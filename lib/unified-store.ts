@@ -542,6 +542,24 @@ class UnifiedStateStore {
     return true
   }
 
+  addPaymentIdentifier(id: string, field: string, value: string): boolean {
+    const payment = this.getPayment(id)
+
+    if (!payment) {
+      CoreLogger.warn("Payment not found for identifier storage", { id, field })
+      return false
+    }
+
+    // Add field dynamically - store verified identifiers (u2aTxid, a2uTxid, etc.)
+    ;(payment as any)[field] = value
+
+    this.saveToStorage()
+    this.notify("payments")
+
+    CoreLogger.operation("Payment identifier stored", { id, field, valueLength: value.length })
+    return true
+  }
+
   getPaymentStats() {
     // Return stats for all payments (no filtering by currentMerchantId which may vary)
     const all = this.state.payments

@@ -1,36 +1,27 @@
-# Build Status - Critical Issues Unresolved
+# Build Status - UNTESTED CODE
 
-**Current Status**: BROKEN - Production build fails with critical issues
+**Current Status**: NOT BUILT - Code has not passed TypeScript check or build yet
 
-## Critical Failures
+## Known Issues Found During Code Review
 
-1. **Production Build Fails** - TypeScript compilation errors prevent deployment
-2. **SDK Request Format Incompatibility** - `/api/pi/complete` and SDK have mismatched parameter contracts
-3. **Retry Recovery Unreachable** - Recovery check logic in `/app/api/pi/a2u/route.ts` is not actually invoked on retry
-4. **DB-Only Reconciliation Absent** - No fallback reconciliation if Horizon succeeds but DB fails
-5. **Partial-Success Persistence Too Late** - Recovery data persisted AFTER DB attempt, not before
-6. **Actual Horizon Fee Not Captured** - `horizonFeeCharged` calculation uses wrong values
-7. **Database Accounting Mismatch** - Receipt insertion does not match blockchain transfer amounts
+1. **Settlement Status Enum Mismatch** - `/lib/db.ts` line 605 checks for `'settlement_failed'` status but SettlementRequest union does not include this value
+2. **Recovery Checkpoint Location** - Recovery state persisted AFTER Horizon submit succeeds, but BEFORE DB transaction attempt is needed
+3. **No Idempotent Recovery Check** - Retry logic missing before Horizon resubmit
+4. **Missing DB Reconciliation Fallback** - If Horizon succeeds but DB fails, no recovery path exists
+5. **Fee Calculation** - Uses `submitResult.fee_charged` (correct), but needs verification against actual transfers
 
-## Attempted Fixes (All Incomplete)
+## Required Actions - IN PROGRESS
 
-These changes were started but require verification and likely additional fixes:
+1. **Build verification** - Must run `pnpm exec tsc --noEmit` and `pnpm run build` to find ALL TypeScript errors
+2. **Fix all compilation errors** - Every error must be fixed before any testing
+3. **Verify settlement status handling** - Ensure settlement_failed is handled correctly
+4. **Test on actual Vercel** - Build same commit SHA on Vercel and verify it passes
+5. **End-to-end flow test** - Test full payment, duplicate Horizon transfer prevention, merchant balance accuracy
+6. **Edge case testing** - Verify no duplicate transfers, no duplicate merchant credits, proper retry handling
 
-- **`/lib/db.ts`**: Parameters changed to accept `customerAmount` and `merchantAmount` separately, but caller may not be passing correct values
-- **`/app/api/pi/a2u/route.ts`**: Recovery state persistence added, but placed after Horizon submit, not before DB call
-- **`/app/api/pi/complete/route.ts`**: Call to `recordA2UTransactionAtomic` updated with new parameter names, but receipt INSERT not verified
+## Status: NO CODE HAS RUN SUCCESSFULLY YET
 
-## Next Steps (Do Not Report Complete)
-
-1. Fix TypeScript compilation errors
-2. Verify SDK parameter compatibility between request and handler
-3. Implement actual idempotent recovery check before Horizon submit
-4. Add DB reconciliation fallback logic
-5. Move recovery persistence to BEFORE DB transaction attempt
-6. Use actual `submitResult.fee_charged` for horizon fee
-7. Verify all accounting calculations match blockchain transfer
-8. Run `pnpm run build` - must pass with zero errors
-9. Deploy to test environment and verify end-to-end
-10. Only then remove these status warnings
-
-**DO NOT DEPLOY** - Application still broken.
+Do not report any completion until:
+- Vercel build passes with exact SHA
+- All end-to-end tests pass
+- Edge cases verified (no duplicate Horizon, no duplicate merchant balance)

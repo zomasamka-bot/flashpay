@@ -47,38 +47,110 @@ export async function POST(request: NextRequest) {
 
     console.log("[Pi Complete] Processing Pi payment:", piPaymentId, "txid:", txid)
 
-    // 2. Get canonical payment state from Redis using piPaymentId
+    // 2. Fetch canonical payment state directly from Pi API (not Redis)
+    // Redis pi_payment:* keys are never created - fetch from authoritative Pi API source
+    if (!config.isPiApiKeyConfigured) {
+      console.error("[Pi Complete] PI_API_KEY not configured")
+      return NextResponse.json({ error: "Server not configured" }, { status: 500 })
+    }
+
     if (!isRedisConfigured) {
       console.error("[Pi Complete] Redis not configured")
       return NextResponse.json({ error: "Storage not available" }, { status: 503 })
     }
 
-    // Look up canonical Pi payment by piPaymentId to derive paymentId from metadata
-    // Fail fast: Do not scan all payment:* keys. Use direct piPaymentId lookup.
-    console.log("[Pi Complete] Looking up canonical Pi payment for piPaymentId:", piPaymentId)
+    console.log("[Pi Complete] Fetching canonical payment from Pi API for piPaymentId:", piPaymentId)
     
-    const canonicalKey = `pi_payment:${piPaymentId}`
-    const canonicalData = await redis.get(canonicalKey)
-    
-    if (!canonicalData) {
-      console.error("[Pi Complete] Canonical Pi payment not found:", piPaymentId)
-      return NextResponse.json({ error: "Pi payment not found" }, { status: 404 })
-    }
-
-    const canonicalPayment = typeof canonicalData === "string" ? JSON.parse(canonicalData) : canonicalData
-    console.log("[Pi Complete] Canonical Pi payment data:", {
-      piPaymentId: canonicalPayment.piPaymentId,
-      hasMetadata: !!canonicalPayment.metadata,
-      hasTxid: !!canonicalPayment.txid,
+    const piApiResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Key ${config.piApiKey}`,
+        "Content-Type": "application/json",
+      },
     })
 
-    // Derive paymentId ONLY from canonical payment metadata
-    // Never trust client-provided paymentId
+    if (!piApiResponse.ok) {
+      console.error("[Pi Complete] Failed to fetch Pi payment - status:", piApiResponse.status)
+      const errorBody = await piApiResponse.text()
+      console.error("[Pi Complete] Pi API error:", errorBody)
+      return NextResponse.json({ error: "Pi payment verification failed" }, { status: 400 })
+    }
+
+    const canonicalPayment = await piApiResponse.json()
+    console.log("[Pi Complete] Canonical Pi payment fetched:", {
+      identifier: canonicalPayment.identifier,
+      hasMetadata: !!canonicalPayment.metadata,
+      hasTxid: !!canonicalPayment.transaction?.txid,
+      hasStatus: !!canonicalPayment.status,
+    })
+
+    // 3. Comprehensive validation of canonical payment from Pi API
+    console.log("[Pi Complete] === VALIDATING CANONICAL PAYMENT FROM PI API ===")
+    
+    // Validate identifier (Pi identifier, not our internal paymentId)
+    if (!canonicalPayment.identifier || typeof canonicalPayment.identifier !== "string") {
+      console.error("[Pi Complete] Missing or invalid identifier:", canonicalPayment.identifier)
+      return NextResponse.json({ error: "Invalid Pi payment identifier" }, { status: 400 })
+    }
+
+    // Validate amount
+    if (!canonicalPayment.amount || typeof canonicalPayment.amount !== "number") {
+      console.error("[Pi Complete] Invalid amount in canonical payment:", canonicalPayment.amount)
+      return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
+    }
+
+    // Validate direction is user_to_app (U2A, not app_to_user)
+    if (canonicalPayment.direction !== "user_to_app") {
+      console.error("[Pi Complete] Invalid direction:", canonicalPayment.direction)
+      return NextResponse.json({ error: "Invalid payment direction" }, { status: 400 })
+    }
+
+    // Validate cancellation flags
+    if (canonicalPayment.status === "cancelled" || canonicalPayment.is_cancelled === true) {
+      console.error("[Pi Complete] Payment was cancelled")
+      return NextResponse.json({ error: "Payment was cancelled" }, { status: 400 })
+    }
+
+    // Validate transaction exists and has txid
+    const canonicalTxid = canonicalPayment.transaction?.txid
+    if (!canonicalTxid || typeof canonicalTxid !== "string") {
+      console.error("[Pi Complete] Missing or invalid transaction txid in canonical payment")
+      return NextResponse.json({ error: "Invalid transaction ID" }, { status: 400 })
+    }
+
+    // Validate transaction txid matches what Pi Wallet sent
+    if (canonicalTxid !== txid) {
+      console.error("[Pi Complete] Transaction txid mismatch - canonical:", canonicalTxid, "wallet:", txid)
+      return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
+    }
+
+    // Validate developer_approved flag if present
+    if (canonicalPayment.developer_approved === false) {
+      console.error("[Pi Complete] Developer did not approve payment")
+      return NextResponse.json({ error: "Payment not approved" }, { status: 400 })
+    }
+
+    // Validate transaction_verified flag
+    if (canonicalPayment.transaction?.verified !== true) {
+      console.error("[Pi Complete] Transaction not verified by Pi")
+      return NextResponse.json({ error: "Transaction not verified" }, { status: 400 })
+    }
+
+    // Validate developer_completed flag if applicable
+    // Some payment states may not require this, but if present it must be true
+    if (canonicalPayment.developer_completed === false) {
+      console.error("[Pi Complete] Developer did not mark payment as completed")
+      return NextResponse.json({ error: "Payment not marked completed by developer" }, { status: 400 })
+    }
+
+    // Derive paymentId ONLY from canonical payment metadata (never trust client)
     const paymentId = canonicalPayment.metadata?.paymentId
-    if (!paymentId) {
-      console.error("[Pi Complete] Invalid canonical payment - missing paymentId in metadata")
+    if (!paymentId || typeof paymentId !== "string") {
+      console.error("[Pi Complete] Invalid canonical payment - missing or invalid paymentId in metadata")
       return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
     }
+
+    console.log("[Pi Complete] === CANONICAL PAYMENT VALIDATED - deriving paymentId:", paymentId)
 
     // Load the actual payment record using the derived paymentId
     const paymentKey = `payment:${paymentId}`
@@ -90,47 +162,15 @@ export async function POST(request: NextRequest) {
     }
 
     const payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
-    console.log("[Pi Complete] Payment record found - ID:", paymentId, "Status:", payment.status)
+    console.log("[Pi Complete] Payment record loaded - ID:", paymentId, "Status:", payment.status)
 
-    // 3. Comprehensive validation of canonical payment data
-    console.log("[Pi Complete] === VALIDATING CANONICAL PAYMENT ===")
-    
-    if (!canonicalPayment.piPaymentId) {
-      console.error("[Pi Complete] Missing canonical piPaymentId")
-      return NextResponse.json({ error: "Invalid Pi payment identifier" }, { status: 400 })
-    }
-
-    if (!canonicalPayment.amount || typeof canonicalPayment.amount !== "number") {
-      console.error("[Pi Complete] Invalid amount in canonical payment:", canonicalPayment.amount)
-      return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
-    }
-
+    // Validate local payment amount matches canonical amount
     if (canonicalPayment.amount !== payment.amount) {
-      console.error("[Pi Complete] Amount mismatch - canonical:", canonicalPayment.amount, "payment:", payment.amount)
+      console.error("[Pi Complete] Amount mismatch - canonical:", canonicalPayment.amount, "local:", payment.amount)
       return NextResponse.json({ error: "Amount verification failed" }, { status: 400 })
     }
 
-    if (canonicalPayment.direction !== "u2a") {
-      console.error("[Pi Complete] Invalid direction:", canonicalPayment.direction)
-      return NextResponse.json({ error: "Invalid payment direction" }, { status: 400 })
-    }
-
-    if (canonicalPayment.metadata?.paymentId !== paymentId) {
-      console.error("[Pi Complete] Metadata paymentId mismatch")
-      return NextResponse.json({ error: "Metadata verification failed" }, { status: 400 })
-    }
-
-    if (canonicalPayment.status === "cancelled") {
-      console.error("[Pi Complete] Payment was cancelled")
-      return NextResponse.json({ error: "Payment was cancelled" }, { status: 400 })
-    }
-
-    if (!canonicalPayment.txid || typeof canonicalPayment.txid !== "string") {
-      console.error("[Pi Complete] Missing or invalid txid in canonical payment")
-      return NextResponse.json({ error: "Invalid transaction ID" }, { status: 400 })
-    }
-
-    console.log("[Pi Complete] === CANONICAL PAYMENT VALIDATED ===")
+    console.log("[Pi Complete] === ALL VALIDATIONS PASSED ===")
 
     // 4. Handle retry cases and idempotency - NEVER downgrade settled_to_merchant
     console.log("[Pi Complete] Current payment status:", payment.status)
@@ -194,16 +234,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "settlement_pending", paymentId })
     }
 
-    // 5. Verify txid from Pi Wallet matches canonical record
-    console.log("[Pi Complete] Verifying txid from Pi Wallet against canonical payment")
-    console.log("[Pi Complete] Canonical txid:", canonicalPayment.txid, "Wallet txid:", txid)
-    
-    if (canonicalPayment.txid !== txid) {
-      console.error("[Pi Complete] Transaction ID mismatch - payment record txid:", canonicalPayment.txid, "wallet txid:", txid)
-      return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
-    }
-
-    // 6. Only allow completion from pending state
+    // 4. Only allow completion from pending state
     if (payment.status !== "pending") {
       console.error("[Pi Complete] Cannot complete from status:", payment.status)
       return NextResponse.json(
@@ -212,21 +243,22 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 7. Persist verified piPaymentId and U2A txid before transitioning
-    console.log("[Pi Complete] Persisting verified identifiers - piPaymentId:", piPaymentId, "U2A txid:", txid)
+    // 5. Persist verified identifiers from canonical Pi API payment
+    // Use txid (Pi Wallet callback), not canonicalTxid, as the single authoritative U2A txid
+    console.log("[Pi Complete] Persisting verified identifiers - piPaymentId:", piPaymentId, "u2aTxid:", txid)
     
     const updatedPayment = {
       ...payment,
       status: "paid_to_app",
       piPaymentId,
-      u2aTxid: txid,
+      u2aTxid: txid,  // Single txid field from Pi Wallet callback (verified against canonical)
       paidAt: new Date().toISOString(),
     }
 
     await redis.set(`payment:${paymentId}`, JSON.stringify(updatedPayment))
-    console.log("[Pi Complete] Payment persisted - status: paid_to_app, txid verified")
+    console.log("[Pi Complete] Payment persisted - status: paid_to_app, txid verified against canonical Pi payment")
 
-    // 8. Call A2U endpoint with ONLY paymentId + internal secret from environment
+    // 6. Call A2U endpoint to begin settlement with validated paymentId
     console.log("[Pi Complete] Initiating A2U settlement for paymentId:", paymentId)
     
     const a2uResponse = await fetch(`${config.appUrl}/api/pi/a2u`, {
@@ -289,14 +321,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 9. A2U succeeded - IMMEDIATELY persist identifiers to Redis BEFORE DB call
+    // 9. A2U succeeded - IMMEDIATELY persist identifiers AND financial data to Redis BEFORE DB call
     // This ensures idempotent recovery: if DB fails, we can retry with same A2U transfer
-    console.log("[Pi Complete] A2U succeeded, persisting identifiers BEFORE DB call")
+    console.log("[Pi Complete] A2U succeeded, persisting identifiers AND financial data BEFORE DB call")
     console.log("[Pi Complete] Horizon txid:", a2uData.txid)
     console.log("[Pi Complete] Horizon fee charged:", a2uData.feeCharged)
+    console.log("[Pi Complete] Customer amount (from A2U):", a2uData.customerAmount)
+    console.log("[Pi Complete] Merchant amount (from A2U):", a2uData.merchantAmount)
 
-    // CRITICAL: Save A2U identifiers atomically BEFORE calling DB
-    // This is the recovery state: if anything fails after this, retry uses stored identifiers
+    // CRITICAL: Save A2U identifiers + authoritative financial data atomically BEFORE calling DB
+    // This is the recovery state: if anything fails after this, retry uses stored identifiers and amounts
     const settlementCompletePayment = {
       ...updatedPayment,
       status: "settlement_pending",
@@ -304,19 +338,41 @@ export async function POST(request: NextRequest) {
       a2uTxid: a2uData.txid,
       a2uFromAddress: a2uData.fromAddress,
       a2uToAddress: a2uData.toAddress,
-      horizonFeeCharged: a2uData.feeCharged,
+      customerAmount: a2uData.customerAmount || updatedPayment.amount, // From A2U, fallback to payment amount
+      merchantAmount: a2uData.merchantAmount || a2uData.customerAmount || updatedPayment.amount, // Actual A2U transfer
+      horizonFeeCharged: a2uData.horizonFeeCharged || a2uData.feeCharged || 0, // Actual Horizon fee
+      appCommission: a2uData.appCommission || 0, // Explicit commission
+      appNetImpact: a2uData.appNetImpact || (a2uData.customerAmount - a2uData.merchantAmount - (a2uData.horizonFeeCharged || a2uData.feeCharged || 0)), // App's net
       settlementCompletedAt: new Date().toISOString(),
     }
     
     await redis.set(`payment:${paymentId}`, JSON.stringify(settlementCompletePayment))
     console.log("[Pi Complete] ✓ A2U identifiers persisted to Redis (recovery state)")
 
-    // 10. Now attempt DB transaction - use verified identifiers from updatedPayment
+    // 10. Now attempt DB transaction - use AUTHORITATIVE values from settlement checkpoint
+    // CRITICAL: These values were persisted from A2U response and saved to Redis above
+    // NO fallbacks - must have all values or error
     console.log("[Pi Complete] Recording atomic A2U transaction to database")
-    console.log("[Pi Complete] Accounting breakdown from A2U response:")
-    console.log("[Pi Complete]   - customerAmount:", a2uData.customerAmount || payment.amount)
-    console.log("[Pi Complete]   - merchantAmount:", a2uData.merchantAmount || payment.amount)
-    console.log("[Pi Complete]   - horizonFeeCharged:", a2uData.feeCharged)
+    console.log("[Pi Complete] AUTHORITATIVE FINANCIAL DATA FROM SETTLEMENT CHECKPOINT:")
+    console.log("[Pi Complete]   - customerAmount (verified U2A):", settlementCompletePayment.customerAmount)
+    console.log("[Pi Complete]   - merchantAmount (actual A2U):", settlementCompletePayment.merchantAmount)
+    console.log("[Pi Complete]   - horizonFeeCharged (actual fee):", settlementCompletePayment.horizonFeeCharged)
+    console.log("[Pi Complete]   - appCommission:", settlementCompletePayment.appCommission)
+    console.log("[Pi Complete]   - appNetImpact:", settlementCompletePayment.appNetImpact)
+    
+    // Validate that all financial values exist - no silent fallbacks
+    if (!settlementCompletePayment.customerAmount || settlementCompletePayment.customerAmount <= 0) {
+      console.error("[Pi Complete] CRITICAL: customerAmount missing or invalid from checkpoint")
+      return NextResponse.json({ error: "Missing authoritative customer amount" }, { status: 500 })
+    }
+    if (!settlementCompletePayment.merchantAmount || settlementCompletePayment.merchantAmount <= 0) {
+      console.error("[Pi Complete] CRITICAL: merchantAmount missing or invalid from checkpoint")
+      return NextResponse.json({ error: "Missing authoritative merchant amount" }, { status: 500 })
+    }
+    if (settlementCompletePayment.horizonFeeCharged === undefined || settlementCompletePayment.horizonFeeCharged < 0) {
+      console.error("[Pi Complete] CRITICAL: horizonFeeCharged missing or invalid from checkpoint")
+      return NextResponse.json({ error: "Missing authoritative horizon fee" }, { status: 500 })
+    }
     
     const dbResult = await recordA2UTransactionAtomic({
       u2aIdentifier: updatedPayment.piPaymentId,
@@ -325,17 +381,19 @@ export async function POST(request: NextRequest) {
       a2uTxid: a2uData.txid,
       merchantId: canonicalPayment.metadata?.merchantId,
       merchantUid: canonicalPayment.metadata?.merchantUid,
-      customerAmount: a2uData.customerAmount || payment.amount,
-      merchantAmount: a2uData.merchantAmount || payment.amount,
-      horizonFeeCharged: a2uData.feeCharged || 0,
-      appCommission: payment.appCommission || 0,
+      customerAmount: settlementCompletePayment.customerAmount, // Authoritative from checkpoint
+      merchantAmount: settlementCompletePayment.merchantAmount, // Authoritative from checkpoint
+      horizonFeeCharged: settlementCompletePayment.horizonFeeCharged, // Authoritative from checkpoint
+      appCommission: settlementCompletePayment.appCommission || 0, // Explicit commission
     })
 
     if (dbResult.success) {
       console.log("[Pi Complete] ✓ Atomic transaction recorded")
-      console.log("[Pi Complete] Accounting reconciliation:")
-      const appNetImpact = (a2uData.customerAmount || payment.amount) - (a2uData.merchantAmount || payment.amount) - (a2uData.feeCharged || 0)
-      console.log("[Pi Complete]   - Merchant credited:", a2uData.merchantAmount || payment.amount)
+      console.log("[Pi Complete] Accounting reconciliation (from settlement checkpoint):")
+      const appNetImpact = settlementCompletePayment.customerAmount - settlementCompletePayment.merchantAmount - settlementCompletePayment.horizonFeeCharged
+      console.log("[Pi Complete]   - Customer amount:", settlementCompletePayment.customerAmount)
+      console.log("[Pi Complete]   - Merchant credited:", settlementCompletePayment.merchantAmount)
+      console.log("[Pi Complete]   - Horizon fee:", settlementCompletePayment.horizonFeeCharged)
       console.log("[Pi Complete]   - App absorbs:", appNetImpact)
       console.log("[Pi Complete]   - Merchant balance updated in database")
       

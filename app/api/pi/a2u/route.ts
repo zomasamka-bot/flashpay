@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { config } from "@/lib/config"
 import { redis, isRedisConfigured } from "@/lib/redis"
+import { recordA2UTransactionAtomic } from "@/lib/db"
 import * as StellarSDK from "@stellar/stellar-sdk"
 
 export const dynamic = "force-dynamic"
@@ -8,6 +9,125 @@ export const runtime = "nodejs"
 
 interface A2UPaymentRequest {
   paymentId: string
+}
+
+/**
+ * ATOMIC: Sign, submit to Horizon, checkpoint recovery state
+ * CRITICAL: All three steps succeed or all fail together
+ * If Horizon succeeds but checkpoint fails: return manual-review with txid, do NOT call Pi /complete
+ * If checkpoint succeeds: safe to call Pi /complete
+ */
+async function horizonSignAndCheckpoint(
+  horizonServer: any,
+  transaction: any,
+  a2uPayment: any,
+  paymentId: string,
+  payment: any,
+  redis: any,
+  baseFee: number,
+  usedFee: number,
+  customerAmount: number, // Verified U2A amount
+  actualTransferredAmount: number // Actual A2U operation amount (merchantAmount)
+): Promise<{
+  success: boolean
+  error?: string
+  txidFromHorizon?: string
+  horizonFeeCharged?: number
+  requiresManualReview?: boolean
+}> {
+  console.log("[Pi A2U] ===== SHARED: SIGN/SUBMIT/CHECKPOINT =====")
+  console.log("[Pi A2U] Payment ID:", paymentId)
+  console.log("[Pi A2U] Customer amount (verified U2A):", customerAmount)
+  console.log("[Pi A2U] Merchant amount (A2U destination):", actualTransferredAmount)
+  console.log("[Pi A2U] A2U to_address (destination):", a2uPayment.to_address)
+  console.log("[Pi A2U] A2U amount (actual transfer):", a2uPayment.amount)
+
+  // STEP 3: Submit to Horizon
+  console.log("[Pi A2U] Submitting signed transaction to Horizon...")
+  let txidFromHorizon: string
+  let submitResult: any
+
+  try {
+    submitResult = await horizonServer.submitTransaction(transaction)
+    console.log("[Pi A2U] ✓ Horizon submission succeeded")
+    console.log("[Pi A2U] Horizon txid:", submitResult.hash)
+
+    txidFromHorizon = submitResult.hash
+    console.log("[Pi A2U] Fee charged (stroops):", submitResult.fee_charged)
+  } catch (horizonError) {
+    const errorMsg = horizonError instanceof Error ? horizonError.message : String(horizonError)
+    console.error("[Pi A2U] ❌ Horizon submission FAILED:", errorMsg)
+    return {
+      success: false,
+      error: errorMsg,
+    }
+  }
+
+  // CRITICAL: Persist recovery checkpoint IMMEDIATELY AFTER Horizon success
+  // DO NOT proceed if persistence fails
+  const horizonFeeCharged = Number(submitResult.fee_charged) / 10_000_000 // stroops to Pi
+
+  console.log("[Pi A2U]")
+  console.log("[Pi A2U] ===== CHECKPOINT: PERSISTING RECOVERY STATE AFTER HORIZON SUCCESS =====")
+  console.log("[Pi A2U] This checkpoint is CRITICAL recovery state - ALL AUTHORITATIVE FINANCIAL DATA")
+  console.log("[Pi A2U]   - a2uPaymentId (Pi identifier):", a2uPayment.identifier)
+  console.log("[Pi A2U]   - a2uTxid (Horizon txid):", txidFromHorizon)
+  console.log("[Pi A2U]   - a2uFromAddress:", transaction.source)
+  console.log("[Pi A2U]   - a2uToAddress (ACTUAL destination):", a2uPayment.to_address)
+  console.log("[Pi A2U]   - customerAmount (verified U2A):", customerAmount)
+  console.log("[Pi A2U]   - merchantAmount (actual A2U):", actualTransferredAmount)
+  console.log("[Pi A2U]   - horizonFeeCharged (Pi):", horizonFeeCharged)
+  console.log("[Pi A2U]   - appCommission:", 0)
+  console.log("[Pi A2U]   - appNetImpact:", customerAmount - actualTransferredAmount - horizonFeeCharged)
+  console.log("[Pi A2U]   - horizonSuccessFlag: true")
+  console.log("[Pi A2U]   - piCompletionPending: true")
+
+  // Build checkpoint with ACTUAL A2U values and financial amounts
+  const checkpointPayment = {
+    ...payment,
+    status: "settlement_pending",
+    a2uPaymentId: a2uPayment.identifier,
+    a2uTxid: txidFromHorizon,
+    a2uFromAddress: transaction.source,
+    a2uToAddress: a2uPayment.to_address, // ACTUAL destination from A2U, not payment.merchantAddress
+    customerAmount, // Authoritative: verified U2A amount
+    merchantAmount: actualTransferredAmount, // Authoritative: actual A2U operation amount
+    horizonFeeCharged, // Authoritative: actual fee from Horizon
+    appCommission: 0, // Explicit default commission
+    appNetImpact: customerAmount - actualTransferredAmount - horizonFeeCharged,
+    horizonSuccessAt: new Date().toISOString(),
+    horizonSuccessFlag: true,
+    piCompletionPending: true,
+  }
+
+  try {
+    await redis.set(`payment:${paymentId}`, JSON.stringify(checkpointPayment))
+    console.log("[Pi A2U] ✓ Recovery checkpoint safely persisted to Redis")
+    console.log("[Pi A2U] Horizon transaction ID:", txidFromHorizon)
+    console.log("[Pi A2U] Status: settlement_pending + horizonSuccessFlag=true + piCompletionPending=true")
+    console.log("[Pi A2U] Now safe to call Pi /complete")
+
+    return {
+      success: true,
+      txidFromHorizon,
+      horizonFeeCharged,
+    }
+  } catch (persistError) {
+    const errorMsg = persistError instanceof Error ? persistError.message : String(persistError)
+    console.error("[Pi A2U] ❌ CRITICAL: Checkpoint persistence failed AFTER Horizon success")
+    console.error("[Pi A2U] Error:", errorMsg)
+    console.error("[Pi A2U] Horizon transaction was successful, but we cannot safely proceed")
+    console.error("[Pi A2U] Must return manual-review with known txid")
+    console.error("[Pi A2U] DO NOT call Pi /complete")
+
+    return {
+      success: false,
+      error: "Checkpoint persistence failed after Horizon success",
+      txidFromHorizon, // Return the txid we DID get from Horizon
+      horizonFeeCharged,
+      requiresManualReview: true,
+    }
+  }
 }
 
 /**
@@ -345,7 +465,8 @@ export async function POST(request: NextRequest) {
         a2uTxid: payment.a2uTxid,
         merchantId: payment.merchantId,
         merchantUid: payment.merchantUid,
-        amount: payment.amount,
+        customerAmount: payment.amount,
+        merchantAmount: payment.merchantAmount || payment.amount,
         horizonFeeCharged: payment.horizonFeeCharged || 0,
         appCommission: payment.appCommission || 0,
       })
@@ -1108,79 +1229,47 @@ export async function POST(request: NextRequest) {
               console.log("[Pi A2U] ===== STEP 3: SUBMIT SIGNED TRANSACTION TO HORIZON =====")
               console.log("[Pi A2U] Submitting XDR to Horizon server (Stellar testnet)...")
               
-              let txidFromHorizon: string
-              try {
-                const submitResult = await horizonServer.submitTransaction(transaction)
-                console.log("[Pi A2U] ✓ Horizon submission succeeded")
-                console.log("[Pi A2U] Horizon response:", JSON.stringify(submitResult, null, 2))
+              // Use shared sign/submit/checkpoint function
+              // customerAmount = verified U2A amount (payment.amount)
+              // actualTransferredAmount = actual A2U operation amount (a2uPayment.amount)
+              const checkpointResult = await horizonSignAndCheckpoint(
+                horizonServer,
+                transaction,
+                a2uPayment,
+                paymentId,
+                payment,
+                redis,
+                baseFee,
+                usedFee,
+                amount, // customerAmount: verified U2A amount
+                Number(a2uPayment.amount) // actualTransferredAmount: actual A2U amount
+              )
+
+              if (!checkpointResult.success) {
+                console.error("[Pi A2U] ❌ Checkpoint function failed:", checkpointResult.error)
                 
-                txidFromHorizon = submitResult.hash
-                console.log("[Pi A2U] Transaction ID from Horizon:", txidFromHorizon)
-                console.log("[Pi A2U] ✓ TXID extracted successfully")
-                
-                // === CRITICAL: PERSIST RECOVERY CHECKPOINT IMMEDIATELY AFTER HORIZON SUCCESS ===
-                // Calculate actual Horizon fee from submitResult
-                const horizonFeeCharged = Number(submitResult.fee_charged) / 10_000_000 // stroops to Pi
-                console.log("[Pi A2U]")
-                console.log("[Pi A2U] ===== PERSISTING RECOVERY CHECKPOINT AFTER HORIZON SUCCESS =====")
-                console.log("[Pi A2U] Actual Horizon fee (stroops):", submitResult.fee_charged)
-                console.log("[Pi A2U] Actual Horizon fee (Pi):", horizonFeeCharged)
-                
-                // Persist recovery state to Redis BEFORE calling Pi /complete
-                // CRITICAL: Extract actual transferred amount from Horizon response if available
-                let actualTransferredAmount = amount
-                if (submitResult.envelope_xdr) {
-                  // Stellar envelope contains the actual transaction - the amount requested
-                  // is the authoritative amount since we control the source account
-                  actualTransferredAmount = amount
-                }
-                
-                const recoveryPayment = {
-                  ...payment,
-                  status: "settlement_pending",
-                  a2uPaymentId: a2uPayment.identifier,
-                  a2uTxid: txidFromHorizon,
-                  a2uFromAddress: transaction.source,
-                  a2uToAddress: payment.merchantAddress,
-                  actualTransferredAmount,
-                  horizonFeeCharged,
-                  horizonSuccessAt: new Date().toISOString(),
-                  horizonSuccessFlag: true,
-                  piCompletionPending: true,
-                }
-                
-                try {
-                  await redis.set(`payment:${paymentId}`, JSON.stringify(recoveryPayment))
-                  console.log("[Pi A2U] ✓ Recovery checkpoint persisted to Redis IMMEDIATELY AFTER HORIZON SUCCESS")
-                  console.log("[Pi A2U] Critical recovery state persisted:")
-                  console.log("[Pi A2U]   - a2uPaymentId:", a2uPayment.identifier)
-                  console.log("[Pi A2U]   - a2uTxid (Horizon TXID):", txidFromHorizon)
-                  console.log("[Pi A2U]   - a2uFromAddress:", transaction.source)
-                  console.log("[Pi A2U]   - a2uToAddress:", payment.merchantAddress)
-                  console.log("[Pi A2U]   - actualTransferredAmount:", actualTransferredAmount)
-                  console.log("[Pi A2U]   - horizonFeeCharged (Pi):", horizonFeeCharged)
-                  console.log("[Pi A2U]   - horizonFeeCharged (stroops):", submitResult.fee_charged)
-                  console.log("[Pi A2U]   - status: settlement_pending")
-                  console.log("[Pi A2U]   - horizonSuccessFlag: true")
-                  console.log("[Pi A2U]   - piCompletionPending: true (Pi /complete not yet called)")
-                } catch (persistError) {
-                  console.error("[Pi A2U] ❌ CRITICAL: Failed to persist recovery checkpoint after Horizon success")
-                  console.error("[Pi A2U] Error:", persistError)
-                  console.error("[Pi A2U] DO NOT PROCEED - must ensure recovery state is persisted before Pi /complete")
+                // If Horizon succeeded but checkpoint failed, return manual-review with txid
+                if (checkpointResult.txidFromHorizon) {
+                  console.error("[Pi A2U] Horizon succeeded with txid:", checkpointResult.txidFromHorizon)
+                  console.error("[Pi A2U] But checkpoint persistence failed")
+                  console.error("[Pi A2U] DO NOT call Pi /complete - must return manual-review")
                   
-                  // CRITICAL: Do not proceed if recovery state cannot be persisted
                   return NextResponse.json({
-                    error: "Failed to persist recovery checkpoint - cannot proceed safely",
-                    step: "recovery_persist",
-                    txidFromHorizon,
-                    horizonFeeCharged,
-                    persistError: persistError instanceof Error ? persistError.message : String(persistError),
                     success: false,
+                    error: checkpointResult.error,
+                    txidFromHorizon: checkpointResult.txidFromHorizon,
+                    horizonFeeCharged: checkpointResult.horizonFeeCharged,
                     requiresManualReview: true,
+                    step: "horizon_success_checkpoint_failed",
                   }, { status: 500 })
                 }
                 
-                console.log("[Pi A2U] ✓ Recovery checkpoint safely persisted - now safe to call Pi /complete")
+                // Horizon failed
+                throw new Error(checkpointResult.error)
+              }
+
+              const txidFromHorizon = checkpointResult.txidFromHorizon!
+              const horizonFeeCharged = checkpointResult.horizonFeeCharged!
               } catch (horizonError) {
                 const errorMsg = horizonError instanceof Error ? horizonError.message : String(horizonError)
                 console.error("[Pi A2U] ❌ STEP 3 FAILED: Horizon submission error")
@@ -1350,6 +1439,9 @@ export async function POST(request: NextRequest) {
               console.log("[Pi A2U] ✓ A2U transfer completed - accounting will be recorded in /api/pi/complete")
               
               // Build exact success response - include merchant accounting amounts
+              // Use actual amounts from checkpoint
+              const merchantAmount = Number(a2uPayment.amount) // Actual A2U destination amount
+              const appNetImpact = amount - merchantAmount - horizonFeeCharged
               const ongoingSuccessResponse = {
                 success: true,
                 message: "A2U transfer completed successfully - merchant received funds",
@@ -1362,10 +1454,11 @@ export async function POST(request: NextRequest) {
                   piComplete: "success",
                 },
                 txid: txidFromHorizon,
-                amount,
-                customerAmount: amount,
-                merchantAmount: amount,  // The actual blockchain transfer amount
-                feeCharged: horizonFeeCharged,  // Actual Horizon fee in Pi
+                customerAmount: amount,  // Verified U2A amount
+                merchantAmount: merchantAmount,  // Actual A2U destination amount
+                horizonFeeCharged: horizonFeeCharged,  // Actual Horizon fee in Pi
+                appCommission: 0,  // Explicit commission (default 0)
+                appNetImpact: appNetImpact,  // App's net impact from this transaction
                 merchantUid: merchantUid.substring(0, 10) + "...",
                 timestamp: new Date().toISOString(),
               }
@@ -1713,63 +1806,55 @@ export async function POST(request: NextRequest) {
       console.log("[Pi A2U] ===== STEP 3: SUBMIT SIGNED TRANSACTION TO HORIZON =====")
       console.log("[Pi A2U] Submitting XDR to Horizon server (Stellar testnet)...")
       
-      let txidFromHorizon: string
-      try {
-        const submitResult = await horizonServer.submitTransaction(transaction)
-        console.log("[Pi A2U] ✓ Horizon submission succeeded")
-        console.log("[Pi A2U] Horizon response:", JSON.stringify(submitResult, null, 2))
+      // Use shared sign/submit/checkpoint function
+      // customerAmount = verified U2A amount (payment.amount)
+      // actualTransferredAmount = actual A2U operation amount (a2uPayment.amount)
+      const checkpointResult = await horizonSignAndCheckpoint(
+        horizonServer,
+        transaction,
+        a2uPayment,
+        paymentId,
+        payment,
+        redis,
+        baseFee,
+        usedFee,
+        amount, // customerAmount: verified U2A amount
+        Number(a2uPayment.amount) // actualTransferredAmount: actual A2U amount
+      )
+
+      if (!checkpointResult.success) {
+        console.error("[Pi A2U] ❌ Checkpoint function failed:", checkpointResult.error)
         
-        txidFromHorizon = submitResult.hash
-        console.log("[Pi A2U] Transaction ID from Horizon:", txidFromHorizon)
-        console.log("[Pi A2U] ✓ TXID extracted successfully")
-      } catch (horizonError) {
-        const errorMsg = horizonError instanceof Error ? horizonError.message : String(horizonError)
-        console.error("[Pi A2U] ❌ STEP 3 FAILED: Horizon submission error")
-        console.error("[Pi A2U] Error message:", errorMsg)
-        console.error("[Pi A2U] Base fee (from Horizon):", baseFee, "stroops")
-        console.error("[Pi A2U] Fee used for transaction:", usedFee, "stroops")
-        
-        // Log detailed error response from Horizon
-        if (horizonError && typeof horizonError === "object") {
-          const err = horizonError as any
+        // If Horizon succeeded but checkpoint failed, return manual-review with txid
+        if (checkpointResult.txidFromHorizon) {
+          console.error("[Pi A2U] Horizon succeeded with txid:", checkpointResult.txidFromHorizon)
+          console.error("[Pi A2U] But checkpoint persistence failed")
+          console.error("[Pi A2U] DO NOT call Pi /complete - must return manual-review")
           
-          // Log response data if available
-          if (err.response && err.response.data) {
-            console.error("[Pi A2U] Horizon response.data:", JSON.stringify(err.response.data, null, 2))
-          }
-          
-          // Log status code
-          if (err.response && err.response.status) {
-            console.error("[Pi A2U] HTTP Status Code:", err.response.status)
-          }
-          
-          // Log extras (result_codes, result_xdr) - THIS IS CRITICAL FOR DEBUGGING
-          if (err.response && err.response.data && err.response.data.extras) {
-            console.error("[Pi A2U] Horizon extras:", JSON.stringify(err.response.data.extras, null, 2))
-            
-            if (err.response.data.extras.result_codes) {
-              console.error("[Pi A2U] Result codes:", err.response.data.extras.result_codes)
-            }
-            
-            if (err.response.data.extras.result_xdr) {
-              console.error("[Pi A2U] Result XDR:", err.response.data.extras.result_xdr)
-            }
-          }
-          
-          // Log raw error object
-          console.error("[Pi A2U] Full error object:", JSON.stringify(err, null, 2))
+          return NextResponse.json({
+            success: false,
+            error: checkpointResult.error,
+            txidFromHorizon: checkpointResult.txidFromHorizon,
+            horizonFeeCharged: checkpointResult.horizonFeeCharged,
+            requiresManualReview: true,
+            step: "horizon_success_checkpoint_failed",
+          }, { status: 500 })
         }
         
+        // Horizon failed
         return NextResponse.json({
-          error: "Failed to submit signed transaction to Horizon/Stellar network",
+          error: "Failed to submit signed transaction to Horizon",
           step: "horizonSubmit",
           piPaymentId: a2uPayment.identifier,
-          details: errorMsg,
+          details: checkpointResult.error,
           baseFee,
           usedFee,
           success: false,
         }, { status: 500 })
       }
+
+      const txidFromHorizon = checkpointResult.txidFromHorizon!
+      const horizonFeeCharged = checkpointResult.horizonFeeCharged!
       
       // Now that we have the TXID from Horizon, we can proceed to complete the A2U payment
       console.log("[Pi A2U]")

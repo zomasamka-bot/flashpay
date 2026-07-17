@@ -697,7 +697,9 @@ export async function recordA2UTransactionAtomic(params: {
       a2uIdentifier: params.a2uIdentifier,
       a2uTxid: params.a2uTxid,
       merchantId: params.merchantId,
-      amount: params.amount,
+      customerAmount: customerAmount,
+      merchantAmount: merchantAmount,
+      horizonFeeCharged: horizonFeeCharged,
     })
 
     const transactionId = randomUUID()
@@ -717,12 +719,13 @@ export async function recordA2UTransactionAtomic(params: {
       // Use postgres transaction callback API (no manual BEGIN/COMMIT/ROLLBACK)
       const result = await client.begin(async (tx) => {
         // 1. Upsert transaction with RETURNING id to get actual ID (new or existing)
+        // CRITICAL: Store merchantAmount (actual blockchain transfer), NOT customerAmount
         const txResult = await tx`
           INSERT INTO transactions (
             id, payment_id, merchant_id, merchant_uid, amount, currency, 
             reference, description, status, created_at, completed_at
           ) VALUES (${transactionId}, ${params.u2aIdentifier}, ${params.merchantId}, ${params.merchantUid}, 
-                    ${params.amount}, ${'π'}, ${reference}, ${params.note || 'A2U Settlement'}, 
+                    ${merchantAmount}, ${'π'}, ${reference}, ${params.note || 'A2U Settlement'}, 
                     ${'completed'}, ${createdAtDate.toISOString()}, NOW())
           ON CONFLICT (payment_id) DO UPDATE SET completed_at = NOW()
           RETURNING id
