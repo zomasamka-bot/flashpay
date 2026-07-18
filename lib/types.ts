@@ -316,23 +316,34 @@ export function parseTransaction(data: unknown): Transaction | null {
 
 /**
  * Parse and validate Receipt from Redis
+ * REQUIRED canonical fields: customerAmount, merchantAmount, appNetImpact
+ * OPTIONAL backward-compat: amount (deprecated)
  */
 export function parseReceipt(data: unknown): Receipt | null {
   if (!data || typeof data !== 'object') return null
   
   const obj = data as Record<string, unknown>
   
-  // Validate required fields
+  // Validate required string fields
   if (typeof obj.receiptId !== 'string') return null
   if (typeof obj.transactionId !== 'string') return null
   if (typeof obj.merchantId !== 'string') return null
-  if (!isFiniteNumber(obj.amount)) return null
   if (typeof obj.description !== 'string') return null
   if (typeof obj.reference !== 'string') return null
   if (!isValidISODate(obj.timestamp)) return null
   
   // Validate currency
   if (obj.currency !== 'π') return null
+  
+  // Validate REQUIRED canonical numeric fields
+  if (!isFiniteNumber(obj.customerAmount)) return null
+  if (!isFiniteNumber(obj.merchantAmount)) return null
+  if (!isFiniteNumber(obj.appNetImpact)) return null
+  
+  // Validate optional numeric fields (can be undefined, but if present must be finite)
+  if (obj.horizonFeeCharged !== undefined && !isFiniteNumber(obj.horizonFeeCharged)) return null
+  if (obj.appCommission !== undefined && !isFiniteNumber(obj.appCommission)) return null
+  if (obj.amount !== undefined && !isFiniteNumber(obj.amount)) return null // Deprecated field
   
   // Validate merchant object and all nested fields
   if (!obj.merchant || typeof obj.merchant !== 'object') return null
@@ -346,11 +357,15 @@ export function parseReceipt(data: unknown): Receipt | null {
   if (payer.username !== undefined && typeof payer.username !== 'string') return null
   if (payer.address !== undefined && typeof payer.address !== 'string') return null
   
-  // Validate optional fields
+  // Validate optional transaction ID fields
   if (obj.txid !== undefined && typeof obj.txid !== 'string') return null
   if (obj.piPaymentId !== undefined && typeof obj.piPaymentId !== 'string') return null
   if (obj.u2aTxid !== undefined && typeof obj.u2aTxid !== 'string') return null
   if (obj.a2uTxid !== undefined && typeof obj.a2uTxid !== 'string') return null
+  
+  // Validate optional settlement fields
+  if (obj.settlementStatus !== undefined && !['pending', 'completed', 'failed'].includes(String(obj.settlementStatus))) return null
+  if (obj.settledAt !== undefined && !isValidISODate(obj.settledAt)) return null
   
   // After validation, no casts needed
   return {
@@ -366,7 +381,12 @@ export function parseReceipt(data: unknown): Receipt | null {
       username: payer.username,
       address: payer.address,
     },
-    amount: obj.amount,
+    customerAmount: obj.customerAmount,
+    merchantAmount: obj.merchantAmount,
+    appNetImpact: obj.appNetImpact,
+    horizonFeeCharged: obj.horizonFeeCharged,
+    appCommission: obj.appCommission,
+    amount: obj.amount, // Deprecated
     currency: 'π',
     description: obj.description,
     reference: obj.reference,
@@ -375,6 +395,8 @@ export function parseReceipt(data: unknown): Receipt | null {
     piPaymentId: obj.piPaymentId,
     u2aTxid: obj.u2aTxid,
     a2uTxid: obj.a2uTxid,
+    settlementStatus: obj.settlementStatus as 'pending' | 'completed' | 'failed' | undefined,
+    settledAt: obj.settledAt,
   }
 }
 

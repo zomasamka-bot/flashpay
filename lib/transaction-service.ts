@@ -110,6 +110,7 @@ export async function recordTransaction(
 /**
  * Generate a receipt for a completed transaction
  * Stored separately for easy retrieval and potential PDF generation
+ * Non-blocking: Returns early if canonical settlement data unavailable (logs warning, does not throw)
  */
 async function generateReceipt(
   transaction: Transaction,
@@ -120,6 +121,31 @@ async function generateReceipt(
   if (!isRedisConfigured) return
 
   try {
+    // Validate REQUIRED canonical settlement data as finite numbers
+    if (typeof payment.customerAmount !== 'number' || !isFinite(payment.customerAmount)) {
+      console.warn("[Transaction Service] generateReceipt: customerAmount unavailable or invalid, skipping receipt", {
+        transactionId: transaction.transactionId,
+        customerAmount: payment.customerAmount,
+      })
+      return
+    }
+
+    if (typeof payment.merchantAmount !== 'number' || !isFinite(payment.merchantAmount)) {
+      console.warn("[Transaction Service] generateReceipt: merchantAmount unavailable or invalid, skipping receipt", {
+        transactionId: transaction.transactionId,
+        merchantAmount: payment.merchantAmount,
+      })
+      return
+    }
+
+    if (typeof payment.appNetImpact !== 'number' || !isFinite(payment.appNetImpact)) {
+      console.warn("[Transaction Service] generateReceipt: appNetImpact unavailable or invalid, skipping receipt", {
+        transactionId: transaction.transactionId,
+        appNetImpact: payment.appNetImpact,
+      })
+      return
+    }
+
     const receipt: Receipt = {
       receiptId: randomUUID(),
       transactionId: transaction.transactionId,
@@ -131,13 +157,19 @@ async function generateReceipt(
       payer: {
         username: "Customer",
       },
-      amount: payment.amount,
+      customerAmount: payment.customerAmount,
+      merchantAmount: payment.merchantAmount,
+      appNetImpact: payment.appNetImpact,
+      horizonFeeCharged: payment.horizonFeeCharged,
+      appCommission: payment.appCommission,
       currency: "π",
       description: payment.note || "Payment",
       reference: transaction.reference,
       timestamp: new Date().toISOString(),
       txid,
-      piPaymentId,
+      piPaymentId: piPaymentId,
+      u2aTxid: payment.u2aTxid,
+      a2uTxid: payment.a2uTxid,
     }
 
     await redis.set(`receipt:${transaction.transactionId}`, JSON.stringify(receipt))
