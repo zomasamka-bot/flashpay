@@ -18,7 +18,7 @@ import { ROUTES } from "@/lib/router"
 export function DomainGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  const [isChecking, setIsChecking] = useState(true)
+  const [mounted, setMounted] = useState(false)
   const [canAccess, setCanAccess] = useState(false)
   const [domain, setDomain] = useState<string>("")
 
@@ -28,18 +28,14 @@ export function DomainGuard({ children }: { children: React.ReactNode }) {
     // No need for multi-domain access control
     console.log("[v0] Domain guard bypassed for route:", pathname)
     setCanAccess(true)
-    setIsChecking(false)
+    setMounted(true)
   }, [pathname])
 
-  if (isChecking) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent mb-4"></div>
-          <p className="text-muted-foreground">Checking access...</p>
-        </div>
-      </div>
-    )
+  // Prevent hydration mismatch by not rendering until client hydration is complete
+  if (!mounted) {
+    // Return children without hydration-sensitive state during SSR
+    // This will be superseded by actual render after hydration
+    return <>{children}</>
   }
 
   if (!canAccess) {
