@@ -3,6 +3,7 @@ import { serverConfig } from "@/lib/server-config"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { recordA2UTransactionAtomic } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
+import { executeA2URecovery, isPaymentRecoverable } from "@/lib/a2u-recovery-service"
 import * as StellarSDK from "@stellar/stellar-sdk"
 
 export const dynamic = "force-dynamic"
@@ -462,131 +463,43 @@ export async function POST(request: NextRequest) {
     
     console.log("[Pi A2U] ✓ Payment loaded from Redis after lock")
 
-    // === RECOVERY CHECKS MUST RUN BEFORE STATUS VALIDATION ===
-    // Recovery logic must be reachable for settlement_pending and requiresDbReconciliation states
-    
+    // === AUTHORITATIVE RECOVERY: Delegate to recovery service if payment is recoverable ===
     console.log("[Pi A2U] === CHECKING RECOVERY STATES ===")
     console.log("[Pi A2U] Current status:", payment.status)
     console.log("[Pi A2U] Has a2uPaymentId:", !!payment.a2uPaymentId)
     console.log("[Pi A2U] Has a2uTxid:", !!payment.a2uTxid)
     console.log("[Pi A2U] requiresDbReconciliation:", payment.requiresDbReconciliation)
     
-    // Recovery: settled_to_merchant - payment is already final
-    if (payment.status === "settled_to_merchant" || payment.a2uStatus === "settled_to_merchant") {
-      console.log("[Pi A2U] RECOVERY: Payment already settled_to_merchant")
-      // Return canonical response from authoritative Redis checkpoint
-      const canonicalResponse = await buildA2USuccessResponse(paymentId)
-      if (!canonicalResponse) {
-        console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
-        return NextResponse.json(
-          { error: "Response building failed - data corruption detected" },
-          { status: 500 }
-        )
-      }
-      return NextResponse.json(canonicalResponse)
-    }
-
-    // Recovery: settlement_pending with A2U identifiers - reuse the stored transfer
-    if (payment.status === "settlement_pending" && payment.a2uPaymentId && payment.a2uTxid) {
-      console.log("[Pi A2U] RECOVERY: settlement_pending with stored A2U identifiers")
-      console.log("[Pi A2U] Reusing a2uPaymentId:", payment.a2uPaymentId)
-      console.log("[Pi A2U] Reusing a2uTxid:", payment.a2uTxid)
-      console.log("[Pi A2U] SKIPPING Horizon - returning stored transaction identifiers")
+    // Check if payment is in a recoverable state
+    if (isPaymentRecoverable(payment)) {
+      console.log("[Pi A2U] Payment is recoverable - delegating to A2U Recovery Service")
+      const recoveryResult = await executeA2URecovery(paymentId)
+      console.log("[Pi A2U] Recovery result:", recoveryResult.status)
       
-      // Return success with stored identifiers - no blockchain resubmission
-      // CRITICAL: All fields must exist in checkpoint
-      if (!payment.horizonFeeCharged || !payment.a2uFromAddress || !payment.a2uToAddress) {
-        console.error("[Pi A2U] CRITICAL: Stored checkpoint missing required fields")
-        console.error("[Pi A2U] horizonFeeCharged:", payment.horizonFeeCharged)
-        console.error("[Pi A2U] a2uFromAddress:", payment.a2uFromAddress)
-        console.error("[Pi A2U] a2uToAddress:", payment.a2uToAddress)
-        return NextResponse.json({
-          success: false,
-          error: "Incomplete checkpoint - manual review required",
-          txidFromHorizon: payment.a2uTxid,
-          requiresManualReview: true,
-        }, { status: 500 })
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: "Idempotent recovery - reusing stored A2U transfer",
-        a2uPaymentId: payment.a2uPaymentId,
-        txid: payment.a2uTxid,
-        feeCharged: payment.horizonFeeCharged,
-        fromAddress: payment.a2uFromAddress,
-        toAddress: payment.a2uToAddress,
-      }, { status: 200 })
-    }
-
-    // Recovery: requiresDbReconciliation - A2U succeeded on Horizon, DB call failed
-    // Must NOT retry Horizon, only retry database persistence
-    if (payment.requiresDbReconciliation && payment.a2uTxid) {
-      console.log("[Pi A2U] RECOVERY: requiresDbReconciliation with stored A2U txid")
-      console.log("[Pi A2U] Stored a2uTxid:", payment.a2uTxid)
-      console.log("[Pi A2U] This is a DB-only retry - calling recordA2UTransactionAtomic directly")
-      
-      // CRITICAL: Validate all required fields exist from checkpoint
-      if (
-        !payment.merchantId ||
-        !payment.merchantUid ||
-        !payment.customerAmount ||
-        !payment.merchantAmount ||
-        payment.horizonFeeCharged === undefined
-      ) {
-        console.error("[Pi A2U] CRITICAL: Checkpoint missing required fields for DB reconciliation")
-        console.error("[Pi A2U] merchantId:", payment.merchantId)
-        console.error("[Pi A2U] merchantUid:", payment.merchantUid)
-        console.error("[Pi A2U] customerAmount:", payment.customerAmount)
-        console.error("[Pi A2U] merchantAmount:", payment.merchantAmount)
-        console.error("[Pi A2U] horizonFeeCharged:", payment.horizonFeeCharged)
-        return NextResponse.json({
-          success: false,
-          error: "Incomplete checkpoint for DB reconciliation - manual review required",
-          txidFromHorizon: payment.a2uTxid,
-          requiresManualReview: true,
-        }, { status: 500 })
-      }
-      
-      // Call the DB reconciliation function directly using static import
-      const dbResult = await recordA2UTransactionAtomic({
-        u2aIdentifier: payment.piPaymentId,
-        u2aTxid: payment.txid,
-        a2uIdentifier: payment.a2uPaymentId,
-        a2uTxid: payment.a2uTxid,
-        merchantId: payment.merchantId,
-        merchantUid: payment.merchantUid,
-        customerAmount: payment.customerAmount,
-        merchantAmount: payment.merchantAmount,
-        horizonFeeCharged: payment.horizonFeeCharged,
-        appCommission: payment.appCommission || 0,
-      })
-      
-      if (dbResult.success) {
-        console.log("[Pi A2U] RECOVERY: DB reconciliation succeeded")
-        // Update payment to settled_to_merchant
-        const settledPayment = {
-          ...payment,
-          status: "settled_to_merchant",
-          settlementCompletedAt: new Date().toISOString(),
+      // Map recovery service response to HTTP response
+      if (recoveryResult.status === "success" || recoveryResult.status === "db_reconciled") {
+        // Return canonical response from authoritative Redis checkpoint
+        const canonicalResponse = await buildA2USuccessResponse(paymentId)
+        if (!canonicalResponse) {
+          console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
+          return NextResponse.json(
+            { error: "Response building failed - data corruption detected" },
+            { status: 500 }
+          )
         }
-        await redis.set(`payment:${paymentId}`, JSON.stringify(settledPayment))
-        
-        return NextResponse.json({
-          success: true,
-          message: "DB reconciliation completed",
-          status: "settled_to_merchant",
-          a2uPaymentId: payment.a2uPaymentId,
-          txid: payment.a2uTxid,
-        })
-      } else {
-        console.error("[Pi A2U] RECOVERY: DB reconciliation failed:", dbResult.error)
+        return NextResponse.json(canonicalResponse)
+      } else if (recoveryResult.status === "irreversible") {
         return NextResponse.json({
           success: false,
-          error: dbResult.error,
-          message: "DB reconciliation failed",
+          error: recoveryResult.details?.error || "Irreversible settlement failure",
           requiresManualReview: true,
-        }, { status: 500 })
+        }, { status: 400 })
+      } else {
+        return NextResponse.json({
+          success: false,
+          error: recoveryResult.details?.error || "Recovery failed",
+          requiresManualReview: true,
+        }, { status: 400 })
       }
     }
 
@@ -1193,7 +1106,8 @@ export async function POST(request: NextRequest) {
               return NextResponse.json({
                 success: false,
                 message: "Ongoing payment found - awaiting blockchain signing",
-                status: "pending_signing",
+                status: "pending",
+                settlementStage: "pending_signing",
                 a2uPaymentId: ongoingPaymentId,
                 amount,
                 details: "PI_PRIVATE_SEED required for signing",
@@ -1527,65 +1441,25 @@ export async function POST(request: NextRequest) {
                 }, { status: 403 })
               }
               
-              // A2U transaction recording is ONLY done in /api/pi/complete after both U2A and A2U confirm
-              console.log("[Pi A2U] ✓ A2U transfer completed - accounting will be recorded in /api/pi/complete")
+              // A2U transfer successful on Horizon - payment is now settlement_pending
+              // Final success comes ONLY after Pi /complete and DB recording
+              console.log("[Pi A2U] ✓ A2U transfer completed on Horizon - status is settlement_pending until Pi /complete")
               
-              // Build exact success response - include merchant accounting amounts
-              // Use actual amounts from checkpoint
-              const merchantAmount = Number(a2uPayment.amount) // Actual A2U destination amount
-              const appNetImpact = amount - merchantAmount - horizonFeeCharged
-              const ongoingSuccessResponse = {
-                success: true,
-                message: "A2U transfer completed successfully - merchant received funds",
-                status: "settled_to_merchant",
-                a2uPaymentId: a2uPayment.identifier,
-                steps: {
-                  reuseExisting: "success",
-                  sign: "success",
-                  horizonSubmit: "success",
-                  piComplete: "success",
-                },
-                txid: txidFromHorizon,
-                customerAmount: amount,  // Verified U2A amount
-                merchantAmount: merchantAmount,  // Actual A2U destination amount
-                horizonFeeCharged: horizonFeeCharged,  // Actual Horizon fee in Pi
-                appCommission: 0,  // Explicit commission (default 0)
-                appNetImpact: appNetImpact,  // App's net impact from this transaction
-                merchantUid: merchantUid.substring(0, 10) + "...",
-                timestamp: new Date().toISOString(),
+              // Return unified response (always uses buildA2USuccessResponse which enforces finality rules)
+              const processingResponse = await buildA2USuccessResponse(paymentId)
+              if (!processingResponse) {
+                console.error("[Pi A2U] ❌ Failed to build processing response after Horizon success")
+                return NextResponse.json(
+                  { error: "Response building failed" },
+                  { status: 500 }
+                )
               }
               
-              // MANDATORY: Store A2U completion with both completion fields, full payment/transaction data, and exact success response
-              if (isRedisConfigured) {
-                const a2uKey = `a2u:${paymentId}`
-                const a2uRecord = {
-                  ...ongoingSuccessResponse,
-                  a2uStatus: "settled_to_merchant",
-                  status: "settled_to_merchant",
-                  originalPaymentId: paymentId,
-                  piPaymentId: a2uPayment.identifier,
-                  merchantId,
-                  merchantUid,
-                  amount,
-                  step1: "reused_ongoing",
-                  step2: "transaction_signed_success",
-                  step3: "horizon_submit_success",
-                  step4: "pi_complete_success",
-                  txid: txidFromHorizon,
-                  completedAt: new Date().toISOString(),
-                  payment,
-                }
-                try {
-                  await redis.set(a2uKey, JSON.stringify(a2uRecord))
-                  console.log("[Pi A2U] ✓ A2U payment marked as COMPLETE in Redis with full response")
-                } catch (error) {
-                  console.error("[Pi A2U] ❌ CRITICAL: Failed to write a2u:complete to Redis")
-                  console.error("[Pi A2U] Error:", error)
-                  throw error
-                }
-              }
-              
-              return NextResponse.json(ongoingSuccessResponse)
+              // processingResponse will have:
+              // - success=false (because status=settlement_pending)
+              // - status="settlement_pending"
+              // - all checkpoint fields (a2uPaymentId, a2uTxid, etc.)
+              return NextResponse.json(processingResponse)
               
             } catch (signingError) {
               console.error("[Pi A2U] ❌ BLOCKCHAIN SIGNING/SUBMISSION FAILED")
@@ -1737,7 +1611,8 @@ export async function POST(request: NextRequest) {
               merchantId,
               merchantUid,
               amount,
-              status: "pending_signing",
+              status: "pending",
+              settlementStage: "pending_signing",
               fromAddress: a2uPayment.from_address,
               toAddress: a2uPayment.to_address,
               network: a2uPayment.network,
@@ -1759,7 +1634,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: false, // A2U not complete
         message: "A2U createPayment successful - awaiting blockchain signing",
-        status: "pending_signing",
+        status: "pending",
+        settlementStage: "pending_signing",
         a2uPaymentId: a2uPayment.identifier,
         step1: "createPayment_success",
         step2: "signing_not_configured",
@@ -2180,4 +2056,16 @@ export async function POST(request: NextRequest) {
         await releaseLockAtomic()
       }
     }
+  } catch (error) {
+    console.error("[Pi A2U] ❌ OUTER HANDLER: Unhandled error in POST handler")
+    console.error("[Pi A2U] Error:", error instanceof Error ? error.message : String(error))
+    
+    return NextResponse.json(
+      {
+        error: "A2U request failed",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    )
+  }
 }

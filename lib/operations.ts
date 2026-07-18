@@ -291,10 +291,23 @@ export function executePayment(
 
   CoreLogger.guard("Payment existence check", false)
 
-  if (payment.status !== "pending" && payment.status !== "settlement_failed") {
-    const trackingId = errorTracker.logError(operation, "Payment already in progress or completed", { paymentId, status: payment.status })
+  // CRITICAL: Only retry pending status - never restart settlement_failed or already-settled
+  if (payment.status !== "pending") {
+    const trackingId = errorTracker.logError(operation, "Payment not in retry-eligible state", { paymentId, status: payment.status })
     CoreLogger.guard("Double payment check", true)
-    onError("This payment has already been completed", trackingId)
+    onError("This payment cannot be retried. Please contact support.", trackingId)
+    return
+  }
+
+  // CRITICAL: Block retry if Horizon was already attempted (a2uTxid or horizonSuccessFlag set)
+  if ((payment as any).a2uTxid || (payment as any).horizonSuccessFlag) {
+    const trackingId = errorTracker.logError(operation, "Horizon already attempted - blocking resubmission", { 
+      paymentId, 
+      hasA2uTxid: !!(payment as any).a2uTxid,
+      hasHorizonFlag: !!(payment as any).horizonSuccessFlag 
+    })
+    CoreLogger.guard("Horizon resubmission block", true)
+    onError("This payment already reached the blockchain. Please wait for settlement to complete or contact support.", trackingId)
     return
   }
 
@@ -497,58 +510,31 @@ export async function handlePaymentRecovery(
     return
   }
 
-  // 3) settlement_pending with piCompletionPending=true and stored A2U IDs: retry only Pi /complete
+  // 3) settlement_pending with piCompletionPending=true and stored A2U IDs: Poll for server recovery
   if (
     payment.status === "settlement_pending" &&
     (payment as any).piCompletionPending === true &&
     (payment as any).u2aTxid &&
     (payment as any).a2uTxid
   ) {
-    console.log("[v0][Recovery] 🔁 State 3: settlement_pending + piCompletionPending - retry Pi /complete")
-
-    try {
-      // Retry ONLY Pi /complete with same identifier and txid - no A2U, no Horizon
-      const completeResponse = await fetch("/api/pi/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          piPaymentId: payment.id,
-          u2aTxid: (payment as any).u2aTxid,
-          a2uTxid: (payment as any).a2uTxid,
-          u2aIdentifier: (payment as any).u2aIdentifier,
-          a2uIdentifier: (payment as any).a2uIdentifier,
-          merchantId: payment.merchantId,
-        }),
-      })
-
-      if (!completeResponse.ok) {
-        const data = await completeResponse.json().catch(() => ({}))
-        throw new Error(data.error || "Pi /complete failed")
-      }
-
-      const completeData = await completeResponse.json()
-      if (completeData.status === "settled_to_merchant") {
-        // Mark as settled with final txid
-        unifiedStore.updatePaymentStatus(
-          paymentId,
-          "settled_to_merchant",
-          completeData.txid || (payment as any).a2uTxid,
-        )
-        auditLogger.log(operation, { paymentId, state: "piCompletionRetry_success" }, "success")
-        onSuccess(completeData.txid || (payment as any).a2uTxid)
-        return
-      }
-
-      throw new Error("Pi /complete did not return settled_to_merchant")
-    } catch (error) {
-      const errorTrackingId = errorTracker.logError(operation, String(error), {
-        paymentId,
-        state: "piCompletionRetry",
-      })
-      CoreLogger.error("Pi /complete retry failed:", error)
-      onError("Failed to retry payment completion", errorTrackingId)
-      return
-    }
+    console.log("[v0][Recovery] 🔄 State 3: settlement_pending + piCompletionPending - server recovery required")
+    console.log("[v0][Recovery] Client cannot call /api/pi/complete - this requires server-side recovery")
+    
+    // CRITICAL: Client must NOT post to /api/pi/complete with custom body
+    // Server-only internal recovery handles completion and DB reconciliation
+    const trackingId = auditLogger.log(
+      operation,
+      { paymentId, state: "piCompletionPending", message: "Waiting for server recovery" },
+      "pending",
+    )
+    
+    const errorTrackingId = errorTracker.logError(
+      operation,
+      "Payment completion in progress - server recovery handling",
+      { paymentId, state: "piCompletionPending" }
+    )
+    onError("Payment settlement in progress. Please wait or contact support if this persists.", errorTrackingId)
+    return
   }
 
   // 4) Pi completed but DB pending: This is a terminal state

@@ -672,7 +672,7 @@ export async function recordA2UTransactionAtomic(params: {
   // CRITICAL: Use actual amounts from blockchain, not calculated amounts
   const customerAmount = params.customerAmount
   const merchantAmount = params.merchantAmount
-  const horizonFeeCharged = params.horizonFeeCharged
+  const horizonFeeCharged = params.horizonFeeCharged ?? 0
   const appCommission = params.appCommission || 0
   
   // Calculate app net impact: what the app absorbs (may be negative if app bears fees)

@@ -66,8 +66,7 @@ export async function POST(request: NextRequest) {
     // CRITICAL: Verify the UID with Pi /v2/me before creating payment
     console.log("[API] ===== VERIFYING MERCHANT UID WITH PI NETWORK =====")
     
-    // Get accessToken from request body
-    const { accessToken } = body
+    // Validate accessToken (already extracted at top)
     if (!accessToken || typeof accessToken !== "string") {
       console.error("[API] ❌ accessToken not provided or invalid")
       return NextResponse.json(

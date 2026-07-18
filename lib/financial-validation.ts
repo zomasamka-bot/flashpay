@@ -100,7 +100,7 @@ export function validateFinancialData(payment: Payment):
   // STEP 7: Verify appNetImpact calculation with tolerance
   // CRITICAL: appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
   // Allow small tolerance for floating-point rounding (0.01 units)
-  const calculatedNetImpact = payment.customerAmount - payment.merchantAmount - payment.horizonFeeCharged
+  const calculatedNetImpact = payment.customerAmount - payment.merchantAmount - (payment.horizonFeeCharged ?? 0)
   const tolerance = 0.01
   const difference = Math.abs(calculatedNetImpact - payment.appNetImpact)
   

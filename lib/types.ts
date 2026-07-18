@@ -39,6 +39,7 @@ export interface Payment {
   horizonSuccessAt?: string // ISO timestamp when Horizon succeeded
   piCompletionPending?: boolean // True if Horizon succeeded but Pi /complete not yet called
   piCompleted?: boolean // True if Pi /complete succeeded
+  dbRecorded?: boolean // True if transaction successfully recorded in database
 }
 
 // Transaction types — permanent ledger of all movements

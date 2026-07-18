@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
+import { publicConfig } from "@/lib/public-config"
 import { recordA2UTransactionAtomic } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 
@@ -275,7 +276,7 @@ export async function POST(request: NextRequest) {
       console.log("[Pi Complete] Reusing A2U payment ID:", payment.a2uPaymentId)
       
       // Call A2U endpoint with ONLY paymentId (strict validation enforced server-side)
-      const a2uCompleteResponse = await fetch(`${serverConfig.appUrl}/api/pi/a2u`, {
+      const a2uCompleteResponse = await fetch(`${publicConfig.appUrl}/api/pi/a2u`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -313,7 +314,16 @@ export async function POST(request: NextRequest) {
         }
       }
       
-      return NextResponse.json({ status: "settlement_pending", paymentId })
+      // Return unified response for settlement_pending state
+      const processingResponse = await buildA2USuccessResponse(paymentId)
+      if (!processingResponse) {
+        console.error("[Pi Complete] ❌ Failed to build processing response")
+        return NextResponse.json(
+          { error: "Response building failed" },
+          { status: 500 }
+        )
+      }
+      return NextResponse.json(processingResponse)
     }
 
     // 4. Only allow completion from pending state
@@ -343,7 +353,7 @@ export async function POST(request: NextRequest) {
     // 6. Call A2U endpoint to begin settlement with validated paymentId
     console.log("[Pi Complete] Initiating A2U settlement for paymentId:", paymentId)
     
-    const a2uResponse = await fetch(`${serverConfig.appUrl}/api/pi/a2u`, {
+    const a2uResponse = await fetch(`${publicConfig.appUrl}/api/pi/a2u`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -374,7 +384,16 @@ export async function POST(request: NextRequest) {
         console.log("[Pi Complete] Saved A2U identifiers, status: settlement_pending")
       }
 
-      return NextResponse.json({ status: "settlement_pending", paymentId }, { status: 202 })
+      // Return unified response for settlement_pending state
+      const processingResponse = await buildA2USuccessResponse(paymentId)
+      if (!processingResponse) {
+        console.error("[Pi Complete] ❌ Failed to build processing response")
+        return NextResponse.json(
+          { error: "Response building failed" },
+          { status: 500 }
+        )
+      }
+      return NextResponse.json(processingResponse, { status: 202 })
     }
 
     if (!a2uResponse.ok || !a2uData.success) {
@@ -502,6 +521,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Checkpoint incomplete - manual review required" }, { status: 500 })
     }
 
+    // CRITICAL VALIDATION: All required identifiers and financial data must exist before DB write
+    if (!checkpoint.piPaymentId) {
+      console.error("[Pi Complete] ❌ AUDIT FAILURE: Missing piPaymentId (u2aIdentifier)")
+      return NextResponse.json({ error: "Missing piPaymentId - manual review required" }, { status: 500 })
+    }
+    if (!checkpoint.a2uPaymentId) {
+      console.error("[Pi Complete] ❌ AUDIT FAILURE: Missing a2uPaymentId (a2uIdentifier)")
+      return NextResponse.json({ error: "Missing a2uPaymentId - manual review required" }, { status: 500 })
+    }
+    if (!checkpoint.u2aTxid) {
+      console.error("[Pi Complete] ❌ AUDIT FAILURE: Missing u2aTxid")
+      return NextResponse.json({ error: "Missing u2aTxid - manual review required" }, { status: 500 })
+    }
+    if (!checkpoint.a2uTxid) {
+      console.error("[Pi Complete] ❌ AUDIT FAILURE: Missing a2uTxid")
+      return NextResponse.json({ error: "Missing a2uTxid - manual review required" }, { status: 500 })
+    }
+    if (typeof checkpoint.customerAmount !== "number") {
+      console.error("[Pi Complete] ❌ AUDIT FAILURE: Invalid customerAmount:", checkpoint.customerAmount)
+      return NextResponse.json({ error: "Invalid customerAmount - manual review required" }, { status: 500 })
+    }
+    if (typeof checkpoint.merchantAmount !== "number") {
+      console.error("[Pi Complete] ❌ AUDIT FAILURE: Invalid merchantAmount:", checkpoint.merchantAmount)
+      return NextResponse.json({ error: "Invalid merchantAmount - manual review required" }, { status: 500 })
+    }
+    if (typeof checkpoint.horizonFeeCharged !== "number") {
+      console.error("[Pi Complete] ❌ AUDIT FAILURE: Invalid horizonFeeCharged:", checkpoint.horizonFeeCharged)
+      return NextResponse.json({ error: "Invalid horizonFeeCharged - manual review required" }, { status: 500 })
+    }
+
     // Now attempt DB transaction - use AUTHORITATIVE values from checkpoint
     // CRITICAL: These values came from verified A2U response and saved to Redis
     console.log("[Pi Complete] Recording atomic A2U transaction to database")
@@ -515,16 +564,16 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete]   - Merchant UID:", checkpoint.merchantUid)
     
     const dbResult = await recordA2UTransactionAtomic({
-      u2aIdentifier: checkpoint.piPaymentId,
-      u2aTxid: checkpoint.u2aTxid,
-      a2uIdentifier: checkpoint.a2uPaymentId,
-      a2uTxid: checkpoint.a2uTxid,
-      merchantId: checkpoint.merchantId, // From Redis checkpoint, NOT from canonicalPayment.metadata
-      merchantUid: checkpoint.merchantUid, // From Redis checkpoint, NOT from canonicalPayment.metadata
-      customerAmount: checkpoint.customerAmount, // Authoritative from checkpoint
-      merchantAmount: checkpoint.merchantAmount, // Authoritative from checkpoint
-      horizonFeeCharged: checkpoint.horizonFeeCharged, // Authoritative from checkpoint
-      appCommission: checkpoint.appCommission, // From checkpoint (default 0)
+      u2aIdentifier: checkpoint.piPaymentId,          // AUDIT: Only piPaymentId, validated above
+      u2aTxid: checkpoint.u2aTxid,                    // AUDIT: Validated above
+      a2uIdentifier: checkpoint.a2uPaymentId,         // AUDIT: Only a2uPaymentId, validated above
+      a2uTxid: checkpoint.a2uTxid,                    // AUDIT: Validated above
+      merchantId: checkpoint.merchantId,               // AUDIT: From Redis checkpoint, validated above
+      merchantUid: checkpoint.merchantUid,             // AUDIT: From Redis checkpoint, validated above
+      customerAmount: checkpoint.customerAmount,       // AUDIT: Validated above, no fallback
+      merchantAmount: checkpoint.merchantAmount,       // AUDIT: Validated above, no fallback
+      horizonFeeCharged: checkpoint.horizonFeeCharged, // AUDIT: Validated above, no fallback
+      appCommission: checkpoint.appCommission,         // Optional, may be undefined
     })
 
     if (dbResult.success) {
@@ -549,6 +598,7 @@ export async function POST(request: NextRequest) {
         settledAt: new Date().toISOString(),
         piCompletionPending: false, // Pi /complete finished
         piCompleted: true, // Settlement fully completed
+        dbRecorded: true, // CRITICAL: Set ONLY after DB commit succeeds
       }
       
       await redis.set(`payment:${paymentId}`, JSON.stringify(finalPayment))
@@ -576,6 +626,7 @@ export async function POST(request: NextRequest) {
         ...checkpoint,
         status: "settlement_pending", // Stay in pending until DB succeeds
         requiresDbReconciliation: true,
+        dbRecorded: false, // CRITICAL: DB failed - mark as not recorded
         dbError: dbResult.error,
         dbAttemptedAt: new Date().toISOString(),
         a2uSucceededAt: new Date().toISOString(), // Mark when A2U was confirmed successful

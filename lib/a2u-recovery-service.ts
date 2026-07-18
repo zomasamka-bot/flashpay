@@ -25,6 +25,7 @@ interface PaymentState {
   paymentId: string
   status: string
   u2aTxid?: string
+  a2uPaymentId?: string
   a2uTxid?: string
   a2uFromAddress?: string
   a2uToAddress?: string
@@ -269,19 +270,57 @@ async function reconcileA2UInDatabase(payment: PaymentState, paymentId: string):
 
   const financialData = validation.data
 
+  // CRITICAL VALIDATION: All required identifiers and financial data must exist before DB write
+  if (!payment.piPaymentId) {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing piPaymentId (u2aIdentifier)")
+    return { status: "irreversible", details: { error: "Missing piPaymentId - cannot proceed to DB" } }
+  }
+  if (!payment.a2uPaymentId) {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing a2uPaymentId (a2uIdentifier)")
+    return { status: "irreversible", details: { error: "Missing a2uPaymentId - cannot proceed to DB" } }
+  }
+  if (!financialData.u2aTxid) {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing u2aTxid")
+    return { status: "irreversible", details: { error: "Missing u2aTxid - cannot proceed to DB" } }
+  }
+  if (!financialData.a2uTxid) {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing a2uTxid")
+    return { status: "irreversible", details: { error: "Missing a2uTxid - cannot proceed to DB" } }
+  }
+  if (!financialData.merchantId) {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing merchantId")
+    return { status: "irreversible", details: { error: "Missing merchantId - cannot proceed to DB" } }
+  }
+  if (!financialData.merchantUid) {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing merchantUid")
+    return { status: "irreversible", details: { error: "Missing merchantUid - cannot proceed to DB" } }
+  }
+  if (typeof financialData.customerAmount !== "number") {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid customerAmount:", financialData.customerAmount)
+    return { status: "irreversible", details: { error: "Invalid customerAmount - cannot proceed to DB" } }
+  }
+  if (typeof financialData.merchantAmount !== "number") {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid merchantAmount:", financialData.merchantAmount)
+    return { status: "irreversible", details: { error: "Invalid merchantAmount - cannot proceed to DB" } }
+  }
+  if (typeof financialData.horizonFeeCharged !== "number") {
+    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid horizonFeeCharged:", financialData.horizonFeeCharged)
+    return { status: "irreversible", details: { error: "Invalid horizonFeeCharged - cannot proceed to DB" } }
+  }
+
   try {
     // Call recordA2UTransactionAtomic with VALIDATED, authoritative financial data from Redis
     const dbResult = await recordA2UTransactionAtomic({
-      u2aIdentifier: payment.u2aIdentifier || "",
-      u2aTxid: financialData.u2aTxid,
-      a2uIdentifier: payment.a2uIdentifier || "",
-      a2uTxid: financialData.a2uTxid,
-      merchantId: financialData.merchantId,
-      merchantUid: financialData.merchantUid,
-      customerAmount: financialData.customerAmount,
-      merchantAmount: financialData.merchantAmount,
-      horizonFeeCharged: financialData.horizonFeeCharged,
-      appCommission: financialData.appCommission,
+      u2aIdentifier: payment.piPaymentId,        // AUDIT: Only use piPaymentId, no fallback
+      u2aTxid: financialData.u2aTxid,            // AUDIT: Validated above
+      a2uIdentifier: payment.a2uPaymentId,       // AUDIT: Only use a2uPaymentId, no fallback
+      a2uTxid: financialData.a2uTxid,            // AUDIT: Validated above
+      merchantId: financialData.merchantId,      // AUDIT: Validated above
+      merchantUid: financialData.merchantUid,    // AUDIT: Validated above
+      customerAmount: financialData.customerAmount,    // AUDIT: Validated above
+      merchantAmount: financialData.merchantAmount,    // AUDIT: Validated above
+      horizonFeeCharged: financialData.horizonFeeCharged,  // AUDIT: Validated above, no fallback
+      appCommission: financialData.appCommission,       // Optional, may be undefined
     })
 
     // CRITICAL: Check dbResult.success === true BEFORE marking settled_to_merchant
@@ -293,6 +332,7 @@ async function reconcileA2UInDatabase(payment: PaymentState, paymentId: string):
       const updatedPayment = {
         ...payment,
         requiresDbReconciliation: true,
+        dbRecorded: false, // CRITICAL: DB failed - mark as not recorded
       }
       await redis.set(`payment:${paymentId}`, JSON.stringify(updatedPayment))
 
@@ -310,6 +350,7 @@ async function reconcileA2UInDatabase(payment: PaymentState, paymentId: string):
       status: "settled_to_merchant",
       requiresDbReconciliation: false,
       piCompleted: true,
+      dbRecorded: true, // CRITICAL: Set ONLY after DB commit succeeds
       settlementCompletedAt: new Date().toISOString(),
     }
 
@@ -345,6 +386,7 @@ async function reconcileA2UInDatabase(payment: PaymentState, paymentId: string):
     const updatedPayment = {
       ...payment,
       requiresDbReconciliation: true,
+      dbRecorded: false, // CRITICAL: DB threw error - mark as not recorded
     }
     await redis.set(`payment:${paymentId}`, JSON.stringify(updatedPayment))
 
