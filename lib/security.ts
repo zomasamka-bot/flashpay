@@ -385,14 +385,14 @@ interface AuditEntry {
   operation: string
   userId?: string
   details: any
-  outcome: "success" | "failure"
+  outcome: "success" | "failure" | "pending"
 }
 
 class AuditLogger {
   private entries: AuditEntry[] = []
   private maxEntries = 200
 
-  log(operation: string, details: any, outcome: "success" | "failure", userId?: string): string {
+  log(operation: string, details: any, outcome: "success" | "failure" | "pending", userId?: string): string {
     if (!OPERATIONAL_FLAGS.ENABLE_AUDIT_LOGGING) {
       return ""
     }
