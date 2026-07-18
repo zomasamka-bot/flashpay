@@ -1,73 +1,101 @@
 import { redis } from "@/lib/redis"
-import { recordA2UTransactionAtomic } from "@/lib/db"
-import { validateFinancialData } from "@/lib/financial-validation"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import type { ExecutorContext } from "@/lib/a2u-executor"
+import { executeA2U } from "@/lib/a2u-executor"
+import type { Payment } from "@/lib/types"
 
 /**
- * AUTHORITATIVE A2U RECOVERY SERVICE
- * 
- * PRECISE RECOVERY STATES IN EXACT ORDER:
- * 1. settled_to_merchant           - return stored success only
- * 2. requiresDbReconciliation      - DB-only recovery with a2uTxid
- * 3. settlement_pending            - retry only Pi A2U /complete (handler only)
- * 4. piCompleted + DB pending      - DB-only recovery with a2uTxid
- * 5. settlement_failed             - never restart Horizon if a2uTxid exists
- * 
- * DB RECONCILIATION ORDER: Always check requiresDbReconciliation BEFORE generic settlement_pending
- * 
- * NAMING CONVENTION:
- * - a2uToAddress: Horizon destination address for A2U operation
- * - u2aTxid: Pi to Horizon txid (lowercase d always)
- * - a2uTxid: Horizon to Pi txid (lowercase d always)
+ * A2U RECOVERY ORCHESTRATOR - Pure orchestrator, no business logic
+ *
+ * Responsibilities (AND ONLY THESE):
+ * 1. Load canonical Payment from Redis
+ * 2. Classify exact state from 5 precise flags
+ * 3. Delegate to unified executor with identical parameters
+ * 4. Return buildA2USuccessResponse (no independent success marking)
+ *
+ * CRITICAL GUARANTEES:
+ * - Recovery NEVER creates new customer U2A (executor reuses a2uPaymentId or creates on demand for new payments only)
+ * - Recovery NEVER resubmits Horizon when a2uTxid or horizonSuccessFlag exists (executor skips stage 2)
+ * - Recovery NEVER marks success independently (executor marks after DB verified in stage 4)
+ * - NO duplicate DB reconciliation logic (ALL delegated to executor stage 4)
+ * - NO separate Pi /complete logic (ALL delegated to executor stage 3)
+ * - NO PaymentState retention (use canonical Payment only)
+ *
+ * EXACT RECOVERY STATE DECISION TABLE:
+ * ┌─────────────────┬──────────────────┬───────────────┬───────────────┬──────────────────────┐
+ * │ State #         │ Conditions       │ a2uTxid?      │ Executor Call │ Expected Executor    │
+ * ├─────────────────┼──────────────────┼───────────────┼───────────────┼──────────────────────┤
+ * │ STATE 1: FINAL  │ status==settled  │ must exist    │ YES (isRec=T) │ Stage 0: return      │
+ * │                 │ + piCompleted    │ + must exist  │ skip 1-3      │ success + txid       │
+ * │                 │ + dbRecorded     │               │               │ (settled_to_merch)   │
+ * ├─────────────────┼──────────────────┼───────────────┼───────────────┼──────────────────────┤
+ * │ STATE 2: DB-    │ requiresDbRecon  │ must exist    │ YES (isRec=T) │ Stage 4: DB only     │
+ * │ PENDING         │ + horizonSuccess │ + horizonFlag │ skip 1-3      │ mark settled_to_merch│
+ * │                 │ + a2uTxid        │ required      │               │                      │
+ * ├─────────────────┼──────────────────┼───────────────┼───────────────┼──────────────────────┤
+ * │ STATE 3: Pi-    │ settlement_pend  │ must exist    │ YES (isRec=T) │ Stage 3: Pi /complete│
+ * │ PENDING         │ + piCompletion   │ + horizonFlag │ skip 1-2      │ Stage 4: DB          │
+ * │                 │ Pending + a2uTxid│ required      │               │ settled_to_merch     │
+ * ├─────────────────┼──────────────────┼───────────────┼───────────────┼──────────────────────┤
+ * │ STATE 4: EARLY  │ piCompleted      │ must exist    │ YES (isRec=T) │ Stage 4: DB only     │
+ * │ DETECTION       │ + !requiresDb    │ + horizonFlag │ skip 1-3      │ settled_to_merch     │
+ * │ (already_compl) │ Recon            │ required      │               │                      │
+ * │                 │ + horizonSuccess │               │               │                      │
+ * ├─────────────────┼──────────────────┼───────────────┼───────────────┼──────────────────────┤
+ * │ STATE 5: IRREV  │ settlement_fail  │ if exists     │ NONE          │ N/A - irreversible   │
+ * │ OR SAFE-RETRY   │ + a2uTxid exists │ + horizonFlag │ return error  │ (cannot restart H)   │
+ * │                 │ OR horizonFlag   │ = irreversible│               │                      │
+ * │                 │ then IRREVERSIB  │ if absent     │ might retry   │                      │
+ * │                 │ else safe retry  │ = safe        │ in future     │                      │
+ * └─────────────────┴──────────────────┴───────────────┴───────────────┴──────────────────────┘
+ *
+ * EXECUTOR CALL PATTERN (identical for all states):
+ * executeA2U({
+ *   paymentId,
+ *   payment,           // canonical Payment from Redis
+ *   merchantUid: payment.merchantUid,
+ *   accessToken: payment.accessToken,
+ *   customerAmount: payment.customerAmount || payment.amount,
+ *   piPaymentId: payment.piPaymentId,
+ *   isRecovery: true   // tells executor to skip completed stages
+ * })
+ *
+ * POST-DELEGATION BEHAVIOR (identical for all callable states):
+ * - Success: buildA2USuccessResponse(paymentId) → read Redis checkpoint
+ * - Failure: return error state (executor updates Redis with checkpoint)
  */
 
-interface PaymentState {
-  paymentId: string
-  status: string
-  u2aTxid?: string
-  a2uPaymentId?: string
-  a2uTxid?: string
-  a2uFromAddress?: string
-  a2uToAddress?: string
-  customerAmount?: number
-  merchantAmount?: number
-  horizonFeeCharged?: number
-  appCommission?: number
-  u2aIdentifier?: string
-  a2uIdentifier?: string
-  merchantId?: string
-  merchantUid?: string
-  requiresDbReconciliation?: boolean
-  horizonSuccessFlag?: boolean
-  piCompletionPending?: boolean
-  piCompleted?: boolean
-}
-
 interface RecoveryResult {
-  status: "success" | "db_reconciled" | "manual_review_required" | "pending_pi_complete" | "irreversible"
+  status:
+    | "success"
+    | "manual_review_required"
+    | "irreversible"
   state: string
   paymentId: string
   details: {
     u2aTxid?: string
     a2uTxid?: string
-    dbTransactionId?: string
     error?: string
   }
 }
 
 /**
- * AUTHORITATIVE recovery orchestrator - single source of truth for all recovery states
- * Implements exact state ordering with DB reconciliation before settlement_pending
+ * MINIMAL ORCHESTRATOR - classify state and delegate only
+ * Returns unified response via buildA2USuccessResponse (never marks success here)
  */
-export async function executeA2URecovery(paymentId: string): Promise<RecoveryResult> {
-  console.log("[A2U Recovery] Starting recovery for payment:", paymentId)
+export async function executeA2URecovery(
+  paymentId: string
+): Promise<RecoveryResult> {
+  console.log("[A2U Recovery] 🔍 Starting orchestrator for:", paymentId)
 
-  // Load payment state from authoritative Redis
+  // Load canonical Payment
   const paymentKey = `payment:${paymentId}`
   const paymentData = await redis.get(paymentKey)
 
   if (!paymentData) {
+    console.error(
+      "[A2U Recovery] ❌ Payment not found in Redis:",
+      paymentId
+    )
     return {
       status: "manual_review_required",
       state: "payment_not_found",
@@ -76,286 +104,286 @@ export async function executeA2URecovery(paymentId: string): Promise<RecoveryRes
     }
   }
 
-  const payment: PaymentState = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
+  const payment: Payment =
+    typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
 
-  console.log("[A2U Recovery] Payment status:", payment.status)
-  console.log("[A2U Recovery] Flags:", {
+  console.log("[A2U Recovery] State flags:", {
+    status: payment.status,
     requiresDbReconciliation: payment.requiresDbReconciliation,
     horizonSuccessFlag: payment.horizonSuccessFlag,
     piCompletionPending: payment.piCompletionPending,
     piCompleted: payment.piCompleted,
-    a2uTxid: payment.a2uTxid ? "present" : "missing",
+    dbRecorded: payment.dbRecorded,
+    a2uTxid: payment.a2uTxid ? "exists" : "missing",
+    horizonFeeCharged: payment.horizonFeeCharged,
   })
 
-  // STATE 1: settled_to_merchant - already complete, return success
-  if (payment.status === "settled_to_merchant") {
-    console.log("[A2U Recovery] ✅ State 1: settled_to_merchant - no recovery needed")
-    return {
-      status: "success",
-      state: "already_settled",
-      paymentId,
-      details: {
-        u2aTxid: payment.u2aTxid,
-        a2uTxid: payment.a2uTxid,
-      },
-    }
-  }
+  // ===== STATE 1: FINAL SUCCESS =====
+  // Already settled to merchant, all work complete
+  // Executor will return stage 0 (early exit with stored txid/fee)
+  if (
+    payment.status === "settled_to_merchant" &&
+    payment.piCompleted === true &&
+    payment.dbRecorded === true
+  ) {
+    console.log(
+      "[A2U Recovery] ✅ STATE 1: Final success - delegating to executor"
+    )
 
-  // STATE 2: requiresDbReconciliation + a2uTxid - DB-only recovery (BEFORE settlement_pending)
-  if (payment.requiresDbReconciliation && payment.a2uTxid && payment.horizonSuccessFlag) {
-    console.log("[A2U Recovery] 🔄 State 2: requiresDbReconciliation - performing DB-only reconciliation")
-    return await reconcileA2UInDatabase(payment, paymentId)
-  }
-
-  // STATE 3: settlement_pending + piCompletionPending + a2uTxid
-  // Delegated to unified executor which will handle Pi /complete + DB reconciliation
-  if (payment.status === "settlement_pending" && payment.piCompletionPending && payment.a2uTxid && payment.a2uPaymentId) {
-    console.log("[A2U Recovery] 🔁 State 3: settlement_pending + piCompletionPending - delegating to unified executor")
-    
-    // Use unified executor to complete Pi and reconcile DB
-    const { executeA2U } = await import("@/lib/a2u-executor")
-    const executorResult = await executeA2U({
+    const result = await executeA2U({
       paymentId,
       payment,
-      merchantUid: payment.merchantUid,
+      merchantUid: payment.merchantUid!,
       accessToken: payment.accessToken,
-      amount: payment.customerAmount || payment.amount,
+      customerAmount: payment.customerAmount || payment.amount,
       piPaymentId: payment.piPaymentId,
       isRecovery: true,
     })
 
-    if (!executorResult.success) {
+    // Executor always returns success: false; check status/error instead
+    if (result.status === "error" || result.error) {
       return {
         status: "manual_review_required",
-        state: "executor_failed_state3",
+        state: "state1_executor_failed",
         paymentId,
-        details: { error: executorResult.error },
+        details: { error: result.error },
       }
     }
 
-    // Canonical response
-    const canonicalResponse = await buildA2USuccessResponse(paymentId)
-    if (!canonicalResponse) {
+    const response = await buildA2USuccessResponse(paymentId)
+    if (!response) {
       return {
         status: "manual_review_required",
-        state: "response_building_failed",
+        state: "state1_response_failed",
         paymentId,
         details: { error: "Response building failed" },
       }
     }
 
     return {
-      status: "db_reconciled",
-      state: "settled_to_merchant",
+      status: "success",
+      state: "final_success",
       paymentId,
       details: {
-        u2aTxid: payment.u2aTxid,
-        a2uTxid: executorResult.txidFromHorizon,
+        u2aTxid: response.u2aTxid,
+        a2uTxid: response.a2uTxid,
       },
     }
   }
 
-  // STATE 4: piCompleted + DB pending (no requiresDbReconciliation flag yet) - DB-only recovery
-  if (payment.piCompleted && !payment.requiresDbReconciliation && payment.a2uTxid && payment.horizonSuccessFlag) {
-    console.log("[A2U Recovery] 📊 State 4: piCompleted + DB pending - performing DB-only reconciliation")
-    return await reconcileA2UInDatabase(payment, paymentId)
+  // ===== STATE 2: DB RECONCILIATION PENDING =====
+  // Horizon succeeded + a2uTxid exists, but DB record not made yet
+  // Executor stage 4 only (skip 1-3)
+  if (
+    payment.requiresDbReconciliation === true &&
+    payment.a2uTxid &&
+    payment.horizonSuccessFlag === true
+  ) {
+    console.log(
+      "[A2U Recovery] 🔄 STATE 2: DB reconciliation pending - delegating to executor stage 4"
+    )
+
+    const result = await executeA2U({
+      paymentId,
+      payment,
+      merchantUid: payment.merchantUid!,
+      accessToken: payment.accessToken,
+      customerAmount: payment.customerAmount || payment.amount,
+      piPaymentId: payment.piPaymentId,
+      isRecovery: true,
+    })
+
+    // Executor always returns success: false; check status/error instead
+    if (result.status === "error" || result.error) {
+      return {
+        status: "manual_review_required",
+        state: "state2_executor_failed",
+        paymentId,
+        details: { error: result.error },
+      }
+    }
+
+    const response = await buildA2USuccessResponse(paymentId)
+    if (!response) {
+      return {
+        status: "manual_review_required",
+        state: "state2_response_failed",
+        paymentId,
+        details: { error: "Response building failed" },
+      }
+    }
+
+    return {
+      status: "success",
+      state: "db_reconciled",
+      paymentId,
+      details: {
+        u2aTxid: response.u2aTxid,
+        a2uTxid: response.a2uTxid,
+      },
+    }
   }
 
-  // STATE 5: settlement_failed - check for irreversibility
+  // ===== STATE 3: PI /COMPLETE PENDING =====
+  // Horizon succeeded (a2uTxid exists) but Pi /complete and DB not yet done
+  // Executor stages 3 and 4 (skip 1-2)
+  if (
+    payment.status === "settlement_pending" &&
+    payment.piCompletionPending === true &&
+    payment.a2uTxid &&
+    payment.a2uPaymentId
+  ) {
+    console.log(
+      "[A2U Recovery] 🔁 STATE 3: Pi /complete pending - delegating to executor stages 3-4"
+    )
+
+    const result = await executeA2U({
+      paymentId,
+      payment,
+      merchantUid: payment.merchantUid!,
+      accessToken: payment.accessToken,
+      customerAmount: payment.customerAmount || payment.amount,
+      piPaymentId: payment.piPaymentId,
+      isRecovery: true,
+    })
+
+    // Executor always returns success: false; check status/error instead
+    if (result.status === "error" || result.error) {
+      return {
+        status: "manual_review_required",
+        state: "state3_executor_failed",
+        paymentId,
+        details: { error: result.error },
+      }
+    }
+
+    const response = await buildA2USuccessResponse(paymentId)
+    if (!response) {
+      return {
+        status: "manual_review_required",
+        state: "state3_response_failed",
+        paymentId,
+        details: { error: "Response building failed" },
+      }
+    }
+
+    return {
+      status: "success",
+      state: "pi_complete_and_db_reconciled",
+      paymentId,
+      details: {
+        u2aTxid: response.u2aTxid,
+        a2uTxid: response.a2uTxid,
+      },
+    }
+  }
+
+  // ===== STATE 4: EARLY DETECTION OF ALREADY_COMPLETED =====
+  // Payment already completed on Pi but DB record not yet created (refetched and validated by executor)
+  // Executor stages 4 only (skip 1-3)
+  if (
+    payment.piCompleted === true &&
+    payment.requiresDbReconciliation !== true &&
+    payment.a2uTxid &&
+    payment.horizonSuccessFlag === true
+  ) {
+    console.log(
+      "[A2U Recovery] 📊 STATE 4: Already-completed on Pi - delegating to executor stage 4"
+    )
+
+    const result = await executeA2U({
+      paymentId,
+      payment,
+      merchantUid: payment.merchantUid!,
+      accessToken: payment.accessToken,
+      customerAmount: payment.customerAmount || payment.amount,
+      piPaymentId: payment.piPaymentId,
+      isRecovery: true,
+    })
+
+    // Executor always returns success: false; check status/error instead
+    if (result.status === "error" || result.error) {
+      return {
+        status: "manual_review_required",
+        state: "state4_executor_failed",
+        paymentId,
+        details: { error: result.error },
+      }
+    }
+
+    const response = await buildA2USuccessResponse(paymentId)
+    if (!response) {
+      return {
+        status: "manual_review_required",
+        state: "state4_response_failed",
+        paymentId,
+        details: { error: "Response building failed" },
+      }
+    }
+
+    return {
+      status: "success",
+      state: "early_detection_reconciled",
+      paymentId,
+      details: {
+        u2aTxid: response.u2aTxid,
+        a2uTxid: response.a2uTxid,
+      },
+    }
+  }
+
+  // ===== STATE 5: SETTLEMENT FAILED - CHECK IRREVERSIBILITY =====
+  // If a2uTxid or horizonSuccessFlag exists: irreversible (Horizon was submitted)
+  // Otherwise: safe to retry (no Horizon submission occurred)
   if (payment.status === "settlement_failed") {
-    // CRITICAL: If a2uTxid or horizonSuccessFlag exists, never restart Horizon
     if (payment.a2uTxid || payment.horizonSuccessFlag) {
-      console.log("[A2U Recovery] ❌ State 5: settlement_failed with identifiers - irreversible")
+      console.log(
+        "[A2U Recovery] ❌ STATE 5: Irreversible failure (Horizon submitted, cannot retry)"
+      )
       return {
         status: "irreversible",
-        state: "irreversible_failure",
+        state: "irreversible_settlement_failure",
         paymentId,
         details: {
-          error: "Irreversible settlement failure - contact support",
+          error:
+            "Horizon transaction submitted but settlement failed - contact support",
           a2uTxid: payment.a2uTxid,
         },
       }
     }
-    // No identifiers = safe to retry
-    console.log("[A2U Recovery] 🔄 State 5: settlement_failed - safe to retry")
+
+    // No Horizon identifiers = safe to retry in future
+    console.log(
+      "[A2U Recovery] 🔄 STATE 5: Safe to retry (no Horizon submission occurred yet)"
+    )
     return {
-      status: "pending_pi_complete",
-      state: "failure_safe_to_retry",
+      status: "manual_review_required",
+      state: "failure_safe_to_retry_later",
       paymentId,
-      details: {},
+      details: { error: "Settlement failed but safe to retry later" },
     }
   }
 
-  // No recovery path matched
-  console.log("[A2U Recovery] ⚠️ No recovery path matched for status:", payment.status)
+  // No state matched - unknown condition
+  console.log(
+    "[A2U Recovery] ⚠️ No recovery state matched for:",
+    payment.status
+  )
   return {
     status: "manual_review_required",
-    state: "no_recovery_path",
+    state: "no_recovery_state_matched",
     paymentId,
-    details: { error: `Unable to determine recovery action for status: ${payment.status}` },
+    details: {
+      error: `Unknown recovery state for status: ${payment.status}`,
+    },
   }
 }
 
 /**
- * STATE 3: Delegated to unified executor
- * NOTE: completePiA2UAndReconcile removed - use executeA2U from lib/a2u-executor.ts instead
+ * Check if payment can be recovered (used by /api/recovery route gate)
  */
-
-/**
- * DB-ONLY RECONCILIATION: Record A2U transaction atomically using Redis as source of truth
- * Used by State 2 (requiresDbReconciliation), State 3 (after Pi /complete), and State 4 (piCompleted + DB pending)
- */
-async function reconcileA2UInDatabase(payment: PaymentState, paymentId: string): Promise<RecoveryResult> {
-  console.log("[A2U Recovery] Reconciling A2U transaction in database...")
-
-  // STRICT: Validate ALL financial data before DB operation - NO FALLBACKS
-  const validation = validateFinancialData(payment)
-  if (!validation.success) {
-    console.error("[A2U Recovery] ❌ Financial validation failed:", validation.error)
-    return {
-      status: "manual_review_required",
-      state: "validation_failed",
-      paymentId,
-      details: { error: validation.error },
-    }
-  }
-
-  const financialData = validation.data
-
-  // CRITICAL VALIDATION: All required identifiers and financial data must exist before DB write
-  if (!payment.piPaymentId) {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing piPaymentId (u2aIdentifier)")
-    return { status: "irreversible", state: "missing_piPaymentId", paymentId, details: { error: "Missing piPaymentId - cannot proceed to DB" } }
-  }
-  if (!payment.a2uPaymentId) {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing a2uPaymentId (a2uIdentifier)")
-    return { status: "irreversible", state: "missing_a2uPaymentId", paymentId, details: { error: "Missing a2uPaymentId - cannot proceed to DB" } }
-  }
-  if (!financialData.u2aTxid) {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing u2aTxid")
-    return { status: "irreversible", state: "missing_u2aTxid", paymentId, details: { error: "Missing u2aTxid - cannot proceed to DB" } }
-  }
-  if (!financialData.a2uTxid) {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing a2uTxid")
-    return { status: "irreversible", state: "missing_a2uTxid", paymentId, details: { error: "Missing a2uTxid - cannot proceed to DB" } }
-  }
-  if (!financialData.merchantId) {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing merchantId")
-    return { status: "irreversible", state: "missing_merchantId", paymentId, details: { error: "Missing merchantId - cannot proceed to DB" } }
-  }
-  if (!financialData.merchantUid) {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing merchantUid")
-    return { status: "irreversible", state: "missing_merchantUid", paymentId, details: { error: "Missing merchantUid - cannot proceed to DB" } }
-  }
-  if (typeof financialData.customerAmount !== "number") {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid customerAmount:", financialData.customerAmount)
-    return { status: "irreversible", state: "invalid_customerAmount", paymentId, details: { error: "Invalid customerAmount - cannot proceed to DB" } }
-  }
-  if (typeof financialData.merchantAmount !== "number") {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid merchantAmount:", financialData.merchantAmount)
-    return { status: "irreversible", state: "invalid_merchantAmount", paymentId, details: { error: "Invalid merchantAmount - cannot proceed to DB" } }
-  }
-  if (typeof financialData.horizonFeeCharged !== "number") {
-    console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid horizonFeeCharged:", financialData.horizonFeeCharged)
-    return { status: "irreversible", state: "invalid_horizonFeeCharged", paymentId, details: { error: "Invalid horizonFeeCharged - cannot proceed to DB" } }
-  }
-
-  try {
-    // Call recordA2UTransactionAtomic with VALIDATED, authoritative financial data from Redis
-    const dbResult = await recordA2UTransactionAtomic({
-      u2aIdentifier: payment.piPaymentId,        // AUDIT: Only use piPaymentId, no fallback
-      u2aTxid: financialData.u2aTxid,            // AUDIT: Validated above
-      a2uIdentifier: payment.a2uPaymentId,       // AUDIT: Only use a2uPaymentId, no fallback
-      a2uTxid: financialData.a2uTxid,            // AUDIT: Validated above
-      merchantId: financialData.merchantId,      // AUDIT: Validated above
-      merchantUid: financialData.merchantUid,    // AUDIT: Validated above
-      customerAmount: financialData.customerAmount,    // AUDIT: Validated above
-      merchantAmount: financialData.merchantAmount,    // AUDIT: Validated above
-      horizonFeeCharged: financialData.horizonFeeCharged,  // AUDIT: Validated above, no fallback
-      appCommission: financialData.appCommission,       // Optional, may be undefined
-    })
-
-    // CRITICAL: Check dbResult.success === true BEFORE marking settled_to_merchant
-    if (!dbResult || !dbResult.success) {
-      console.error("[A2U Recovery] ❌ DB reconciliation returned success=false:", dbResult?.error)
-
-      // For State 2: Keep requiresDbReconciliation flag
-      // For State 4: Set requiresDbReconciliation flag so next attempt retries DB
-      const updatedPayment = {
-        ...payment,
-        requiresDbReconciliation: true,
-        dbRecorded: false, // CRITICAL: DB failed - mark as not recorded
-      }
-      await redis.set(`payment:${paymentId}`, JSON.stringify(updatedPayment))
-
-      return {
-        status: "manual_review_required",
-        state: "db_reconciliation_failed",
-        paymentId,
-        details: { error: dbResult?.error || "Unknown DB error" },
-      }
-    }
-
-    // DB SUCCESSFUL: Mark payment as settled
-    const updatedPayment = {
-      ...payment,
-      status: "settled_to_merchant",
-      requiresDbReconciliation: false,
-      piCompleted: true,
-      dbRecorded: true, // CRITICAL: Set ONLY after DB commit succeeds
-      settlementCompletedAt: new Date().toISOString(),
-    }
-
-    await redis.set(`payment:${paymentId}`, JSON.stringify(updatedPayment))
-    console.log("[A2U Recovery] ✅ DB reconciliation completed successfully with txid:", dbResult.transactionId)
-
-    // Return canonical response from authoritative Redis checkpoint
-    const canonicalResponse = await buildA2USuccessResponse(paymentId)
-    if (!canonicalResponse) {
-      console.error("[A2U Recovery] ❌ Failed to build canonical response for settled payment")
-      return {
-        status: "manual_review_required",
-        state: "response_building_failed",
-        paymentId,
-        details: { error: "Response building failed - data corruption detected" },
-      }
-    }
-
-    return {
-      status: "db_reconciled",
-      state: "settled_to_merchant",
-      paymentId,
-      details: {
-        u2aTxid: payment.u2aTxid,
-        a2uTxid: payment.a2uTxid,
-        dbTransactionId: dbResult.transactionId,
-      },
-    }
-  } catch (dbError) {
-    console.error("[A2U Recovery] ❌ DB reconciliation threw error:", dbError)
-
-    // Mark as requiring reconciliation so next attempt retries DB operation
-    const updatedPayment = {
-      ...payment,
-      requiresDbReconciliation: true,
-      dbRecorded: false, // CRITICAL: DB threw error - mark as not recorded
-    }
-    await redis.set(`payment:${paymentId}`, JSON.stringify(updatedPayment))
-
-    return {
-      status: "manual_review_required",
-      state: "db_reconciliation_error",
-      paymentId,
-      details: { error: String(dbError) },
-    }
-  }
-}
-
-/**
- * Check if a payment is in a recoverable state
- */
-export function isPaymentRecoverable(payment: PaymentState): boolean {
-  // Only specific states can be recovered
+export function isPaymentRecoverable(payment: Payment): boolean {
+  // Must be in one of these terminal or semi-terminal states
   const recoverableStates = [
     "settled_to_merchant",
     "settlement_pending",
@@ -366,8 +394,11 @@ export function isPaymentRecoverable(payment: PaymentState): boolean {
     return false
   }
 
-  // settlement_failed is only recoverable if no identifiers exist
-  if (payment.status === "settlement_failed" && (payment.a2uTxid || payment.horizonSuccessFlag)) {
+  // settlement_failed is only recoverable if NO Horizon identifiers (safe to retry)
+  if (
+    payment.status === "settlement_failed" &&
+    (payment.a2uTxid || payment.horizonSuccessFlag)
+  ) {
     return false
   }
 
@@ -375,17 +406,22 @@ export function isPaymentRecoverable(payment: PaymentState): boolean {
 }
 
 /**
- * Extract recovery hints from payment state for logging/diagnostics
+ * Extract recovery diagnostics for logging (no business logic)
  */
-export function getRecoveryHints(payment: PaymentState): Record<string, unknown> {
+export function getRecoveryHints(payment: Payment): Record<
+  string,
+  unknown
+> {
   return {
     status: payment.status,
-    hasA2UTxid: !!payment.a2uTxid,
-    hasU2ATxid: !!payment.u2aTxid,
     requiresDbReconciliation: payment.requiresDbReconciliation,
     horizonSuccessFlag: payment.horizonSuccessFlag,
     piCompletionPending: payment.piCompletionPending,
     piCompleted: payment.piCompleted,
+    dbRecorded: payment.dbRecorded,
+    hasA2UTxid: !!payment.a2uTxid,
+    hasU2ATxid: !!payment.u2aTxid,
+    horizonFeeCharged: payment.horizonFeeCharged,
     isRecoverable: isPaymentRecoverable(payment),
   }
 }

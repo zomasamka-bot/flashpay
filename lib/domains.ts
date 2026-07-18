@@ -70,7 +70,7 @@ class DomainStore {
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
       if (stored) {
-        const data = JSON.parse(stored)
+        const data = typeof stored === 'string' ? JSON.parse(stored) : stored
         this.masterEnabled = data.masterEnabled ?? false
 
         // Load individual domain states

@@ -398,6 +398,14 @@ class UnifiedStateStore {
   // PAYMENTS (MERCHANT-SCOPED)
   // ========================================================================
 
+  /**
+   * CRITICAL GATE: Only pending status can start a fresh customer U2A
+   * This prevents duplicate payment creation for payments already sent to Pi
+   */
+  canStartFreshPayment(status: PaymentStatus): boolean {
+    return status === "pending"
+  }
+
   createPayment(amount: number, note: string): Payment {
     const lockKey = `create-${Date.now()}`
 

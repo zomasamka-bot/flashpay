@@ -112,10 +112,8 @@ export interface Receipt {
   txid?: string // U2A transaction ID
   piPaymentId?: string // U2A payment identifier
   
-  // U2A and A2U identifiers for tracing
-  u2aIdentifier?: string  // User-to-App payment identifier from Pi
+  // U2A and A2U transaction IDs for tracing
   u2aTxid?: string        // U2A transaction ID from Pi
-  a2uIdentifier?: string  // App-to-User payment identifier from Pi
   a2uTxid?: string        // A2U transaction ID (Horizon txid)
   
   // Settlement status
@@ -351,9 +349,7 @@ export function parseReceipt(data: unknown): Receipt | null {
   // Validate optional fields
   if (obj.txid !== undefined && typeof obj.txid !== 'string') return null
   if (obj.piPaymentId !== undefined && typeof obj.piPaymentId !== 'string') return null
-  if (obj.u2aIdentifier !== undefined && typeof obj.u2aIdentifier !== 'string') return null
   if (obj.u2aTxid !== undefined && typeof obj.u2aTxid !== 'string') return null
-  if (obj.a2uIdentifier !== undefined && typeof obj.a2uIdentifier !== 'string') return null
   if (obj.a2uTxid !== undefined && typeof obj.a2uTxid !== 'string') return null
   
   // After validation, no casts needed
@@ -377,9 +373,7 @@ export function parseReceipt(data: unknown): Receipt | null {
     timestamp: obj.timestamp,
     txid: obj.txid,
     piPaymentId: obj.piPaymentId,
-    u2aIdentifier: obj.u2aIdentifier,
     u2aTxid: obj.u2aTxid,
-    a2uIdentifier: obj.a2uIdentifier,
     a2uTxid: obj.a2uTxid,
   }
 }

@@ -167,53 +167,79 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
     executePayment(
       payment.id,
       (u2aTxid) => {
-        console.log("[v0][CustomerView] Final success callback - U2A txid:", u2aTxid)
+        console.log("[v0][CustomerView] Callback received U2A txid:", u2aTxid)
+        console.log("[v0][CustomerView] Fetching canonical server state to validate finality predicate")
         
-        // CRITICAL: This callback fires ONLY after backend confirms settled_to_merchant
-        // Final success must store: settled_to_merchant, piPaymentId, u2aTxid, a2uPaymentId, a2uTxid, settledAt
-        // Call onSuccess exactly once with final verified identifiers
-        
-        const currentPayment = unifiedStore.getPayment(paymentId)
-        if (!currentPayment) {
-          console.log("[v0][CustomerView] Payment not found for success callback")
-          return
-        }
+        // CRITICAL: Never set settled_to_merchant locally
+        // Fetch canonical payment from server (forces reconciliation verification)
+        ;(async () => {
+          try {
+            const response = await fetch(`/api/payments/${paymentId}`)
+            if (!response.ok) {
+              console.error("[v0][CustomerView] Failed to fetch server payment state:", response.status)
+              onError("Failed to verify payment settlement with server")
+              setIsPaying(false)
+              return
+            }
 
-        // Only proceed if status is settled_to_merchant (never downgrade)
-        if (currentPayment.status !== "settled_to_merchant") {
-          console.log("[v0][CustomerView] ⚠️ Final success but status is", currentPayment.status)
-          console.log("[v0][CustomerView] Updating to settled_to_merchant with full identifiers")
-        }
+            const serverPayment: Payment = await response.json()
+            console.log("[v0][CustomerView] Server payment state:", {
+              status: serverPayment.status,
+              piCompleted: serverPayment.piCompleted,
+              dbRecorded: serverPayment.dbRecorded,
+              u2aTxid: !!serverPayment.u2aTxid,
+              a2uTxid: !!serverPayment.a2uTxid,
+              requiresDbReconciliation: serverPayment.requiresDbReconciliation,
+            })
 
-        // Update payment with final state - settled_to_merchant with all transaction identifiers
-        const settledAt = new Date().toISOString()
-        const finalPayment: Payment = {
-          ...currentPayment,
-          status: "settled_to_merchant",
-          txid: u2aTxid,
-          u2aTxid: u2aTxid,
-          piPaymentId: currentPayment.piPaymentId,
-          a2uPaymentId: currentPayment.a2uPaymentId,
-          a2uTxid: currentPayment.a2uTxid,
-          paidAt: currentPayment.paidAt || new Date().toISOString(),
-          settledAt: settledAt,
-          requiresDbReconciliation: false,
-          dbRecorded: true,
-        }
-        
-        // Update local store with final state
-        unifiedStore.addPayment(finalPayment)
-        setPaymentStatus("settled_to_merchant")
-        setPayment(finalPayment)
-        setIsPaymentPaid(true)
-        setIsPaying(false)
-        
-        // Call onSuccess exactly once with verified U2A transaction ID
-        console.log("[v0][CustomerView] ✓ Payment settled_to_merchant - calling onSuccess exactly once")
-        toast({
-          title: "Payment Successful",
-          description: `Settlement complete. Transaction: ${u2aTxid}`,
-        })
+            // Validate exact finality predicate (matches buildA2USuccessResponse)
+            const isCanonicallyFinal =
+              serverPayment.status === "settled_to_merchant" &&
+              serverPayment.piCompleted === true &&
+              serverPayment.dbRecorded === true &&
+              !!serverPayment.u2aTxid &&
+              !!serverPayment.a2uTxid &&
+              serverPayment.requiresDbReconciliation !== true
+
+            if (!isCanonicallyFinal) {
+              console.warn("[v0][CustomerView] Server payment does not meet finality predicate yet", {
+                status: serverPayment.status,
+                piCompleted: serverPayment.piCompleted,
+                dbRecorded: serverPayment.dbRecorded,
+              })
+              
+              // Update local state from server but DO NOT call onSuccess
+              unifiedStore.addPayment(serverPayment)
+              setPayment(serverPayment)
+              setPaymentStatus(serverPayment.status)
+              setIsPaying(false)
+              
+              // Show progress message instead of success
+              setProgressMessage(`Processing settlement... (${serverPayment.status})`)
+              return
+            }
+
+            // ONLY NOW that predicate is validated: call onSuccess
+            console.log("[v0][CustomerView] ✓ Payment meets finality predicate - calling onSuccess exactly once")
+            
+            unifiedStore.addPayment(serverPayment)
+            setPayment(serverPayment)
+            setPaymentStatus("settled_to_merchant")
+            setIsPaymentPaid(true)
+            setIsPaying(false)
+            
+            toast({
+              title: "Payment Successful",
+              description: `Settlement complete. Transaction: ${serverPayment.u2aTxid}`,
+            })
+            
+            onSuccess(serverPayment.u2aTxid)
+          } catch (err) {
+            console.error("[v0][CustomerView] Error fetching server state:", err)
+            onError("Failed to verify payment settlement")
+            setIsPaying(false)
+          }
+        })()
       },
       (error) => {
         console.log("[v0][CustomerView] Payment error callback:", error)

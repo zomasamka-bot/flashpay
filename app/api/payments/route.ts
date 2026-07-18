@@ -24,7 +24,8 @@ function getPublicPayment(payment: any) {
     status: payment.status,
     createdAt: payment.createdAt,
     paidAt: payment.paidAt,
-    txid: payment.txid,
+    u2aTxid: payment.u2aTxid,
+    a2uTxid: payment.a2uTxid,
   }
 }
 
@@ -122,30 +123,6 @@ export async function POST(request: NextRequest) {
 
     // Generate unique payment ID (Edge Runtime compatible)
     const paymentId = crypto.randomUUID()
-
-    // CRITICAL: Check if a payment with this ID already exists and has a2uTxid or horizonSuccessFlag
-    // This blocks resubmission of payments that have already been submitted to Horizon
-    if (isKvConfigured) {
-      try {
-        const existingData = await redis.get(`payment:${paymentId}`)
-        if (existingData) {
-          const existing = JSON.parse(existingData)
-          if (existing.a2uTxid || existing.horizonSuccessFlag) {
-            console.error("[API] ❌ SECURITY: Payment ID collision with existing Horizon-submitted record - BLOCKING")
-            return NextResponse.json(
-              {
-                error: "Payment record already submitted to Horizon - cannot resubmit",
-                status: "manual_review_required",
-              },
-              { status: 409, headers: corsHeaders }
-            )
-          }
-        }
-      } catch (checkError) {
-        console.error("[API] Error checking existing payment:", checkError)
-        // Continue - it's likely just a cache miss
-      }
-    }
 
     // Create payment object with VERIFIED identity from Pi /v2/me
     const payment: Payment = {

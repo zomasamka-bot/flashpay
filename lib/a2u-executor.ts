@@ -27,41 +27,67 @@ import * as StellarSDK from "@stellar/stellar-sdk"
  * No Horizon re-signing when txid exists.
  */
 
-interface ExecutorContext {
+import type { Payment } from "@/lib/types"
+
+export interface ExecutorContext {
   paymentId: string
-  payment: any
+  payment: Payment // Use canonical Payment type - REQUIRED
   merchantUid: string
   accessToken: string
-  amount: number
-  piPaymentId?: string
+  customerAmount: number // REQUIRED - validated amount
+  piPaymentId: string // REQUIRED for recovery, may be undefined for new payments
   isRecovery: boolean
 }
 
-interface ExecutorResult {
-  success: boolean
+/**
+ * CRITICAL: Executor NEVER returns success: true
+ * ALL paths (new, ongoing, complete, recovery) return { success: false, status: "settlement_pending" }
+ * or error states. ONLY buildA2USuccessResponse() can return success: true after reading Redis predicate.
+ */
+type ExecutorResult = {
+  success: false
   status: string
-  error?: string
-  txidFromHorizon?: string
-  a2uPaymentId?: string
+  error: string
+  txidFromHorizon?: never // Never return txid on failure
+  horizonFeeCharged?: never
 }
 
 /**
  * UNIFIED EXECUTOR: Resume from stored stage or execute complete flow
+ * Validates all context inputs and returns discriminated union (success must include txidFromHorizon)
  */
 export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> {
+  // Validate required context fields - no optional coercion
+  if (!ctx.paymentId || typeof ctx.paymentId !== 'string') {
+    return { success: false, status: "invalid_context", error: "paymentId required and must be string" }
+  }
+  if (!ctx.payment || typeof ctx.payment !== 'object') {
+    return { success: false, status: "invalid_context", error: "payment object required" }
+  }
+  if (!ctx.merchantUid || typeof ctx.merchantUid !== 'string') {
+    return { success: false, status: "invalid_context", error: "merchantUid required and must be string" }
+  }
+  if (!ctx.accessToken || typeof ctx.accessToken !== 'string') {
+    return { success: false, status: "invalid_context", error: "accessToken required and must be string" }
+  }
+  if (typeof ctx.customerAmount !== 'number' || !Number.isFinite(ctx.customerAmount)) {
+    return { success: false, status: "invalid_context", error: "customerAmount required and must be finite number" }
+  }
+  if (typeof ctx.isRecovery !== 'boolean') {
+    return { success: false, status: "invalid_context", error: "isRecovery required and must be boolean" }
+  }
+
   console.log("[A2U Executor] ===== UNIFIED A2U EXECUTOR START =====")
   console.log("[A2U Executor] Payment ID:", ctx.paymentId)
   console.log("[A2U Executor] Is Recovery:", ctx.isRecovery)
   console.log("[A2U Executor] Current Status:", ctx.payment.status)
 
   // STAGE 0: Check if already settled (terminal state)
+  // Executor returns settlement_pending; buildA2USuccessResponse() will return success: true after validating predicate
   if (ctx.payment.status === "settled_to_merchant") {
-    console.log("[A2U Executor] ✅ Already settled - returning success")
-    const canonicalResponse = await buildA2USuccessResponse(ctx.paymentId)
-    if (!canonicalResponse) {
-      return { success: false, status: "error", error: "Response building failed" }
-    }
-    return { success: true, status: "settled_to_merchant" }
+    console.log("[A2U Executor] ℹ️ Already settled - skipping execution")
+    console.log("[A2U Executor] Caller will invoke buildA2USuccessResponse() to return final response with predicate check")
+    return { success: false, status: "settlement_pending", error: "Already settled - final response via buildA2USuccessResponse()" }
   }
 
   // STAGE 1: Get/Create A2U payment (skip if already have a2uPaymentId)
@@ -88,23 +114,68 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       a2uPayment = fetchResult
     }
 
-    // Check if already_completed on Pi
+    // CRITICAL: Validate reused A2U against payment context
+    if (!a2uPayment.identifier || typeof a2uPayment.identifier !== 'string') {
+      return { success: false, status: "error", error: "Reused A2U missing identifier" }
+    }
+    if (a2uPayment.identifier !== a2uPaymentId) {
+      return { success: false, status: "error", error: "Reused A2U identifier mismatch" }
+    }
+    // Validate reused A2U amount, addresses, approval, cancellation
+    if (!a2uPayment.amount || Number(a2uPayment.amount) !== ctx.customerAmount) {
+      return { success: false, status: "error", error: "Reused A2U amount mismatch" }
+    }
+    if (!a2uPayment.from_address || typeof a2uPayment.from_address !== 'string') {
+      return { success: false, status: "error", error: "Reused A2U missing from_address" }
+    }
+    if (!a2uPayment.to_address || typeof a2uPayment.to_address !== 'string') {
+      return { success: false, status: "error", error: "Reused A2U missing to_address" }
+    }
+    if (a2uPayment.cancelled === true) {
+      return { success: false, status: "error", error: "Reused A2U is cancelled" }
+    }
+    // Direction: App to User (Pi → Merchant Horizon wallet)
+    if (a2uPayment.direction !== "app_to_user") {
+      return { success: false, status: "error", error: "Reused A2U has wrong direction" }
+    }
+
+    // Check if already_completed on Pi - refetch and validate before continuing
     if (a2uPayment.status?.developer_completed === true && a2uPayment.transaction?.verified === true) {
-      console.log("[A2U Executor] EARLY DETECTION: A2U already completed on Pi")
-      const persistedCheckpoint = {
+      console.log("[A2U Executor] EARLY DETECTION: A2U already completed on Pi - refetching to validate")
+      const refetchedPayment = await fetchA2UPayment(a2uPaymentId)
+      if (!refetchedPayment) {
+        return { success: false, status: "error", error: "Failed to refetch already_completed payment" }
+      }
+      // Validate refetched data
+      if (!refetchedPayment.transaction || typeof refetchedPayment.transaction.txid !== 'string') {
+        return { success: false, status: "error", error: "Refetched payment missing transaction txid" }
+      }
+      const txid = refetchedPayment.transaction.txid
+      const feeData = refetchedPayment.transaction.fee_charged
+      if (typeof feeData !== 'number') {
+        console.warn("[A2U Executor] Refetched payment missing fee_charged - cannot finalize without DB reconciliation")
+        return { success: false, status: "settlement_pending", error: "Payment exists on Pi but missing fee data for DB record" }
+      }
+      // Persist with refetched data - but NEVER set dbRecorded or settled_to_merchant from Pi state alone
+      ctx.payment = {
         ...ctx.payment,
-        status: "settled_to_merchant",
-        a2uTxid: a2uPayment.transaction.txid,
+        a2uTxid: txid,
+        a2uFromAddress: refetchedPayment.from_address,
+        a2uToAddress: refetchedPayment.to_address,
+        customerAmount: ctx.customerAmount,
+        merchantAmount: Number(refetchedPayment.amount),
+        horizonFeeCharged: Number(feeData) / 10_000_000,
+        horizonSuccessFlag: true,
         piCompleted: true,
-        dbRecorded: true,
-        settlementCompletedAt: new Date().toISOString(),
+        piCompletionPending: false,
+        piCompletedAt: new Date().toISOString(),
+        status: "settlement_pending",
+        // DO NOT set dbRecorded or settled_to_merchant - must wait for DB reconciliation
+        requiresDbReconciliation: true,
       }
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(persistedCheckpoint))
-      const canonicalResponse = await buildA2USuccessResponse(ctx.paymentId)
-      if (!canonicalResponse) {
-        return { success: false, status: "error", error: "Response building failed" }
-      }
-      return { success: true, status: "settled_to_merchant", txidFromHorizon: a2uPayment.transaction.txid }
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      console.log("[A2U Executor] ✓ Already-completed payment validated and stored for DB reconciliation")
+      // Continue to stage 4 (DB reconciliation) - DO NOT return success yet
     }
   }
 
@@ -127,16 +198,20 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     txidFromHorizon = signResult.txidFromHorizon!
     const horizonFeeCharged = signResult.horizonFeeCharged || 0
 
-    // CRITICAL: Persist recovery checkpoint AFTER Horizon success
+    // CRITICAL: Persist recovery checkpoint AFTER Horizon success with NO FALLBACKS
+    if (typeof horizonFeeCharged !== 'number' || !Number.isFinite(horizonFeeCharged)) {
+      console.error("[A2U Stage2] ❌ AUDIT FAILURE: horizonFeeCharged from Horizon must be finite number")
+      return { success: false, status: "settlement_pending", error: "Horizon fee calculation failed" }
+    }
     ctx.payment = {
       ...ctx.payment,
       status: "settlement_pending",
       a2uTxid: txidFromHorizon,
       a2uFromAddress: a2uPayment.from_address,
       a2uToAddress: a2uPayment.to_address,
-      customerAmount: ctx.amount,
+      customerAmount: ctx.customerAmount,
       merchantAmount: Number(a2uPayment.amount),
-      horizonFeeCharged,
+      horizonFeeCharged, // REQUIRED - no fallback
       horizonSuccessFlag: true,
       piCompletionPending: true,
       piCompleted: false,
@@ -144,7 +219,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       horizonSuccessAt: new Date().toISOString(),
     }
     await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success")
+    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", horizonFeeCharged)
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
   }
@@ -182,12 +257,14 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] STAGE 4: Skipping DB reconciliation - already recorded")
   }
 
-  console.log("[A2U Executor] ===== UNIFIED A2U EXECUTOR SUCCESS =====")
+  // ALL executor paths return settlement_pending (never success: true here)
+  // buildA2USuccessResponse() validates predicate and returns final success: true/false
+  console.log("[A2U Executor] ===== STAGE 4 COMPLETE - RETURNING SETTLEMENT_PENDING =====")
+  console.log("[A2U Executor] ℹ️ Executor complete; caller must invoke buildA2USuccessResponse() for final response")
   return {
-    success: true,
-    status: "settled_to_merchant",
-    txidFromHorizon,
-    a2uPaymentId,
+    success: false,
+    status: "settlement_pending",
+    error: "Executor completed stages 1-4; final response via buildA2USuccessResponse()",
   }
 }
 
@@ -288,8 +365,14 @@ async function stage2SignAndSubmit(ctx: ExecutorContext, a2uPayment: any): Promi
   try {
     const piPrivateSeed = process.env.PI_PRIVATE_SEED
     if (!piPrivateSeed) {
-      console.warn("[A2U Stage2] PI_PRIVATE_SEED not configured - pending signing")
-      return { success: true } // Return pending state
+      console.error("[A2U Stage2] ❌ PI_PRIVATE_SEED not configured - cannot sign Horizon transaction")
+      // Persist checkpoint with no Horizon flags set
+      ctx.payment.status = "settlement_pending"
+      ctx.payment.piCompletionPending = true
+      ctx.payment.horizonSuccessFlag = false // DO NOT set to true
+      ctx.payment.a2uTxid = undefined // DO NOT set txid
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      return { success: false, status: "settlement_pending", error: "PI_PRIVATE_SEED not configured - requires manual intervention" }
     }
 
     console.log("[A2U Stage2] Creating Stellar keypair")
@@ -345,7 +428,8 @@ async function stage2SignAndSubmit(ctx: ExecutorContext, a2uPayment: any): Promi
     const horizonFeeCharged = Number(submitResult.fee_charged) / 10_000_000
 
     console.log("[A2U Stage2] ✓ Horizon submission succeeded:", txidFromHorizon)
-    return { success: true, txidFromHorizon, horizonFeeCharged }
+    // Executor never returns success: true; caller will invoke buildA2USuccessResponse()
+    return { success: false, status: "settlement_pending", error: "Stage 2 complete; proceed to stage 3" }
   } catch (error) {
     console.error("[A2U Stage2] Exception:", error)
     return { success: false, error: String(error) }
@@ -373,14 +457,16 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
       if (response.status === 400 && errorText.includes("already_completed")) {
         console.log("[A2U Stage3] Payment already_completed - refetching to validate")
         // This is OK - payment was already marked complete
-        return { success: true }
+        // Executor never returns success: true
+        return { success: false, status: "settlement_pending", error: "Stage 3 complete; proceed to stage 4" }
       }
       console.error("[A2U Stage3] Pi /complete failed:", errorText)
       return { success: false, error: "Pi /complete failed" }
     }
 
     console.log("[A2U Stage3] ✓ Pi /complete succeeded")
-    return { success: true }
+    // Executor never returns success: true
+    return { success: false, status: "settlement_pending", error: "Stage 3 complete; proceed to stage 4" }
   } catch (error) {
     console.error("[A2U Stage3] Exception:", error)
     return { success: false, error: String(error) }
@@ -438,11 +524,18 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     if (!dbResult || !dbResult.success) {
       console.error("[A2U Stage4] DB reconciliation failed:", dbResult?.error)
-      return { success: false, error: dbResult?.error || "Unknown DB error" }
+      // Persist failure state for recovery
+      ctx.payment.status = "settlement_pending"
+      ctx.payment.dbRecorded = false
+      ctx.payment.requiresDbReconciliation = true
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      console.log("[A2U Stage4] Persisted settlement_pending with dbRecorded=false and requiresDbReconciliation=true")
+      return { success: false, status: "settlement_pending", error: dbResult?.error || "Unknown DB error" }
     }
 
     console.log("[A2U Stage4] ✓ DB reconciliation succeeded with transaction ID:", dbResult.transactionId)
-    return { success: true }
+    // Executor never returns success: true; buildA2USuccessResponse() validates predicate + returns final response
+    return { success: false, status: "settlement_pending", error: "All executor stages complete; final response via buildA2USuccessResponse()" }
   } catch (error) {
     console.error("[A2U Stage4] Exception:", error)
     return { success: false, error: String(error) }
