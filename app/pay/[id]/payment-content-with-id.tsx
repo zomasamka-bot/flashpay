@@ -312,7 +312,7 @@ export default function PaymentContentWithId({
               setIsPaying(false)
               toast({
                 title: "Payment Successful",
-                description: `Transaction ID: ${updated.txid || txid}`,
+                description: `Transaction ID: ${updated.u2aTxid || updated.a2uTxid || txid}`,
               })
             }
           }
