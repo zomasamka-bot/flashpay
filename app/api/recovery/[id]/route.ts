@@ -8,6 +8,7 @@ export const runtime = 'nodejs'
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
+import { buildA2USuccessResponse } from "@/lib/a2u-response"
 
 /**
  * INTERNAL-ONLY Server recovery endpoint.
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
       case "db_reconciled":
         // States 2 & 4: DB reconciliation succeeded, return canonical response
-        const canonicalResponse = await require("@/lib/a2u-response").buildA2USuccessResponse(paymentId)
+        const canonicalResponse = await buildA2USuccessResponse(paymentId)
         if (!canonicalResponse) {
           return NextResponse.json(
             { error: "Response building failed - data corruption detected" },

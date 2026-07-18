@@ -13,7 +13,15 @@ import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessin
 import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
 import type { Payment, PaymentStatus } from "@/lib/types"
 
-export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
+export function CustomerPaymentView({ 
+  paymentId, 
+  onSuccess, 
+  onError 
+}: { 
+  paymentId: string
+  onSuccess?: (u2aTxid: string) => void
+  onError?: (error: string) => void
+}) {
   const { toast } = useToast()
   const [payment, setPayment] = useState<Payment | null>(null)
   const [loading, setLoading] = useState(true)
@@ -233,10 +241,14 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
               description: `Settlement complete. Transaction: ${serverPayment.u2aTxid}`,
             })
             
-            onSuccess(serverPayment.u2aTxid)
+            if (onSuccess && serverPayment.u2aTxid) {
+              onSuccess(serverPayment.u2aTxid)
+            }
           } catch (err) {
             console.error("[v0][CustomerView] Error fetching server state:", err)
-            onError("Failed to verify payment settlement")
+            if (onError) {
+              onError("Failed to verify payment settlement")
+            }
             setIsPaying(false)
           }
         })()
@@ -328,12 +340,12 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
             )}
           </div>
 
-          {payment.txid && (
+          {payment.u2aTxid && (
             <div className="p-3 bg-muted rounded-lg space-y-1">
               <div className="text-xs text-muted-foreground">Transaction ID</div>
-              <div className="text-sm font-mono break-all">{payment.txid}</div>
+              <div className="text-sm font-mono break-all">{payment.u2aTxid}</div>
               <a
-                href={`https://blockexplorer.minepi.com/tx/${payment.txid}`}
+                href={`https://blockexplorer.minepi.com/tx/${payment.u2aTxid}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-primary flex items-center gap-1 hover:underline"

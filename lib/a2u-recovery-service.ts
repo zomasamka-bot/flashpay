@@ -67,8 +67,10 @@ import type { Payment } from "@/lib/types"
 interface RecoveryResult {
   status:
     | "success"
-    | "manual_review_required"
+    | "db_reconciled"
+    | "pending_pi_complete"
     | "irreversible"
+    | "manual_review_required"
   state: string
   paymentId: string
   details: {

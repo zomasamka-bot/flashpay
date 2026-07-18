@@ -91,7 +91,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   }
 
   // STAGE 1: Get/Create A2U payment (skip if already have a2uPaymentId)
-  let a2uPayment = ctx.payment.a2uPayment || null
   let a2uPaymentId = ctx.payment.a2uPaymentId
 
   if (!a2uPaymentId) {
@@ -100,70 +99,50 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!stageResult.success) {
       return stageResult
     }
-    a2uPayment = stageResult.a2uPayment
     a2uPaymentId = stageResult.a2uPaymentId
     ctx.payment.a2uPaymentId = a2uPaymentId
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
-    // Fetch existing A2U payment if needed
-    if (!a2uPayment) {
-      const fetchResult = await fetchA2UPayment(a2uPaymentId)
-      if (!fetchResult) {
-        return { success: false, status: "error", error: "Failed to fetch existing A2U payment" }
-      }
-      a2uPayment = fetchResult
+  }
+
+    // For reused a2uPaymentId, fetch from Pi API to validate
+    // This also detects early completion
+    console.log("[A2U Executor] STAGE 1: Fetching and validating reused A2U from Pi API")
+    const fetchedPayment = await fetchA2UPayment(a2uPaymentId)
+    if (!fetchedPayment) {
+      return { success: false, status: "error", error: "Failed to fetch existing A2U payment from Pi" }
     }
 
-    // CRITICAL: Validate reused A2U against payment context
-    if (!a2uPayment.identifier || typeof a2uPayment.identifier !== 'string') {
-      return { success: false, status: "error", error: "Reused A2U missing identifier" }
+    // Validate identifier matches
+    if (fetchedPayment.identifier !== a2uPaymentId) {
+      return { success: false, status: "error", error: "A2U identifier mismatch from Pi API" }
     }
-    if (a2uPayment.identifier !== a2uPaymentId) {
-      return { success: false, status: "error", error: "Reused A2U identifier mismatch" }
+    
+    // Validate amount matches customer amount
+    if (!fetchedPayment.amount || Number(fetchedPayment.amount) !== ctx.customerAmount) {
+      return { success: false, status: "error", error: "A2U amount mismatch" }
     }
-    // Validate reused A2U amount, addresses, approval, cancellation
-    if (!a2uPayment.amount || Number(a2uPayment.amount) !== ctx.customerAmount) {
-      return { success: false, status: "error", error: "Reused A2U amount mismatch" }
-    }
-    if (!a2uPayment.from_address || typeof a2uPayment.from_address !== 'string') {
-      return { success: false, status: "error", error: "Reused A2U missing from_address" }
-    }
-    if (!a2uPayment.to_address || typeof a2uPayment.to_address !== 'string') {
-      return { success: false, status: "error", error: "Reused A2U missing to_address" }
-    }
-    if (a2uPayment.cancelled === true) {
-      return { success: false, status: "error", error: "Reused A2U is cancelled" }
-    }
-    // Direction: App to User (Pi → Merchant Horizon wallet)
-    if (a2uPayment.direction !== "app_to_user") {
-      return { success: false, status: "error", error: "Reused A2U has wrong direction" }
-    }
-
-    // Check if already_completed on Pi - refetch and validate before continuing
-    if (a2uPayment.status?.developer_completed === true && a2uPayment.transaction?.verified === true) {
-      console.log("[A2U Executor] EARLY DETECTION: A2U already completed on Pi - refetching to validate")
-      const refetchedPayment = await fetchA2UPayment(a2uPaymentId)
-      if (!refetchedPayment) {
-        return { success: false, status: "error", error: "Failed to refetch already_completed payment" }
+    
+    // Check if already_completed on Pi - early detection
+    if (fetchedPayment.status?.developer_completed === true && fetchedPayment.transaction?.verified === true) {
+      console.log("[A2U Executor] STAGE 1: Early detection - A2U already completed on Pi")
+      if (!fetchedPayment.transaction || typeof fetchedPayment.transaction.txid !== 'string') {
+        return { success: false, status: "error", error: "Completed A2U missing transaction txid" }
       }
-      // Validate refetched data
-      if (!refetchedPayment.transaction || typeof refetchedPayment.transaction.txid !== 'string') {
-        return { success: false, status: "error", error: "Refetched payment missing transaction txid" }
-      }
-      const txid = refetchedPayment.transaction.txid
-      const feeData = refetchedPayment.transaction.fee_charged
+      const txid = fetchedPayment.transaction.txid
+      const feeData = fetchedPayment.transaction.fee_charged
       if (typeof feeData !== 'number') {
-        console.warn("[A2U Executor] Refetched payment missing fee_charged - cannot finalize without DB reconciliation")
-        return { success: false, status: "settlement_pending", error: "Payment exists on Pi but missing fee data for DB record" }
+        console.warn("[A2U Executor] Completed A2U missing fee_charged")
+        return { success: false, status: "settlement_pending", error: "A2U completed on Pi but missing fee data for DB record" }
       }
-      // Persist with refetched data - but NEVER set dbRecorded or settled_to_merchant from Pi state alone
+      // Persist with fetched data - but NEVER set dbRecorded or settled_to_merchant from Pi state alone
       ctx.payment = {
         ...ctx.payment,
         a2uTxid: txid,
-        a2uFromAddress: refetchedPayment.from_address,
-        a2uToAddress: refetchedPayment.to_address,
+        a2uFromAddress: fetchedPayment.from_address,
+        a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
-        merchantAmount: Number(refetchedPayment.amount),
+        merchantAmount: Number(fetchedPayment.amount),
         horizonFeeCharged: Number(feeData) / 10_000_000,
         horizonSuccessFlag: true,
         piCompleted: true,
@@ -179,19 +158,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
   }
 
-  // Persist A2U identifiers after stage 1
-  ctx.payment.a2uPaymentId = a2uPaymentId
-  ctx.payment.a2uFromAddress = a2uPayment.from_address
-  ctx.payment.a2uToAddress = a2uPayment.to_address
-  ctx.payment.a2uAmount = a2uPayment.amount
-  await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-
   // STAGE 2: Sign (skip if already have a2uTxid)
   let txidFromHorizon = ctx.payment.a2uTxid
 
   if (!txidFromHorizon) {
     console.log("[A2U Executor] STAGE 2: Signing transaction")
-    const signResult = await stage2SignAndSubmit(ctx, a2uPayment)
+    const signResult = await stage2SignAndSubmit(ctx)
     if (!signResult.success) {
       return signResult
     }
@@ -250,7 +222,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     ctx.payment.dbRecorded = true
     ctx.payment.status = "settled_to_merchant"
     ctx.payment.requiresDbReconciliation = false
-    ctx.payment.settlementCompletedAt = new Date().toISOString()
+    ctx.payment.settledAt = new Date().toISOString()
     await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
     console.log("[A2U Executor] ✓ DB reconciliation succeeded")
   } else {
@@ -361,8 +333,23 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<{ success: boolean
 /**
  * STAGE 2: Sign and submit to Horizon
  */
-async function stage2SignAndSubmit(ctx: ExecutorContext, a2uPayment: any): Promise<{ success: boolean; txidFromHorizon?: string; horizonFeeCharged?: number; error?: string }> {
+async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<{ success: boolean; txidFromHorizon?: string; horizonFeeCharged?: number; error?: string }> {
   try {
+    // CRITICAL: Use ONLY Payment fields (never undefined a2uPayment object parameter)
+    const toAddress = ctx.payment.a2uToAddress
+    const amount = ctx.payment.merchantAmount
+    const a2uPaymentId = ctx.payment.a2uPaymentId
+    
+    if (!toAddress || typeof toAddress !== 'string') {
+      return { success: false, error: "Payment missing required a2uToAddress" }
+    }
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+      return { success: false, error: "Payment missing required merchantAmount" }
+    }
+    if (!a2uPaymentId || typeof a2uPaymentId !== 'string') {
+      return { success: false, error: "Payment missing required a2uPaymentId" }
+    }
+    
     const piPrivateSeed = process.env.PI_PRIVATE_SEED
     if (!piPrivateSeed) {
       console.error("[A2U Stage2] ❌ PI_PRIVATE_SEED not configured - cannot sign Horizon transaction")
@@ -379,7 +366,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext, a2uPayment: any): Promi
     const appKeypair = StellarSDK.Keypair.fromSecret(piPrivateSeed)
     const appPublicKey = appKeypair.publicKey()
 
-    if (appPublicKey !== a2uPayment.from_address) {
+    if (appPublicKey !== ctx.payment.a2uFromAddress) {
       console.error("[A2U Stage2] Address mismatch")
       return { success: false, error: "Private seed does not match app wallet address" }
     }
@@ -409,13 +396,13 @@ async function stage2SignAndSubmit(ctx: ExecutorContext, a2uPayment: any): Promi
 
     builder.addOperation(
       StellarSDK.Operation.payment({
-        destination: a2uPayment.to_address,
+        destination: toAddress,
         asset: StellarSDK.Asset.native(),
-        amount: a2uPayment.amount.toString(),
+        amount: amount.toString(),
       })
     )
 
-    builder.addMemo(StellarSDK.Memo.text(a2uPayment.identifier.substring(0, 28)))
+    builder.addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0, 28)))
     builder.setTimeout(StellarSDK.TimeoutInfinite)
 
     const transaction = builder.build()

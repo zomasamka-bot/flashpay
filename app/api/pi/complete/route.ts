@@ -127,13 +127,28 @@ export async function POST(request: NextRequest) {
 
     const payment: Payment = typeof currentCheckpoint === "string" ? JSON.parse(currentCheckpoint) : currentCheckpoint
     
+    // Validate merchantUid and piPaymentId before executor
+    if (!payment.merchantUid || typeof payment.merchantUid !== "string") {
+      console.error("[Pi Complete] Payment missing merchantUid")
+      return NextResponse.json({ error: "Invalid payment - missing merchantUid" }, { status: 400 })
+    }
+    if (!payment.piPaymentId || typeof payment.piPaymentId !== "string") {
+      console.error("[Pi Complete] Payment missing piPaymentId")
+      return NextResponse.json({ error: "Invalid payment - missing piPaymentId" }, { status: 400 })
+    }
+    
     // Persist paid_to_app status - this marks U2A complete
     payment.status = "paid_to_app"
     payment.u2aTxid = txid
-    payment.u2aCompletedAt = new Date().toISOString()
+    payment.paidAt = new Date().toISOString()
+    
+    // Ensure piPaymentId is persisted (may have come from client callback)
+    if (!payment.piPaymentId && piPaymentId) {
+      payment.piPaymentId = piPaymentId
+    }
     
     await redis.set(`payment:${paymentId}`, JSON.stringify(payment))
-    console.log("[Pi Complete] ✓ Persisted status = paid_to_app")
+    console.log("[Pi Complete] ✓ Persisted status = paid_to_app with paidAt timestamp")
 
     // === STAGE 3: Call unified executor ===
     console.log("[Pi Complete] === STAGE 3: Call unified executor ===")
@@ -143,16 +158,17 @@ export async function POST(request: NextRequest) {
       payment,
       merchantUid: payment.merchantUid,
       accessToken: payment.accessToken || "",
-      customerAmount: payment.customerAmount || 0,
-      piPaymentId: piPaymentId,
+      customerAmount: payment.customerAmount || payment.amount,
+      piPaymentId: payment.piPaymentId,
       isRecovery: false,
     })
 
-    if (!executorResult.success) {
-      console.warn("[Pi Complete] Executor returned failure - status:", executorResult.status)
+    // Executor always returns success: false; check status/error instead
+    if (executorResult.status === "error" || executorResult.error) {
+      console.warn("[Pi Complete] Executor returned error - status:", executorResult.status, "error:", executorResult.error)
       // Still return success for client - settlement is async
     } else {
-      console.log("[Pi Complete] ✅ Executor succeeded - status:", executorResult.status)
+      console.log("[Pi Complete] ✓ Executor stages complete - status:", executorResult.status)
     }
 
     // === STAGE 4: Re-read latest checkpoint from Redis ===
