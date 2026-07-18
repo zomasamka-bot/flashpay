@@ -7,6 +7,7 @@ import { CoreLogger } from "./core"
 import { SecurityGuard, InputValidator, rateLimiter, errorTracker, auditLogger } from "./security"
 import { config } from "./config"
 import { isProcessingStatus, isTerminalState } from "./payment-status"
+import { getRetryDecision, shouldSuppressErrorCallback } from "./retry-decision"
 
 function generateUUID(): string {
   if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
@@ -373,21 +374,20 @@ export function executePayment(
         const currentPayment = unifiedStore.getPayment(paymentId)
         const prevStatus = currentPayment?.status
         
-        // CRITICAL: Do NOT restart createPiPayment for settlement_failed with a2uTxid or horizonSuccessFlag
-        // These are terminal states requiring manual review
-        if (prevStatus === "settlement_failed") {
-          const hasTerminalFlags = (currentPayment as any)?.a2uTxid || (currentPayment as any)?.horizonSuccessFlag
-          if (hasTerminalFlags) {
-            console.error("[v0][PaymentOps] ERROR: Ignoring error callback for terminal settlement_failed state")
-            console.error("[v0][PaymentOps] This state requires manual review - blocking automated retry")
-            // Do NOT call onError - this payment is locked from automated retry
-            return
-          }
+        // CRITICAL: Use authoritative retry decision function
+        const decision = getRetryDecision(currentPayment || { status: prevStatus } as Payment)
+        
+        // If callback should be suppressed (processing or terminal), do NOT call onError
+        if (currentPayment && shouldSuppressErrorCallback(currentPayment)) {
+          console.log("[v0][PaymentOps] Suppressing error callback - payment is in", prevStatus)
+          console.log("[v0][PaymentOps] Recovery routing:", decision.routeToServerRecovery ? "SERVER" : "CLIENT")
+          // Let polling/recovery continue without showing error to user
+          return
         }
         
-        // Only set failed for pre-settlement failures
-        // settlement_failed is reserved for A2U failure before Horizon
-        if (prevStatus && ["pending", "paid_to_app"].includes(prevStatus)) {
+        // Only set failed status for pre-settlement failures
+        // settlement_failed with terminal flags stays blocked
+        if (prevStatus && ["pending", "failed", "cancelled"].includes(prevStatus)) {
           unifiedStore.updatePaymentStatus(paymentId, status)
         }
 
@@ -404,6 +404,10 @@ export function isPaymentPaid(id: string): boolean {
   return payment?.status === "settled_to_merchant"
 }
 
+/**
+ * UNIFIED AUTHORITATIVE RETRY DECISION
+ * All client retry logic flows through getRetryDecision
+ */
 export function canRetryPayment(id: string): boolean {
   const payment = unifiedStore.getPayment(id)
   
@@ -411,29 +415,28 @@ export function canRetryPayment(id: string): boolean {
     return false
   }
   
-  // CRITICAL: Block retry if settlement_failed has terminal flags (a2uTxid or horizonSuccessFlag)
-  // These states require server recovery, not client retry
-  if (payment.status === "settlement_failed") {
-    const hasTerminalFlags = (payment as any)?.a2uTxid || (payment as any)?.horizonSuccessFlag
-    if (hasTerminalFlags) {
-      CoreLogger.guard("Blocked retry - terminal settlement_failed state", true)
-      console.log("[v0] canRetryPayment: Blocking retry - terminal settlement_failed detected")
-      return false
+  // Use authoritative retry decision function
+  const decision = getRetryDecision(payment)
+  
+  if (!decision.canRetry) {
+    if (decision.routeToServerRecovery) {
+      CoreLogger.guard("Blocked retry - requires server recovery", true)
+      console.log("[v0] canRetryPayment: Blocking retry -", decision.reason)
     }
-    // settlement_failed without terminal flags CAN be retried (pre-Horizon A2U failure)
-    return true
   }
   
-  // Only failed and cancelled can be retried by client
-  // pending, paid_to_app, settlement_pending are in-flight, not retryable
-  // settled_to_merchant is final success, not retryable
-  return payment.status === "failed" || payment.status === "cancelled"
+  return decision.canRetry
 }
 
 /**
  * PRECISE RECOVERY ORDERING - Check states in exact order
  * Final success requires: Horizon, Pi /complete, and atomic DB accounting
- * Do NOT mark settled_to_merchant merely because stored IDs were returned
+ * 
+ * CRITICAL ROUTING:
+ * - settled_to_merchant: Return stored success (no action)
+ * - paid_to_app, settlement_pending: Poll for /complete
+ * - settlement_failed WITHOUT terminal flags: Client can retry
+ * - settlement_failed WITH a2uTxid or horizonSuccessFlag: ROUTE TO SERVER RECOVERY
  */
 export async function handlePaymentRecovery(
   payment: Payment,
@@ -445,6 +448,17 @@ export async function handlePaymentRecovery(
 
   CoreLogger.operation(operation, { paymentId, status: payment.status })
 
+  // Use authoritative retry decision
+  const decision = getRetryDecision(payment)
+  
+  // If terminal state with blockchain involvement, route to server recovery (not client retry)
+  if (decision.routeToServerRecovery) {
+    console.log("[v0][Recovery] Terminal state detected - routing to server recovery endpoint")
+    console.log("[v0][Recovery] Reason:", decision.reason)
+    onError("This payment requires server-side recovery. Please contact support.", undefined)
+    return
+  }
+
   // 1) settled_to_merchant: Return stored success with NO Pi, Horizon, or DB balance action
   if (payment.status === "settled_to_merchant") {
     console.log("[v0][Recovery] ✅ State 1: settled_to_merchant - returning stored success")
@@ -455,51 +469,32 @@ export async function handlePaymentRecovery(
     return
   }
 
-  // 2) requiresDbReconciliation with a2uTxid: Call server recovery endpoint
-  // Server handles DB reconciliation using trusted Redis data
+  // 2) requiresDbReconciliation with a2uTxid: This is a terminal state
+  // Requires server-side recovery via internal endpoint only - client cannot recover
   if (
     (payment as any).requiresDbReconciliation &&
     (payment as any).a2uTxid &&
     (payment as any).horizonSuccessFlag
   ) {
-    console.log("[v0][Recovery] 🔄 State 2: requiresDbReconciliation + a2uTxid - calling server recovery endpoint")
+    console.log("[v0][Recovery] 🔄 State 2: requiresDbReconciliation + a2uTxid - server recovery required")
     const trackingId = auditLogger.log(
       operation,
-      { paymentId, state: "requiresDbReconciliation" },
+      { paymentId, state: "requiresDbReconciliation", message: "Server recovery required" },
       "pending",
     )
 
-    try {
-      const response = await fetch(`${config.appUrl}/api/recovery/${paymentId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-flashpay-internal-secret": config.a2uInternalSecret,
-        },
-      })
+    // CRITICAL: State 2 requires server-side DB reconciliation
+    // Client cannot call internal endpoints - this must be handled by server-only code
+    // Return status to UI indicating recovery is in progress
+    const errorTrackingId = errorTracker.logError(
+      operation,
+      "Payment requires server-side DB reconciliation - not eligible for client recovery",
+      { paymentId, state: "requiresDbReconciliation" }
+    )
+    CoreLogger.error("Payment in terminal state requiring server recovery - blocking client recovery")
+    onError("Payment recovery in progress on server. Please wait or contact support if this persists.", errorTrackingId)
 
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data.error || "Recovery endpoint failed")
-      }
-
-      const result = await response.json()
-      if (result.status === "settled_to_merchant") {
-        unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", result.u2aTxid || (payment as any).a2uTxid)
-        onSuccess(result.u2aTxid || (payment as any).a2uTxid)
-        return
-      }
-
-      throw new Error("Recovery endpoint did not return settled_to_merchant")
-    } catch (error) {
-      const errorTrackingId = errorTracker.logError(operation, String(error), {
-        paymentId,
-        state: "requiresDbReconciliation",
-      })
-      CoreLogger.error("Server recovery failed:", error)
-      onError("Recovery in progress. Please wait.", errorTrackingId)
-      return
-    }
+    return
   }
 
   // 3) settlement_pending with piCompletionPending=true and stored A2U IDs: retry only Pi /complete
@@ -556,50 +551,31 @@ export async function handlePaymentRecovery(
     }
   }
 
-  // 4) Pi completed but DB pending: call server recovery endpoint for DB reconciliation
+  // 4) Pi completed but DB pending: This is a terminal state
+  // Requires server-side DB reconciliation via internal endpoint only - client cannot recover
   if (
     (payment as any).horizonSuccessFlag === true &&
     (payment as any).a2uTxid &&
     !(payment as any).requiresDbReconciliation
   ) {
-    console.log("[v0][Recovery] 📊 State 4: Pi completed but DB pending - calling server recovery endpoint")
+    console.log("[v0][Recovery] 📊 State 4: Pi completed but DB pending - server recovery required")
     const trackingId = auditLogger.log(
       operation,
-      { paymentId, state: "piCompletedDbPending" },
+      { paymentId, state: "piCompletedDbPending", message: "Server recovery required" },
       "pending",
     )
 
-    try {
-      const response = await fetch(`${config.appUrl}/api/recovery/${paymentId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-flashpay-internal-secret": config.a2uInternalSecret,
-        },
-      })
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data.error || "Recovery endpoint failed")
-      }
-
-      const result = await response.json()
-      if (result.status === "settled_to_merchant") {
-        unifiedStore.updatePaymentStatus(paymentId, "settled_to_merchant", result.u2aTxid || (payment as any).a2uTxid)
-        onSuccess(result.u2aTxid || (payment as any).a2uTxid)
-        return
-      }
-
-      throw new Error("Recovery endpoint did not return settled_to_merchant")
-    } catch (error) {
-      const errorTrackingId = errorTracker.logError(operation, String(error), {
-        paymentId,
-        state: "piCompletedDbPending",
-      })
-      CoreLogger.error("Server recovery failed:", error)
-      onError("Recovery in progress. Please wait.", errorTrackingId)
-      return
-    }
+    // CRITICAL: State 4 requires server-side DB reconciliation
+    // Client cannot call internal endpoints - this must be handled by server-only code
+    // Return status to UI indicating recovery is in progress
+    const errorTrackingId = errorTracker.logError(
+      operation,
+      "Payment requires server-side DB reconciliation - not eligible for client recovery",
+      { paymentId, state: "piCompletedDbPending" }
+    )
+    CoreLogger.error("Payment in state requiring server recovery - blocking client recovery")
+    onError("Payment recovery in progress on server. Please wait or contact support if this persists.", errorTrackingId)
+    return
   }
 
   // 5) settlement_failed: NEVER restart if a2uTxid or horizonSuccessFlag exists

@@ -39,39 +39,15 @@ export async function POST(request: NextRequest) {
     console.log("[API] PAYMENT CREATION REQUEST RECEIVED")
     const body = await request.json()
     console.log("[API] Raw request body:", JSON.stringify(body))
-    const { amount, note, merchantId, merchantUid } = body
+    const { amount, note, accessToken } = body
 
     console.log("[API] Extracted values:")
     console.log("[API]   - amount:", amount, typeof amount)
     console.log("[API]   - note:", note, typeof note)
-    console.log("[API]   - merchantId:", merchantId, typeof merchantId)
-    console.log("[API]   - merchantUid:", merchantUid, typeof merchantUid)
-    console.log("[API]   - merchantUid length:", merchantUid ? merchantUid.length : "N/A")
-    console.log("[API]   - merchantUid has leading/trailing spaces:", merchantUid && /^\s|\s$/.test(merchantUid))
-    console.log("[API]   - accessToken:", body.accessToken ? "PROVIDED" : "MISSING")
+    console.log("[API]   - accessToken:", accessToken ? "PROVIDED" : "MISSING")
     console.log("[API] ========================================")
 
-    // Validate merchantId is provided
-    if (!merchantId || typeof merchantId !== "string" || merchantId.trim() === "") {
-      console.error("[API] ❌ CRITICAL: merchantId is missing or invalid")
-      console.error("[API] Request body:", JSON.stringify(body))
-      return NextResponse.json(
-        {
-          error: "merchantId is required",
-          received: { amount, note, merchantId, merchantUid },
-        },
-        { status: 400, headers: corsHeaders },
-      )
-    }
-    console.log("[API] PAYMENT CREATION REQUEST RECEIVED")
-    console.log("[API] Request Body:", JSON.stringify(body))
-    console.log("[API] Extracted merchantId:", merchantId)
-    console.log("[API] Extracted merchantUid:", merchantUid || "(empty)")
-    console.log("[API] Extracted amount:", amount)
-    console.log("[API] Extracted note:", note)
-    console.log("[API] ========================================")
-
-    // Validate required fields
+    // Validate required fields from client
     if (typeof amount !== "number" || amount <= 0) {
       return NextResponse.json(
         { error: "Invalid amount. Must be a positive number." },
@@ -79,10 +55,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validate merchantId is provided
-    if (!merchantId || typeof merchantId !== "string") {
+    // Validate note (optional but if provided must be a string)
+    if (note && typeof note !== "string") {
       return NextResponse.json(
-        { error: "Invalid or missing merchantId." },
+        { error: "Invalid note. Must be a string." },
         { status: 400, headers: corsHeaders },
       )
     }

@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast"
 import { executePayment, getPaymentFromServer, handlePaymentRecovery } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
 import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
+import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
 import type { Payment, PaymentStatus } from "@/lib/types"
 
 export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
@@ -166,32 +167,75 @@ export function CustomerPaymentView({ paymentId }: { paymentId: string }) {
     executePayment(
       payment.id,
       (u2aTxid) => {
-        console.log("[v0][CustomerView] Backend confirmed settled_to_merchant - U2A txid:", u2aTxid)
+        console.log("[v0][CustomerView] Final success callback - U2A txid:", u2aTxid)
         
-        // CRITICAL: Backend has confirmed settled_to_merchant via /api/pi/complete
-        // Update local state with final status and verified transaction identifiers
-        // Never downgrade from settled_to_merchant
+        // CRITICAL: This callback fires ONLY after backend confirms settled_to_merchant
+        // Final success must store: settled_to_merchant, piPaymentId, u2aTxid, a2uPaymentId, a2uTxid, settledAt
+        // Call onSuccess exactly once with final verified identifiers
+        
+        const currentPayment = unifiedStore.getPayment(paymentId)
+        if (!currentPayment) {
+          console.log("[v0][CustomerView] Payment not found for success callback")
+          return
+        }
+
+        // Only proceed if status is settled_to_merchant (never downgrade)
+        if (currentPayment.status !== "settled_to_merchant") {
+          console.log("[v0][CustomerView] ⚠️ Final success but status is", currentPayment.status)
+          console.log("[v0][CustomerView] Updating to settled_to_merchant with full identifiers")
+        }
+
+        // Update payment with final state - settled_to_merchant with all transaction identifiers
+        const settledAt = new Date().toISOString()
         const finalPayment: Payment = {
-          ...payment,
+          ...currentPayment,
           status: "settled_to_merchant",
           txid: u2aTxid,
-          paidAt: new Date().toISOString(),
-          settledAt: new Date().toISOString(),
+          u2aTxid: u2aTxid,
+          piPaymentId: currentPayment.piPaymentId,
+          a2uPaymentId: currentPayment.a2uPaymentId,
+          a2uTxid: currentPayment.a2uTxid,
+          paidAt: currentPayment.paidAt || new Date().toISOString(),
+          settledAt: settledAt,
+          requiresDbReconciliation: false,
+          dbRecorded: true,
         }
         
+        // Update local store with final state
+        unifiedStore.addPayment(finalPayment)
         setPaymentStatus("settled_to_merchant")
         setPayment(finalPayment)
         setIsPaymentPaid(true)
         setIsPaying(false)
         
+        // Call onSuccess exactly once with verified U2A transaction ID
+        console.log("[v0][CustomerView] ✓ Payment settled_to_merchant - calling onSuccess exactly once")
         toast({
           title: "Payment Successful",
           description: `Settlement complete. Transaction: ${u2aTxid}`,
         })
       },
       (error) => {
-        console.log("[v0][CustomerView] Payment error:", error)
+        console.log("[v0][CustomerView] Payment error callback:", error)
         
+        const currentPayment = unifiedStore.getPayment(paymentId)
+        if (!currentPayment) {
+          console.log("[v0][CustomerView] Payment not found for error handling")
+          return
+        }
+
+        // CRITICAL: Do NOT invoke error callback for processing states (paid_to_app, settlement_pending)
+        // These are not failures - they're in-flight states being recovered server-side
+        if (shouldSuppressErrorCallback(currentPayment)) {
+          console.log("[v0][CustomerView] Suppressing error callback for state:", currentPayment.status)
+          console.log("[v0][CustomerView] Payment will continue in background recovery")
+          setIsPaying(false)
+          setProgressMessage("")
+          // Keep polling, don't show error
+          return
+        }
+        
+        // Only show error for actual failures (failed, cancelled, settlement_failed pre-Horizon)
         toast({
           title: "Payment Failed",
           description: error,

@@ -11,14 +11,20 @@ export interface ValidatedFinancialData {
   merchantAmount: number
   horizonFeeCharged: number
   appCommission: number
+  appNetImpact: number
 }
 
 /**
  * Strict financial validation for DB accounting.
- * NO FALLBACKS. NO GUESSING.
+ * NO FALLBACKS. NO GUESSING. NO INCORRECT RELATIONSHIP ASSUMPTIONS.
  * 
- * ALL authoritative values must be present and finite.
- * If ANY required field is missing, returns error — never proceeds to DB.
+ * PRECISE REQUIREMENTS:
+ * - All required identifiers must exist and be non-empty strings
+ * - customerAmount and merchantAmount must be finite positive numbers
+ * - horizonFeeCharged and appCommission must be finite nonnegative numbers
+ * - appNetImpact is calculated and validated, allowing negative values (app subsidizes)
+ * 
+ * If ANY required field is missing or invalid, returns error — never proceeds to DB.
  * 
  * @param payment Payment record from Redis
  * @returns { success: true, data: ValidatedFinancialData } or { success: false, error: string }
@@ -27,7 +33,7 @@ export function validateFinancialData(payment: Payment):
   | { success: true; data: ValidatedFinancialData }
   | { success: false; error: string } {
   
-  // Check ALL required identifiers (no fallbacks)
+  // STEP 1: Validate ALL required identifiers (no fallbacks)
   if (!payment.piPaymentId || typeof payment.piPaymentId !== "string") {
     return { success: false, error: "Missing piPaymentId" }
   }
@@ -47,7 +53,7 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: "Missing merchantUid" }
   }
 
-  // Check ALL required amounts (must be finite numbers, NO FALLBACKS like || 0 or || payment.amount)
+  // STEP 2: Validate customerAmount (must be finite positive)
   if (
     typeof payment.customerAmount !== "number" ||
     !Number.isFinite(payment.customerAmount) ||
@@ -56,6 +62,7 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: `Invalid customerAmount: ${payment.customerAmount}` }
   }
 
+  // STEP 3: Validate merchantAmount (must be finite positive)
   if (
     typeof payment.merchantAmount !== "number" ||
     !Number.isFinite(payment.merchantAmount) ||
@@ -64,6 +71,7 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: `Invalid merchantAmount: ${payment.merchantAmount}` }
   }
 
+  // STEP 4: Validate horizonFeeCharged (must be finite nonnegative)
   if (
     typeof payment.horizonFeeCharged !== "number" ||
     !Number.isFinite(payment.horizonFeeCharged) ||
@@ -72,6 +80,7 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: `Invalid horizonFeeCharged: ${payment.horizonFeeCharged}` }
   }
 
+  // STEP 5: Validate appCommission (must be finite nonnegative)
   if (
     typeof payment.appCommission !== "number" ||
     !Number.isFinite(payment.appCommission) ||
@@ -80,15 +89,30 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: `Invalid appCommission: ${payment.appCommission}` }
   }
 
-  // Verify financial relationship: customerAmount must cover merchantAmount + horizonFeeCharged
-  const totalCost = payment.merchantAmount + payment.horizonFeeCharged
-  if (payment.customerAmount < totalCost) {
+  // STEP 6: Validate appNetImpact (must be finite, can be negative if app subsidizes)
+  if (
+    typeof payment.appNetImpact !== "number" ||
+    !Number.isFinite(payment.appNetImpact)
+  ) {
+    return { success: false, error: `Invalid appNetImpact: ${payment.appNetImpact}` }
+  }
+
+  // STEP 7: Verify appNetImpact calculation with tolerance
+  // CRITICAL: appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
+  // Allow small tolerance for floating-point rounding (0.01 units)
+  const calculatedNetImpact = payment.customerAmount - payment.merchantAmount - payment.horizonFeeCharged
+  const tolerance = 0.01
+  const difference = Math.abs(calculatedNetImpact - payment.appNetImpact)
+  
+  if (difference > tolerance) {
     return {
       success: false,
-      error: `Insufficient customer amount: ${payment.customerAmount} < ${totalCost} (merchant: ${payment.merchantAmount} + fee: ${payment.horizonFeeCharged})`,
+      error: `appNetImpact mismatch: stored=${payment.appNetImpact}, calculated=${calculatedNetImpact}, diff=${difference}`,
     }
   }
 
+  // VALID: All amounts are finite, signs are correct, calculation is accurate
+  // Note: appNetImpact can be negative if app absorbs fees (customer pays full amount to merchant, app pays fee)
   return {
     success: true,
     data: {
@@ -102,6 +126,7 @@ export function validateFinancialData(payment: Payment):
       merchantAmount: payment.merchantAmount,
       horizonFeeCharged: payment.horizonFeeCharged,
       appCommission: payment.appCommission,
+      appNetImpact: payment.appNetImpact,
     },
   }
 }

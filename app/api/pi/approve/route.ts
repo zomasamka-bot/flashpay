@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
-import { config } from "@/lib/config"
+import { serverConfig } from "@/lib/server-config"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
     console.log("[Pi Webhook] Pi Payment ID:", identifier)
 
-    if (!config.isPiApiKeyConfigured) {
+    if (!serverConfig.isPiApiKeyConfigured) {
       console.error("[Pi Webhook] PI_API_KEY not configured")
       return new Response(JSON.stringify({ error: "Server not configured" }), {
         status: 500,
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
       {
         method: "GET",
         headers: {
-          Authorization: `Key ${config.piApiKey}`,
+          Authorization: `Key ${serverConfig.piApiKey}`,
           "Content-Type": "application/json",
         },
       },
@@ -190,7 +190,7 @@ export async function POST(request: NextRequest) {
       {
         method: "POST",
         headers: {
-          Authorization: `Key ${config.piApiKey}`,
+          Authorization: `Key ${serverConfig.piApiKey}`,
           "Content-Type": "application/json",
         },
       },
@@ -221,7 +221,7 @@ export async function POST(request: NextRequest) {
       {
         method: "GET",
         headers: {
-          Authorization: `Key ${config.piApiKey}`,
+          Authorization: `Key ${serverConfig.piApiKey}`,
           "Content-Type": "application/json",
         },
       },

@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
-import { config } from "@/lib/config"
+import { serverConfig } from "@/lib/server-config"
 import { recordA2UTransactionAtomic } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // Fail closed: require A2U_INTERNAL_SECRET from environment
-    if (!config.a2uInternalSecret || typeof config.a2uInternalSecret !== "string") {
+    if (!serverConfig.a2uInternalSecret || typeof serverConfig.a2uInternalSecret !== "string") {
       console.error("[Pi Complete] SECURITY: A2U_INTERNAL_SECRET not configured - REJECTING ALL REQUESTS")
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
     // 2. Fetch canonical payment state directly from Pi API (not Redis)
     // Redis pi_payment:* keys are never created - fetch from authoritative Pi API source
-    if (!config.isPiApiKeyConfigured) {
+    if (!serverConfig.isPiApiKeyConfigured) {
       console.error("[Pi Complete] PI_API_KEY not configured")
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     const piApiResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
       method: "GET",
       headers: {
-        "Authorization": `Key ${config.piApiKey}`,
+        "Authorization": `Key ${serverConfig.piApiKey}`,
         "Content-Type": "application/json",
       },
     })
@@ -129,11 +129,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Transaction not verified" }, { status: 400 })
     }
 
-    // Validate developer_completed flag from nested status object if present
-    if (canonicalPayment.status?.developer_completed === false) {
-      console.error("[Pi Complete] Developer did not mark payment as completed - developer_completed:", canonicalPayment.status?.developer_completed)
-      return NextResponse.json({ error: "Payment not marked completed by developer" }, { status: 400 })
-    }
+    // NOTE: developer_completed flag is checked AFTER calling Pi /complete endpoint (not before)
+    // The endpoint may need to call Pi /complete which updates the flag
 
     // Validate transaction exists and has txid
     const canonicalTxid = canonicalPayment.transaction?.txid
@@ -156,6 +153,79 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Pi Complete] === CANONICAL PAYMENT VALIDATED - deriving paymentId:", paymentId)
+
+    // 3a. If developer_completed is not true, call Pi /complete to mark it completed
+    if (canonicalPayment.status?.developer_completed !== true) {
+      console.log("[Pi Complete] developer_completed not true yet - calling Pi /complete endpoint...")
+      
+      try {
+        const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Key ${serverConfig.piApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ txid }),
+        })
+
+        if (completeResponse.ok) {
+          console.log("[Pi Complete] Successfully called Pi /complete - refetching canonical payment")
+          
+          // Refetch the canonical payment to get updated developer_completed flag
+          const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+            method: "GET",
+            headers: {
+              "Authorization": `Key ${serverConfig.piApiKey}`,
+              "Content-Type": "application/json",
+            },
+          })
+
+          if (refetchResponse.ok) {
+            const refetchedPayment = await refetchResponse.json()
+            console.log("[Pi Complete] Refetched payment after /complete call - developer_completed:", refetchedPayment.status?.developer_completed)
+            Object.assign(canonicalPayment, refetchedPayment)
+          } else {
+            console.warn("[Pi Complete] Failed to refetch after /complete - using previous state")
+          }
+        } else if (completeResponse.status === 400) {
+          // Check if already_completed error
+          const errorData = await completeResponse.json()
+          if (errorData.error === "already_completed") {
+            console.log("[Pi Complete] Payment was already completed - refetching canonical payment")
+            
+            // Refetch to get current state
+            const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+              method: "GET",
+              headers: {
+                "Authorization": `Key ${serverConfig.piApiKey}`,
+                "Content-Type": "application/json",
+              },
+            })
+
+            if (refetchResponse.ok) {
+              const refetchedPayment = await refetchResponse.json()
+              console.log("[Pi Complete] Refetched payment after already_completed - developer_completed:", refetchedPayment.status?.developer_completed)
+              Object.assign(canonicalPayment, refetchedPayment)
+            }
+          } else {
+            console.error("[Pi Complete] Pi /complete failed:", errorData.error)
+            return NextResponse.json({ error: "Failed to complete Pi payment", details: errorData.error }, { status: 400 })
+          }
+        } else {
+          console.error("[Pi Complete] Pi /complete returned status:", completeResponse.status)
+          return NextResponse.json({ error: "Failed to complete Pi payment" }, { status: 400 })
+        }
+      } catch (completeError) {
+        console.error("[Pi Complete] Error calling Pi /complete:", completeError)
+        return NextResponse.json({ error: "Failed to complete Pi payment" }, { status: 500 })
+      }
+    }
+
+    // 3b. NOW verify that developer_completed is true (after calling Pi /complete if needed)
+    if (canonicalPayment.status?.developer_completed !== true) {
+      console.error("[Pi Complete] Payment still not marked completed by developer after /complete call - developer_completed:", canonicalPayment.status?.developer_completed)
+      return NextResponse.json({ error: "Payment completion failed" }, { status: 400 })
+    }
 
     // Load the actual payment record using the derived paymentId
     const paymentKey = `payment:${paymentId}`
@@ -205,11 +275,11 @@ export async function POST(request: NextRequest) {
       console.log("[Pi Complete] Reusing A2U payment ID:", payment.a2uPaymentId)
       
       // Call A2U endpoint with ONLY paymentId (strict validation enforced server-side)
-      const a2uCompleteResponse = await fetch(`${config.appUrl}/api/pi/a2u`, {
+      const a2uCompleteResponse = await fetch(`${serverConfig.appUrl}/api/pi/a2u`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-flashpay-internal-secret": config.a2uInternalSecret,
+          "x-flashpay-internal-secret": serverConfig.a2uInternalSecret,
         },
         body: JSON.stringify({
           paymentId,
@@ -273,11 +343,11 @@ export async function POST(request: NextRequest) {
     // 6. Call A2U endpoint to begin settlement with validated paymentId
     console.log("[Pi Complete] Initiating A2U settlement for paymentId:", paymentId)
     
-    const a2uResponse = await fetch(`${config.appUrl}/api/pi/a2u`, {
+    const a2uResponse = await fetch(`${serverConfig.appUrl}/api/pi/a2u`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-flashpay-internal-secret": config.a2uInternalSecret,
+        "x-flashpay-internal-secret": serverConfig.a2uInternalSecret,
       },
       body: JSON.stringify({ paymentId }),
     })

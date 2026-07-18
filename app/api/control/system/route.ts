@@ -8,7 +8,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSystemState, enableKillSwitch, disableKillSwitch, resetSystemState } from "@/lib/system-control"
 import { isOwnerUid, unauthorizedResponse } from "@/lib/owner-auth"
-import { config } from "@/lib/config"
 
 /**
  * GET /api/control/system

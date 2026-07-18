@@ -315,27 +315,38 @@ export const authenticateCustomer = async (): Promise<{
     const authPromise = window.Pi.authenticate(["payments"], async (payment: any) => {
       // Handle incomplete payment from Pi Network
       console.log("[CUSTOMER-AUTH] Incomplete payment callback triggered")
-      CoreLogger.warn("Incomplete payment found during customer auth", payment)
       
-      if (payment && payment.identifier) {
-        try {
-          const completeResponse = await fetch(`${config.appUrl}/api/pi/complete`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payment),
+      // Only attempt completion if both piPaymentId and txid exist
+      const piPaymentId = payment?.identifier
+      const txid = payment?.transaction?.txid
+      
+      if (!piPaymentId || !txid) {
+        CoreLogger.warn("Incomplete payment missing required fields", {
+          hasIdentifier: !!piPaymentId,
+          hasTransaction: !!payment?.transaction,
+          hasTransactionId: !!txid,
+        })
+        return
+      }
+      
+      try {
+        const completeResponse = await fetch(`${config.appUrl}/api/pi/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ piPaymentId, txid }),
+        })
+        
+        if (completeResponse.ok) {
+          CoreLogger.info("Successfully completed incomplete payment", { piPaymentId, txid })
+        } else {
+          CoreLogger.warn("Failed to complete incomplete payment", { 
+            status: completeResponse.status,
+            piPaymentId,
+            txid,
           })
-          
-          if (completeResponse.ok) {
-            CoreLogger.info("Successfully completed incomplete payment", { paymentId: payment.identifier })
-          } else {
-            CoreLogger.warn("Failed to complete incomplete payment", { 
-              status: completeResponse.status,
-              paymentId: payment.identifier 
-            })
-          }
-        } catch (error) {
-          CoreLogger.error("Error completing incomplete payment", { error, paymentId: payment.identifier })
         }
+      } catch (error) {
+        CoreLogger.error("Error completing incomplete payment", { error, piPaymentId, txid })
       }
     })
 
@@ -459,11 +470,44 @@ export const authenticateMerchant = async (): Promise<{
   try {
     CoreLogger.operation("Authenticating merchant with Pi SDK")
 
-  const authPromise = window.Pi.authenticate(
-  ["username", "payments", "wallet_address"],
-  (payment: any) => {
-  console.log("[MERCHANT-AUTH] Incomplete payment callback triggered")
-  CoreLogger.warn("Incomplete payment found during auth", payment)
+    const authPromise = window.Pi.authenticate(
+      ["username", "payments", "wallet_address"],
+      async (payment: any) => {
+    // Handle incomplete payment from Pi Network
+    console.log("[MERCHANT-AUTH] Incomplete payment callback triggered")
+    
+    // Only attempt completion if both piPaymentId and txid exist
+    const piPaymentId = payment?.identifier
+    const txid = payment?.transaction?.txid
+    
+    if (!piPaymentId || !txid) {
+      CoreLogger.warn("Incomplete payment missing required fields during merchant auth", {
+        hasIdentifier: !!piPaymentId,
+        hasTransaction: !!payment?.transaction,
+        hasTransactionId: !!txid,
+      })
+      return
+    }
+    
+    try {
+      const completeResponse = await fetch(`${config.appUrl}/api/pi/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ piPaymentId, txid }),
+      })
+      
+      if (completeResponse.ok) {
+        CoreLogger.info("Successfully completed incomplete payment during merchant auth", { piPaymentId, txid })
+      } else {
+        CoreLogger.warn("Failed to complete incomplete payment during merchant auth", { 
+          status: completeResponse.status,
+          piPaymentId,
+          txid,
+        })
+      }
+    } catch (error) {
+      CoreLogger.error("Error completing incomplete payment during merchant auth", { error, piPaymentId, txid })
+    }
   }
   )
   

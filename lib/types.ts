@@ -17,6 +17,7 @@ export interface Payment {
   
   note: string
   status: PaymentStatus
+  settlementStage?: "pending_signing" | "sign_pending" | "complete_pending" | "completed" // Internal step tracking - NOT public status
   createdAt: string
   paidAt?: string // When U2A was marked paid_to_app
   settledAt?: string // When A2U settled_to_merchant (only set when status=settled_to_merchant)

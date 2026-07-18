@@ -114,6 +114,7 @@ async function horizonSignAndCheckpoint(
   console.log("[Pi A2U]   - piCompletionPending: true")
 
   // Build checkpoint with ACTUAL A2U values and financial amounts
+  // CRITICAL: This checkpoint is the authoritative source of truth after Horizon success
   const checkpointPayment = {
     ...payment,
     status: "settlement_pending",
@@ -121,15 +122,16 @@ async function horizonSignAndCheckpoint(
     a2uTxid: txidFromHorizon,
     a2uFromAddress: transaction.source,
     a2uToAddress: a2uPayment.to_address, // ACTUAL destination from A2U, not payment.merchantAddress
-    customerAmount, // Authoritative: verified U2A amount
-    merchantAmount: actualTransferredAmount, // Authoritative: actual A2U operation amount
-    horizonFeeCharged, // Authoritative: actual fee from Horizon
-    appCommission: 0, // Explicit default commission
-    appNetImpact: customerAmount - actualTransferredAmount - horizonFeeCharged,
+    customerAmount, // Authoritative: verified U2A amount (from customer wallet)
+    merchantAmount: actualTransferredAmount, // Authoritative: actual A2U operation amount (to merchant wallet)
+    horizonFeeCharged, // Authoritative: actual fee from Horizon (fee_charged converted from stroops)
+    appCommission: 0, // Explicit: no commission on Pi A2U
+    appNetImpact: customerAmount - actualTransferredAmount - horizonFeeCharged, // Explicit: net impact calculation
     horizonSuccessAt: new Date().toISOString(),
-    horizonSuccessFlag: true,
-    piCompletionPending: true,
+    horizonSuccessFlag: true, // MARKS: Horizon succeeded, txid is persisted
+    piCompletionPending: true, // MARKS: Waiting for Pi /complete
     piCompleted: false, // CRITICAL: Pi /complete not yet called
+    requiresDbReconciliation: false, // MARKS: DB reconciliation not yet needed (set true after Pi /complete fails)
   }
 
   try {
@@ -139,17 +141,12 @@ async function horizonSignAndCheckpoint(
     console.log("[Pi A2U] Status: settlement_pending + horizonSuccessFlag=true + piCompletionPending=true")
     console.log("[Pi A2U] Now safe to call Pi /complete")
 
-    // Build canonical response by re-reading authoritative Redis checkpoint
-    const canonicalResponse = await buildA2USuccessResponse(paymentId)
-    if (!canonicalResponse) {
-      console.error("[Pi A2U] ❌ Failed to build canonical response - checkpoint corrupted")
-      return NextResponse.json(
-        { error: "Response building failed - data corruption detected" },
-        { status: 500 }
-      )
+    // Return success with txid. Route caller will handle Pi /complete, DB accounting, and response building.
+    return {
+      success: true,
+      txidFromHorizon,
+      horizonFeeCharged,
     }
-
-    return NextResponse.json(canonicalResponse)
   } catch (persistError) {
     const errorMsg = persistError instanceof Error ? persistError.message : String(persistError)
     console.error("[Pi A2U] ❌ CRITICAL: Checkpoint persistence failed AFTER Horizon success")
@@ -416,19 +413,19 @@ export async function POST(request: NextRequest) {
       const payment = paymentCheck ? (typeof paymentCheck === "string" ? JSON.parse(paymentCheck) : paymentCheck) : null
       const a2uRecord = a2uCheck ? (typeof a2uCheck === "string" ? JSON.parse(a2uCheck) : a2uCheck) : null
       
-  if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
-    console.log("[Pi A2U] Payment already settled - returning canonical response")
-    // Return canonical response from authoritative Redis checkpoint
-    const canonicalResponse = await buildA2USuccessResponse(paymentId)
-    if (!canonicalResponse) {
-      console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
-      return NextResponse.json(
-        { error: "Response building failed - data corruption detected" },
-        { status: 500 }
-      )
-    }
-    return NextResponse.json(canonicalResponse)
-  }
+      if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
+        console.log("[Pi A2U] Payment already settled - returning canonical response")
+        // Return canonical response from authoritative Redis checkpoint
+        const canonicalResponse = await buildA2USuccessResponse(paymentId)
+        if (!canonicalResponse) {
+          console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
+          return NextResponse.json(
+            { error: "Response building failed - data corruption detected" },
+            { status: 500 }
+          )
+        }
+        return NextResponse.json(canonicalResponse)
+      }
       
       console.error("[Pi A2U] Lock unavailable and payment not complete - cannot proceed")
       return NextResponse.json({ error: "A2U transfer in progress" }, { status: 409 })
@@ -448,20 +445,20 @@ export async function POST(request: NextRequest) {
     let payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
     let a2uRecord = a2uData ? (typeof a2uData === "string" ? JSON.parse(a2uData) : a2uData) : null
     
-  // Check if already complete after re-read
-  if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
-    console.log("[Pi A2U] Payment already settled after lock - returning canonical response")
-    // Return canonical response from authoritative Redis checkpoint
-    const canonicalResponse = await buildA2USuccessResponse(paymentId)
-    if (!canonicalResponse) {
-      console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
-      return NextResponse.json(
-        { error: "Response building failed - data corruption detected" },
-        { status: 500 }
-      )
+    // Check if already complete after re-read
+    if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
+      console.log("[Pi A2U] Payment already settled after lock - returning canonical response")
+      // Return canonical response from authoritative Redis checkpoint
+      const canonicalResponse = await buildA2USuccessResponse(paymentId)
+      if (!canonicalResponse) {
+        console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
+        return NextResponse.json(
+          { error: "Response building failed - data corruption detected" },
+          { status: 500 }
+        )
+      }
+      return NextResponse.json(canonicalResponse)
     }
-    return NextResponse.json(canonicalResponse)
-  }
     
     console.log("[Pi A2U] ✓ Payment loaded from Redis after lock")
 
@@ -474,20 +471,20 @@ export async function POST(request: NextRequest) {
     console.log("[Pi A2U] Has a2uTxid:", !!payment.a2uTxid)
     console.log("[Pi A2U] requiresDbReconciliation:", payment.requiresDbReconciliation)
     
-  // Recovery: settled_to_merchant - payment is already final
-  if (payment.status === "settled_to_merchant" || payment.a2uStatus === "settled_to_merchant") {
-    console.log("[Pi A2U] RECOVERY: Payment already settled_to_merchant")
-    // Return canonical response from authoritative Redis checkpoint
-    const canonicalResponse = await buildA2USuccessResponse(paymentId)
-    if (!canonicalResponse) {
-      console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
-      return NextResponse.json(
-        { error: "Response building failed - data corruption detected" },
-        { status: 500 }
-      )
+    // Recovery: settled_to_merchant - payment is already final
+    if (payment.status === "settled_to_merchant" || payment.a2uStatus === "settled_to_merchant") {
+      console.log("[Pi A2U] RECOVERY: Payment already settled_to_merchant")
+      // Return canonical response from authoritative Redis checkpoint
+      const canonicalResponse = await buildA2USuccessResponse(paymentId)
+      if (!canonicalResponse) {
+        console.error("[Pi A2U] ❌ Failed to build canonical response for settled payment")
+        return NextResponse.json(
+          { error: "Response building failed - data corruption detected" },
+          { status: 500 }
+        )
+      }
+      return NextResponse.json(canonicalResponse)
     }
-    return NextResponse.json(canonicalResponse)
-  }
 
     // Recovery: settlement_pending with A2U identifiers - reuse the stored transfer
     if (payment.status === "settlement_pending" && payment.a2uPaymentId && payment.a2uTxid) {
@@ -498,7 +495,7 @@ export async function POST(request: NextRequest) {
       
       // Return success with stored identifiers - no blockchain resubmission
       // CRITICAL: All fields must exist in checkpoint
-      if (!payment.horizonFeeCharged || !payment.a2uFromAddress || !payment.a2aToAddress) {
+      if (!payment.horizonFeeCharged || !payment.a2uFromAddress || !payment.a2uToAddress) {
         console.error("[Pi A2U] CRITICAL: Stored checkpoint missing required fields")
         console.error("[Pi A2U] horizonFeeCharged:", payment.horizonFeeCharged)
         console.error("[Pi A2U] a2uFromAddress:", payment.a2uFromAddress)
@@ -1319,47 +1316,52 @@ export async function POST(request: NextRequest) {
               console.log("[Pi A2U] ===== STEP 3: SUBMIT SIGNED TRANSACTION TO HORIZON =====")
               console.log("[Pi A2U] Submitting XDR to Horizon server (Stellar testnet)...")
               
-              // Use shared sign/submit/checkpoint function
-              // customerAmount = verified U2A amount (payment.amount)
-              // actualTransferredAmount = actual A2U operation amount (a2uPayment.amount)
-              const checkpointResult = await horizonSignAndCheckpoint(
-                horizonServer,
-                transaction,
-                a2uPayment,
-                paymentId,
-                payment,
-                redis,
-                baseFee,
-                usedFee,
-                amount, // customerAmount: verified U2A amount
-                Number(a2uPayment.amount) // actualTransferredAmount: actual A2U amount
-              )
+              // Declare outside try so scope extends through Pi /complete
+              let txidFromHorizon: string
+              let horizonFeeCharged: number
+              
+              try {
+                // Use shared sign/submit/checkpoint function
+                // customerAmount = verified U2A amount (payment.amount)
+                // actualTransferredAmount = actual A2U operation amount (a2uPayment.amount)
+                const checkpointResult = await horizonSignAndCheckpoint(
+                  horizonServer,
+                  transaction,
+                  a2uPayment,
+                  paymentId,
+                  payment,
+                  redis,
+                  baseFee,
+                  usedFee,
+                  amount, // customerAmount: verified U2A amount
+                  Number(a2uPayment.amount) // actualTransferredAmount: actual A2U amount
+                )
 
-              if (!checkpointResult.success) {
-                console.error("[Pi A2U] ❌ Checkpoint function failed:", checkpointResult.error)
-                
-                // If Horizon succeeded but checkpoint failed, return manual-review with txid
-                if (checkpointResult.txidFromHorizon) {
-                  console.error("[Pi A2U] Horizon succeeded with txid:", checkpointResult.txidFromHorizon)
-                  console.error("[Pi A2U] But checkpoint persistence failed")
-                  console.error("[Pi A2U] DO NOT call Pi /complete - must return manual-review")
+                if (!checkpointResult.success) {
+                  console.error("[Pi A2U] ❌ Checkpoint function failed:", checkpointResult.error)
                   
-                  return NextResponse.json({
-                    success: false,
-                    error: checkpointResult.error,
-                    txidFromHorizon: checkpointResult.txidFromHorizon,
-                    horizonFeeCharged: checkpointResult.horizonFeeCharged,
-                    requiresManualReview: true,
-                    step: "horizon_success_checkpoint_failed",
-                  }, { status: 500 })
+                  // If Horizon succeeded but checkpoint failed, return manual-review with txid
+                  if (checkpointResult.txidFromHorizon) {
+                    console.error("[Pi A2U] Horizon succeeded with txid:", checkpointResult.txidFromHorizon)
+                    console.error("[Pi A2U] But checkpoint persistence failed")
+                    console.error("[Pi A2U] DO NOT call Pi /complete - must return manual-review")
+                    
+                    return NextResponse.json({
+                      success: false,
+                      error: checkpointResult.error,
+                      txidFromHorizon: checkpointResult.txidFromHorizon,
+                      horizonFeeCharged: checkpointResult.horizonFeeCharged,
+                      requiresManualReview: true,
+                      step: "horizon_success_checkpoint_failed",
+                    }, { status: 500 })
+                  }
+                  
+                  // Horizon failed
+                  throw new Error(checkpointResult.error)
                 }
-                
-                // Horizon failed
-                throw new Error(checkpointResult.error)
-              }
 
-              const txidFromHorizon = checkpointResult.txidFromHorizon!
-              const horizonFeeCharged = checkpointResult.horizonFeeCharged!
+                txidFromHorizon = checkpointResult.txidFromHorizon!
+                horizonFeeCharged = checkpointResult.horizonFeeCharged!
               } catch (horizonError) {
                 const errorMsg = horizonError instanceof Error ? horizonError.message : String(horizonError)
                 console.error("[Pi A2U] ❌ STEP 3 FAILED: Horizon submission error")
@@ -1773,6 +1775,26 @@ export async function POST(request: NextRequest) {
     }
     
     console.log("[Pi A2U] ✅ PI_PRIVATE_SEED is configured and available")
+    
+    // CRITICAL GUARD: Once a2uTxid exists, NEVER re-sign or re-submit to Horizon
+    if (payment.a2uTxid) {
+      console.error("[Pi A2U] ❌ CRITICAL SECURITY GUARD: a2uTxid already exists in Redis")
+      console.error("[Pi A2U] a2uTxid:", payment.a2uTxid)
+      console.error("[Pi A2U] THIS MEANS: Horizon transaction was already successfully submitted")
+      console.error("[Pi A2U] PREVENTING: Any Horizon re-signing or re-submission")
+      console.error("[Pi A2U] ACTION: Returning canonical response without Horizon operations")
+      
+      // Return success without re-signing
+      const canonicalResponse = await buildA2USuccessResponse(paymentId)
+      if (!canonicalResponse) {
+        return NextResponse.json(
+          { error: "Response building failed - a2uTxid exists but response invalid" },
+          { status: 500 }
+        )
+      }
+      return NextResponse.json(canonicalResponse)
+    }
+    
     console.log("[Pi A2U] ===== STEP 2: BLOCKCHAIN TRANSACTION SIGNING =====")
     console.log("[Pi A2U] Starting blockchain signing process...")
     console.log("[Pi A2U] Private seed length:", piPrivateSeed.length)
@@ -1832,8 +1854,8 @@ export async function POST(request: NextRequest) {
       // CRITICAL: Fetch dynamic base fee from Horizon (not fixed BASE_FEE)
       console.log("[Pi A2U]")
       console.log("[Pi A2U] ===== FETCHING DYNAMIC FEE FROM HORIZON =====")
-      let baseFee: string
-      let usedFee: string
+      let baseFee: number
+      let usedFee: number
       try {
         const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
         baseFee = Number(baseFeeFromHorizon)
@@ -1896,6 +1918,10 @@ export async function POST(request: NextRequest) {
       console.log("[Pi A2U] ===== STEP 3: SUBMIT SIGNED TRANSACTION TO HORIZON =====")
       console.log("[Pi A2U] Submitting XDR to Horizon server (Stellar testnet)...")
       
+      // Declare outside so scope extends through Pi /complete and DB accounting
+      let txidFromHorizon: string
+      let horizonFeeCharged: number
+      
       // Use shared sign/submit/checkpoint function
       // customerAmount = verified U2A amount (payment.amount)
       // actualTransferredAmount = actual A2U operation amount (a2uPayment.amount)
@@ -1923,23 +1949,25 @@ export async function POST(request: NextRequest) {
           
           // CRITICAL: Save the a2uTxid and horizon success flags to preserve recovery state
           // This record is now BLOCKED from createPayment and cannot be resubmitted to Horizon
+          // MUST use actual values from Horizon response, NEVER use || 0 defaults
           const partialSuccessPayment = {
             ...payment,
             status: "settlement_pending", // Keep as pending, not settlement_failed
             a2uPaymentId: a2uPayment.identifier,
             a2uTxid: checkpointResult.txidFromHorizon, // PRESERVE the known txid from Horizon
             a2uFromAddress: transaction.source,
-            a2uToAddress: a2uPayment.to_address,
-            customerAmount,
-            merchantAmount: Number(a2uPayment.amount),
-            horizonFeeCharged: checkpointResult.horizonFeeCharged || 0,
+            a2uToAddress: a2uPayment.to_address, // ACTUAL destination from A2U
+            customerAmount, // Authoritative: verified U2A amount
+            merchantAmount: Number(a2uPayment.amount), // Authoritative: actual A2U operation amount
+            horizonFeeCharged: checkpointResult.horizonFeeCharged, // MUST use actual fee from Horizon, no defaults
             appCommission: 0,
-            appNetImpact: customerAmount - Number(a2uPayment.amount) - (checkpointResult.horizonFeeCharged || 0),
+            appNetImpact: customerAmount - Number(a2uPayment.amount) - checkpointResult.horizonFeeCharged,
             horizonSuccessFlag: true, // MARKS: Horizon succeeded - block from resubmission
-            checkpointPersistenceFailed: true, // MARKS: Redis checkpoint failed
-            requiresManualReview: true, // MARKS: Human review needed
-            piCompletionPending: false, // DO NOT call Pi /complete after this failure
+            piCompletionPending: false, // DO NOT call Pi /complete after checkpoint failure
             piCompleted: false,
+            requiresDbReconciliation: false, // MARKS: DB reconciliation not yet attempted
+            checkpointPersistenceFailed: true, // MARKS: Initial Redis checkpoint failed
+            requiresManualReview: true, // MARKS: Human review needed
             horizonSuccessAt: new Date().toISOString(),
             checkpointFailureAt: new Date().toISOString(),
           }
@@ -1974,8 +2002,8 @@ export async function POST(request: NextRequest) {
         }, { status: 500 })
       }
 
-      const txidFromHorizon = checkpointResult.txidFromHorizon!
-      const horizonFeeCharged = checkpointResult.horizonFeeCharged!
+      txidFromHorizon = checkpointResult.txidFromHorizon!
+      horizonFeeCharged = checkpointResult.horizonFeeCharged!
       
       // Now that we have the TXID from Horizon, we can proceed to complete the A2U payment
       console.log("[Pi A2U]")

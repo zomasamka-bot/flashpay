@@ -14,7 +14,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { config } from "@/lib/config"
+import { publicConfig } from "@/lib/config"
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,16 +37,16 @@ export async function POST(request: NextRequest) {
 
     // Verify owner UID is configured
     console.log("[owner-verify-uid] Config check:", {
-      isOwnerConfigured: config.isOwnerConfigured,
-      ownerUidExists: !!config.ownerUid,
-      ownerUid: config.ownerUid ? config.ownerUid.substring(0, 20) + "..." : "NOT SET",
+      isOwnerConfigured: publicConfig.isOwnerConfigured,
+      ownerUidExists: !!publicConfig.ownerUid,
+      ownerUid: publicConfig.ownerUid ? publicConfig.ownerUid.substring(0, 20) + "..." : "NOT SET",
       processEnv: !!process.env.NEXT_PUBLIC_OWNER_UID,
     })
 
-    if (!config.isOwnerConfigured || !config.ownerUid) {
+    if (!publicConfig.isOwnerConfigured || !publicConfig.ownerUid) {
       console.error("[owner-verify-uid] Config not configured:", {
-        isOwnerConfigured: config.isOwnerConfigured,
-        ownerUid: config.ownerUid,
+        isOwnerConfigured: publicConfig.isOwnerConfigured,
+        ownerUid: publicConfig.ownerUid,
       })
       return NextResponse.json(
         { success: false, error: "Owner verification not configured" },
@@ -94,11 +94,11 @@ export async function POST(request: NextRequest) {
     // Compare verified UID from Pi Network with configured owner UID
     console.log("[owner-verify-uid] UID Comparison:", {
       verifiedUid,
-      configOwnerUid: config.ownerUid,
-      match: verifiedUid === config.ownerUid,
+      configOwnerUid: publicConfig.ownerUid,
+      match: verifiedUid === publicConfig.ownerUid,
     })
 
-    if (verifiedUid !== config.ownerUid) {
+    if (verifiedUid !== publicConfig.ownerUid) {
       return NextResponse.json(
         { success: false, error: "Not authorized as owner" },
         { status: 403 }

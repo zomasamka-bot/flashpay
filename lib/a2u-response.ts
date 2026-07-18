@@ -1,29 +1,53 @@
 import { redis } from "@/lib/redis"
 
 /**
- * Canonical A2U success response shape - used by ALL success paths.
+ * Unified payment response shape - used by ALL response paths (processing or final).
  * Re-reads Redis to ensure authoritative data, never trusts HTTP response fields.
+ * 
+ * Contains all critical fields for transparency. Status determines finality:
+ * - status="settled_to_merchant" + success=true: Final success (all reconciliation complete)
+ * - status="settlement_pending": Processing (incomplete, client may retry)
+ * 
+ * FINALITY CONDITIONS (all must be true for final success):
+ * - status === "settled_to_merchant"
+ * - piCompleted === true
+ * - dbRecorded === true
+ * - requiresDbReconciliation !== true
+ * - u2aTxid exists
+ * - a2uTxid exists
  */
-export interface A2USuccessResponse {
-  success: true
-  status: "settled_to_merchant"
+export interface PaymentResponse {
+  success: boolean
+  status: "settlement_pending" | "settled_to_merchant" | string
   paymentId: string
   a2uPaymentId: string
-  a2uTxid: string
   u2aTxid: string
-  fromAddress: string
-  toAddress: string
+  a2uTxid: string
+  a2uFromAddress: string
+  a2uToAddress: string
   customerAmount: number
   merchantAmount: number
   horizonFeeCharged: number
   appCommission: number
   appNetImpact: number
   piCompleted: boolean
+  dbRecorded: boolean
 }
 
 /**
- * Build canonical A2U success response by re-reading Redis checkpoint.
+ * Build unified payment response by re-reading Redis checkpoint.
  * Never use internal HTTP response fields; always trust the persistent Redis record.
+ * 
+ * Response validity rules (CRITICAL):
+ * - FINAL SUCCESS (success=true, status="settled_to_merchant"): ONLY when ALL true:
+ *   * status === "settled_to_merchant"
+ *   * piCompleted === true
+ *   * dbRecorded === true
+ *   * requiresDbReconciliation !== true (must be false or undefined)
+ *   * u2aTxid exists
+ *   * a2uTxid exists
+ * - PROCESSING (success=false, status="settlement_pending"): Processing, never final
+ * - Other statuses: Return authoritative state without claiming success
  * 
  * This ensures consistency across:
  * - Initial approval (new payment)
@@ -32,7 +56,7 @@ export interface A2USuccessResponse {
  */
 export async function buildA2USuccessResponse(
   paymentId: string
-): Promise<A2USuccessResponse | null> {
+): Promise<PaymentResponse | null> {
   const paymentKey = `payment:${paymentId}`
   const paymentData = await redis.get(paymentKey)
 
@@ -43,9 +67,15 @@ export async function buildA2USuccessResponse(
 
   const payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
 
+  // CRITICAL: Verify payment uses correct field name (payment.id, not paymentId)
+  const recordId = payment.id || payment.paymentId
+  if (!recordId) {
+    console.error("[A2UResponse] Payment missing both id and paymentId fields")
+    return null
+  }
+
   // CRITICAL: All these fields must exist in the checkpoint
   if (
-    !payment.paymentId ||
     !payment.a2uPaymentId ||
     !payment.a2uTxid ||
     !payment.u2aTxid ||
@@ -58,7 +88,6 @@ export async function buildA2USuccessResponse(
     payment.appNetImpact === undefined
   ) {
     console.error("[A2UResponse] Missing required fields in Redis checkpoint:", {
-      paymentId: payment.paymentId,
       a2uPaymentId: payment.a2uPaymentId,
       a2uTxid: payment.a2uTxid,
       u2aTxid: payment.u2aTxid,
@@ -73,23 +102,46 @@ export async function buildA2USuccessResponse(
     return null
   }
 
-  // Build canonical response from authoritative Redis checkpoint
-  const response: A2USuccessResponse = {
-    success: true,
-    status: "settled_to_merchant",
-    paymentId: payment.paymentId,
+  // CRITICAL: Determine response finality based on PRECISE conditions
+  const isFinalSuccess =
+    payment.status === "settled_to_merchant" &&
+    payment.piCompleted === true &&
+    payment.dbRecorded === true &&
+    payment.requiresDbReconciliation !== true &&
+    !!payment.u2aTxid &&
+    !!payment.a2uTxid
+
+  // CRITICAL: settlement_pending NEVER returns success=true, even if other fields exist
+  const isProcessing = payment.status === "settlement_pending"
+
+  // Build unified response from authoritative Redis checkpoint
+  const response: PaymentResponse = {
+    success: isFinalSuccess,
+    status: payment.status || "settlement_pending",
+    paymentId: recordId,
     a2uPaymentId: payment.a2uPaymentId,
-    a2uTxid: payment.a2uTxid,
     u2aTxid: payment.u2aTxid,
-    fromAddress: payment.a2uFromAddress,
-    toAddress: payment.a2uToAddress,
+    a2uTxid: payment.a2uTxid,
+    a2uFromAddress: payment.a2uFromAddress,
+    a2uToAddress: payment.a2uToAddress,
     customerAmount: payment.customerAmount,
     merchantAmount: payment.merchantAmount,
     horizonFeeCharged: payment.horizonFeeCharged,
     appCommission: payment.appCommission,
     appNetImpact: payment.appNetImpact,
     piCompleted: payment.piCompleted === true,
+    dbRecorded: payment.dbRecorded === true,
   }
+
+  console.log("[A2UResponse] Built response:", {
+    success: response.success,
+    status: response.status,
+    isFinalSuccess,
+    isProcessing,
+    piCompleted: response.piCompleted,
+    dbRecorded: response.dbRecorded,
+    requiresDbReconciliation: payment.requiresDbReconciliation,
+  })
 
   return response
 }
