@@ -49,11 +49,18 @@ interface PiA2UPayment {
 }
 
 /**
+ * Reusable type guard: Check if unknown is a Record<string, unknown>
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/**
  * Type guard: Validate unknown object as PiA2UPayment
  */
 function isPiA2UPayment(value: unknown): value is PiA2UPayment {
-  if (typeof value !== 'object' || value === null) return false
-  const obj = value as Record<string, unknown>
+  if (!isRecord(value)) return false
+  const obj = value
   
   // Required fields
   if (typeof obj.identifier !== 'string') return false
@@ -63,15 +70,15 @@ function isPiA2UPayment(value: unknown): value is PiA2UPayment {
   
   // Optional status field
   if (obj.status !== undefined && obj.status !== null) {
-    if (typeof obj.status !== 'object') return false
-    const statusObj = obj.status as Record<string, unknown>
+    if (!isRecord(obj.status)) return false
+    const statusObj = obj.status
     if (statusObj.developer_completed !== undefined && typeof statusObj.developer_completed !== 'boolean') return false
   }
   
   // Optional transaction field
   if (obj.transaction !== undefined && obj.transaction !== null) {
-    if (typeof obj.transaction !== 'object') return false
-    const txObj = obj.transaction as Record<string, unknown>
+    if (!isRecord(obj.transaction)) return false
+    const txObj = obj.transaction
     if (txObj.verified !== undefined && typeof txObj.verified !== 'boolean') return false
     if (txObj.txid !== undefined && typeof txObj.txid !== 'string') return false
     if (txObj.fee_charged !== undefined && typeof txObj.fee_charged !== 'number' && typeof txObj.fee_charged !== 'string') return false
@@ -460,20 +467,24 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
     })
 
     const sourceAccount = await horizonServer.loadAccount(appPublicKey)
-    let baseFee = 100
-    let usedFee = 200
+    let feeCharged = 200
 
     try {
       const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
-      baseFee = Number(baseFeeFromHorizon)
-      usedFee = Number(baseFeeFromHorizon) * 2
+      const baseFeeNumber = Number(baseFeeFromHorizon)
+      if (typeof baseFeeNumber === 'number' && Number.isFinite(baseFeeNumber) && baseFeeNumber > 0) {
+        feeCharged = baseFeeNumber * 2
+      }
     } catch (feeError) {
       console.warn("[A2U Stage2] Using fallback fee")
     }
 
+    // Stellar SDK TransactionBuilder requires fee as string
+    const feeAsString = String(Math.floor(feeCharged))
+
     console.log("[A2U Stage2] Building transaction")
     const builder = new StellarSDK.TransactionBuilder(sourceAccount, {
-      fee: usedFee,
+      fee: feeAsString,
       networkPassphrase: "Pi Testnet",
     })
 
