@@ -35,7 +35,7 @@ export interface ExecutorContext {
   merchantUid: string
   accessToken: string
   customerAmount: number // REQUIRED - validated amount
-  piPaymentId: string // REQUIRED for recovery, may be undefined for new payments
+  piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
   isRecovery: boolean
 }
 
@@ -76,6 +76,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   if (typeof ctx.isRecovery !== 'boolean') {
     return { success: false, status: "invalid_context", error: "isRecovery required and must be boolean" }
   }
+  // piPaymentId is optional for new payments, but MUST be present for recovery or stage 4 DB recording
+  // Validation below will enforce when needed
 
   console.log("[A2U Executor] ===== UNIFIED A2U EXECUTOR START =====")
   console.log("[A2U Executor] Payment ID:", ctx.paymentId)
@@ -98,6 +100,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     const stageResult = await stage1CreateA2U(ctx)
     if (!stageResult.success) {
       return stageResult
+    }
+    // Type guarantees a2uPaymentId exists when success: true
+    if (!stageResult.a2uPaymentId || typeof stageResult.a2uPaymentId !== 'string') {
+      return { success: false, status: "error", error: "Stage1 returned success but a2uPaymentId is missing" }
     }
     a2uPaymentId = stageResult.a2uPaymentId
     ctx.payment.a2uPaymentId = a2uPaymentId
@@ -200,7 +206,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       horizonSuccessAt: new Date().toISOString(),
     }
     await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", horizonFeeCharged)
+    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.horizonFeeCharged)
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
   }
@@ -264,7 +270,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 /**
  * STAGE 1: Create or fetch A2U payment
  */
-async function stage1CreateA2U(ctx: ExecutorContext): Promise<{ success: boolean; a2uPayment?: any; a2uPaymentId?: string; error?: string }> {
+async function stage1CreateA2U(ctx: ExecutorContext): Promise<{ success: boolean; a2uPayment?: any; a2uPaymentId: string; error?: string } | { success: false; a2uPaymentId?: never; error: string }> {
   try {
     // Verify UID with Pi /v2/me
     const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
@@ -520,6 +526,11 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     console.log("[A2U Stage4]   - merchantAmount:", financialData.merchantAmount)
     console.log("[A2U Stage4]   - horizonFeeCharged:", financialData.horizonFeeCharged)
     console.log("[A2U Stage4]   - appCommission:", financialData.appCommission)
+
+    // Validate piPaymentId is present and is a string before DB record
+    if (!ctx.piPaymentId || typeof ctx.piPaymentId !== 'string') {
+      return { success: false, status: "error", error: "piPaymentId required for DB record - missing U2A identifier" }
+    }
 
     // Call DB with VALIDATED financial data only
     const dbResult = await recordA2UTransactionAtomic({

@@ -60,7 +60,8 @@ export function useLoadPaymentHistory() {
               createdAt: typeof payment.createdAt === "string" ? payment.createdAt : new Date(payment.createdAt).toISOString(),
               paidAt: payment.paidAt ? (typeof payment.paidAt === "string" ? payment.paidAt : new Date(payment.paidAt).toISOString()) : undefined,
               accessToken: payment.accessToken || "",
-              txid: (payment as any).u2aTxid || (payment as any).a2uTxid,
+              u2aTxid: (payment as any).u2aTxid,
+              a2uTxid: (payment as any).a2uTxid,
             }
             
             // Use existing addPayment method to add to store

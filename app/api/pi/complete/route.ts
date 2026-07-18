@@ -127,14 +127,29 @@ export async function POST(request: NextRequest) {
 
     const payment: Payment = typeof currentCheckpoint === "string" ? JSON.parse(currentCheckpoint) : currentCheckpoint
     
-    // Validate merchantUid and piPaymentId before executor
-    if (!payment.merchantUid || typeof payment.merchantUid !== "string") {
+    // Capture and validate all required fields BEFORE mutation (strict TypeScript contracts)
+    const merchantUid = payment.merchantUid
+    if (!merchantUid || typeof merchantUid !== "string") {
       console.error("[Pi Complete] Payment missing merchantUid")
       return NextResponse.json({ error: "Invalid payment - missing merchantUid" }, { status: 400 })
     }
-    if (!payment.piPaymentId || typeof payment.piPaymentId !== "string") {
+    
+    const piPaymentIdFromPayment = payment.piPaymentId
+    if (!piPaymentIdFromPayment || typeof piPaymentIdFromPayment !== "string") {
       console.error("[Pi Complete] Payment missing piPaymentId")
       return NextResponse.json({ error: "Invalid payment - missing piPaymentId" }, { status: 400 })
+    }
+    
+    const accessToken = payment.accessToken
+    if (!accessToken || typeof accessToken !== "string") {
+      console.error("[Pi Complete] Payment missing accessToken")
+      return NextResponse.json({ error: "Invalid payment - missing accessToken" }, { status: 400 })
+    }
+    
+    const customerAmount = payment.customerAmount || payment.amount
+    if (typeof customerAmount !== "number" || !Number.isFinite(customerAmount)) {
+      console.error("[Pi Complete] Invalid customerAmount")
+      return NextResponse.json({ error: "Invalid payment - invalid customerAmount" }, { status: 400 })
     }
     
     // Persist paid_to_app status - this marks U2A complete
@@ -142,24 +157,19 @@ export async function POST(request: NextRequest) {
     payment.u2aTxid = txid
     payment.paidAt = new Date().toISOString()
     
-    // Ensure piPaymentId is persisted (may have come from client callback)
-    if (!payment.piPaymentId && piPaymentId) {
-      payment.piPaymentId = piPaymentId
-    }
-    
     await redis.set(`payment:${paymentId}`, JSON.stringify(payment))
     console.log("[Pi Complete] ✓ Persisted status = paid_to_app with paidAt timestamp")
 
-    // === STAGE 3: Call unified executor ===
+    // === STAGE 3: Call unified executor with validated fields ===
     console.log("[Pi Complete] === STAGE 3: Call unified executor ===")
 
     const executorResult = await executeA2U({
       paymentId,
       payment,
-      merchantUid: payment.merchantUid,
-      accessToken: payment.accessToken || "",
-      customerAmount: payment.customerAmount || payment.amount,
-      piPaymentId: payment.piPaymentId,
+      merchantUid,
+      accessToken,
+      customerAmount,
+      piPaymentId: piPaymentIdFromPayment,
       isRecovery: false,
     })
 
