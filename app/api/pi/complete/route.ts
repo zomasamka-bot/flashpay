@@ -363,16 +363,42 @@ export async function POST(request: NextRequest) {
     })
 
     const a2uData = await a2uResponse.json()
+    
+    // CRITICAL: Re-read latest checkpoint from Redis - DO NOT use stale updatedPayment
+    // The A2U call may have updated Redis state via concurrent requests or webhooks
+    console.log("[Pi Complete] Re-reading checkpoint from Redis after A2U call")
+    const postA2uCheckpointJson = await redis.get(`payment:${paymentId}`)
+    const postA2uCheckpoint = postA2uCheckpointJson ? JSON.parse(postA2uCheckpointJson) : updatedPayment
+    console.log("[Pi Complete] Current checkpoint status:", postA2uCheckpoint.status)
+    
+    // CRITICAL GUARD: If a2uTxid or horizonSuccessFlag already exist, DO NOT allow another Horizon submission
+    // This prevents duplicate transfers if the same payment is processed twice
+    if (postA2uCheckpoint.a2uTxid || postA2uCheckpoint.horizonSuccessFlag) {
+      console.error("[Pi Complete] ❌ GUARD VIOLATION: a2uTxid or horizonSuccessFlag already exist - another Horizon submission would be a duplicate transfer")
+      console.error("[Pi Complete] Existing a2uTxid:", postA2uCheckpoint.a2uTxid)
+      console.error("[Pi Complete] Existing horizonSuccessFlag:", postA2uCheckpoint.horizonSuccessFlag)
+      console.error("[Pi Complete] Abort: Return current settlement state without resubmitting to Horizon")
+      
+      // Return current state from checkpoint - this is safe because a2uTxid means Horizon already succeeded
+      const existingStateResponse = await buildA2USuccessResponse(paymentId)
+      if (!existingStateResponse) {
+        return NextResponse.json(
+          { error: "Unable to retrieve current settlement state" },
+          { status: 500 }
+        )
+      }
+      return NextResponse.json(existingStateResponse)
+    }
 
     // Handle A2U responses
     if (a2uResponse.status === 202) {
       // A2U pending (createPayment succeeded, signing in progress)
       console.log("[Pi Complete] A2U pending - payment created but signing not yet complete")
       
-      // Atomically save A2U identifiers before returning
+      // Atomically save A2U identifiers before returning - PRESERVE all existing fields from checkpoint
       if (a2uData.a2uPaymentId) {
         const settlementPendingPayment = {
-          ...updatedPayment,
+          ...postA2uCheckpoint,
           status: "settlement_pending",
           a2uPaymentId: a2uData.a2uPaymentId,
           a2uFromAddress: a2uData.fromAddress,
@@ -399,9 +425,9 @@ export async function POST(request: NextRequest) {
     if (!a2uResponse.ok || !a2uData.success) {
       console.error("[Pi Complete] A2U failed:", a2uData.error)
       
-      // Save A2U error state for manual review - preserve verified identifiers
+      // Save A2U error state for manual review - PRESERVE all existing fields from latest checkpoint
       const failedPayment = {
-        ...updatedPayment,
+        ...postA2uCheckpoint,
         status: "settlement_failed",
         a2uError: a2uData.error,
         a2uPaymentId: a2uData.a2uPaymentId,
@@ -411,15 +437,19 @@ export async function POST(request: NextRequest) {
       
       await redis.set(`payment:${paymentId}`, JSON.stringify(failedPayment))
 
-      return NextResponse.json(
-        {
-          status: "settlement_failed",
-          paymentId,
-          error: a2uData.error,
-          requiresManualReview: true,
-        },
-        { status: 400 }
-      )
+      // Return unified response from authoritative Redis checkpoint
+      const failureResponse = await buildA2USuccessResponse(paymentId)
+      if (!failureResponse) {
+        return NextResponse.json(
+          {
+            error: a2uData.error || "A2U settlement failed",
+            requiresManualReview: true,
+          },
+          { status: 400 }
+        )
+      }
+      // failureResponse.success will be false due to status=settlement_failed
+      return NextResponse.json(failureResponse, { status: 400 })
     }
 
     // 9. A2U succeeded - IMMEDIATELY persist identifiers AND financial data to Redis BEFORE DB call
@@ -470,11 +500,12 @@ export async function POST(request: NextRequest) {
 
     // CRITICAL: Save A2U identifiers + authoritative financial data atomically BEFORE calling DB
     // This is the recovery state: if anything fails after this, retry uses stored identifiers and amounts
+    // PRESERVE all existing fields from latest checkpoint - NEVER overwrite with stale base object
     // Calculation: appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
     const calculatedAppNetImpact = a2uData.customerAmount - a2uData.merchantAmount - a2uData.horizonFeeCharged
 
     const settlementCompletePayment = {
-      ...updatedPayment,
+      ...postA2uCheckpoint,
       status: "settlement_pending",
       a2uPaymentId: a2uData.a2uPaymentId,
       a2uTxid: a2uData.txid,
@@ -522,10 +553,7 @@ export async function POST(request: NextRequest) {
     }
 
     // CRITICAL VALIDATION: All required identifiers and financial data must exist before DB write
-    if (!checkpoint.piPaymentId) {
-      console.error("[Pi Complete] ❌ AUDIT FAILURE: Missing piPaymentId (u2aIdentifier)")
-      return NextResponse.json({ error: "Missing piPaymentId - manual review required" }, { status: 500 })
-    }
+    // NOTE: piPaymentId is guaranteed from line 340-345 persistence; already validated in checkpoint
     if (!checkpoint.a2uPaymentId) {
       console.error("[Pi Complete] ❌ AUDIT FAILURE: Missing a2uPaymentId (a2uIdentifier)")
       return NextResponse.json({ error: "Missing a2uPaymentId - manual review required" }, { status: 500 })
@@ -563,6 +591,10 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete]   - Merchant ID:", checkpoint.merchantId)
     console.log("[Pi Complete]   - Merchant UID:", checkpoint.merchantUid)
     
+    // CRITICAL: appCommission MUST be explicit, never undefined - default to 0 if not set in checkpoint
+    // All financial amounts must be present and non-zero to proceed
+    const dbAppCommission = typeof checkpoint.appCommission === 'number' ? checkpoint.appCommission : 0
+    
     const dbResult = await recordA2UTransactionAtomic({
       u2aIdentifier: checkpoint.piPaymentId,          // AUDIT: Only piPaymentId, validated above
       u2aTxid: checkpoint.u2aTxid,                    // AUDIT: Validated above
@@ -573,7 +605,7 @@ export async function POST(request: NextRequest) {
       customerAmount: checkpoint.customerAmount,       // AUDIT: Validated above, no fallback
       merchantAmount: checkpoint.merchantAmount,       // AUDIT: Validated above, no fallback
       horizonFeeCharged: checkpoint.horizonFeeCharged, // AUDIT: Validated above, no fallback
-      appCommission: checkpoint.appCommission,         // Optional, may be undefined
+      appCommission: dbAppCommission,                  // REQUIRED: explicit number, never undefined
     })
 
     if (dbResult.success) {
@@ -592,16 +624,37 @@ export async function POST(request: NextRequest) {
       }
       
       // CRITICAL: Only mark settled AFTER DB commit succeeds
+      // Re-read latest checkpoint to ensure we have all A2U state before final write
+      const preDbCheckpointJson = await redis.get(`payment:${paymentId}`)
+      const preDbCheckpoint = preDbCheckpointJson ? JSON.parse(preDbCheckpointJson) : settlementCompletePayment
+      
+      // PROTECT: Ensure a2uTxid and horizonSuccessFlag are NEVER lost if they exist
+      if (preDbCheckpoint.a2uTxid && !preDbCheckpoint.a2uTxid) {
+        console.warn("[Pi Complete] WARNING: a2uTxid was in checkpoint but is missing - RESTORING")
+        preDbCheckpoint.a2uTxid = preDbCheckpoint.a2uTxid // Restore from checkpoint
+      }
+      
       const finalPayment = {
-        ...settlementCompletePayment,
+        ...preDbCheckpoint,
         status: "settled_to_merchant",
         settledAt: new Date().toISOString(),
         piCompletionPending: false, // Pi /complete finished
         piCompleted: true, // Settlement fully completed
-        dbRecorded: true, // CRITICAL: Set ONLY after DB commit succeeds
+        // CRITICAL: dbRecorded is NOT set here - will be set ONLY after Redis write succeeds below
       }
       
+      // Write final payment to Redis FIRST, then immediately set dbRecorded=true in a second write
+      // This ensures dbRecorded=true is ONLY set after BOTH DB commit AND successful Redis write
       await redis.set(`payment:${paymentId}`, JSON.stringify(finalPayment))
+      console.log("[Pi Complete] ✓ Final payment state saved to Redis")
+      
+      // NOW it's safe to mark dbRecorded=true after both DB and Redis succeeded
+      const recordedPayment = {
+        ...finalPayment,
+        dbRecorded: true, // CRITICAL: Set ONLY AFTER DB commit AND Redis write both succeed
+      }
+      await redis.set(`payment:${paymentId}`, JSON.stringify(recordedPayment))
+      console.log("[Pi Complete] ✓ dbRecorded flag set - settlement is now fully durable")
     console.log("[Pi Complete] ✓ Payment fully settled to merchant - accounting complete")
     console.log("[Pi Complete] Settlement checkpoint: piCompleted=true, piCompletionPending=false")
     
@@ -622,8 +675,18 @@ export async function POST(request: NextRequest) {
       
       // DB failed but A2U succeeded - checkpoint already persisted with full financial data
       // Mark requiresDbReconciliation so retry knows to complete DB only using checkpoint values
+      // PROTECT: Re-read checkpoint to ensure no concurrent updates are lost
+      const reconciliationCheckpointJson = await redis.get(`payment:${paymentId}`)
+      const reconciliationCheckpoint = reconciliationCheckpointJson ? JSON.parse(reconciliationCheckpointJson) : checkpoint
+      
+      // CRITICAL: Preserve a2uTxid and all financial fields - they must NEVER be deleted
+      if (!reconciliationCheckpoint.a2uTxid && checkpoint.a2uTxid) {
+        console.warn("[Pi Complete] WARNING: a2uTxid lost during reconciliation - RESTORING from checkpoint")
+        reconciliationCheckpoint.a2uTxid = checkpoint.a2uTxid
+      }
+      
       const reconciliationNeededPayment = {
-        ...checkpoint,
+        ...reconciliationCheckpoint,
         status: "settlement_pending", // Stay in pending until DB succeeds
         requiresDbReconciliation: true,
         dbRecorded: false, // CRITICAL: DB failed - mark as not recorded

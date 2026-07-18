@@ -665,15 +665,56 @@ export async function recordA2UTransactionAtomic(params: {
   customerAmount: number     // Verified U2A amount (what customer sent)
   merchantAmount: number     // Actual amount in A2U blockchain transfer (what was sent on Stellar)
   horizonFeeCharged: number  // Actual submitResult.fee_charged / 10_000_000 (in Pi)
-  appCommission?: number     // App commission (default 0)
+  appCommission: number      // REQUIRED: App commission (must be explicit, no fallback)
   note?: string
   createdAt?: Date
 }): Promise<{ success: boolean; error?: string; transactionId?: string }> {
+  // STRICT VALIDATION: Reject transaction if any required field is missing or invalid
+  
+  // Validate identifiers - must not be empty strings
+  if (!params.u2aIdentifier || typeof params.u2aIdentifier !== 'string') {
+    throw new Error('u2aIdentifier is required and must be a non-empty string')
+  }
+  if (!params.u2aTxid || typeof params.u2aTxid !== 'string') {
+    throw new Error('u2aTxid is required and must be a non-empty string')
+  }
+  if (!params.a2uIdentifier || typeof params.a2uIdentifier !== 'string') {
+    throw new Error('a2uIdentifier is required and must be a non-empty string')
+  }
+  if (!params.a2uTxid || typeof params.a2uTxid !== 'string') {
+    throw new Error('a2uTxid is required and must be a non-empty string')
+  }
+  
+  // Validate merchant identifiers
+  if (!params.merchantId || typeof params.merchantId !== 'string') {
+    throw new Error('merchantId is required and must be a non-empty string')
+  }
+  if (!params.merchantUid || typeof params.merchantUid !== 'string') {
+    throw new Error('merchantUid is required and must be a non-empty string')
+  }
+  
   // CRITICAL: Use actual amounts from blockchain, not calculated amounts
   const customerAmount = params.customerAmount
   const merchantAmount = params.merchantAmount
-  const horizonFeeCharged = params.horizonFeeCharged ?? 0
-  const appCommission = params.appCommission || 0
+  const horizonFeeCharged = params.horizonFeeCharged
+  
+  // Validate all amounts are finite numbers (no NaN, Infinity, or null)
+  if (typeof customerAmount !== 'number' || !Number.isFinite(customerAmount)) {
+    throw new Error('customerAmount must be a finite number')
+  }
+  if (typeof merchantAmount !== 'number' || !Number.isFinite(merchantAmount)) {
+    throw new Error('merchantAmount must be a finite number')
+  }
+  if (typeof horizonFeeCharged !== 'number' || !Number.isFinite(horizonFeeCharged)) {
+    throw new Error('horizonFeeCharged must be a finite number')
+  }
+  
+  // CRITICAL: appCommission is REQUIRED, no fallback to 0
+  // Must be an explicit number (not undefined, not null, not || 0)
+  if (typeof params.appCommission !== 'number' || !Number.isFinite(params.appCommission)) {
+    throw new Error('appCommission is required and must be a finite number')
+  }
+  const appCommission = params.appCommission
   
   // Calculate app net impact: what the app absorbs (may be negative if app bears fees)
   // appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
@@ -718,6 +759,27 @@ export async function recordA2UTransactionAtomic(params: {
     try {
       // Use postgres transaction callback API (no manual BEGIN/COMMIT/ROLLBACK)
       const result = await client.begin(async (tx) => {
+        // 0. Check for existing transaction - if found, verify it matches identifiers and amounts (idempotency check)
+        const existingTxCheck = await tx`
+          SELECT id, merchant_id, merchant_uid, amount FROM transactions WHERE payment_id = ${params.u2aIdentifier}
+          LIMIT 1
+        `
+        
+        if (existingTxCheck && existingTxCheck.length > 0) {
+          const existing = existingTxCheck[0]
+          // IDEMPOTENCY: Verify the existing transaction matches merchant and amount
+          if (existing.merchant_id !== params.merchantId) {
+            throw new Error(`Idempotency violation: existing transaction has different merchantId: ${existing.merchant_id} vs ${params.merchantId}`)
+          }
+          if (existing.merchant_uid !== params.merchantUid) {
+            throw new Error(`Idempotency violation: existing transaction has different merchantUid: ${existing.merchant_uid} vs ${params.merchantUid}`)
+          }
+          if (existing.amount !== merchantAmount) {
+            throw new Error(`Idempotency violation: existing transaction has different amount: ${existing.amount} vs ${merchantAmount}`)
+          }
+          console.log('[DB] Idempotency check passed - existing transaction matches all fields, reusing transaction ID')
+        }
+        
         // 1. Upsert transaction with RETURNING id to get actual ID (new or existing)
         // CRITICAL: Store merchantAmount (actual blockchain transfer), NOT customerAmount
         const txResult = await tx`
@@ -736,6 +798,30 @@ export async function recordA2UTransactionAtomic(params: {
         
         // 2. Insert receipt idempotently with fee tracking using the actual transaction ID
         // CRITICAL: Store customerAmount, merchantAmount (what was actually sent on blockchain), and horizonFeeCharged
+        // On conflict, verify amounts match (idempotency check)
+        const existingReceiptCheck = await tx`
+          SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount FROM receipts 
+          WHERE transaction_id = ${actualTransactionId} LIMIT 1
+        `
+        
+        if (existingReceiptCheck && existingReceiptCheck.length > 0) {
+          const existing = existingReceiptCheck[0]
+          // IDEMPOTENCY: Verify existing receipt matches all financial fields
+          if (Math.abs(existing.customer_amount - customerAmount) > 0.0001) {
+            throw new Error(`Idempotency violation: receipt has different customerAmount: ${existing.customer_amount} vs ${customerAmount}`)
+          }
+          if (Math.abs(existing.merchant_amount - merchantAmount) > 0.0001) {
+            throw new Error(`Idempotency violation: receipt has different merchantAmount: ${existing.merchant_amount} vs ${merchantAmount}`)
+          }
+          if (Math.abs(existing.horizon_fee_charged - horizonFeeCharged) > 0.0001) {
+            throw new Error(`Idempotency violation: receipt has different horizonFeeCharged: ${existing.horizon_fee_charged} vs ${horizonFeeCharged}`)
+          }
+          if (Math.abs(existing.app_commission - appCommission) > 0.0001) {
+            throw new Error(`Idempotency violation: receipt has different appCommission: ${existing.app_commission} vs ${appCommission}`)
+          }
+          console.log('[DB] Idempotency check passed - existing receipt matches all financial fields, no duplicate credit')
+        }
+        
         const receiptResult = await tx`
           INSERT INTO receipts (
             transaction_id, merchant_id, merchant_uid, amount, currency, timestamp, txid,
@@ -752,6 +838,7 @@ export async function recordA2UTransactionAtomic(params: {
         `
 
         // Only increment settled if receipt was newly inserted (RETURNING returned a row)
+        // This ensures merchantAmount credit is applied EXACTLY ONCE, never duplicated on retry
         const receiptWasInserted = receiptResult && receiptResult.length > 0
 
         // 3. Update merchant balance - only increment if receipt is new

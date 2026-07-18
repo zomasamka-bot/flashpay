@@ -158,14 +158,24 @@ export async function getTransaction(transactionId: string): Promise<Transaction
     
     // Parse string or object from Redis
     let parsed: unknown
-    if (typeof data === 'string') {
-      parsed = JSON.parse(data)
-    } else {
-      parsed = data
+    try {
+      if (typeof data === 'string') {
+        parsed = JSON.parse(data)
+      } else {
+        parsed = data
+      }
+    } catch (parseError) {
+      console.error("[Transaction Service] JSON parse failed for transaction:", transactionId, parseError)
+      return null
     }
     
-    // Validate with strict parser
-    return parseTransaction(parsed)
+    // Validate with strict parser - returns null if invalid
+    const transaction = parseTransaction(parsed)
+    if (!transaction) {
+      console.error("[Transaction Service] Transaction validation failed:", transactionId)
+      return null
+    }
+    return transaction
   } catch (error) {
     console.error("[Transaction Service] Error fetching transaction:", error)
     return null
@@ -184,14 +194,24 @@ export async function getReceipt(transactionId: string): Promise<Receipt | null>
     
     // Parse string or object from Redis
     let parsed: unknown
-    if (typeof data === 'string') {
-      parsed = JSON.parse(data)
-    } else {
-      parsed = data
+    try {
+      if (typeof data === 'string') {
+        parsed = JSON.parse(data)
+      } else {
+        parsed = data
+      }
+    } catch (parseError) {
+      console.error("[Transaction Service] JSON parse failed for receipt:", transactionId, parseError)
+      return null
     }
     
-    // Validate with strict parser
-    return parseReceipt(parsed)
+    // Validate with strict parser - returns null if invalid
+    const receipt = parseReceipt(parsed)
+    if (!receipt) {
+      console.error("[Transaction Service] Receipt validation failed:", transactionId)
+      return null
+    }
+    return receipt
   } catch (error) {
     console.error("[Transaction Service] Error fetching receipt:", error)
     return null
@@ -349,18 +369,39 @@ export async function updateMerchantBalance(
     if (currentBalance) {
       // Parse Redis data
       let parsed: unknown
-      if (typeof currentBalance === 'string') {
-        parsed = JSON.parse(currentBalance)
-      } else {
-        parsed = currentBalance
+      try {
+        if (typeof currentBalance === 'string') {
+          parsed = JSON.parse(currentBalance)
+        } else {
+          parsed = currentBalance
+        }
+      } catch (parseError) {
+        console.error("[Transaction Service] JSON parse failed for balance:", merchantId, parseError)
+        balance = {
+          merchantId,
+          settled: 0,
+          unsettled: 0,
+          total: 0,
+          lastUpdated: new Date().toISOString(),
+        }
+        await redis.set(balanceKey, JSON.stringify(balance))
+        return
       }
       
       // Validate with strict parser
       const validatedBalance = parseMerchantBalance(parsed, merchantId)
       if (!validatedBalance) {
-        throw new Error('Invalid merchant balance data from Redis')
+        console.warn('[Transaction Service] Invalid merchant balance data from Redis, resetting')
+        balance = {
+          merchantId,
+          settled: 0,
+          unsettled: 0,
+          total: 0,
+          lastUpdated: new Date().toISOString(),
+        }
+      } else {
+        balance = validatedBalance
       }
-      balance = validatedBalance
     } else {
       balance = {
         merchantId,
@@ -415,16 +456,34 @@ export async function getMerchantBalance(merchantId: string): Promise<MerchantBa
     
     // Parse Redis data
     let parsed: unknown
-    if (typeof data === 'string') {
-      parsed = JSON.parse(data)
-    } else {
-      parsed = data
+    try {
+      if (typeof data === 'string') {
+        parsed = JSON.parse(data)
+      } else {
+        parsed = data
+      }
+    } catch (parseError) {
+      console.error("[Transaction Service] JSON parse failed for balance:", merchantId, parseError)
+      return {
+        merchantId,
+        settled: 0,
+        unsettled: 0,
+        total: 0,
+        lastUpdated: new Date().toISOString(),
+      }
     }
     
     // Validate with strict parser
     const validatedBalance = parseMerchantBalance(parsed, merchantId)
     if (!validatedBalance) {
-      throw new Error('Invalid merchant balance data')
+      console.warn('[Transaction Service] Invalid merchant balance data - returning defaults')
+      return {
+        merchantId,
+        settled: 0,
+        unsettled: 0,
+        total: 0,
+        lastUpdated: new Date().toISOString(),
+      }
     }
     return validatedBalance
   } catch (error) {

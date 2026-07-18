@@ -527,7 +527,7 @@ class UnifiedStateStore {
     payment.status = status
     if (status === "paid_to_app") {
       payment.paidAt = new Date().toISOString()
-      payment.txid = txid
+      payment.u2aTxid = txid // Standardized identifier: u2aTxid replaces legacy txid
     }
     if (status === "settled_to_merchant") {
       payment.settledAt = new Date().toISOString()

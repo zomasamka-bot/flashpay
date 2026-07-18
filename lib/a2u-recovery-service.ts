@@ -2,6 +2,7 @@ import { redis } from "@/lib/redis"
 import { recordA2UTransactionAtomic } from "@/lib/db"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
+import type { ExecutorContext } from "@/lib/a2u-executor"
 
 /**
  * AUTHORITATIVE A2U RECOVERY SERVICE
@@ -47,7 +48,7 @@ interface RecoveryResult {
   status: "success" | "db_reconciled" | "manual_review_required" | "pending_pi_complete" | "irreversible"
   state: string
   paymentId: string
-  details?: {
+  details: {
     u2aTxid?: string
     a2uTxid?: string
     dbTransactionId?: string
@@ -107,10 +108,51 @@ export async function executeA2URecovery(paymentId: string): Promise<RecoveryRes
   }
 
   // STATE 3: settlement_pending + piCompletionPending + a2uTxid
-  // CRITICAL: Server (NOT client) must call Pi /v2/payments/complete with stored a2uTxid
+  // Delegated to unified executor which will handle Pi /complete + DB reconciliation
   if (payment.status === "settlement_pending" && payment.piCompletionPending && payment.a2uTxid && payment.a2uPaymentId) {
-    console.log("[A2U Recovery] 🔁 State 3: settlement_pending + piCompletionPending - server calling Pi /complete")
-    return await completePiA2UAndReconcile(payment, paymentId)
+    console.log("[A2U Recovery] 🔁 State 3: settlement_pending + piCompletionPending - delegating to unified executor")
+    
+    // Use unified executor to complete Pi and reconcile DB
+    const { executeA2U } = await import("@/lib/a2u-executor")
+    const executorResult = await executeA2U({
+      paymentId,
+      payment,
+      merchantUid: payment.merchantUid,
+      accessToken: payment.accessToken,
+      amount: payment.customerAmount || payment.amount,
+      piPaymentId: payment.piPaymentId,
+      isRecovery: true,
+    })
+
+    if (!executorResult.success) {
+      return {
+        status: "manual_review_required",
+        state: "executor_failed_state3",
+        paymentId,
+        details: { error: executorResult.error },
+      }
+    }
+
+    // Canonical response
+    const canonicalResponse = await buildA2USuccessResponse(paymentId)
+    if (!canonicalResponse) {
+      return {
+        status: "manual_review_required",
+        state: "response_building_failed",
+        paymentId,
+        details: { error: "Response building failed" },
+      }
+    }
+
+    return {
+      status: "db_reconciled",
+      state: "settled_to_merchant",
+      paymentId,
+      details: {
+        u2aTxid: payment.u2aTxid,
+        a2uTxid: executorResult.txidFromHorizon,
+      },
+    }
   }
 
   // STATE 4: piCompleted + DB pending (no requiresDbReconciliation flag yet) - DB-only recovery
@@ -140,6 +182,7 @@ export async function executeA2URecovery(paymentId: string): Promise<RecoveryRes
       status: "pending_pi_complete",
       state: "failure_safe_to_retry",
       paymentId,
+      details: {},
     }
   }
 
@@ -154,100 +197,9 @@ export async function executeA2URecovery(paymentId: string): Promise<RecoveryRes
 }
 
 /**
- * STATE 3 SERVER-SIDE Pi COMPLETION: Call Pi /v2/payments/complete, then DB reconciliation
- * 
- * CRITICAL FLOW:
- * 1. Server calls Pi /v2/payments/${a2uPaymentId}/complete with stored a2uTxid
- * 2. Pi confirms A2U completion
- * 3. Persist piCompletionPending=false, piCompleted=true
- * 4. Perform DB accounting via reconcileA2UInDatabase
- * 5. Once a2uTxid exists, no Horizon re-signing ever occurs
+ * STATE 3: Delegated to unified executor
+ * NOTE: completePiA2UAndReconcile removed - use executeA2U from lib/a2u-executor.ts instead
  */
-async function completePiA2UAndReconcile(payment: PaymentState, paymentId: string): Promise<RecoveryResult> {
-  console.log("[A2U Recovery] === STATE 3: Server calling Pi /v2/payments/complete ===")
-  console.log("[A2U Recovery] a2uPaymentId:", payment.a2uPaymentId)
-  console.log("[A2U Recovery] a2uTxid:", payment.a2uTxid)
-
-  // CRITICAL: Import serverConfig to get Pi API credentials
-  const { serverConfig } = await import("@/lib/server-config")
-  
-  if (!serverConfig.piApiKey) {
-    console.error("[A2U Recovery] ❌ PI_API_KEY not configured - cannot complete Pi A2U")
-    return {
-      status: "manual_review_required",
-      state: "pi_api_not_configured",
-      paymentId,
-      details: { error: "Server not configured for Pi API calls" },
-    }
-  }
-
-  // Call Pi /v2/payments/complete endpoint with stored a2uTxid
-  try {
-    console.log("[A2U Recovery] Calling Pi /v2/payments/complete for a2uPaymentId:", payment.a2uPaymentId)
-    
-    const piCompleteResponse = await fetch(
-      `https://api.minepi.com/v2/payments/${payment.a2uPaymentId}/complete`,
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Key ${serverConfig.piApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          txid: payment.a2uTxid, // Use stored a2uTxid from Horizon
-        }),
-      }
-    )
-
-    if (!piCompleteResponse.ok) {
-      const errorBody = await piCompleteResponse.text()
-      console.error("[A2U Recovery] ❌ Pi /complete failed - status:", piCompleteResponse.status)
-      console.error("[A2U Recovery] Pi error:", errorBody)
-
-      // Pi API failure - do NOT persist piCompleted, keep piCompletionPending=true for retry
-      return {
-        status: "manual_review_required",
-        state: "pi_complete_failed",
-        paymentId,
-        details: {
-          error: `Pi /complete returned ${piCompleteResponse.status}`,
-        },
-      }
-    }
-
-    const piCompleteResult = await piCompleteResponse.json()
-    console.log("[A2U Recovery] ✅ Pi /complete succeeded")
-    console.log("[A2U Recovery] Pi response status:", piCompleteResult.status)
-
-    // CRITICAL: Persist piCompletionPending=false and piCompleted=true
-    // ONLY after Pi confirms completion
-    const completedPayment = {
-      ...payment,
-      piCompletionPending: false,
-      piCompleted: true,
-      piCompletedAt: new Date().toISOString(),
-    }
-
-    await redis.set(`payment:${paymentId}`, JSON.stringify(completedPayment))
-    console.log("[A2U Recovery] ✓ Persisted piCompleted=true")
-
-    // Now perform DB accounting via reconciliation
-    console.log("[A2U Recovery] Now performing DB accounting with piCompleted=true")
-    return await reconcileA2UInDatabase(completedPayment, paymentId)
-  } catch (piError) {
-    console.error("[A2U Recovery] ❌ Exception calling Pi /complete:", piError)
-
-    // Pi API error - do NOT persist piCompleted, keep piCompletionPending=true for retry
-    return {
-      status: "manual_review_required",
-      state: "pi_complete_exception",
-      paymentId,
-      details: {
-        error: String(piError),
-      },
-    }
-  }
-}
 
 /**
  * DB-ONLY RECONCILIATION: Record A2U transaction atomically using Redis as source of truth
@@ -273,39 +225,39 @@ async function reconcileA2UInDatabase(payment: PaymentState, paymentId: string):
   // CRITICAL VALIDATION: All required identifiers and financial data must exist before DB write
   if (!payment.piPaymentId) {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing piPaymentId (u2aIdentifier)")
-    return { status: "irreversible", details: { error: "Missing piPaymentId - cannot proceed to DB" } }
+    return { status: "irreversible", state: "missing_piPaymentId", paymentId, details: { error: "Missing piPaymentId - cannot proceed to DB" } }
   }
   if (!payment.a2uPaymentId) {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing a2uPaymentId (a2uIdentifier)")
-    return { status: "irreversible", details: { error: "Missing a2uPaymentId - cannot proceed to DB" } }
+    return { status: "irreversible", state: "missing_a2uPaymentId", paymentId, details: { error: "Missing a2uPaymentId - cannot proceed to DB" } }
   }
   if (!financialData.u2aTxid) {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing u2aTxid")
-    return { status: "irreversible", details: { error: "Missing u2aTxid - cannot proceed to DB" } }
+    return { status: "irreversible", state: "missing_u2aTxid", paymentId, details: { error: "Missing u2aTxid - cannot proceed to DB" } }
   }
   if (!financialData.a2uTxid) {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing a2uTxid")
-    return { status: "irreversible", details: { error: "Missing a2uTxid - cannot proceed to DB" } }
+    return { status: "irreversible", state: "missing_a2uTxid", paymentId, details: { error: "Missing a2uTxid - cannot proceed to DB" } }
   }
   if (!financialData.merchantId) {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing merchantId")
-    return { status: "irreversible", details: { error: "Missing merchantId - cannot proceed to DB" } }
+    return { status: "irreversible", state: "missing_merchantId", paymentId, details: { error: "Missing merchantId - cannot proceed to DB" } }
   }
   if (!financialData.merchantUid) {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Missing merchantUid")
-    return { status: "irreversible", details: { error: "Missing merchantUid - cannot proceed to DB" } }
+    return { status: "irreversible", state: "missing_merchantUid", paymentId, details: { error: "Missing merchantUid - cannot proceed to DB" } }
   }
   if (typeof financialData.customerAmount !== "number") {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid customerAmount:", financialData.customerAmount)
-    return { status: "irreversible", details: { error: "Invalid customerAmount - cannot proceed to DB" } }
+    return { status: "irreversible", state: "invalid_customerAmount", paymentId, details: { error: "Invalid customerAmount - cannot proceed to DB" } }
   }
   if (typeof financialData.merchantAmount !== "number") {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid merchantAmount:", financialData.merchantAmount)
-    return { status: "irreversible", details: { error: "Invalid merchantAmount - cannot proceed to DB" } }
+    return { status: "irreversible", state: "invalid_merchantAmount", paymentId, details: { error: "Invalid merchantAmount - cannot proceed to DB" } }
   }
   if (typeof financialData.horizonFeeCharged !== "number") {
     console.error("[A2U Recovery] ❌ AUDIT FAILURE: Invalid horizonFeeCharged:", financialData.horizonFeeCharged)
-    return { status: "irreversible", details: { error: "Invalid horizonFeeCharged - cannot proceed to DB" } }
+    return { status: "irreversible", state: "invalid_horizonFeeCharged", paymentId, details: { error: "Invalid horizonFeeCharged - cannot proceed to DB" } }
   }
 
   try {

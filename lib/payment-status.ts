@@ -88,7 +88,6 @@ export function canClientRetryPayment(payment: Payment): boolean {
   // settlement_failed WITH terminal flags (a2uTxid/horizonSuccessFlag) is BLOCKED
   
   if (isTerminalState(payment)) {
-    console.log("[v0] Payment blocked from retry: terminal settlement_failed state detected")
     return false
   }
   

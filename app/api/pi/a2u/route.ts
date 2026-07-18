@@ -407,14 +407,12 @@ export async function POST(request: NextRequest) {
       console.warn("[Pi A2U] ⚠️  Could not acquire lock - another A2U may be in progress")
       console.log("[Pi A2U] Re-reading payment records to check if already complete...")
       
-      // Re-read both records to check if already complete
+      // Re-read payment record to check if already complete (ONLY authoritative source is payment:${paymentId})
       const paymentCheck = await redis.get(`payment:${paymentId}`)
-      const a2uCheck = await redis.get(`a2u:${paymentId}`)
       
       const payment = paymentCheck ? (typeof paymentCheck === "string" ? JSON.parse(paymentCheck) : paymentCheck) : null
-      const a2uRecord = a2uCheck ? (typeof a2uCheck === "string" ? JSON.parse(a2uCheck) : a2uCheck) : null
       
-      if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
+      if (payment?.status === "settled_to_merchant") {
         console.log("[Pi A2U] Payment already settled - returning canonical response")
         // Return canonical response from authoritative Redis checkpoint
         const canonicalResponse = await buildA2USuccessResponse(paymentId)
@@ -434,9 +432,8 @@ export async function POST(request: NextRequest) {
 
     console.log("[Pi A2U] ✓ Lock acquired:", lockKey)
 
-    // Re-read both records after lock acquisition
+    // Re-read payment record after lock acquisition (ONLY authoritative source is payment:${paymentId})
     const paymentData = await redis.get(`payment:${paymentId}`)
-    const a2uData = await redis.get(`a2u:${paymentId}`)
     
     if (!paymentData) {
       console.error("[Pi A2U] Payment not found in Redis:", paymentId)
@@ -444,10 +441,9 @@ export async function POST(request: NextRequest) {
     }
 
     let payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
-    let a2uRecord = a2uData ? (typeof a2uData === "string" ? JSON.parse(a2uData) : a2uData) : null
     
     // Check if already complete after re-read
-    if (a2uRecord?.a2uStatus === "settled_to_merchant" || a2uRecord?.status === "settled_to_merchant" || payment?.a2uStatus === "settled_to_merchant" || payment?.status === "settled_to_merchant") {
+    if (payment?.status === "settled_to_merchant") {
       console.log("[Pi A2U] Payment already settled after lock - returning canonical response")
       // Return canonical response from authoritative Redis checkpoint
       const canonicalResponse = await buildA2USuccessResponse(paymentId)
@@ -520,10 +516,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
     }
 
-    if (!payment.txid) {
-      console.error("[Pi A2U] Missing txid in Redis record")
-      return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
-    }
+  // txid field removed - use u2aTxid for customer-to-app transaction ID
 
     if (!payment.amount || payment.amount <= 0) {
       console.error("[Pi A2U] Invalid payment amount:", payment.amount)
@@ -1053,34 +1046,18 @@ export async function POST(request: NextRequest) {
                   }, { status: 500 })
                 }
                 
-                const a2uCompleteKey = `a2u:${paymentId}`
-                const a2uRecord = {
-                  ...payment,
-                  a2uStatus: "settled_to_merchant",
-                  status: "settled_to_merchant",
-                  originalPaymentId: paymentId,
-                  piPaymentId: a2uPayment.identifier,
-                  merchantId,
-                  merchantUid,
-                  amount,
-                  txid: existingTxid,
-                  completedAt: new Date().toISOString(),
+                // Idempotency checkpoint already saved to payment:${paymentId} in earlier step
+                // No separate a2u: key needed - payment: is the only authoritative source
+                // Return canonical response from authoritative Redis checkpoint (enforces finality rules)
+                const canonicalResponse = await buildA2USuccessResponse(paymentId)
+                if (!canonicalResponse) {
+                  console.error("[Pi A2U] ❌ Failed to build canonical response for already-settled payment")
+                  return NextResponse.json(
+                    { error: "Response building failed" },
+                    { status: 500 }
+                  )
                 }
-                try {
-                  await redis.set(a2uCompleteKey, JSON.stringify(a2uRecord))
-                  console.log("[Pi A2U] ✓ Already-completed payment persisted")
-                } catch (error) {
-                  console.error("[Pi A2U] ❌ CRITICAL: Failed to persist already-completed record:", error)
-                  throw error
-                }
-                
-                return NextResponse.json({
-                  success: true,
-                  message: "A2U transfer already completed - existing txid",
-                  txid: existingTxid,
-                  status: "settled_to_merchant",
-                  a2uPaymentId: a2uPayment.identifier,
-                })
+                return NextResponse.json(canonicalResponse)
               } else {
                 console.error("[Pi A2U] ❌ Early detection validation failed:", validationResult.error)
               }
@@ -1101,18 +1078,16 @@ export async function POST(request: NextRequest) {
               console.warn("[Pi A2U] Ongoing payment found but cannot proceed without private key")
               console.warn("[Pi A2U] Status: PENDING_SIGNING")
               
-              // Do NOT write a2u record here - let finally release the lock
-              
-              return NextResponse.json({
-                success: false,
-                message: "Ongoing payment found - awaiting blockchain signing",
-                status: "pending",
-                settlementStage: "pending_signing",
-                a2uPaymentId: ongoingPaymentId,
-                amount,
-                details: "PI_PRIVATE_SEED required for signing",
-                timestamp: new Date().toISOString(),
-              }, { status: 202 })
+              // Return unified response enforcing settlement_pending status until signing completes
+              const processingResponse = await buildA2USuccessResponse(paymentId)
+              if (!processingResponse) {
+                console.error("[Pi A2U] ❌ Failed to build processing response for pending signing")
+                return NextResponse.json(
+                  { error: "Response building failed" },
+                  { status: 500 }
+                )
+              }
+              return NextResponse.json(processingResponse, { status: 202 })
             }
             
             // Private seed IS available - continue with signing code for the ongoing payment
@@ -1434,11 +1409,15 @@ export async function POST(request: NextRequest) {
               const verifiedIdentity = await verifyMerchantIdentityFromPi(accessToken)
               if (!verifiedIdentity || verifiedIdentity.uid !== merchantUid) {
                 console.error("[Pi A2U] ❌ SECURITY: Merchant identity verification failed or uid mismatch")
-                return NextResponse.json({
-                  error: "Merchant identity verification failed",
-                  step: "identity_verification",
-                  success: false,
-                }, { status: 403 })
+                // Return unified error response - no success flag, use canonical response structure
+                const failureResponse = await buildA2USuccessResponse(paymentId)
+                if (!failureResponse) {
+                  return NextResponse.json({
+                    error: "Merchant identity verification failed",
+                  }, { status: 403 })
+                }
+                // failureResponse.success will be false due to status not being settled_to_merchant
+                return NextResponse.json(failureResponse, { status: 403 })
               }
               
               // A2U transfer successful on Horizon - payment is now settlement_pending
@@ -1599,36 +1578,9 @@ export async function POST(request: NextRequest) {
       console.warn("[Pi A2U] To:", a2uPayment.to_address)
       console.warn("[Pi A2U] Amount:", a2uPayment.amount, "Pi")
       
-      // Store A2U payment in pending state for manual review/signing
-      if (isRedisConfigured) {
-        try {
-          const a2uKey = `a2u:${paymentId}`
-          await redis.set(
-            a2uKey,
-            JSON.stringify({
-              originalPaymentId: paymentId,
-              piPaymentId: a2uPayment.identifier,
-              merchantId,
-              merchantUid,
-              amount,
-              status: "pending",
-              settlementStage: "pending_signing",
-              fromAddress: a2uPayment.from_address,
-              toAddress: a2uPayment.to_address,
-              network: a2uPayment.network,
-              step1: "createPayment_success",
-              step2: "signing_not_configured",
-              step3: "pending",
-              createdAt: new Date().toISOString(),
-              requiresManualReview: true,
-              note: "Awaiting PI_PRIVATE_SEED configuration for blockchain signing",
-            })
-          )
-          console.log("[Pi A2U] A2U payment stored with PENDING_SIGNING status in Redis")
-        } catch (error) {
-          console.warn("[Pi A2U] Failed to store A2U reference (non-blocking):", error)
-        }
-      }
+      // No separate a2u: key for pending state - all state tracked in payment:${paymentId}
+      // Diagnostic logging only - not persisted as authoritative
+      console.log("[Pi A2U] ⚠️ Awaiting PI_PRIVATE_SEED configuration for blockchain signing")
       
       // Return 202 Accepted - createPayment succeeded, awaiting blockchain signing
       return NextResponse.json({
@@ -1985,32 +1937,27 @@ export async function POST(request: NextRequest) {
       console.log("[Pi A2U]   4. complete on Pi backend: success")
       console.log("[Pi A2U] Merchant wallet has received funds")
       
-      // MANDATORY: Store A2U completion in Redis with BOTH a2uStatus and status fields BEFORE returning success
+      // MANDATORY: Store A2U completion in payment:${paymentId} (ONLY authoritative source) BEFORE returning success
       if (isRedisConfigured) {
-        const a2uCompleteKey = `a2u:${paymentId}`
-        const a2uCompleteData = {
+        const paymentCompleteKey = `payment:${paymentId}`
+        const paymentCompleteData = {
           ...payment, // Include full payment record
           ...{
-            originalPaymentId: paymentId,
             piPaymentId: a2uPayment.identifier,
             merchantId,
             merchantUid,
-            amount,
-            a2uStatus: "settled_to_merchant", // Both fields required
+            a2uPaymentId: a2uPayment.identifier,
+            a2uTxid: txidFromHorizon,
             status: "settled_to_merchant",
-            step1: "createPayment_success",
-            step2: "transaction_signed_success",
-            step3: "horizon_submit_success",
-            step4: "pi_complete_success",
-            txid: txidFromHorizon,
-            completedAt: new Date().toISOString(),
+            u2aTxid: payment.u2aTxid, // Preserve U2A txid from earlier
+            settlementCompletedAt: new Date().toISOString(),
           }
         }
         try {
-          await redis.set(a2uCompleteKey, JSON.stringify(a2uCompleteData))
-          console.log("[Pi A2U] ✓ A2U marked complete in Redis with both a2uStatus and status fields")
+          await redis.set(paymentCompleteKey, JSON.stringify(paymentCompleteData))
+          console.log("[Pi A2U] ✓ Settlement complete - payment:${paymentId} marked settled_to_merchant")
         } catch (error) {
-          console.error("[Pi A2U] ❌ CRITICAL: Failed to write a2u:complete to Redis")
+          console.error("[Pi A2U] ❌ CRITICAL: Failed to write payment:complete to Redis")
           console.error("[Pi A2U] Error:", error)
           throw error // Fail the transaction if we can't persist
         }

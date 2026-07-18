@@ -21,11 +21,10 @@ export interface Payment {
   createdAt: string
   paidAt?: string // When U2A was marked paid_to_app
   settledAt?: string // When A2U settled_to_merchant (only set when status=settled_to_merchant)
-  txid?: string // U2A transaction ID
   
   // U2A recovery tracking
   piPaymentId?: string // U2A identifier from Pi webhook
-  u2aTxid?: string // U2A transaction ID (clientTxid from Pi flow)
+  u2aTxid?: string // U2A transaction ID (customer-to-app txid)
   
   // A2U recovery for atomic idempotency
   a2uPaymentId?: string // Pi A2U identifier - stored after Horizon succeeds
@@ -229,7 +228,10 @@ function isValidISODate(value: unknown): value is string {
   if (typeof value !== 'string') return false
   try {
     const date = new Date(value)
-    return !isNaN(date.getTime()) && value === date.toISOString()
+    if (isNaN(date.getTime())) return false
+    // Accept value if it parses to valid ISO date - don't require exact toISOString() match
+    // Redis may store dates in slightly different ISO formats
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)
   } catch {
     return false
   }
