@@ -260,10 +260,11 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
 /**
  * STAGE 1: Create or fetch A2U payment - STRICT DISCRIMINATED UNION
+ * Pi A2U Payment Response: { identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown }
  */
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<
   { success: false; status: string; error: string } |
-  { success: true; a2uPaymentId: string; a2uPayment: any }
+  { success: true; a2uPaymentId: string; a2uPayment: { identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown } }
 > {
   try {
     // Verify UID with Pi /v2/me
@@ -278,13 +279,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<
     if (!verifyResponse.ok) {
       const error = await verifyResponse.text()
       console.error("[A2U Stage1] UID verification failed:", error)
-      return { success: false, error: "UID verification failed" }
+      return { success: false, status: "error", error: "UID verification failed" }
     }
 
     const verifiedUser = await verifyResponse.json()
     if (verifiedUser.uid !== ctx.merchantUid) {
       console.error("[A2U Stage1] UID mismatch")
-      return { success: false, error: "UID mismatch" }
+      return { success: false, status: "error", error: "UID mismatch" }
     }
 
     console.log("[A2U Stage1] ✓ UID verified")
@@ -505,7 +506,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     const validation = validateFinancialData(ctx.payment)
     if (!validation.success) {
       console.error("[A2U Stage4] Financial validation failed:", validation.error)
-      return { success: false, error: validation.error }
+      return { success: false, status: "error", error: validation.error }
     }
 
     const financialData = validation.data
@@ -513,13 +514,13 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     // CRITICAL VALIDATION: Reject if horizonFeeCharged missing - NO fallback to 0
     if (typeof financialData.horizonFeeCharged !== 'number' || !Number.isFinite(financialData.horizonFeeCharged)) {
       console.error("[A2U Stage4] ❌ AUDIT FAILURE: horizonFeeCharged must be a finite number, got:", financialData.horizonFeeCharged)
-      return { success: false, error: "horizonFeeCharged validation failed - cannot proceed to DB" }
+      return { success: false, status: "error", error: "horizonFeeCharged validation failed - cannot proceed to DB" }
     }
 
     // CRITICAL: appCommission MUST be explicit number from validated data
     if (typeof financialData.appCommission !== 'number' || !Number.isFinite(financialData.appCommission)) {
       console.error("[A2U Stage4] ❌ AUDIT FAILURE: appCommission must be a finite number, got:", financialData.appCommission)
-      return { success: false, error: "appCommission validation failed - cannot proceed to DB" }
+      return { success: false, status: "error", error: "appCommission validation failed - cannot proceed to DB" }
     }
 
     console.log("[A2U Stage4] All financial fields validated - proceeding to DB:")
@@ -534,10 +535,11 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     }
 
     // Call DB with VALIDATED financial data only
+    // CRITICAL: Pass financialData.a2uPaymentId (validated string) not ctx.payment.a2uPaymentId (optional)
     const dbResult = await recordA2UTransactionAtomic({
       u2aIdentifier: ctx.piPaymentId,
       u2aTxid: financialData.u2aTxid,
-      a2uIdentifier: ctx.payment.a2uPaymentId,
+      a2uIdentifier: financialData.a2uPaymentId,
       a2uTxid: txidFromHorizon,
       merchantId: financialData.merchantId,
       merchantUid: financialData.merchantUid,
@@ -569,8 +571,9 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
 /**
  * Fetch existing A2U payment
+ * Pi A2U Payment Response: { identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown }
  */
-async function fetchA2UPayment(a2uPaymentId: string): Promise<any | null> {
+async function fetchA2UPayment(a2uPaymentId: string): Promise<{ identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown } | null> {
   try {
     const response = await fetch(`https://api.minepi.com/v2/payments/${a2uPaymentId}`, {
       method: "GET",
