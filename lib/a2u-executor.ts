@@ -29,6 +29,57 @@ import * as StellarSDK from "@stellar/stellar-sdk"
 
 import type { Payment } from "@/lib/types"
 
+/**
+ * Pi A2U Payment API Response - Strict type definition
+ * Based on Pi API response structure for payments endpoint
+ */
+interface PiA2UPayment {
+  identifier: string
+  from_address: string
+  to_address: string
+  amount: string
+  status?: {
+    developer_completed?: boolean
+  }
+  transaction?: {
+    verified?: boolean
+    txid?: string
+    fee_charged?: number | string
+  }
+}
+
+/**
+ * Type guard: Validate unknown object as PiA2UPayment
+ */
+function isPiA2UPayment(value: unknown): value is PiA2UPayment {
+  if (typeof value !== 'object' || value === null) return false
+  const obj = value as Record<string, unknown>
+  
+  // Required fields
+  if (typeof obj.identifier !== 'string') return false
+  if (typeof obj.from_address !== 'string') return false
+  if (typeof obj.to_address !== 'string') return false
+  if (typeof obj.amount !== 'string') return false
+  
+  // Optional status field
+  if (obj.status !== undefined && obj.status !== null) {
+    if (typeof obj.status !== 'object') return false
+    const statusObj = obj.status as Record<string, unknown>
+    if (statusObj.developer_completed !== undefined && typeof statusObj.developer_completed !== 'boolean') return false
+  }
+  
+  // Optional transaction field
+  if (obj.transaction !== undefined && obj.transaction !== null) {
+    if (typeof obj.transaction !== 'object') return false
+    const txObj = obj.transaction as Record<string, unknown>
+    if (txObj.verified !== undefined && typeof txObj.verified !== 'boolean') return false
+    if (txObj.txid !== undefined && typeof txObj.txid !== 'string') return false
+    if (txObj.fee_charged !== undefined && typeof txObj.fee_charged !== 'number' && typeof txObj.fee_charged !== 'string') return false
+  }
+  
+  return true
+}
+
 export interface ExecutorContext {
   paymentId: string
   payment: Payment // Use canonical Payment type - REQUIRED
@@ -260,11 +311,11 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
 /**
  * STAGE 1: Create or fetch A2U payment - STRICT DISCRIMINATED UNION
- * Pi A2U Payment Response: { identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown }
+ * Parses response as unknown and validates with isPiA2UPayment guard - NO CASTS
  */
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<
   { success: false; status: string; error: string } |
-  { success: true; a2uPaymentId: string; a2uPayment: { identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown } }
+  { success: true; a2uPaymentId: string; a2uPayment: PiA2UPayment }
 > {
   try {
     // Verify UID with Pi /v2/me
@@ -338,13 +389,20 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<
       return { success: false, status: "error", error: "A2U creation failed" }
     }
 
-    const a2uPayment = await createResponse.json()
-    console.log("[A2U Stage1] ✓ A2U payment created:", a2uPayment.identifier)
+    const responseData: unknown = await createResponse.json()
+    
+    // Validate response with type guard - NO CASTS
+    if (!isPiA2UPayment(responseData)) {
+      console.error("[A2U Stage1] A2U response validation failed:", responseData)
+      return { success: false, status: "error", error: "A2U response validation failed - missing required fields" }
+    }
+    
+    console.log("[A2U Stage1] ✓ A2U payment created:", responseData.identifier)
 
     return {
       success: true,
-      a2uPaymentId: a2uPayment.identifier,
-      a2uPayment,
+      a2uPaymentId: responseData.identifier,
+      a2uPayment: responseData,
     }
   } catch (error) {
     console.error("[A2U Stage1] Exception:", error)
@@ -571,9 +629,9 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
 /**
  * Fetch existing A2U payment
- * Pi A2U Payment Response: { identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown }
+ * Parses response as unknown and validates with isPiA2UPayment guard - NO CASTS
  */
-async function fetchA2UPayment(a2uPaymentId: string): Promise<{ identifier: string; from_address: string; to_address: string; amount: string; [key: string]: unknown } | null> {
+async function fetchA2UPayment(a2uPaymentId: string): Promise<PiA2UPayment | null> {
   try {
     const response = await fetch(`https://api.minepi.com/v2/payments/${a2uPaymentId}`, {
       method: "GET",
@@ -588,7 +646,15 @@ async function fetchA2UPayment(a2uPaymentId: string): Promise<{ identifier: stri
       return null
     }
 
-    return await response.json()
+    const responseData: unknown = await response.json()
+    
+    // Validate response with type guard - NO CASTS
+    if (!isPiA2UPayment(responseData)) {
+      console.error("[A2U Fetch] A2U response validation failed:", responseData)
+      return null
+    }
+    
+    return responseData
   } catch (error) {
     console.error("[A2U Fetch] Exception:", error)
     return null
