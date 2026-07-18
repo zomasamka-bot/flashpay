@@ -157,9 +157,9 @@ export async function GET(request: NextRequest) {
             amount: payment.amount,
             status: payment.status,
             createdAt: payment.createdAt,
-            receipt: payment.txid ? {
+            receipt: (payment.u2aTxid || payment.a2uTxid) ? {
               transactionId: payment.id,
-              txid: payment.txid,
+              txid: payment.u2aTxid || payment.a2uTxid,
               currency: "π",
               timestamp: payment.paidAt,
             } : null,

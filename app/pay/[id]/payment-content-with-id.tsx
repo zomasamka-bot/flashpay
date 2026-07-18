@@ -522,7 +522,7 @@ export default function PaymentContentWithId({
             {isPaid && (
               <div className="p-4 bg-accent/10 text-accent rounded-lg text-center">
                 <p className="font-semibold mb-1">Payment Completed</p>
-                {payment.txid && <p className="text-xs font-mono mt-2">{payment.txid}</p>}
+                {(payment.u2aTxid || payment.a2uTxid) && <p className="text-xs font-mono mt-2">{payment.u2aTxid || payment.a2uTxid}</p>}
               </div>
             )}
 

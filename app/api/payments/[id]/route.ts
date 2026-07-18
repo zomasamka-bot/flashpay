@@ -34,7 +34,7 @@ function getPublicPayment(payment: any) {
     status: payment.status,
     createdAt: payment.createdAt,
     paidAt: payment.paidAt,
-    txid: payment.txid,
+    txid: payment.u2aTxid || payment.a2uTxid,
   }
 }
 

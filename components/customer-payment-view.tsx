@@ -185,7 +185,9 @@ export function CustomerPaymentView({
             const response = await fetch(`/api/payments/${paymentId}`)
             if (!response.ok) {
               console.error("[v0][CustomerView] Failed to fetch server payment state:", response.status)
-              onError("Failed to verify payment settlement with server")
+              if (onError) {
+                onError("Failed to verify payment settlement with server")
+              }
               setIsPaying(false)
               return
             }

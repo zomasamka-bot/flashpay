@@ -170,7 +170,7 @@ export async function GET(request: NextRequest) {
             status: payment.status,
             createdAt: payment.createdAt,
             paidAt: payment.paidAt,
-            txid: payment.txid,
+            txid: payment.u2aTxid || payment.a2uTxid,
             transactionId: payment.id,
           })
         } catch (e) {

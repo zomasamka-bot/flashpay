@@ -101,9 +101,20 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
     a2uPaymentId = stageResult.a2uPaymentId
     ctx.payment.a2uPaymentId = a2uPaymentId
+
+    // Extract and persist Stage 1 payment data from stageResult
+    if (stageResult.a2uPayment) {
+      ctx.payment = {
+        ...ctx.payment,
+        a2uFromAddress: stageResult.a2uPayment.from_address,
+        a2uToAddress: stageResult.a2uPayment.to_address,
+        customerAmount: ctx.customerAmount,
+        merchantAmount: Number(stageResult.a2uPayment.amount),
+      }
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+    }
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
-  }
 
     // For reused a2uPaymentId, fetch from Pi API to validate
     // This also detects early completion
@@ -147,7 +158,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         horizonSuccessFlag: true,
         piCompleted: true,
         piCompletionPending: false,
-        piCompletedAt: new Date().toISOString(),
+        paidAt: new Date().toISOString(),
         status: "settlement_pending",
         // DO NOT set dbRecorded or settled_to_merchant - must wait for DB reconciliation
         requiresDbReconciliation: true,
@@ -167,23 +178,21 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!signResult.success) {
       return signResult
     }
-    txidFromHorizon = signResult.txidFromHorizon!
-    const horizonFeeCharged = signResult.horizonFeeCharged || 0
+    txidFromHorizon = signResult.txidFromHorizon
 
-    // CRITICAL: Persist recovery checkpoint AFTER Horizon success with NO FALLBACKS
-    if (typeof horizonFeeCharged !== 'number' || !Number.isFinite(horizonFeeCharged)) {
-      console.error("[A2U Stage2] ❌ AUDIT FAILURE: horizonFeeCharged from Horizon must be finite number")
-      return { success: false, status: "settlement_pending", error: "Horizon fee calculation failed" }
+    // CRITICAL: Validate horizonFeeCharged exists and is finite (no || 0 fallback)
+    if (typeof signResult.horizonFeeCharged !== 'number' || !Number.isFinite(signResult.horizonFeeCharged)) {
+      console.error("[A2U Stage2] ❌ horizonFeeCharged from Horizon must be finite number, got:", typeof signResult.horizonFeeCharged)
+      return { success: false, status: "settlement_pending", error: "Horizon fee calculation failed - missing or invalid fee" }
     }
+
     ctx.payment = {
       ...ctx.payment,
       status: "settlement_pending",
       a2uTxid: txidFromHorizon,
-      a2uFromAddress: a2uPayment.from_address,
-      a2uToAddress: a2uPayment.to_address,
+      // a2uFromAddress, a2uToAddress, merchantAmount already persisted in stage 1; NEVER pull from undefined a2uPayment
       customerAmount: ctx.customerAmount,
-      merchantAmount: Number(a2uPayment.amount),
-      horizonFeeCharged, // REQUIRED - no fallback
+      horizonFeeCharged: signResult.horizonFeeCharged,
       horizonSuccessFlag: true,
       piCompletionPending: true,
       piCompleted: false,
@@ -199,13 +208,21 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   // STAGE 3: Complete Pi (skip if already piCompleted)
   if (!ctx.payment.piCompleted) {
     console.log("[A2U Executor] STAGE 3: Calling Pi /complete")
+    // Validate a2uPaymentId is present before calling Pi
+    if (!a2uPaymentId || typeof a2uPaymentId !== 'string') {
+      return { success: false, status: "error", error: "a2uPaymentId missing before stage 3" }
+    }
+    // Validate txidFromHorizon exists (required for Pi /complete)
+    if (!txidFromHorizon || typeof txidFromHorizon !== 'string') {
+      return { success: false, status: "error", error: "txidFromHorizon missing before stage 3 - Horizon must have succeeded" }
+    }
     const piResult = await stage3CompletePi(ctx, a2uPaymentId, txidFromHorizon)
     if (!piResult.success) {
       return piResult
     }
     ctx.payment.piCompleted = true
     ctx.payment.piCompletionPending = false
-    ctx.payment.piCompletedAt = new Date().toISOString()
+    ctx.payment.paidAt = new Date().toISOString()
     await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
     console.log("[A2U Executor] ✓ Pi /complete succeeded")
   } else {
@@ -215,6 +232,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   // STAGE 4: DB Reconciliation (skip if already dbRecorded)
   if (!ctx.payment.dbRecorded) {
     console.log("[A2U Executor] STAGE 4: Reconciling in database")
+    // Validate txidFromHorizon exists for DB record
+    if (!txidFromHorizon || typeof txidFromHorizon !== 'string') {
+      return { success: false, status: "error", error: "txidFromHorizon missing before stage 4 - cannot record in DB" }
+    }
     const dbResult = await stage4ReconcileDB(ctx, txidFromHorizon)
     if (!dbResult.success) {
       return dbResult
@@ -271,7 +292,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<{ success: boolean
     // Create A2U payment
     const requestBody = {
       payment: {
-        amount: ctx.amount,
+        amount: ctx.customerAmount,
         memo: `FlashPay settlement for ${ctx.paymentId}`,
         metadata: {
           paymentId: ctx.paymentId,
@@ -415,8 +436,13 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<{ success: boo
     const horizonFeeCharged = Number(submitResult.fee_charged) / 10_000_000
 
     console.log("[A2U Stage2] ✓ Horizon submission succeeded:", txidFromHorizon)
-    // Executor never returns success: true; caller will invoke buildA2USuccessResponse()
-    return { success: false, status: "settlement_pending", error: "Stage 2 complete; proceed to stage 3" }
+    // Return txid and fee for persisting in executeA2U (success: false because executor never returns true)
+    return { 
+      success: false,
+      txidFromHorizon,
+      horizonFeeCharged,
+      error: "Stage 2 complete; proceed to stage 3"
+    }
   } catch (error) {
     console.error("[A2U Stage2] Exception:", error)
     return { success: false, error: String(error) }

@@ -475,7 +475,7 @@ export async function handlePaymentRecovery(
   // 1) settled_to_merchant: Return stored success with NO Pi, Horizon, or DB balance action
   if (payment.status === "settled_to_merchant") {
     console.log("[v0][Recovery] ✅ State 1: settled_to_merchant - returning stored success")
-    const txid = payment.txid || (payment as any).u2aTxid || payment.a2uTxid || "unknown"
+    const txid = payment.u2aTxid || payment.a2uTxid || "unknown"
     auditLogger.log(operation, { paymentId, state: "settled_to_merchant", txid }, "success")
     // Call outer onSuccess - this is the final state
     onSuccess(txid)
