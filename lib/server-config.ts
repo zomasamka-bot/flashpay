@@ -1,9 +1,14 @@
+"use server"
+
 /**
  * Server-only configuration
  * MUST NEVER be imported from client code ("use client" modules)
  * 
  * Contains all secrets: PI_API_KEY, A2U_INTERNAL_SECRET, Redis credentials, DATABASE_URL
  * If this file is bundled into the client, the app is INSECURE.
+ * 
+ * CRITICAL: Must be imported DIRECTLY from lib/server-config.ts in server-only contexts.
+ * NEVER import from lib/config.ts to prevent accidental client bundling.
  */
 
 // Fail-closed: throw if server secrets are missing in production
