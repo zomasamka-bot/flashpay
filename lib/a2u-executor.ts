@@ -506,9 +506,27 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
     const submitResult = await horizonServer.submitTransaction(transaction)
 
     const txidFromHorizon = submitResult.hash
-    const horizonFeeCharged = Number(submitResult.fee_charged) / 10_000_000
-
     console.log("[A2U Stage2] ✓ Horizon submission succeeded:", txidFromHorizon)
+    
+    // Fetch the typed transaction record from Horizon to read actual fee_charged
+    console.log("[A2U Stage2] Fetching transaction record for fee verification")
+    const transactionRecord = await horizonServer.transactions().transaction(txidFromHorizon).call()
+    
+    // Validate fee_charged is number or string (stroops)
+    const feeChargedStroops = transactionRecord.fee_charged
+    if (typeof feeChargedStroops !== 'number' && typeof feeChargedStroops !== 'string') {
+      return { success: false, status: "error", error: "Horizon transaction has invalid fee_charged type" }
+    }
+    
+    const feeChargedAsNumber = Number(feeChargedStroops)
+    if (!Number.isFinite(feeChargedAsNumber) || feeChargedAsNumber < 0) {
+      return { success: false, status: "error", error: "Horizon transaction fee_charged is not a finite nonnegative number" }
+    }
+    
+    // Convert stroops to Pi (1 Pi = 10,000,000 stroops)
+    const horizonFeeCharged = feeChargedAsNumber / 10_000_000
+    
+    console.log("[A2U Stage2] ✓ Fee verified from Horizon:", horizonFeeCharged)
     // Return txid and fee for persisting in executeA2U
     return { 
       success: true,
