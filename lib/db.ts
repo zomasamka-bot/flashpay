@@ -602,7 +602,7 @@ export async function updateSettlementStatus(
       }
     }
 
-    if (status === 'settlement_failed' && errorMessage) {
+    if (status === 'failed' && errorMessage) {
       updates.push(`error_message = $${paramIndex}`)
       params.push(errorMessage)
       paramIndex++
