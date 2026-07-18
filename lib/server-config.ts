@@ -1,4 +1,4 @@
-"use server"
+import "server-only"
 
 /**
  * Server-only configuration
@@ -9,6 +9,10 @@
  * 
  * CRITICAL: Must be imported DIRECTLY from lib/server-config.ts in server-only contexts.
  * NEVER import from lib/config.ts to prevent accidental client bundling.
+ * 
+ * Note: Using import "server-only" (not "use server") to allow synchronous exports
+ * required by serverConfig object and requireSecret function.
+ * This directive prevents accidental client bundling at build time.
  */
 
 // Fail-closed: throw if server secrets are missing in production
