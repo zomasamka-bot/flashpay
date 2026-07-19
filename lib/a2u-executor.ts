@@ -49,6 +49,21 @@ interface PiA2UPayment {
 }
 
 /**
+ * ============================================================================
+ * UNIFIED INTERNAL RESULT CONTRACT (Stage 2)
+ * ============================================================================
+ * 
+ * ALL stage functions return this discriminated union.
+ * No dual-system success fields in internal flow.
+ * 
+ * - ok: true → data available, proceed to next stage
+ * - ok: false → error occurred, userFacingStatus tells caller what to return to user
+ */
+type StageResult = 
+  | { ok: true; data: Record<string, unknown> }
+  | { ok: false; error: string; userFacingStatus: string }
+
+/**
  * Reusable type guard: Check if unknown is a Record<string, unknown>
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -155,21 +170,25 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   if (!a2uPaymentId) {
     console.log("[A2U Executor] STAGE 1: Creating new A2U payment")
     const stageResult = await stage1CreateA2U(ctx)
-    if (!stageResult.success) {
-      return stageResult
+    if (!stageResult.ok) {
+      return {
+        success: false,
+        status: stageResult.userFacingStatus,
+        error: stageResult.error
+      }
     }
-    // Discriminated union: success: true includes a2uPaymentId
-    a2uPaymentId = stageResult.a2uPaymentId
+    // Discriminated union: ok: true includes a2uPaymentId
+    a2uPaymentId = stageResult.data.a2uPaymentId as string
     ctx.payment.a2uPaymentId = a2uPaymentId
 
     // Extract and persist Stage 1 payment data from stageResult
-    if (stageResult.a2uPayment) {
+    if (stageResult.data.a2uPayment) {
       ctx.payment = {
         ...ctx.payment,
-        a2uFromAddress: stageResult.a2uPayment.from_address,
-        a2uToAddress: stageResult.a2uPayment.to_address,
+        a2uFromAddress: stageResult.data.a2uPayment.from_address,
+        a2uToAddress: stageResult.data.a2uPayment.to_address,
         customerAmount: ctx.customerAmount,
-        merchantAmount: Number(stageResult.a2uPayment.amount),
+        merchantAmount: Number(stageResult.data.a2uPayment.amount),
       }
       await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
     }
@@ -235,11 +254,15 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   if (!txidFromHorizon) {
     console.log("[A2U Executor] STAGE 2: Signing transaction")
     const signResult = await stage2SignAndSubmit(ctx)
-    if (!signResult.success) {
-      return signResult
+    if (!signResult.ok) {
+      return {
+        success: false,
+        status: signResult.userFacingStatus,
+        error: signResult.error
+      }
     }
-    // Discriminated union: success: true includes txidFromHorizon and horizonFeeCharged
-    txidFromHorizon = signResult.txidFromHorizon
+    // Discriminated union: ok: true includes txidFromHorizon and horizonFeeCharged
+    txidFromHorizon = signResult.data.txidFromHorizon as string
 
     ctx.payment = {
       ...ctx.payment,
@@ -247,7 +270,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       a2uTxid: txidFromHorizon,
       // a2uFromAddress, a2uToAddress, merchantAmount already persisted in stage 1; NEVER pull from undefined a2uPayment
       customerAmount: ctx.customerAmount,
-      horizonFeeCharged: signResult.horizonFeeCharged,
+      horizonFeeCharged: signResult.data.horizonFeeCharged,
       horizonSuccessFlag: true,
       piCompletionPending: true,
       piCompleted: false,
@@ -255,7 +278,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       horizonSuccessAt: new Date().toISOString(),
     }
     await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.horizonFeeCharged )
+    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged )
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
   }
@@ -272,8 +295,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return { success: false, status: "error", error: "txidFromHorizon missing before stage 3 - Horizon must have succeeded" }
     }
     const piResult = await stage3CompletePi(ctx, a2uPaymentId, txidFromHorizon)
-    if (!piResult.success) {
-      return piResult
+    if (!piResult.ok) {
+      return {
+        success: false,
+        status: piResult.userFacingStatus,
+        error: piResult.error
+      }
     }
     ctx.payment.piCompleted = true
     ctx.payment.piCompletionPending = false
@@ -292,8 +319,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return { success: false, status: "error", error: "txidFromHorizon missing before stage 4 - cannot record in DB" }
     }
     const dbResult = await stage4ReconcileDB(ctx, txidFromHorizon)
-    if (!dbResult.success) {
-      return dbResult
+    if (!dbResult.ok) {
+      return {
+        success: false,
+        status: dbResult.userFacingStatus,
+        error: dbResult.error
+      }
     }
     ctx.payment.dbRecorded = true
     ctx.payment.status = "settled_to_merchant"
@@ -317,13 +348,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 }
 
 /**
- * STAGE 1: Create or fetch A2U payment - STRICT DISCRIMINATED UNION
+ * STAGE 1: Create or fetch A2U payment - UNIFIED RESULT CONTRACT
  * Parses response as unknown and validates with isPiA2UPayment guard - NO CASTS
  */
-async function stage1CreateA2U(ctx: ExecutorContext): Promise<
-  { success: false; status: string; error: string } |
-  { success: true; a2uPaymentId: string; a2uPayment: PiA2UPayment }
-> {
+async function stage1CreateA2U(ctx: ExecutorContext): Promise<StageResult> {
   try {
     // Verify UID with Pi /v2/me
     const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
@@ -337,13 +365,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<
     if (!verifyResponse.ok) {
       const error = await verifyResponse.text()
       console.error("[A2U Stage1] UID verification failed:", error)
-      return { success: false, status: "error", error: "UID verification failed" }
+      return { ok: false, error: "UID verification failed", userFacingStatus: "error" }
     }
 
     const verifiedUser = await verifyResponse.json()
     if (verifiedUser.uid !== ctx.merchantUid) {
       console.error("[A2U Stage1] UID mismatch")
-      return { success: false, status: "error", error: "UID mismatch" }
+      return { ok: false, error: "UID mismatch", userFacingStatus: "error" }
     }
 
     console.log("[A2U Stage1] ✓ UID verified")
@@ -387,13 +415,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<
           console.warn("[A2U Stage1] Ongoing payment found - reusing:", ongoingPaymentId)
           const fetchResult = await fetchA2UPayment(ongoingPaymentId)
           if (fetchResult) {
-            return { success: true, a2uPaymentId: ongoingPaymentId, a2uPayment: fetchResult }
+            return { ok: true, data: { a2uPaymentId: ongoingPaymentId, a2uPayment: fetchResult } }
           }
         }
       }
 
       console.error("[A2U Stage1] A2U creation failed:", errorData)
-      return { success: false, status: "error", error: "A2U creation failed" }
+      return { ok: false, error: "A2U creation failed", userFacingStatus: "error" }
     }
 
     const responseData: unknown = await createResponse.json()
@@ -401,29 +429,28 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<
     // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
       console.error("[A2U Stage1] A2U response validation failed:", responseData)
-      return { success: false, status: "error", error: "A2U response validation failed - missing required fields" }
+      return { ok: false, error: "A2U response validation failed - missing required fields", userFacingStatus: "error" }
     }
     
     console.log("[A2U Stage1] ✓ A2U payment created:", responseData.identifier)
 
     return {
-      success: true,
-      a2uPaymentId: responseData.identifier,
-      a2uPayment: responseData,
+      ok: true,
+      data: {
+        a2uPaymentId: responseData.identifier,
+        a2uPayment: responseData,
+      },
     }
   } catch (error) {
     console.error("[A2U Stage1] Exception:", error)
-    return { success: false, status: "error", error: String(error) }
+    return { ok: false, error: String(error), userFacingStatus: "error" }
   }
 }
 
 /**
- * STAGE 2: Sign and submit to Horizon - STRICT DISCRIMINATED UNION
+ * STAGE 2: Sign and submit to Horizon - UNIFIED RESULT CONTRACT
  */
-async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
-  { success: false; status: string; error: string } |
-  { success: true; txidFromHorizon: string; horizonFeeCharged: number }
-> {
+async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<StageResult> {
   try {
     // CRITICAL: Use ONLY Payment fields (never undefined a2uPayment object parameter)
     const toAddress = ctx.payment.a2uToAddress
@@ -431,13 +458,13 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
     const a2uPaymentId = ctx.payment.a2uPaymentId
     
     if (!toAddress || typeof toAddress !== 'string') {
-      return { success: false, status: "error", error: "Payment missing required a2uToAddress" }
+      return { ok: false, error: "Payment missing required a2uToAddress", userFacingStatus: "error" }
     }
     if (typeof amount !== 'number' || !Number.isFinite(amount)) {
-      return { success: false, status: "error", error: "Payment missing required merchantAmount" }
+      return { ok: false, error: "Payment missing required merchantAmount", userFacingStatus: "error" }
     }
     if (!a2uPaymentId || typeof a2uPaymentId !== 'string') {
-      return { success: false, status: "error", error: "Payment missing required a2uPaymentId" }
+      return { ok: false, error: "Payment missing required a2uPaymentId", userFacingStatus: "error" }
     }
     
     const piPrivateSeed = process.env.PI_PRIVATE_SEED
@@ -449,7 +476,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
       ctx.payment.horizonSuccessFlag = false // DO NOT set to true
       ctx.payment.a2uTxid = undefined // DO NOT set txid
       await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-      return { success: false, status: "settlement_pending", error: "PI_PRIVATE_SEED not configured - requires manual intervention" }
+      return { ok: false, error: "PI_PRIVATE_SEED not configured - requires manual intervention", userFacingStatus: "settlement_pending" }
     }
 
     console.log("[A2U Stage2] Creating Stellar keypair")
@@ -458,7 +485,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
 
     if (appPublicKey !== ctx.payment.a2uFromAddress) {
       console.error("[A2U Stage2] Address mismatch")
-      return { success: false, status: "error", error: "Private seed does not match app wallet address" }
+      return { ok: false, error: "Private seed does not match app wallet address", userFacingStatus: "error" }
     }
 
     console.log("[A2U Stage2] Connecting to Horizon")
@@ -515,12 +542,12 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
     // Validate fee_charged is number or string (stroops)
     const feeChargedStroops = transactionRecord.fee_charged
     if (typeof feeChargedStroops !== 'number' && typeof feeChargedStroops !== 'string') {
-      return { success: false, status: "error", error: "Horizon transaction has invalid fee_charged type" }
+      return { ok: false, error: "Horizon transaction has invalid fee_charged type", userFacingStatus: "error" }
     }
     
     const feeChargedAsNumber = Number(feeChargedStroops)
     if (!Number.isFinite(feeChargedAsNumber) || feeChargedAsNumber < 0) {
-      return { success: false, status: "error", error: "Horizon transaction fee_charged is not a finite nonnegative number" }
+      return { ok: false, error: "Horizon transaction fee_charged is not a finite nonnegative number", userFacingStatus: "error" }
     }
     
     // Convert stroops to Pi (1 Pi = 10,000,000 stroops)
@@ -529,23 +556,22 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<
     console.log("[A2U Stage2] ✓ Fee verified from Horizon:", horizonFeeCharged)
     // Return txid and fee for persisting in executeA2U
     return { 
-      success: true,
-      txidFromHorizon,
-      horizonFeeCharged,
+      ok: true,
+      data: {
+        txidFromHorizon,
+        horizonFeeCharged,
+      },
     }
   } catch (error) {
     console.error("[A2U Stage2] Exception:", error)
-    return { success: false, status: "error", error: String(error) }
+    return { ok: false, error: String(error), userFacingStatus: "error" }
   }
 }
 
 /**
- * STAGE 3: Call Pi /complete - STRICT DISCRIMINATED UNION
+ * STAGE 3: Call Pi /complete - UNIFIED RESULT CONTRACT
  */
-async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txidFromHorizon: string): Promise<
-  { success: false; status: string; error: string } |
-  { success: true }
-> {
+async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txidFromHorizon: string): Promise<StageResult> {
   try {
     console.log("[A2U Stage3] Calling Pi /v2/payments/complete")
 
@@ -563,29 +589,26 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
       if (response.status === 400 && errorText.includes("already_completed")) {
         console.log("[A2U Stage3] Payment already_completed - refetching to validate")
         // This is OK - payment was already marked complete
-        return { success: true }
+        return { ok: true, data: {} }
       }
       console.error("[A2U Stage3] Pi /complete failed:", errorText)
-      return { success: false, status: "error", error: "Pi /complete failed" }
+      return { ok: false, error: "Pi /complete failed", userFacingStatus: "error" }
     }
 
     console.log("[A2U Stage3] ✓ Pi /complete succeeded")
-    return { success: true }
+    return { ok: true, data: {} }
   } catch (error) {
     console.error("[A2U Stage3] Exception:", error)
-    return { success: false, status: "error", error: String(error) }
+    return { ok: false, error: String(error), userFacingStatus: "error" }
   }
 }
 
 /**
  * STAGE 4: Reconcile in database
  * STRICT: Validate ALL fields before transaction entry, NO fallbacks
- * STRICT DISCRIMINATED UNION: success: false must include status and error
+ * UNIFIED RESULT CONTRACT
  */
-async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string): Promise<
-  { success: false; status: string; error: string } |
-  { success: true }
-> {
+async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string): Promise<StageResult> {
   try {
     console.log("[A2U Stage4] Reconciling database")
 
@@ -593,7 +616,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     const validation = validateFinancialData(ctx.payment)
     if (!validation.success) {
       console.error("[A2U Stage4] Financial validation failed:", validation.error)
-      return { success: false, status: "error", error: validation.error }
+      return { ok: false, error: validation.error, userFacingStatus: "error" }
     }
 
     const financialData = validation.data
@@ -601,13 +624,13 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     // CRITICAL VALIDATION: Reject if horizonFeeCharged missing - NO fallback to 0
     if (typeof financialData.horizonFeeCharged !== 'number' || !Number.isFinite(financialData.horizonFeeCharged)) {
       console.error("[A2U Stage4] ❌ AUDIT FAILURE: horizonFeeCharged must be a finite number, got:", financialData.horizonFeeCharged)
-      return { success: false, status: "error", error: "horizonFeeCharged validation failed - cannot proceed to DB" }
+      return { ok: false, error: "horizonFeeCharged validation failed - cannot proceed to DB", userFacingStatus: "error" }
     }
 
     // CRITICAL: appCommission MUST be explicit number from validated data
     if (typeof financialData.appCommission !== 'number' || !Number.isFinite(financialData.appCommission)) {
       console.error("[A2U Stage4] ❌ AUDIT FAILURE: appCommission must be a finite number, got:", financialData.appCommission)
-      return { success: false, status: "error", error: "appCommission validation failed - cannot proceed to DB" }
+      return { ok: false, error: "appCommission validation failed - cannot proceed to DB", userFacingStatus: "error" }
     }
 
     console.log("[A2U Stage4] All financial fields validated - proceeding to DB:")
@@ -618,7 +641,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     // Validate piPaymentId is present and is a string before DB record
     if (!ctx.piPaymentId || typeof ctx.piPaymentId !== 'string') {
-      return { success: false, status: "error", error: "piPaymentId required for DB record - missing U2A identifier" }
+      return { ok: false, success: false, status: "error", error: "piPaymentId required for DB record - missing U2A identifier" }
     }
 
     // Call DB with VALIDATED financial data only
@@ -644,15 +667,15 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
       ctx.payment.requiresDbReconciliation = true
       await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
       console.log("[A2U Stage4] Persisted settlement_pending with dbRecorded=false and requiresDbReconciliation=true")
-      return { success: false, status: "settlement_pending", error: dbResult?.error || "Unknown DB error" }
+      return { ok: false, error: dbResult?.error || "Unknown DB error", userFacingStatus: "settlement_pending" }
     }
 
     console.log("[A2U Stage4] ✓ DB reconciliation succeeded with transaction ID:", dbResult.transactionId)
-    // Return success: true to proceed past stage 4 (executor will still return settlement_pending to caller)
-    return { success: true }
+    // Return ok: true to proceed past stage 4 (executor will still return settlement_pending to caller)
+    return { ok: true, data: {} }
   } catch (error) {
     console.error("[A2U Stage4] Exception:", error)
-    return { success: false, status: "error", error: String(error) }
+    return { ok: false, error: String(error), userFacingStatus: "error" }
   }
 }
 
