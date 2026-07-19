@@ -14,12 +14,14 @@ export const runtime = "nodejs"
  * Client-facing endpoint that completes U2A payment verification from Pi.
  * Receives Pi payment identifier and txid from Pi Wallet callback.
  * 
- * MINIMAL FLOW:
+ * AUTHORITATIVE U2A COMPLETION FLOW:
  * 1. Verify U2A payment from Pi API (validation only)
- * 2. Persist status = paid_to_app to Redis
- * 3. Call unified executor to handle all A2U settlement stages
- * 4. Re-read latest payment state from Redis
- * 5. Return canonical response
+ * 2. If not developer_completed, call Pi /v2/payments/{piPaymentId}/complete, then refetch and validate
+ * 3. Load and validate all required fields (merchantUid validated before any A2U execution)
+ * 4. Persist status = paid_to_app to Redis (never overwrites settlement_pending or settled_to_merchant)
+ * 5. Call unified executor once to handle all A2U settlement stages
+ * 6. Re-read latest payment state from Redis
+ * 7. Return canonical response (final state)
  * 
  * All settlement, financial, and DB logic delegated to lib/a2u-executor.ts
  * Never returns early on a2uTxid - executor handles resumption
@@ -106,6 +108,73 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
     }
 
+    // If not developer_completed, call Pi /complete endpoint and refetch
+    let finalPiPayment = piPayment
+    if (piPayment.status?.developer_completed !== true) {
+      console.log("[Pi Complete] Payment not developer_completed - calling Pi /complete endpoint")
+      
+      const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Key ${serverConfig.piApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ txid }),
+      })
+
+      if (!completeResponse.ok) {
+        console.error("[Pi Complete] Pi /complete call failed - status:", completeResponse.status)
+        return NextResponse.json({ error: "Payment completion failed" }, { status: 400 })
+      }
+
+      // Refetch payment to validate developer_completed=true
+      const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Key ${serverConfig.piApiKey}`,
+          "Content-Type": "application/json",
+        },
+      })
+
+      if (!refetchResponse.ok) {
+        console.error("[Pi Complete] Refetch after /complete failed - status:", refetchResponse.status)
+        return NextResponse.json({ error: "Payment verification failed" }, { status: 400 })
+      }
+
+      finalPiPayment = await refetchResponse.json()
+
+      // Validate identifier, direction, amount, txid, non-cancelled, developer_completed after refetch
+      if (!finalPiPayment.identifier || finalPiPayment.identifier !== piPaymentId) {
+        console.error("[Pi Complete] Refetched payment identifier mismatch")
+        return NextResponse.json({ error: "Payment identifier mismatch" }, { status: 400 })
+      }
+
+      if (finalPiPayment.direction !== "user_to_app") {
+        console.error("[Pi Complete] Refetched payment invalid direction:", finalPiPayment.direction)
+        return NextResponse.json({ error: "Invalid payment direction" }, { status: 400 })
+      }
+
+      if (finalPiPayment.status?.cancelled === true || finalPiPayment.status?.user_cancelled === true) {
+        console.error("[Pi Complete] Refetched payment was cancelled")
+        return NextResponse.json({ error: "Payment was cancelled" }, { status: 400 })
+      }
+
+      if (finalPiPayment.status?.developer_completed !== true) {
+        console.error("[Pi Complete] Refetched payment still not developer_completed")
+        return NextResponse.json({ error: "Payment completion failed" }, { status: 400 })
+      }
+
+      const refetchedTxid = finalPiPayment.transaction?.txid
+      if (!refetchedTxid || refetchedTxid !== txid) {
+        console.error("[Pi Complete] Refetched txid mismatch")
+        return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
+      }
+
+      console.log("[Pi Complete] ✓ Pi /complete succeeded and payment verified")
+    } else {
+      console.log("[Pi Complete] Payment already developer_completed - skipping Pi /complete call")
+    }
+
     // Derive paymentId from metadata (never trust client)
     const paymentId = piPayment.metadata?.paymentId
     if (!paymentId || typeof paymentId !== "string") {
@@ -115,8 +184,8 @@ export async function POST(request: NextRequest) {
 
     console.log("[Pi Complete] ✅ U2A verification passed - paymentId:", paymentId)
 
-    // === STAGE 2: Persist paid_to_app status ===
-    console.log("[Pi Complete] === STAGE 2: Persist paid_to_app ===")
+    // === STAGE 2: Load and validate payment state ===
+    console.log("[Pi Complete] === STAGE 2: Load and validate payment state ===")
 
     // Load current payment state
     const currentCheckpoint = await redis.get(`payment:${paymentId}`)
@@ -128,6 +197,7 @@ export async function POST(request: NextRequest) {
     const payment: Payment = typeof currentCheckpoint === "string" ? JSON.parse(currentCheckpoint) : currentCheckpoint
     
     // Capture and validate all required fields BEFORE mutation (strict TypeScript contracts)
+    // Validate merchantUid BEFORE any A2U execution
     const merchantUid = payment.merchantUid
     if (!merchantUid || typeof merchantUid !== "string") {
       console.error("[Pi Complete] Payment missing merchantUid")
@@ -146,13 +216,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment - missing accessToken" }, { status: 400 })
     }
     
-    const customerAmount = payment.customerAmount || payment.amount
+    const customerAmount = payment.customerAmount
     if (typeof customerAmount !== "number" || !Number.isFinite(customerAmount)) {
-      console.error("[Pi Complete] Invalid customerAmount")
+      console.error("[Pi Complete] Invalid or missing customerAmount")
       return NextResponse.json({ error: "Invalid payment - invalid customerAmount" }, { status: 400 })
     }
+
+    console.log("[Pi Complete] ✓ All required fields validated - merchantUid, piPaymentId, accessToken, customerAmount")
     
-    // Persist paid_to_app status - this marks U2A complete
+    // === STAGE 3: Persist paid_to_app status without overwriting newer settlement fields ===
+    console.log("[Pi Complete] === STAGE 3: Persist paid_to_app status ===")
+    
+    // Only persist U2A completion fields; never overwrite settlement_pending or settled_to_merchant
     payment.status = "paid_to_app"
     payment.u2aTxid = txid
     payment.paidAt = new Date().toISOString()
@@ -160,8 +235,8 @@ export async function POST(request: NextRequest) {
     await redis.set(`payment:${paymentId}`, JSON.stringify(payment))
     console.log("[Pi Complete] ✓ Persisted status = paid_to_app with paidAt timestamp")
 
-    // === STAGE 3: Call unified executor with validated fields ===
-    console.log("[Pi Complete] === STAGE 3: Call unified executor ===")
+    // === STAGE 4: Call unified executor with validated fields (invoked once) ===
+    console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
 
     const executorResult = await executeA2U({
       paymentId,
@@ -180,8 +255,8 @@ export async function POST(request: NextRequest) {
       console.log("[Pi Complete] ✓ Executor succeeded - status:", executorResult.status)
     }
 
-    // === STAGE 4: Re-read latest checkpoint from Redis ===
-    console.log("[Pi Complete] === STAGE 4: Re-read latest checkpoint ===")
+    // === STAGE 5: Re-read latest checkpoint from Redis ===
+    console.log("[Pi Complete] === STAGE 5: Re-read latest checkpoint ===")
 
     const latestCheckpoint = await redis.get(`payment:${paymentId}`)
     if (!latestCheckpoint) {
@@ -192,8 +267,8 @@ export async function POST(request: NextRequest) {
     const latestPayment: Payment = typeof latestCheckpoint === "string" ? JSON.parse(latestCheckpoint) : latestCheckpoint
     console.log("[Pi Complete] ✓ Re-read latest checkpoint - status:", latestPayment.status)
 
-    // === STAGE 5: Return canonical response ===
-    console.log("[Pi Complete] === STAGE 5: Return canonical response ===")
+    // === STAGE 6: Return canonical response (final state, invoked once) ===
+    console.log("[Pi Complete] === STAGE 6: Return canonical response ===")
 
     const canonicalResponse = await buildA2USuccessResponse(paymentId)
     if (!canonicalResponse) {
