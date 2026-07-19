@@ -65,11 +65,11 @@ type Stage2Result =
   | { ok: false; error: string; userFacingStatus: string }
 
 type Stage3Result = 
-  | { ok: true; data: Record<string, never> }  // Explicit no-data success
+  | { ok: true }
   | { ok: false; error: string; userFacingStatus: string }
 
 type Stage4Result = 
-  | { ok: true; data: Record<string, never> }  // Explicit no-data success
+  | { ok: true }
   | { ok: false; error: string; userFacingStatus: string }
 
 /**
@@ -187,7 +187,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       }
     }
     // Discriminated union: ok: true includes a2uPaymentId
-    a2uPaymentId = stageResult.data.a2uPaymentId as string
+    a2uPaymentId = stageResult.data.a2uPaymentId
     ctx.payment.a2uPaymentId = a2uPaymentId
 
     // Extract and persist Stage 1 payment data from stageResult
@@ -271,7 +271,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       }
     }
     // Discriminated union: ok: true includes txidFromHorizon and horizonFeeCharged
-    txidFromHorizon = signResult.data.txidFromHorizon as string
+    txidFromHorizon = signResult.data.txidFromHorizon
 
     ctx.payment = {
       ...ctx.payment,
@@ -504,16 +504,18 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     })
 
     const sourceAccount = await horizonServer.loadAccount(appPublicKey)
-    let feeCharged = 200
-
+    
+    let feeCharged: number
     try {
       const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
       const baseFeeNumber = Number(baseFeeFromHorizon)
-      if (typeof baseFeeNumber === 'number' && Number.isFinite(baseFeeNumber) && baseFeeNumber > 0) {
-        feeCharged = baseFeeNumber * 2
+      if (!Number.isFinite(baseFeeNumber) || baseFeeNumber <= 0) {
+        return { ok: false, error: "Horizon baseFee is not a valid positive number", userFacingStatus: "error" }
       }
+      feeCharged = baseFeeNumber * 2
     } catch (feeError) {
-      console.warn("[A2U Stage2] Using fallback fee")
+      console.error("[A2U Stage2] Failed to fetch Horizon baseFee:", feeError)
+      return { ok: false, error: "Failed to fetch Horizon baseFee", userFacingStatus: "error" }
     }
 
     // Stellar SDK TransactionBuilder requires fee as string
@@ -600,14 +602,14 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
       if (response.status === 400 && errorText.includes("already_completed")) {
         console.log("[A2U Stage3] Payment already_completed - refetching to validate")
         // This is OK - payment was already marked complete
-        return { ok: true, data: {} as Record<string, never> }
+        return { ok: true }
       }
       console.error("[A2U Stage3] Pi /complete failed:", errorText)
       return { ok: false, error: "Pi /complete failed", userFacingStatus: "error" }
     }
 
     console.log("[A2U Stage3] ✓ Pi /complete succeeded")
-    return { ok: true, data: {} as Record<string, never> }
+    return { ok: true }
   } catch (error) {
     console.error("[A2U Stage3] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }
@@ -652,7 +654,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     // Validate piPaymentId is present and is a string before DB record
     if (!ctx.piPaymentId || typeof ctx.piPaymentId !== 'string') {
-      return { ok: false, success: false, status: "error", error: "piPaymentId required for DB record - missing U2A identifier" }
+      return { ok: false, error: "piPaymentId required for DB record - missing U2A identifier", userFacingStatus: "error" }
     }
 
     // Call DB with VALIDATED financial data only
@@ -683,7 +685,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     console.log("[A2U Stage4] ✓ DB reconciliation succeeded with transaction ID:", dbResult.transactionId)
     // Return ok: true to proceed past stage 4 (executor will still return settlement_pending to caller)
-    return { ok: true, data: {} as Record<string, never> }
+    return { ok: true }
   } catch (error) {
     console.error("[A2U Stage4] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }
