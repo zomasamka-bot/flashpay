@@ -1,6 +1,6 @@
 import { redis } from "@/lib/redis"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { executeA2U } from "@/lib/a2u-executor"
+import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -132,7 +132,7 @@ export async function executeA2URecovery(
       "[A2U Recovery] ✅ STATE 1: Final success - delegating to executor"
     )
 
-    const result = await executeA2U({
+    const result = await executeA2ULocked({
       paymentId,
       payment,
       merchantUid: payment.merchantUid!,
@@ -184,7 +184,7 @@ export async function executeA2URecovery(
       "[A2U Recovery] 🔄 STATE 2: DB reconciliation pending - delegating to executor stage 4"
     )
 
-    const result = await executeA2U({
+    const result = await executeA2ULocked({
       paymentId,
       payment,
       merchantUid: payment.merchantUid!,
@@ -237,7 +237,7 @@ export async function executeA2URecovery(
       "[A2U Recovery] 🔁 STATE 3: Pi /complete pending - delegating to executor stages 3-4"
     )
 
-    const result = await executeA2U({
+    const result = await executeA2ULocked({
       paymentId,
       payment,
       merchantUid: payment.merchantUid!,
@@ -290,7 +290,7 @@ export async function executeA2URecovery(
       "[A2U Recovery] 📊 STATE 4: Already-completed on Pi - delegating to executor stage 4"
     )
 
-    const result = await executeA2U({
+    const result = await executeA2ULocked({
       paymentId,
       payment,
       merchantUid: payment.merchantUid!,

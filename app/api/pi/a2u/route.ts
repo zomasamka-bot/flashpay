@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { serverConfig } from "@/lib/server-config"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { executeA2U } from "@/lib/a2u-executor"
+import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -44,46 +44,25 @@ function validateA2URequestBody(body: unknown): body is A2UPaymentRequest {
 
 /**
  * ============================================================================
- * App-to-User Transfer (A2U) - Execute A2U via unified executor
+ * App-to-User Transfer (A2U) - Execute A2U via ONE shared locked boundary
  * ============================================================================
  *
- * MINIMAL ROUTE: Only handles authentication, lock, load, and delegates to executor.
+ * MINIMAL ROUTE: Only handles authentication and delegates to executeA2ULocked.
  *
- * Accepts ONLY paymentId; delegates ALL A2U execution to lib/a2u-executor.ts
- * which is the ONLY A2U execution implementation.
+ * ALL A2U concurrency (routes /api/pi/a2u, /api/pi/complete, /api/recovery/[id])
+ * flows through executeA2ULocked() with one Redis lock per paymentId.
  *
  * FLOW:
  * 1. Validate internal secret header (x-flashpay-internal-secret)
  * 2. Validate request contains ONLY paymentId
- * 3. Acquire distributed lock on payment:${paymentId}
- * 4. Load payment from Redis
- * 5. Call executeA2U() from lib/a2u-executor.ts
- * 6. Return canonical response
+ * 3. Load payment from Redis (authoritative source)
+ * 4. Call executeA2ULocked() (ONE concurrency boundary, handles all locking)
+ * 5. Return canonical response
  */
 
-// POST /api/pi/a2u — A2U endpoint (delegates to executor)
+// POST /api/pi/a2u — A2U endpoint (delegates to shared locked executor)
 export async function POST(request: NextRequest) {
   console.log("[Pi A2U] A2U request initiated at", new Date().toISOString())
-
-  let lockToken: string | null = null
-  let lockKey: string | null = null
-  let lockAcquired = false
-
-  const releaseLockAtomic = async () => {
-    if (!lockAcquired || !lockToken || !lockKey || !isRedisConfigured) return
-    try {
-      const luaScript = `
-        if redis.call('get', KEYS[1]) == ARGV[1] then
-          return redis.call('del', KEYS[1])
-        else
-          return 0
-        end
-      `
-      await redis.eval(luaScript, [lockKey], [lockToken])
-    } catch (error) {
-      console.warn("[Pi A2U] Failed to release lock atomically:", error)
-    }
-  }
 
   try {
     // === AUTHENTICATION ===
@@ -134,48 +113,10 @@ export async function POST(request: NextRequest) {
     console.log("[Pi A2U] ===== A2U REQUEST RECEIVED =====")
     console.log("[Pi A2U] Payment ID:", paymentId)
 
-    // === CONCURRENCY LOCK ===
     if (!isRedisConfigured) {
       console.error("[Pi A2U] Redis not configured")
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
     }
-
-    lockToken = crypto.randomUUID()
-    lockKey = `a2u:lock:${paymentId}`
-    const lockTtl = 600 // 10 minutes
-
-    console.log("[Pi A2U] ===== ACQUIRING CONCURRENCY LOCK =====")
-
-    try {
-      const lockResult = await redis.set(lockKey, lockToken, { nx: true, ex: lockTtl })
-      lockAcquired = lockResult === "OK"
-    } catch (lockError) {
-      console.error("[Pi A2U] Lock acquisition error:", lockError)
-    }
-
-    if (!lockAcquired) {
-      console.warn("[Pi A2U] Could not acquire lock - checking if already settled...")
-
-      const paymentCheck = await redis.get(`payment:${paymentId}`)
-      const payment = paymentCheck ? (typeof paymentCheck === "string" ? JSON.parse(paymentCheck) : paymentCheck) : null
-
-      if (payment?.status === "settled_to_merchant") {
-        console.log("[Pi A2U] Payment already settled - returning canonical response")
-        const canonicalResponse = await buildA2USuccessResponse(paymentId)
-        if (!canonicalResponse) {
-          return NextResponse.json(
-            { error: "Response building failed - data corruption detected" },
-            { status: 500 }
-          )
-        }
-        return NextResponse.json(canonicalResponse)
-      }
-
-      console.error("[Pi A2U] Lock unavailable and payment not complete - cannot proceed")
-      return NextResponse.json({ error: "A2U transfer in progress" }, { status: 409 })
-    }
-
-    console.log("[Pi A2U] ✓ Lock acquired:", lockKey)
 
     // === LOAD PAYMENT ===
     const paymentData = await redis.get(`payment:${paymentId}`)
@@ -187,30 +128,12 @@ export async function POST(request: NextRequest) {
 
     const payment: Payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
 
-    // Check if already settled
-    if (payment.status === "settled_to_merchant") {
-      console.log("[Pi A2U] Payment already settled - returning canonical response")
-      const canonicalResponse = await buildA2USuccessResponse(paymentId)
-      if (!canonicalResponse) {
-        return NextResponse.json(
-          { error: "Response building failed - data corruption detected" },
-          { status: 500 }
-        )
-      }
-      return NextResponse.json(canonicalResponse)
-    }
+    console.log("[Pi A2U] ✓ Payment loaded from Redis - status:", payment.status)
 
-    console.log("[Pi A2U] ✓ Payment loaded from Redis")
-
-    // === DELEGATE TO EXECUTOR ===
-    console.log("[Pi A2U] Delegating to unified A2U executor")
+    // === DELEGATE TO SHARED LOCKED EXECUTOR ===
+    console.log("[Pi A2U] Delegating to shared locked A2U executor (ONE concurrency boundary)")
 
     // Validate required fields for executor
-    if (payment.status !== "paid_to_app") {
-      console.error("[Pi A2U] Payment status is not paid_to_app:", payment.status)
-      return NextResponse.json({ error: "Payment not in paid_to_app state" }, { status: 400 })
-    }
-
     if (!payment.merchantUid) {
       console.error("[Pi A2U] Missing merchantUid")
       return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
@@ -221,18 +144,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
     }
 
-    if (!payment.piPaymentId) {
-      console.error("[Pi A2U] Missing piPaymentId")
-      return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
-    }
-
     if (typeof payment.amount !== "number" || payment.amount <= 0) {
       console.error("[Pi A2U] Invalid payment amount:", payment.amount)
       return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
     }
 
-    // Call unified executor (always returns settlement_pending or error)
-    const result = await executeA2U({
+    // Call shared locked executor with ONE concurrency boundary (handles all locking)
+    const result = await executeA2ULocked({
       paymentId,
       payment,
       merchantUid: payment.merchantUid,
@@ -243,34 +161,27 @@ export async function POST(request: NextRequest) {
     })
 
     if (!result.ok) {
-      console.error("[Pi A2U] Executor error:", result.error)
+      console.error("[Pi A2U] Locked executor error:", result.error)
       return NextResponse.json(
         { error: result.error, success: false },
-        { status: 400 }
+        { status: result.status || 400 }
       )
     }
 
-    console.log("[Pi A2U] Executor succeeded - building canonical response via predicate check")
+    console.log("[Pi A2U] ✓ Locked executor succeeded - settlement stage initiated")
 
-    // === INVOKE CANONICAL RESPONSE BUILDER ===
-    // buildA2USuccessResponse() validates predicate and returns success: true/false
+    // === RETURN CANONICAL RESPONSE ===
     const canonicalResponse = await buildA2USuccessResponse(paymentId)
     if (!canonicalResponse) {
-      console.error("[Pi A2U] Failed to build canonical response - data inconsistency")
       return NextResponse.json(
-        { error: "Response building failed", success: false },
+        { error: "Response building failed - data corruption detected" },
         { status: 500 }
       )
     }
 
     return NextResponse.json(canonicalResponse)
   } catch (error) {
-    console.error("[Pi A2U] Unhandled exception:", error)
-    return NextResponse.json(
-      { error: "Internal server error", success: false },
-      { status: 500 }
-    )
-  } finally {
-    await releaseLockAtomic()
+    console.error("[Pi A2U] Unexpected error:", error)
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

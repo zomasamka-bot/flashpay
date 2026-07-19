@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { executeA2U } from "@/lib/a2u-executor"
+import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -310,7 +310,7 @@ export async function POST(request: NextRequest) {
     // === STAGE 4: Call unified executor with validated fields (invoked once) ===
     console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
 
-    const executorResult = await executeA2U({
+    const executorResult = await executeA2ULocked({
       paymentId: flashPaymentId,
       payment,
       merchantUid,
