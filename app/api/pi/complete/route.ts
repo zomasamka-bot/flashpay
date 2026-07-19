@@ -307,16 +307,11 @@ export async function POST(request: NextRequest) {
     await redis.set(`payment:${flashPaymentId}`, JSON.stringify(payment))
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
 
-    // === STAGE 4: Call unified executor with validated fields (invoked once) ===
+    // === STAGE 4: Call unified executor with ONE concurrency boundary ===
     console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
 
     const executorResult = await executeA2ULocked({
       paymentId: flashPaymentId,
-      payment,
-      merchantUid,
-      accessToken,
-      customerAmount: finalPiAmount,
-      piPaymentId: piPaymentIdCanonical,
       isRecovery: false,
     })
 

@@ -24,11 +24,6 @@ import crypto from "crypto"
 
 interface LockedExecutorParams {
   paymentId: string
-  payment: Payment
-  merchantUid: string
-  accessToken: string
-  customerAmount: number
-  piPaymentId: string
   isRecovery: boolean
 }
 
@@ -98,7 +93,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
 
     console.log("[A2U Locked Executor] ✓ Lock acquired")
 
-    // Inside lock: reload latest payment checkpoint
+    // Inside lock: reload LATEST payment checkpoint
     const paymentData = await redis.get(`payment:${paymentId}`)
     if (!paymentData) {
       console.error("[A2U Locked Executor] Payment not found after lock acquisition")
@@ -107,19 +102,42 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
 
     const latestPayment: Payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
 
+    console.log("[A2U Locked Executor] Latest payment status:", latestPayment.status)
+
+    // Validate and derive all fields from LATEST checkpoint (not stale caller copies)
+    if (!latestPayment.merchantUid || typeof latestPayment.merchantUid !== "string") {
+      console.error("[A2U Locked Executor] Invalid merchantUid in latest checkpoint")
+      return { ok: false, status: 400, error: "Invalid payment record" }
+    }
+
+    if (!latestPayment.accessToken || typeof latestPayment.accessToken !== "string") {
+      console.error("[A2U Locked Executor] Invalid accessToken in latest checkpoint")
+      return { ok: false, status: 400, error: "Invalid payment record" }
+    }
+
+    if (typeof latestPayment.amount !== "number" || latestPayment.amount <= 0) {
+      console.error("[A2U Locked Executor] Invalid amount in latest checkpoint:", latestPayment.amount)
+      return { ok: false, status: 400, error: "Invalid payment amount" }
+    }
+
+    if (!latestPayment.piPaymentId || typeof latestPayment.piPaymentId !== "string") {
+      console.error("[A2U Locked Executor] Invalid piPaymentId in latest checkpoint")
+      return { ok: false, status: 400, error: "Invalid payment record" }
+    }
+
     // Inside lock: any valid a2uTxid or horizonSuccessFlag must permanently skip Stage 2
     if (latestPayment.a2uTxid || latestPayment.horizonSuccessFlag) {
       console.log("[A2U Locked Executor] Valid a2uTxid or horizonSuccessFlag exists - will skip Stage 2")
     }
 
-    // Execute A2U with latest payment state
+    // Execute A2U with derived fields from latest authoritative checkpoint
     const result = await executeA2U({
       paymentId,
       payment: latestPayment,
-      merchantUid: params.merchantUid,
-      accessToken: params.accessToken,
-      customerAmount: params.customerAmount,
-      piPaymentId: params.piPaymentId,
+      merchantUid: latestPayment.merchantUid,
+      accessToken: latestPayment.accessToken,
+      customerAmount: latestPayment.amount,
+      piPaymentId: latestPayment.piPaymentId,
       isRecovery: params.isRecovery,
     })
 

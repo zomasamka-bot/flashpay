@@ -130,33 +130,21 @@ export async function POST(request: NextRequest) {
 
     console.log("[Pi A2U] ✓ Payment loaded from Redis - status:", payment.status)
 
+    // === VALIDATE piPaymentId ===
+    if (typeof payment.piPaymentId !== "string" || !payment.piPaymentId) {
+      console.error("[Pi A2U] Invalid piPaymentId:", payment.piPaymentId)
+      return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
+    }
+
+    console.log("[Pi A2U] ✓ piPaymentId validated:", payment.piPaymentId)
+
     // === DELEGATE TO SHARED LOCKED EXECUTOR ===
     console.log("[Pi A2U] Delegating to shared locked A2U executor (ONE concurrency boundary)")
 
-    // Validate required fields for executor
-    if (!payment.merchantUid) {
-      console.error("[Pi A2U] Missing merchantUid")
-      return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
-    }
-
-    if (!payment.accessToken) {
-      console.error("[Pi A2U] Missing accessToken")
-      return NextResponse.json({ error: "Invalid payment record" }, { status: 400 })
-    }
-
-    if (typeof payment.amount !== "number" || payment.amount <= 0) {
-      console.error("[Pi A2U] Invalid payment amount:", payment.amount)
-      return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
-    }
-
-    // Call shared locked executor with ONE concurrency boundary (handles all locking)
+    // Call shared locked executor with ONLY paymentId and isRecovery
+    // All other fields are derived inside the lock from latest Redis checkpoint
     const result = await executeA2ULocked({
       paymentId,
-      payment,
-      merchantUid: payment.merchantUid,
-      accessToken: payment.accessToken,
-      customerAmount: payment.amount,
-      piPaymentId: payment.piPaymentId,
       isRecovery: false,
     })
 

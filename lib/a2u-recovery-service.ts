@@ -134,11 +134,6 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      payment,
-      merchantUid: payment.merchantUid!,
-      accessToken: payment.accessToken,
-      customerAmount: payment.customerAmount || payment.amount,
-      piPaymentId: payment.piPaymentId,
       isRecovery: true,
     })
 
@@ -186,11 +181,6 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      payment,
-      merchantUid: payment.merchantUid!,
-      accessToken: payment.accessToken,
-      customerAmount: payment.customerAmount || payment.amount,
-      piPaymentId: payment.piPaymentId,
       isRecovery: true,
     })
 
@@ -239,11 +229,6 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      payment,
-      merchantUid: payment.merchantUid!,
-      accessToken: payment.accessToken,
-      customerAmount: payment.customerAmount || payment.amount,
-      piPaymentId: payment.piPaymentId,
       isRecovery: true,
     })
 
@@ -292,11 +277,6 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      payment,
-      merchantUid: payment.merchantUid!,
-      accessToken: payment.accessToken,
-      customerAmount: payment.customerAmount || payment.amount,
-      piPaymentId: payment.piPaymentId,
       isRecovery: true,
     })
 
