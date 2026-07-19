@@ -175,20 +175,27 @@ export async function POST(request: NextRequest) {
       console.log("[Pi Complete] Payment already developer_completed - skipping Pi /complete call")
     }
 
-    // Derive paymentId from metadata (never trust client)
-    const paymentId = piPayment.metadata?.paymentId
-    if (!paymentId || typeof paymentId !== "string") {
+    // Derive flashPaymentId from metadata BEFORE loading Redis (internal app identifier)
+    const flashPaymentId = finalPiPayment.metadata?.paymentId
+    if (!flashPaymentId || typeof flashPaymentId !== "string") {
       console.error("[Pi Complete] Invalid payment metadata - missing paymentId")
       return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
     }
 
-    console.log("[Pi Complete] ✅ U2A verification passed - paymentId:", paymentId)
+    // Use finalPiPayment.identifier as canonical Pi identifier
+    const piPaymentIdCanonical = finalPiPayment.identifier
+    if (!piPaymentIdCanonical || typeof piPaymentIdCanonical !== "string") {
+      console.error("[Pi Complete] Invalid Pi payment identifier")
+      return NextResponse.json({ error: "Invalid Pi payment identifier" }, { status: 400 })
+    }
+
+    console.log("[Pi Complete] ✅ U2A verification passed - flashPaymentId:", flashPaymentId, "piPaymentId:", piPaymentIdCanonical)
 
     // === STAGE 2: Load and validate payment state ===
     console.log("[Pi Complete] === STAGE 2: Load and validate payment state ===")
 
-    // Load current payment state
-    const currentCheckpoint = await redis.get(`payment:${paymentId}`)
+    // Load current payment state using flashPaymentId
+    const currentCheckpoint = await redis.get(`payment:${flashPaymentId}`)
     if (!currentCheckpoint) {
       console.error("[Pi Complete] Payment not found in Redis")
       return NextResponse.json({ error: "Payment not found" }, { status: 404 })
@@ -228,21 +235,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment amount mismatch" }, { status: 400 })
     }
 
-    // Use canonical metadata.paymentId directly from finalPiPayment (authoritative, no fallback)
-    const canonicalPaymentId = finalPiPayment.metadata?.paymentId
-    if (!canonicalPaymentId || typeof canonicalPaymentId !== "string") {
-      console.error("[Pi Complete] Canonical payment metadata.paymentId missing or invalid")
-      return NextResponse.json({ error: "Invalid Pi payment metadata" }, { status: 400 })
-    }
-
-    // If existing piPaymentId differs from canonical, fail closed
-    const existingPiPaymentId = payment.piPaymentId
-    if (existingPiPaymentId && existingPiPaymentId !== canonicalPaymentId) {
-      console.error("[Pi Complete] Existing piPaymentId differs from canonical - existing:", existingPiPaymentId, "canonical:", canonicalPaymentId)
+    // Validate stored piPaymentId against canonical Pi identifier
+    const storedPiPaymentId = payment.piPaymentId
+    if (storedPiPaymentId && storedPiPaymentId !== piPaymentIdCanonical) {
+      console.error("[Pi Complete] Stored piPaymentId differs from canonical Pi identifier - stored:", storedPiPaymentId, "canonical:", piPaymentIdCanonical)
       return NextResponse.json({ error: "Payment identifier conflict" }, { status: 400 })
     }
 
-    console.log("[Pi Complete] Using canonical paymentId from finalPiPayment.metadata:", canonicalPaymentId)
+    console.log("[Pi Complete] Using canonical piPaymentId from finalPiPayment.identifier:", piPaymentIdCanonical)
 
     // Authoritative amount: if existing customerAmount differs from finalPiAmount, reject
     const existingCustomerAmount = payment.customerAmount
@@ -262,8 +262,8 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete] === STAGE 3: Persist verified U2A fields ===")
     
     // Use canonical transaction.txid directly (authoritative, no fallback)
-    const canonicalTxid = finalPiPayment.transaction?.txid
-    if (!canonicalTxid || typeof canonicalTxid !== "string") {
+    const finalCanonicalTxid = finalPiPayment.transaction?.txid
+    if (!finalCanonicalTxid || typeof finalCanonicalTxid !== "string") {
       console.error("[Pi Complete] Canonical transaction.txid missing or invalid")
       return NextResponse.json({ error: "Invalid Pi transaction id" }, { status: 400 })
     }
@@ -276,11 +276,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment in incompatible state" }, { status: 400 })
     }
 
-    // Persist canonical piPaymentId from metadata
-    payment.piPaymentId = canonicalPaymentId
+    // Persist canonical piPaymentId from Pi identifier
+    payment.piPaymentId = piPaymentIdCanonical
 
     // Persist canonical txid from transaction
-    payment.u2aTxid = canonicalTxid
+    payment.u2aTxid = finalCanonicalTxid
 
     // Preserve existing paidAt, or set once if absent
     if (!payment.paidAt) {
@@ -304,19 +304,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment in unexpected status" }, { status: 400 })
     }
     
-    await redis.set(`payment:${paymentId}`, JSON.stringify(payment))
+    await redis.set(`payment:${flashPaymentId}`, JSON.stringify(payment))
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
 
     // === STAGE 4: Call unified executor with validated fields (invoked once) ===
     console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
 
     const executorResult = await executeA2U({
-      paymentId,
+      paymentId: flashPaymentId,
       payment,
       merchantUid,
       accessToken,
       customerAmount: finalPiAmount,
-      piPaymentId: canonicalPaymentId,
+      piPaymentId: piPaymentIdCanonical,
       isRecovery: false,
     })
 
@@ -330,7 +330,7 @@ export async function POST(request: NextRequest) {
     // === STAGE 5: Re-read latest checkpoint from Redis ===
     console.log("[Pi Complete] === STAGE 5: Re-read latest checkpoint ===")
 
-    const latestCheckpoint = await redis.get(`payment:${paymentId}`)
+    const latestCheckpoint = await redis.get(`payment:${flashPaymentId}`)
     if (!latestCheckpoint) {
       console.error("[Pi Complete] Payment disappeared from Redis after executor")
       return NextResponse.json({ error: "Payment state lost" }, { status: 500 })
@@ -342,7 +342,7 @@ export async function POST(request: NextRequest) {
     // === STAGE 6: Return canonical response (final state, invoked once) ===
     console.log("[Pi Complete] === STAGE 6: Return canonical response ===")
 
-    const canonicalResponse = await buildA2USuccessResponse(paymentId)
+    const canonicalResponse = await buildA2USuccessResponse(flashPaymentId)
     if (!canonicalResponse) {
       console.error("[Pi Complete] Failed to build canonical response")
       return NextResponse.json({ error: "Response building failed" }, { status: 500 })
