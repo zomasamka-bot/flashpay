@@ -228,58 +228,84 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment amount mismatch" }, { status: 400 })
     }
 
-    // piPaymentId: use Redis value if present and matches canonical; otherwise use canonical
-    let piPaymentIdToUse: string
-    const existingPiPaymentId = payment.piPaymentId
-    if (existingPiPaymentId && typeof existingPiPaymentId === "string") {
-      if (existingPiPaymentId !== piPaymentId) {
-        console.error("[Pi Complete] Existing piPaymentId differs from canonical - existing:", existingPiPaymentId, "canonical:", piPaymentId)
-        return NextResponse.json({ error: "Payment identifier conflict" }, { status: 400 })
-      }
-      piPaymentIdToUse = existingPiPaymentId
-      console.log("[Pi Complete] Using existing piPaymentId from Redis:", piPaymentIdToUse)
-    } else {
-      piPaymentIdToUse = piPaymentId
-      console.log("[Pi Complete] Using canonical piPaymentId (not previously stored):", piPaymentIdToUse)
+    // Use canonical metadata.paymentId directly from finalPiPayment (authoritative, no fallback)
+    const canonicalPaymentId = finalPiPayment.metadata?.paymentId
+    if (!canonicalPaymentId || typeof canonicalPaymentId !== "string") {
+      console.error("[Pi Complete] Canonical payment metadata.paymentId missing or invalid")
+      return NextResponse.json({ error: "Invalid Pi payment metadata" }, { status: 400 })
     }
 
-    // customerAmount: use Redis value if present; otherwise use canonical
-    let customerAmountToUse: number
+    // If existing piPaymentId differs from canonical, fail closed
+    const existingPiPaymentId = payment.piPaymentId
+    if (existingPiPaymentId && existingPiPaymentId !== canonicalPaymentId) {
+      console.error("[Pi Complete] Existing piPaymentId differs from canonical - existing:", existingPiPaymentId, "canonical:", canonicalPaymentId)
+      return NextResponse.json({ error: "Payment identifier conflict" }, { status: 400 })
+    }
+
+    console.log("[Pi Complete] Using canonical paymentId from finalPiPayment.metadata:", canonicalPaymentId)
+
+    // Authoritative amount: if existing customerAmount differs from finalPiAmount, reject
     const existingCustomerAmount = payment.customerAmount
     if (typeof existingCustomerAmount === "number" && Number.isFinite(existingCustomerAmount)) {
-      customerAmountToUse = existingCustomerAmount
-      console.log("[Pi Complete] Using existing customerAmount from Redis:", customerAmountToUse)
-    } else if (typeof finalPiAmount === "number" && Number.isFinite(finalPiAmount)) {
-      customerAmountToUse = finalPiAmount
-      console.log("[Pi Complete] Using canonical amount as customerAmount (not previously stored):", customerAmountToUse)
+      if (existingCustomerAmount !== finalPiAmount) {
+        console.error("[Pi Complete] Existing customerAmount differs from authoritative finalPiAmount - existing:", existingCustomerAmount, "authoritative:", finalPiAmount)
+        return NextResponse.json({ error: "Customer amount mismatch with authoritative Pi amount" }, { status: 400 })
+      }
+      console.log("[Pi Complete] Existing customerAmount matches authoritative amount:", existingCustomerAmount)
     } else {
-      console.error("[Pi Complete] Unable to determine customerAmount")
-      return NextResponse.json({ error: "Invalid payment - unable to determine customerAmount" }, { status: 400 })
+      console.log("[Pi Complete] No existing customerAmount - will persist authoritative finalPiAmount:", finalPiAmount)
     }
 
     console.log("[Pi Complete] ✓ All required fields validated - merchantUid, accessToken, amount, piPaymentId, customerAmount")
     
-    // === STAGE 3: Persist verified U2A fields without overwriting newer settlement status ===
+    // === STAGE 3: Persist verified U2A fields with strict status validation ===
     console.log("[Pi Complete] === STAGE 3: Persist verified U2A fields ===")
     
-    // Update ONLY verified U2A metadata and txid; preserve any newer settlement status
+    // Use canonical transaction.txid directly (authoritative, no fallback)
+    const canonicalTxid = finalPiPayment.transaction?.txid
+    if (!canonicalTxid || typeof canonicalTxid !== "string") {
+      console.error("[Pi Complete] Canonical transaction.txid missing or invalid")
+      return NextResponse.json({ error: "Invalid Pi transaction id" }, { status: 400 })
+    }
+
+    // Fail closed on incompatible statuses
     const currentStatus = payment.status
-    payment.piPaymentId = piPaymentIdToUse
-    payment.u2aTxid = finalPiPayment.transaction?.txid || txid
-    payment.paidAt = new Date().toISOString()
-    payment.customerAmount = customerAmountToUse
-    
-    // If status is still paid_to_app (not yet advanced), it will be set by executor
-    // If status is already settlement_pending or settled_to_merchant (executor already ran), preserve it
-    if (currentStatus === "paid_to_app" || !currentStatus) {
-      payment.status = "paid_to_app"
-      console.log("[Pi Complete] Setting status = paid_to_app (U2A complete)")
+    const incompatibleStatuses = ["cancelled", "failed", "settlement_failed"]
+    if (incompatibleStatuses.includes(currentStatus)) {
+      console.error("[Pi Complete] Payment has incompatible status:", currentStatus)
+      return NextResponse.json({ error: "Payment in incompatible state" }, { status: 400 })
+    }
+
+    // Persist canonical piPaymentId from metadata
+    payment.piPaymentId = canonicalPaymentId
+
+    // Persist canonical txid from transaction
+    payment.u2aTxid = canonicalTxid
+
+    // Preserve existing paidAt, or set once if absent
+    if (!payment.paidAt) {
+      payment.paidAt = new Date().toISOString()
+      console.log("[Pi Complete] Setting paidAt for first time:", payment.paidAt)
     } else {
-      console.log("[Pi Complete] Preserving existing status:", currentStatus, "(executor may have already advanced)")
+      console.log("[Pi Complete] Preserving existing paidAt:", payment.paidAt)
+    }
+
+    // Persist authoritative amount as customerAmount
+    payment.customerAmount = finalPiAmount
+
+    // Change status only if currently pending; preserve paid_to_app, settlement_pending, settled_to_merchant
+    if (currentStatus === "pending" || !currentStatus) {
+      payment.status = "paid_to_app"
+      console.log("[Pi Complete] Changed status from pending to paid_to_app")
+    } else if (currentStatus === "paid_to_app" || currentStatus === "settlement_pending" || currentStatus === "settled_to_merchant") {
+      console.log("[Pi Complete] Preserving existing compatible status:", currentStatus)
+    } else {
+      console.error("[Pi Complete] Status neither pending nor compatible settlement status:", currentStatus)
+      return NextResponse.json({ error: "Payment in unexpected status" }, { status: 400 })
     }
     
     await redis.set(`payment:${paymentId}`, JSON.stringify(payment))
-    console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount")
+    console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
 
     // === STAGE 4: Call unified executor with validated fields (invoked once) ===
     console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
@@ -289,8 +315,8 @@ export async function POST(request: NextRequest) {
       payment,
       merchantUid,
       accessToken,
-      customerAmount: customerAmountToUse,
-      piPaymentId: piPaymentIdToUse,
+      customerAmount: finalPiAmount,
+      piPaymentId: canonicalPaymentId,
       isRecovery: false,
     })
 
