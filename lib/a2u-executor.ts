@@ -164,11 +164,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   console.log("[A2U Executor] Current Status:", ctx.payment.status)
 
   // STAGE 0: Check if already settled (terminal state)
-  // Executor returns settlement_pending; buildA2USuccessResponse() will return success: true after validating predicate
+  // Executor returns ok:true; caller invokes buildA2USuccessResponse() to return final response
   if (ctx.payment.status === "settled_to_merchant") {
     console.log("[A2U Executor] ℹ️ Already settled - skipping execution")
-    console.log("[A2U Executor] Caller will invoke buildA2USuccessResponse() to return final response with predicate check")
-    return { ok: false, status: "settlement_pending", error: "Already settled - final response via buildA2USuccessResponse()" }
+    return { ok: true, status: "settlement_pending" }
   }
 
   // STAGE 1: Get/Create A2U payment (skip if already have a2uPaymentId)
@@ -183,7 +182,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         status: stageResult.userFacingStatus,
         error: stageResult.error,
       }
-    }
     }
     // Discriminated union: ok: true includes a2uPaymentId
     a2uPaymentId = stageResult.data.a2uPaymentId
@@ -208,41 +206,50 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] STAGE 1: Fetching and validating reused A2U from Pi API")
     const fetchedPayment = await fetchA2UPayment(a2uPaymentId)
     if (!fetchedPayment) {
-    return { ok: false, status: "error", error: "Failed to fetch existing A2U payment from Pi" }
-  }
-  if (existingPayment.identifier !== a2uPaymentId) {
-    return { ok: false, status: "error", error: "A2U identifier mismatch from Pi API" }
-  }
-  if (existingPayment.amount !== ctx.customerAmount) {
-    return { ok: false, status: "error", error: "A2U amount mismatch" }
-  }
-  if (!existingPayment.transaction?.txid) {
-    return { ok: false, status: "error", error: "Completed A2U missing transaction txid" }
-  }
-  if (typeof existingPayment.fee_charged !== 'number' || !Number.isFinite(existingPayment.fee_charged)) {
-    return { ok: false, status: "settlement_pending", error: "A2U completed on Pi but missing fee data for DB record" }
-      }
-      // Persist with fetched data - but NEVER set dbRecorded or settled_to_merchant from Pi state alone
-      ctx.payment = {
-        ...ctx.payment,
-        a2uTxid: txid,
-        a2uFromAddress: fetchedPayment.from_address,
-        a2uToAddress: fetchedPayment.to_address,
-        customerAmount: ctx.customerAmount,
-        merchantAmount: Number(fetchedPayment.amount),
-        horizonFeeCharged: Number(feeData) / 10_000_000,
-        horizonSuccessFlag: true,
-        piCompleted: true,
-        piCompletionPending: false,
-        paidAt: new Date().toISOString(),
-        status: "settlement_pending",
-        // DO NOT set dbRecorded or settled_to_merchant - must wait for DB reconciliation
-        requiresDbReconciliation: true,
-      }
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-      console.log("[A2U Executor] ✓ Already-completed payment validated and stored for DB reconciliation")
-      // Continue to stage 4 (DB reconciliation) - DO NOT return success yet
+      return { ok: false, status: "error", error: "Failed to fetch existing A2U payment from Pi" }
     }
+    if (fetchedPayment.identifier !== a2uPaymentId) {
+      return { ok: false, status: "error", error: "A2U identifier mismatch from Pi API" }
+    }
+    if (fetchedPayment.amount !== ctx.customerAmount) {
+      return { ok: false, status: "error", error: "A2U amount mismatch" }
+    }
+    if (!fetchedPayment.from_address || !fetchedPayment.to_address) {
+      return { ok: false, status: "error", error: "A2U missing addresses" }
+    }
+    if (fetchedPayment.developer_completed !== true) {
+      return { ok: false, status: "error", error: "A2U not marked developer_completed by Pi" }
+    }
+    if (!fetchedPayment.transaction?.verified) {
+      return { ok: false, status: "error", error: "A2U transaction not verified on Horizon" }
+    }
+    if (!fetchedPayment.transaction?.txid) {
+      return { ok: false, status: "error", error: "A2U missing transaction txid" }
+    }
+    if (typeof fetchedPayment.fee_charged !== 'number' || !Number.isFinite(fetchedPayment.fee_charged)) {
+      return { ok: false, status: "settlement_pending", error: "A2U completed on Pi but missing fee data for DB record" }
+    }
+    // Persist with fetched data - but NEVER set dbRecorded or settled_to_merchant from Pi state alone
+    ctx.payment = {
+      ...ctx.payment,
+      a2uTxid: fetchedPayment.transaction.txid,
+      a2uFromAddress: fetchedPayment.from_address,
+      a2uToAddress: fetchedPayment.to_address,
+      customerAmount: ctx.customerAmount,
+      merchantAmount: Number(fetchedPayment.amount),
+      horizonFeeCharged: Number(fetchedPayment.fee_charged) / 10_000_000,
+      horizonSuccessFlag: true,
+      piCompleted: true,
+      piCompletionPending: false,
+      paidAt: new Date().toISOString(),
+      status: "settlement_pending",
+      // DO NOT set dbRecorded or settled_to_merchant - must wait for DB reconciliation
+      requiresDbReconciliation: true,
+    }
+    await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+    console.log("[A2U Executor] ✓ Already-completed payment validated and stored for DB reconciliation")
+    // Continue to stage 4 (DB reconciliation) - DO NOT return success yet
+  }
   }
 
   // STAGE 2: Sign (skip if already have a2uTxid)
@@ -257,7 +264,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         status: signResult.userFacingStatus,
         error: signResult.error,
       }
-    }
     }
     // Discriminated union: ok: true includes txidFromHorizon and horizonFeeCharged
     txidFromHorizon = signResult.data.txidFromHorizon
@@ -299,7 +305,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: piResult.error,
       }
     }
-    }
     ctx.payment.piCompleted = true
     ctx.payment.piCompletionPending = false
     ctx.payment.paidAt = new Date().toISOString()
@@ -323,7 +328,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         status: dbResult.userFacingStatus,
         error: dbResult.error,
       }
-    }
     }
     ctx.payment.dbRecorded = true
     ctx.payment.status = "settled_to_merchant"

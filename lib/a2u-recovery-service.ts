@@ -142,8 +142,7 @@ export async function executeA2URecovery(
       isRecovery: true,
     })
 
-    // Executor always returns success: false; check status/error instead
-    if (result.status === "error" || result.error) {
+    if (!result.ok) {
       return {
         status: "manual_review_required",
         state: "state1_executor_failed",
@@ -195,8 +194,7 @@ export async function executeA2URecovery(
       isRecovery: true,
     })
 
-    // Executor always returns success: false; check status/error instead
-    if (result.status === "error" || result.error) {
+    if (!result.ok) {
       return {
         status: "manual_review_required",
         state: "state2_executor_failed",
@@ -249,8 +247,7 @@ export async function executeA2URecovery(
       isRecovery: true,
     })
 
-    // Executor always returns success: false; check status/error instead
-    if (result.status === "error" || result.error) {
+    if (!result.ok) {
       return {
         status: "manual_review_required",
         state: "state3_executor_failed",
@@ -303,8 +300,7 @@ export async function executeA2URecovery(
       isRecovery: true,
     })
 
-    // Executor always returns success: false; check status/error instead
-    if (result.status === "error" || result.error) {
+    if (!result.ok) {
       return {
         status: "manual_review_required",
         state: "state4_executor_failed",
