@@ -204,36 +204,82 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment - missing merchantUid" }, { status: 400 })
     }
     
-    const piPaymentIdFromPayment = payment.piPaymentId
-    if (!piPaymentIdFromPayment || typeof piPaymentIdFromPayment !== "string") {
-      console.error("[Pi Complete] Payment missing piPaymentId")
-      return NextResponse.json({ error: "Invalid payment - missing piPaymentId" }, { status: 400 })
-    }
-    
     const accessToken = payment.accessToken
     if (!accessToken || typeof accessToken !== "string") {
       console.error("[Pi Complete] Payment missing accessToken")
       return NextResponse.json({ error: "Invalid payment - missing accessToken" }, { status: 400 })
     }
     
-    const customerAmount = payment.customerAmount
-    if (typeof customerAmount !== "number" || !Number.isFinite(customerAmount)) {
-      console.error("[Pi Complete] Invalid or missing customerAmount")
-      return NextResponse.json({ error: "Invalid payment - invalid customerAmount" }, { status: 400 })
+    // Validate finalPiPayment.amount is finite positive and matches Redis payment.amount
+    const finalPiAmount = finalPiPayment.amount
+    if (typeof finalPiAmount !== "number" || !Number.isFinite(finalPiAmount) || finalPiAmount <= 0) {
+      console.error("[Pi Complete] Pi amount invalid - not finite or not positive:", finalPiAmount)
+      return NextResponse.json({ error: "Invalid Pi payment amount" }, { status: 400 })
     }
 
-    console.log("[Pi Complete] ✓ All required fields validated - merchantUid, piPaymentId, accessToken, customerAmount")
+    const redisAmount = payment.amount
+    if (typeof redisAmount !== "number" || !Number.isFinite(redisAmount)) {
+      console.error("[Pi Complete] Redis payment amount invalid:", redisAmount)
+      return NextResponse.json({ error: "Invalid payment - invalid amount in Redis" }, { status: 400 })
+    }
+
+    if (finalPiAmount !== redisAmount) {
+      console.error("[Pi Complete] Amount mismatch - Pi:", finalPiAmount, "Redis:", redisAmount)
+      return NextResponse.json({ error: "Payment amount mismatch" }, { status: 400 })
+    }
+
+    // piPaymentId: use Redis value if present and matches canonical; otherwise use canonical
+    let piPaymentIdToUse: string
+    const existingPiPaymentId = payment.piPaymentId
+    if (existingPiPaymentId && typeof existingPiPaymentId === "string") {
+      if (existingPiPaymentId !== piPaymentId) {
+        console.error("[Pi Complete] Existing piPaymentId differs from canonical - existing:", existingPiPaymentId, "canonical:", piPaymentId)
+        return NextResponse.json({ error: "Payment identifier conflict" }, { status: 400 })
+      }
+      piPaymentIdToUse = existingPiPaymentId
+      console.log("[Pi Complete] Using existing piPaymentId from Redis:", piPaymentIdToUse)
+    } else {
+      piPaymentIdToUse = piPaymentId
+      console.log("[Pi Complete] Using canonical piPaymentId (not previously stored):", piPaymentIdToUse)
+    }
+
+    // customerAmount: use Redis value if present; otherwise use canonical
+    let customerAmountToUse: number
+    const existingCustomerAmount = payment.customerAmount
+    if (typeof existingCustomerAmount === "number" && Number.isFinite(existingCustomerAmount)) {
+      customerAmountToUse = existingCustomerAmount
+      console.log("[Pi Complete] Using existing customerAmount from Redis:", customerAmountToUse)
+    } else if (typeof finalPiAmount === "number" && Number.isFinite(finalPiAmount)) {
+      customerAmountToUse = finalPiAmount
+      console.log("[Pi Complete] Using canonical amount as customerAmount (not previously stored):", customerAmountToUse)
+    } else {
+      console.error("[Pi Complete] Unable to determine customerAmount")
+      return NextResponse.json({ error: "Invalid payment - unable to determine customerAmount" }, { status: 400 })
+    }
+
+    console.log("[Pi Complete] ✓ All required fields validated - merchantUid, accessToken, amount, piPaymentId, customerAmount")
     
-    // === STAGE 3: Persist paid_to_app status without overwriting newer settlement fields ===
-    console.log("[Pi Complete] === STAGE 3: Persist paid_to_app status ===")
+    // === STAGE 3: Persist verified U2A fields without overwriting newer settlement status ===
+    console.log("[Pi Complete] === STAGE 3: Persist verified U2A fields ===")
     
-    // Only persist U2A completion fields; never overwrite settlement_pending or settled_to_merchant
-    payment.status = "paid_to_app"
-    payment.u2aTxid = txid
+    // Update ONLY verified U2A metadata and txid; preserve any newer settlement status
+    const currentStatus = payment.status
+    payment.piPaymentId = piPaymentIdToUse
+    payment.u2aTxid = finalPiPayment.transaction?.txid || txid
     payment.paidAt = new Date().toISOString()
+    payment.customerAmount = customerAmountToUse
+    
+    // If status is still paid_to_app (not yet advanced), it will be set by executor
+    // If status is already settlement_pending or settled_to_merchant (executor already ran), preserve it
+    if (currentStatus === "paid_to_app" || !currentStatus) {
+      payment.status = "paid_to_app"
+      console.log("[Pi Complete] Setting status = paid_to_app (U2A complete)")
+    } else {
+      console.log("[Pi Complete] Preserving existing status:", currentStatus, "(executor may have already advanced)")
+    }
     
     await redis.set(`payment:${paymentId}`, JSON.stringify(payment))
-    console.log("[Pi Complete] ✓ Persisted status = paid_to_app with paidAt timestamp")
+    console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount")
 
     // === STAGE 4: Call unified executor with validated fields (invoked once) ===
     console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
@@ -243,8 +289,8 @@ export async function POST(request: NextRequest) {
       payment,
       merchantUid,
       accessToken,
-      customerAmount,
-      piPaymentId: piPaymentIdFromPayment,
+      customerAmount: customerAmountToUse,
+      piPaymentId: piPaymentIdToUse,
       isRecovery: false,
     })
 
