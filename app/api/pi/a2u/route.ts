@@ -242,17 +242,17 @@ export async function POST(request: NextRequest) {
       isRecovery: false,
     })
 
-    if (result.status === "error" || result.error) {
+    if (!result.ok) {
       console.error("[Pi A2U] Executor error:", result.error)
       return NextResponse.json(
-        { error: result.error || "A2U execution failed", success: false },
+        { error: result.error, success: false },
         { status: 400 }
       )
     }
 
-    console.log("[Pi A2U] Executor stages complete - building canonical response via predicate check")
+    console.log("[Pi A2U] Executor succeeded - building canonical response via predicate check")
 
-    // === ALWAYS INVOKE CANONICAL RESPONSE BUILDER ===
+    // === INVOKE CANONICAL RESPONSE BUILDER ===
     // buildA2USuccessResponse() validates predicate and returns success: true/false
     const canonicalResponse = await buildA2USuccessResponse(paymentId)
     if (!canonicalResponse) {

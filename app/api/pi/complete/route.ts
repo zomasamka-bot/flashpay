@@ -173,12 +173,11 @@ export async function POST(request: NextRequest) {
       isRecovery: false,
     })
 
-    // Executor always returns success: false; check status/error instead
-    if (executorResult.status === "error" || executorResult.error) {
-      console.warn("[Pi Complete] Executor returned error - status:", executorResult.status, "error:", executorResult.error)
+    if (!executorResult.ok) {
+      console.warn("[Pi Complete] Executor failed - status:", executorResult.status, "error:", executorResult.error)
       // Still return success for client - settlement is async
     } else {
-      console.log("[Pi Complete] ✓ Executor stages complete - status:", executorResult.status)
+      console.log("[Pi Complete] ✓ Executor succeeded - status:", executorResult.status)
     }
 
     // === STAGE 4: Re-read latest checkpoint from Redis ===
