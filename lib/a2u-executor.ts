@@ -201,8 +201,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
 
-    // For reused a2uPaymentId, fetch from Pi API to validate
-    // This also detects early completion
+    // For reused a2uPaymentId, fetch from Pi API to validate state
     console.log("[A2U Executor] STAGE 1: Fetching and validating reused A2U from Pi API")
     const fetchedPayment = await fetchA2UPayment(a2uPaymentId)
     if (!fetchedPayment) {
@@ -211,45 +210,63 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (fetchedPayment.identifier !== a2uPaymentId) {
       return { ok: false, status: "error", error: "A2U identifier mismatch from Pi API" }
     }
-    if (fetchedPayment.amount !== ctx.customerAmount) {
+    // Normalize and check amount match exactly
+    const fetchedAmount = Number(fetchedPayment.amount)
+    if (!Number.isFinite(fetchedAmount) || fetchedAmount !== ctx.customerAmount) {
       return { ok: false, status: "error", error: "A2U amount mismatch" }
     }
     if (!fetchedPayment.from_address || !fetchedPayment.to_address) {
       return { ok: false, status: "error", error: "A2U missing addresses" }
     }
-    if (fetchedPayment.developer_completed !== true) {
-      return { ok: false, status: "error", error: "A2U not marked developer_completed by Pi" }
+    
+    // Check if payment is cancelled or invalid
+    if (fetchedPayment.status?.cancelled || fetchedPayment.status === "cancelled") {
+      return { ok: false, status: "error", error: "A2U payment was cancelled" }
     }
-    if (!fetchedPayment.transaction?.verified) {
-      return { ok: false, status: "error", error: "A2U transaction not verified on Horizon" }
+    
+    // Check if payment is developer-completed (signature stage done, Horizon verified)
+    const isDevCompleted = fetchedPayment.status?.developer_completed === true
+    const isTransactionVerified = fetchedPayment.transaction?.verified === true
+    const hasTransactionTxid = typeof fetchedPayment.transaction?.txid === 'string'
+    const hasValidFee = typeof fetchedPayment.transaction?.fee_charged === 'number' && 
+                        Number.isFinite(fetchedPayment.transaction.fee_charged)
+    
+    // If developer_completed AND transaction verified AND has txid AND has fee: skip to DB stage
+    if (isDevCompleted && isTransactionVerified && hasTransactionTxid && hasValidFee) {
+      console.log("[A2U Executor] A2U is developer-completed and transaction verified - skipping to DB reconciliation")
+      ctx.payment = {
+        ...ctx.payment,
+        a2uTxid: fetchedPayment.transaction.txid,
+        a2uFromAddress: fetchedPayment.from_address,
+        a2uToAddress: fetchedPayment.to_address,
+        customerAmount: ctx.customerAmount,
+        merchantAmount: fetchedAmount,
+        horizonFeeCharged: Number(fetchedPayment.transaction.fee_charged) / 10_000_000,
+        horizonSuccessFlag: true,
+        piCompleted: true,
+        piCompletionPending: false,
+        paidAt: new Date().toISOString(),
+        status: "settlement_pending",
+        // DO NOT set dbRecorded or settled_to_merchant - must wait for DB reconciliation
+        requiresDbReconciliation: true,
+      }
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      console.log("[A2U Executor] ✓ Verified completed payment stored - will proceed to DB reconciliation at Stage 4")
+      // Set flags to skip Stages 2 and 3, continue to Stage 4
+    } else {
+      // Not developer-completed: allow to continue through normal flow (Stage 2)
+      console.log("[A2U Executor] A2U is not yet developer-completed - will continue through signing flow")
+      ctx.payment = {
+        ...ctx.payment,
+        a2uFromAddress: fetchedPayment.from_address,
+        a2uToAddress: fetchedPayment.to_address,
+        customerAmount: ctx.customerAmount,
+        merchantAmount: fetchedAmount,
+        status: "settlement_pending",
+      }
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      // Continue to Stage 2 for signing
     }
-    if (!fetchedPayment.transaction?.txid) {
-      return { ok: false, status: "error", error: "A2U missing transaction txid" }
-    }
-    if (typeof fetchedPayment.fee_charged !== 'number' || !Number.isFinite(fetchedPayment.fee_charged)) {
-      return { ok: false, status: "settlement_pending", error: "A2U completed on Pi but missing fee data for DB record" }
-    }
-    // Persist with fetched data - but NEVER set dbRecorded or settled_to_merchant from Pi state alone
-    ctx.payment = {
-      ...ctx.payment,
-      a2uTxid: fetchedPayment.transaction.txid,
-      a2uFromAddress: fetchedPayment.from_address,
-      a2uToAddress: fetchedPayment.to_address,
-      customerAmount: ctx.customerAmount,
-      merchantAmount: Number(fetchedPayment.amount),
-      horizonFeeCharged: Number(fetchedPayment.fee_charged) / 10_000_000,
-      horizonSuccessFlag: true,
-      piCompleted: true,
-      piCompletionPending: false,
-      paidAt: new Date().toISOString(),
-      status: "settlement_pending",
-      // DO NOT set dbRecorded or settled_to_merchant - must wait for DB reconciliation
-      requiresDbReconciliation: true,
-    }
-    await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-    console.log("[A2U Executor] ✓ Already-completed payment validated and stored for DB reconciliation")
-    // Continue to stage 4 (DB reconciliation) - DO NOT return success yet
-  }
   }
 
   // STAGE 2: Sign (skip if already have a2uTxid)
@@ -292,10 +309,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] STAGE 3: Calling Pi /complete")
     // Validate a2uPaymentId is present before calling Pi
     if (!a2uPaymentId || typeof a2uPaymentId !== 'string') {
-    return { ok: false, status: "error", error: "a2uPaymentId missing before stage 3" }
-  }
-  if (!txidFromHorizon || typeof txidFromHorizon !== 'string') {
-    return { ok: false, status: "error", error: "txidFromHorizon missing before stage 3 - Horizon must have succeeded" }
+      return { ok: false, status: "error", error: "a2uPaymentId missing before stage 3" }
+    }
+    if (!txidFromHorizon || typeof txidFromHorizon !== 'string') {
+      return { ok: false, status: "error", error: "txidFromHorizon missing before stage 3 - Horizon must have succeeded" }
     }
     const piResult = await stage3CompletePi(ctx, a2uPaymentId, txidFromHorizon)
     if (!piResult.ok) {
