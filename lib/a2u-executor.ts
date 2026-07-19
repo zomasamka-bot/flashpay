@@ -234,14 +234,14 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     
     // Extract state from PaymentDTO
     const isDevCompleted = fetchedPayment.status?.developer_completed === true
-    const hasTxid = typeof fetchedPayment.transaction?.txid === 'string'
+    const existingTxid = fetchedPayment.transaction?.txid
     
     // If any txid exists, preserve it and permanently skip Stage2
-    if (hasTxid) {
+    if (typeof existingTxid === "string") {
       console.log("[A2U Executor] A2U has existing txid - preserving and skipping Stage 2")
       ctx.payment = {
         ...ctx.payment,
-        a2uTxid: fetchedPayment.transaction.txid,
+        a2uTxid: existingTxid,
         a2uFromAddress: fetchedPayment.from_address,
         a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
