@@ -219,21 +219,45 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return { ok: false, status: "error", error: "A2U missing addresses" }
     }
     
-    // Check if payment is cancelled or invalid
-    if (fetchedPayment.status?.cancelled || fetchedPayment.status === "cancelled") {
+    // Check if payment is cancelled by user or system
+    if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true) {
       return { ok: false, status: "error", error: "A2U payment was cancelled" }
     }
     
-    // Check if payment is developer-completed (signature stage done, Horizon verified)
+    // Extract status and transaction fields from PaymentDTO
     const isDevCompleted = fetchedPayment.status?.developer_completed === true
-    const isTransactionVerified = fetchedPayment.transaction?.verified === true
-    const hasTransactionTxid = typeof fetchedPayment.transaction?.txid === 'string'
-    const hasValidFee = typeof fetchedPayment.transaction?.fee_charged === 'number' && 
-                        Number.isFinite(fetchedPayment.transaction.fee_charged)
+    const isTransactionVerified = fetchedPayment.status?.transaction_verified === true
+    const hasTxid = typeof fetchedPayment.transaction?.txid === 'string'
     
-    // If developer_completed AND transaction verified AND has txid AND has fee: skip to DB stage
-    if (isDevCompleted && isTransactionVerified && hasTransactionTxid && hasValidFee) {
-      console.log("[A2U Executor] A2U is developer-completed and transaction verified - skipping to DB reconciliation")
+    // Flow decision based on payment state:
+    // 1. transaction verified + txid but NOT developer_completed: fetch fee from Horizon, block Stage2, resume Pi /complete
+    // 2. developer_completed + transaction verified + txid: skip to DB reconciliation
+    // 3. no txid: continue to Stage 2 for normal signing
+    
+    if (isTransactionVerified && hasTxid && !isDevCompleted) {
+      // Payment is verified on Horizon but not yet marked developer_completed
+      // Fetch fee from Horizon and proceed directly to Pi /complete (Stage 3)
+      console.log("[A2U Executor] A2U has verified txid but not developer_completed - fetching fee from Horizon")
+      
+      // Fetch fee from Horizon for this txid
+      let horizonFee: number
+      try {
+        const horizonServer = new StellarSDK.Server("https://horizon.stellar.org")
+        const txRecord = await horizonServer.transactions().transaction(fetchedPayment.transaction.txid).call()
+        const feeChargedStroops = txRecord.fee_charged
+        if (typeof feeChargedStroops !== 'number' && typeof feeChargedStroops !== 'string') {
+          return { ok: false, status: "error", error: "Horizon transaction has invalid fee_charged type" }
+        }
+        horizonFee = Number(feeChargedStroops)
+        if (!Number.isFinite(horizonFee) || horizonFee < 0) {
+          return { ok: false, status: "error", error: "Horizon transaction fee_charged is not a valid nonnegative number" }
+        }
+      } catch (error) {
+        console.error("[A2U Stage1] Failed to fetch fee from Horizon:", error)
+        return { ok: false, status: "error", error: "Failed to fetch fee from Horizon for verified txid" }
+      }
+      
+      // Preserve verified txid and fee, skip Stage 2, resume Pi /complete at Stage 3
       ctx.payment = {
         ...ctx.payment,
         a2uTxid: fetchedPayment.transaction.txid,
@@ -241,7 +265,25 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
-        horizonFeeCharged: Number(fetchedPayment.transaction.fee_charged) / 10_000_000,
+        horizonFeeCharged: horizonFee / 10_000_000,
+        horizonSuccessFlag: true,
+        piCompleted: false,
+        piCompletionPending: true,
+        status: "settlement_pending",
+      }
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      console.log("[A2U Executor] ✓ Verified txid and fee preserved - will proceed to Pi /complete at Stage 3")
+      // txidFromHorizon is set, so Stage 2 will be skipped and Stage 3 will complete Pi
+    } else if (isDevCompleted && isTransactionVerified && hasTxid) {
+      // Payment is fully developer-completed: skip to DB reconciliation
+      console.log("[A2U Executor] A2U is developer-completed with verified txid - skipping to DB reconciliation")
+      ctx.payment = {
+        ...ctx.payment,
+        a2uTxid: fetchedPayment.transaction.txid,
+        a2uFromAddress: fetchedPayment.from_address,
+        a2uToAddress: fetchedPayment.to_address,
+        customerAmount: ctx.customerAmount,
+        merchantAmount: fetchedAmount,
         horizonSuccessFlag: true,
         piCompleted: true,
         piCompletionPending: false,
@@ -251,11 +293,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         requiresDbReconciliation: true,
       }
       await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-      console.log("[A2U Executor] ✓ Verified completed payment stored - will proceed to DB reconciliation at Stage 4")
-      // Set flags to skip Stages 2 and 3, continue to Stage 4
+      console.log("[A2U Executor] ✓ Developer-completed payment stored - will proceed to DB reconciliation at Stage 4")
     } else {
-      // Not developer-completed: allow to continue through normal flow (Stage 2)
-      console.log("[A2U Executor] A2U is not yet developer-completed - will continue through signing flow")
+      // No txid or incomplete state: continue through normal flow (Stage 2 signing)
+      console.log("[A2U Executor] A2U needs signing - will continue through Stage 2")
       ctx.payment = {
         ...ctx.payment,
         a2uFromAddress: fetchedPayment.from_address,
@@ -265,7 +306,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         status: "settlement_pending",
       }
       await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
-      // Continue to Stage 2 for signing
     }
   }
 
