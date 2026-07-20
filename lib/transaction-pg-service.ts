@@ -1,6 +1,7 @@
 import { query } from "./db"
 import { Payment } from "./types"
 import { randomUUID } from "crypto"
+import { assertReconciliationSafe, checkReconciliationGuard } from "./reconciliation-guard"
 
 /**
  * Generate a human-readable transaction reference
@@ -15,6 +16,10 @@ function generateReference(): string {
 /**
  * Record a transaction to PostgreSQL after payment completion
  * This is called fire-and-forget and does NOT block payment flow
+ *
+ * CRITICAL: Before ANY DB write, this function validates the reconciliation guard.
+ * If accounting data is incomplete or inconsistent, the write is BLOCKED and the
+ * payment checkpoint is preserved in Redis for manual review.
  */
 export async function recordTransactionToPG(
   payment: Payment,
@@ -42,6 +47,38 @@ export async function recordTransactionToPG(
     console.error("[Transaction] Invalid payment - invalid amount:", payment.amount)
     return null
   }
+
+  // =========================================================================
+  // CRITICAL GATE: Check reconciliation readiness before ANY DB write
+  // =========================================================================
+  
+  const guardResult = checkReconciliationGuard(payment)
+  
+  if (!guardResult.canProceed) {
+    console.error(
+      "[Transaction] ❌ RECONCILIATION BLOCKED - Accounting data invalid or incomplete:",
+      {
+        paymentId: payment.id,
+        merchantId: payment.merchantId,
+        gatesFailed: guardResult.gatesFailed,
+        blocking: guardResult.blocking,
+      }
+    )
+    
+    // IMPORTANT: We return null (no DB record created) but do NOT throw.
+    // This allows the payment to remain in Redis checkpoint for review.
+    // The payment is NOT marked dbRecorded, so a future reconciliation attempt
+    // will retry the guard check.
+    return null
+  }
+
+  console.log(
+    "[Transaction] ✓ Reconciliation guard passed - proceeding with DB write:",
+    {
+      paymentId: payment.id,
+      gatesPassed: guardResult.gatesPassed,
+    }
+  )
 
   // Validate and parse createdAt (Payment.createdAt is a string ISO format)
   let createdAtDate: Date
