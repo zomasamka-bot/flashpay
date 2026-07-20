@@ -677,36 +677,23 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     const financialData = validation.data
 
-    // CRITICAL VALIDATION: Reject if horizonFeeCharged missing - NO fallback to 0
-    if (typeof financialData.horizonFeeCharged !== 'number' || !Number.isFinite(financialData.horizonFeeCharged)) {
-      console.error("[A2U Stage4] ❌ AUDIT FAILURE: horizonFeeCharged must be a finite number, got:", financialData.horizonFeeCharged)
-      return { ok: false, error: "horizonFeeCharged validation failed - cannot proceed to DB", userFacingStatus: "error" }
-    }
-
-    // CRITICAL: appCommission MUST be explicit number from validated data
-    if (typeof financialData.appCommission !== 'number' || !Number.isFinite(financialData.appCommission)) {
-      console.error("[A2U Stage4] ❌ AUDIT FAILURE: appCommission must be a finite number, got:", financialData.appCommission)
-      return { ok: false, error: "appCommission validation failed - cannot proceed to DB", userFacingStatus: "error" }
-    }
-
     console.log("[A2U Stage4] All financial fields validated from Redis checkpoint - proceeding to DB:")
+    console.log("[A2U Stage4]   - piPaymentId:", financialData.piPaymentId)
+    console.log("[A2U Stage4]   - u2aTxid:", financialData.u2aTxid)
+    console.log("[A2U Stage4]   - a2uPaymentId:", financialData.a2uPaymentId)
+    console.log("[A2U Stage4]   - a2uTxid:", financialData.a2uTxid)
     console.log("[A2U Stage4]   - customerAmount:", financialData.customerAmount)
     console.log("[A2U Stage4]   - merchantAmount:", financialData.merchantAmount)
     console.log("[A2U Stage4]   - horizonFeeCharged:", financialData.horizonFeeCharged)
     console.log("[A2U Stage4]   - appCommission:", financialData.appCommission)
 
-    // Validate piPaymentId is present and is a string before DB record
-    if (!ctx.piPaymentId || typeof ctx.piPaymentId !== 'string') {
-      return { ok: false, error: "piPaymentId required for DB record - missing U2A identifier", userFacingStatus: "error" }
-    }
-
     // Call DB with VALIDATED financial data only
-    // CRITICAL: Pass financialData.a2uPaymentId (validated string) not ctx.payment.a2uPaymentId (optional)
+    // CRITICAL: Pass ONLY validated identifiers from financialData
     const dbResult = await recordA2UTransactionAtomic({
-      u2aIdentifier: ctx.piPaymentId,
+      u2aIdentifier: financialData.piPaymentId,
       u2aTxid: financialData.u2aTxid,
       a2uIdentifier: financialData.a2uPaymentId,
-      a2uTxid: txidFromHorizon,
+      a2uTxid: financialData.a2uTxid,
       merchantId: financialData.merchantId,
       merchantUid: financialData.merchantUid,
       customerAmount: financialData.customerAmount,
@@ -717,12 +704,18 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     if (!dbResult || !dbResult.success) {
       console.error("[A2U Stage4] DB reconciliation failed:", dbResult?.error)
-      // Preserve failure state for recovery by reloading, updating, and persisting
-      latestPayment.status = "settlement_pending"
-      latestPayment.dbRecorded = false
-      latestPayment.requiresDbReconciliation = true
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(latestPayment))
-      console.log("[A2U Stage4] Persisted settlement_pending with dbRecorded=false and requiresDbReconciliation=true")
+      // Preserve failure state for recovery using monotonic merge
+      try {
+        await persistCheckpointMerged(ctx.paymentId, {
+          status: "settlement_pending",
+          dbRecorded: false,
+          requiresDbReconciliation: true,
+        })
+        console.log("[A2U Stage4] Persisted settlement_pending with dbRecorded=false and requiresDbReconciliation=true via persistCheckpointMerged")
+      } catch (persistErr) {
+        console.error("[A2U Stage4] Failed to persist checkpoint on DB failure:", persistErr)
+        // Continue returning error even if checkpoint persist fails
+      }
       return { ok: false, error: dbResult?.error || "Unknown DB error", userFacingStatus: "settlement_pending" }
     }
 
