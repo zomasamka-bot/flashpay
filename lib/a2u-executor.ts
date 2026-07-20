@@ -247,6 +247,11 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
         status: "settlement_pending" as const,
+        horizonSuccessFlag: true,
+        horizonSuccessAt: new Date().toISOString(),
+        piCompleted: isDevCompleted,
+        piCompletionPending: !isDevCompleted,
+        requiresDbReconciliation: false,
       }
       // Replace ctx.payment with fully merged record
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, preserveUpdates)
@@ -261,6 +266,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
         status: "settlement_pending" as const,
+        piCompleted: isDevCompleted,
+        piCompletionPending: !isDevCompleted,
+        requiresDbReconciliation: false,
       }
       // Replace ctx.payment with fully merged record
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, continueUpdates)
@@ -293,8 +301,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       horizonSuccessAt: new Date().toISOString(),
       piCompletionPending: true,
       piCompleted: false,
-      paidAt: new Date().toISOString(),
-      requiresDbReconciliation: true,
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage2Updates)
@@ -349,15 +355,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: dbResult.error,
       }
     }
-    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status, and appNetImpact after atomic DB success (crash-safe merge)
-    // appNetImpact = customerAmount - merchantAmount - horizonFeeCharged (same formula from validateFinancialData and DB recording)
-    const appNetImpact = financialData.customerAmount - financialData.merchantAmount - financialData.horizonFeeCharged
+    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status after atomic DB success (crash-safe merge)
     const stage4Updates = {
       dbRecorded: true,
       status: "settled_to_merchant" as const,
       requiresDbReconciliation: false,
       settledAt: new Date().toISOString(),
-      appNetImpact: appNetImpact,
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage4Updates)
@@ -848,7 +851,6 @@ async function persistCheckpointMerged(
     if (updates.merchantAmount !== undefined) merged.merchantAmount = updates.merchantAmount
     if (updates.horizonFeeCharged !== undefined) merged.horizonFeeCharged = updates.horizonFeeCharged
     if (updates.appCommission !== undefined) merged.appCommission = updates.appCommission
-    if (updates.appNetImpact !== undefined) merged.appNetImpact = updates.appNetImpact
     if (updates.note !== undefined) merged.note = updates.note
     if (updates.settlementStage !== undefined) merged.settlementStage = updates.settlementStage
     if (updates.createdAt !== undefined) merged.createdAt = updates.createdAt
