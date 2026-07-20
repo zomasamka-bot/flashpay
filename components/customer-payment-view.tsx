@@ -9,9 +9,8 @@ import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { executePayment, getPaymentFromServer, handlePaymentRecovery } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
-import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
+import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus, isPaymentFinal } from "@/lib/payment-status"
 import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
-import { isPaymentFinal } from "@/lib/a2u-response"
 import type { Payment, PaymentStatus } from "@/lib/types"
 
 export function CustomerPaymentView({ 

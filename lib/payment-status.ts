@@ -95,6 +95,26 @@ export function canClientRetryPayment(payment: Payment): boolean {
 }
 
 /**
+ * SINGLE SOURCE OF TRUTH: Finality predicate checked identically on server and client.
+ * ALL conditions must be true for success=true response and onSuccess callback.
+ * Client-safe: no server-only imports.
+ * @param payment - The payment record from checkpoint
+ * @returns true if payment meets all finality requirements
+ */
+export function isPaymentFinal(payment: Payment): boolean {
+  return (
+    payment.status === "settled_to_merchant" &&
+    payment.piCompleted === true &&
+    payment.dbRecorded === true &&
+    payment.requiresDbReconciliation !== true &&
+    !!payment.piPaymentId &&
+    !!payment.a2uPaymentId &&
+    !!payment.u2aTxid &&
+    !!payment.a2uTxid
+  )
+}
+
+/**
  * Get human-readable status label for UI display
  */
 export function getStatusLabel(status: PaymentStatus): string {

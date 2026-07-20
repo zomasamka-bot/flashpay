@@ -1,23 +1,5 @@
 import { redis } from "@/lib/redis"
-
-/**
- * SINGLE SOURCE OF TRUTH: Finality predicate checked identically on server and client.
- * ALL conditions must be true for success=true response and onSuccess callback.
- * @param payment - The payment record from Redis checkpoint
- * @returns true if payment meets all finality requirements
- */
-export function isPaymentFinal(payment: any): boolean {
-  return (
-    payment.status === "settled_to_merchant" &&
-    payment.piCompleted === true &&
-    payment.dbRecorded === true &&
-    payment.requiresDbReconciliation !== true &&
-    !!payment.piPaymentId &&
-    !!payment.a2uPaymentId &&
-    !!payment.u2aTxid &&
-    !!payment.a2uTxid
-  )
-}
+import { isPaymentFinal } from "@/lib/payment-status"
 
 /**
  * Unified payment response shape - used by ALL response paths (processing or final).
