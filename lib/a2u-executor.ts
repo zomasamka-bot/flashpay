@@ -203,9 +203,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         a2uToAddress: stageResult.data.a2uPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
-        merchantId: ctx.payment.merchantId,
-        merchantUid: ctx.merchantUid,
-        appCommission: ctx.payment.appCommission,
       }
       // Replace ctx.payment with fully merged record returned from persist
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage1Updates)
@@ -249,9 +246,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
-        merchantId: ctx.payment.merchantId,
-        merchantUid: ctx.merchantUid,
-        appCommission: ctx.payment.appCommission,
         status: "settlement_pending" as const,
       }
       // Replace ctx.payment with fully merged record
@@ -266,9 +260,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
-        merchantId: ctx.payment.merchantId,
-        merchantUid: ctx.merchantUid,
-        appCommission: ctx.payment.appCommission,
         status: "settlement_pending" as const,
       }
       // Replace ctx.payment with fully merged record
@@ -298,9 +289,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       a2uTxid: txidFromHorizon,
       customerAmount: ctx.customerAmount,
       horizonFeeCharged: signResult.data.horizonFeeCharged,
-      merchantId: ctx.payment.merchantId,
-      merchantUid: ctx.merchantUid,
-      appCommission: ctx.payment.appCommission,
       horizonSuccessFlag: true,
       piCompletionPending: true,
       piCompleted: false,
@@ -360,14 +348,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: dbResult.error,
       }
     }
-    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status, and appNetImpact after atomic DB success (crash-safe merge)
-    const appNetImpact = ctx.payment.customerAmount - ctx.payment.merchantAmount - (ctx.payment.horizonFeeCharged ?? 0)
+    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status after atomic DB success (crash-safe merge)
     const stage4Updates = {
       dbRecorded: true,
       status: "settled_to_merchant" as const,
       requiresDbReconciliation: false,
       settledAt: new Date().toISOString(),
-      appNetImpact: appNetImpact,
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage4Updates)
