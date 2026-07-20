@@ -290,10 +290,11 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       customerAmount: ctx.customerAmount,
       horizonFeeCharged: signResult.data.horizonFeeCharged,
       horizonSuccessFlag: true,
+      horizonSuccessAt: new Date().toISOString(),
       piCompletionPending: true,
       piCompleted: false,
-      requiresDbReconciliation: false,
-      horizonSuccessAt: new Date().toISOString(),
+      paidAt: new Date().toISOString(),
+      requiresDbReconciliation: true,
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage2Updates)
@@ -348,12 +349,15 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: dbResult.error,
       }
     }
-    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status after atomic DB success (crash-safe merge)
+    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status, and appNetImpact after atomic DB success (crash-safe merge)
+    // appNetImpact = customerAmount - merchantAmount - horizonFeeCharged (same formula from validateFinancialData and DB recording)
+    const appNetImpact = financialData.customerAmount - financialData.merchantAmount - financialData.horizonFeeCharged
     const stage4Updates = {
       dbRecorded: true,
       status: "settled_to_merchant" as const,
       requiresDbReconciliation: false,
       settledAt: new Date().toISOString(),
+      appNetImpact: appNetImpact,
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage4Updates)
