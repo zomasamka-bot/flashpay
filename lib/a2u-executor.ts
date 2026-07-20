@@ -429,22 +429,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       console.log("[A2U Executor] ✓ Final DB markers persisted (dbRecorded=true, settled_to_merchant)")
     } catch (finalPersistErr) {
       const persistError = finalPersistErr instanceof Error ? finalPersistErr.message : String(finalPersistErr)
-      console.error("[A2U Executor] CRITICAL: Final Redis checkpoint failed after DB success - preserving recovery state:", persistError)
-      // Preserve all completed DB identifiers and evidence in checkpoint without final markers for retry
-      try {
-        await persistCheckpointMerged(ctx.paymentId, {
-          status: "settlement_pending",
-          requiresDbReconciliation: false,
-          // Preserve: a2uPaymentId, a2uTxid, u2aTxid, horizonSuccessFlag, piCompleted, piCompletionPending, piCompletedAt
-          // These identifiers and completion evidence are already in ctx.payment from prior stages
-        })
-        console.log("[A2U Executor] Preserved recovery checkpoint with DB evidence after final Redis failure")
-      } catch (recoveryErr) {
-        const recoveryError = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
-        console.error("[A2U Executor] CRITICAL: Failed to preserve recovery checkpoint:", recoveryError)
-        // Even if this fails, all DB state is already persisted - return error but don't repeat prior stages on retry
-        return { ok: false, status: "error", error: "Final settlement failed - DB committed but Redis checkpoint persistence failed" }
-      }
+      console.error("[A2U Executor] CRITICAL: Final Redis checkpoint failed after DB success - returning error without retry:", persistError)
+      // DO NOT attempt recovery checkpoint write - DB is already committed with verified transactionId
+      // Payment data in ctx.payment contains all DB-verified identifiers and evidence
+      // On next invocation, isRecovery=true will reload from Redis, verify DB matches, write only final markers
+      return { ok: false, status: "settlement_pending", error: "Final Redis checkpoint failed - DB committed successfully, retry only checkpoint" }
+    }
       // Return error but signal recovery is preserved for retry
       return { ok: false, status: "settlement_pending", error: "Final Redis checkpoint failed - DB committed successfully, retry only checkpoint" }
     }
