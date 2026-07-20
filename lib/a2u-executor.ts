@@ -822,12 +822,29 @@ async function persistCheckpointMerged(
       merged.status = updates.status
     }
 
-    // Merge all other fields while preserving evidence
-    for (const [key, value] of Object.entries(updates)) {
-      if (!["a2uPaymentId", "a2uTxid", "horizonSuccessFlag", "piCompleted", "dbRecorded", "horizonSuccessAt", "paidAt", "settledAt", "status"].includes(key)) {
-        ;(merged as Record<string, unknown>)[key] = value
-      }
-    }
+    // Merge all other allowed fields from updates while preserving protected checkpoint evidence
+    // Only assign fields that are explicitly allowed (not protected terminals or timestamps)
+    // Use explicit typed assignment to avoid unsafe casts
+    if (updates.id !== undefined) merged.id = updates.id
+    if (updates.merchantId !== undefined) merged.merchantId = updates.merchantId
+    if (updates.merchantAddress !== undefined) merged.merchantAddress = updates.merchantAddress
+    if (updates.merchantUid !== undefined) merged.merchantUid = updates.merchantUid
+    if (updates.accessToken !== undefined) merged.accessToken = updates.accessToken
+    if (updates.amount !== undefined) merged.amount = updates.amount
+    if (updates.customerAmount !== undefined) merged.customerAmount = updates.customerAmount
+    if (updates.merchantAmount !== undefined) merged.merchantAmount = updates.merchantAmount
+    if (updates.horizonFeeCharged !== undefined) merged.horizonFeeCharged = updates.horizonFeeCharged
+    if (updates.appCommission !== undefined) merged.appCommission = updates.appCommission
+    if (updates.appNetImpact !== undefined) merged.appNetImpact = updates.appNetImpact
+    if (updates.note !== undefined) merged.note = updates.note
+    if (updates.settlementStage !== undefined) merged.settlementStage = updates.settlementStage
+    if (updates.createdAt !== undefined) merged.createdAt = updates.createdAt
+    if (updates.piPaymentId !== undefined) merged.piPaymentId = updates.piPaymentId
+    if (updates.u2aTxid !== undefined) merged.u2aTxid = updates.u2aTxid
+    if (updates.a2uFromAddress !== undefined) merged.a2uFromAddress = updates.a2uFromAddress
+    if (updates.a2uToAddress !== undefined) merged.a2uToAddress = updates.a2uToAddress
+    if (updates.requiresDbReconciliation !== undefined) merged.requiresDbReconciliation = updates.requiresDbReconciliation
+    if (updates.piCompletionPending !== undefined) merged.piCompletionPending = updates.piCompletionPending
 
     // Persist merged record - if this fails, throw immediately to stop workflow
     console.log("[A2U Checkpoint] Persisting strictly monotonic checkpoint to Redis")
