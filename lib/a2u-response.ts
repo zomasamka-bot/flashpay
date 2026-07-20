@@ -18,18 +18,23 @@ import { redis } from "@/lib/redis"
  */
 export interface PaymentResponse {
   success: boolean
-  status: "settlement_pending" | "settled_to_merchant" | string
+  status: string
   paymentId: string
-  a2uPaymentId: string
-  u2aTxid: string
-  a2uTxid: string
-  a2uFromAddress: string
-  a2uToAddress: string
-  customerAmount: number
-  merchantAmount: number
-  horizonFeeCharged: number
-  appCommission: number
-  appNetImpact: number
+  // Identifiers - only present if checkpoint has them
+  piPaymentId?: string
+  a2uPaymentId?: string
+  u2aTxid?: string
+  a2uTxid?: string
+  // Addresses - only present after Horizon broadcast
+  a2uFromAddress?: string
+  a2uToAddress?: string
+  // Amounts - only present after amounts confirmed
+  customerAmount?: number
+  merchantAmount?: number
+  horizonFeeCharged?: number
+  appCommission?: number
+  appNetImpact?: number
+  // State flags - always present to show current state
   piCompleted: boolean
   dbRecorded: boolean
 }
@@ -101,27 +106,27 @@ export async function buildA2USuccessResponse(
   // CRITICAL: Failure state (preserve all checkpoints for recovery)
   const isFailed = payment.status === "settlement_failed"
 
-  // Build response with only authoritative Redis data
-  // For processing/failure states, preserve identifiers but never claim success
-  // Never fabricate missing critical fields
+  // Build response with ONLY values actually stored in Redis checkpoint
+  // Never fabricate missing fields - use optional properties to indicate what exists
   const response: PaymentResponse = {
     success: isFinalSuccess,
     status: payment.status || "settlement_pending",
     paymentId: recordId,
-    // Preserve identifiers for all states (critical for recovery)
-    a2uPaymentId: payment.a2uPaymentId || "",
-    u2aTxid: payment.u2aTxid || "",
-    a2uTxid: payment.a2uTxid || "",
-    // Preserve addresses from checkpoint - may be undefined in early states
-    a2uFromAddress: payment.a2uFromAddress || "",
-    a2uToAddress: payment.a2uToAddress || "",
-    // Preserve amounts - required for response validity
-    customerAmount: payment.customerAmount ?? 0,
-    merchantAmount: payment.merchantAmount ?? 0,
-    horizonFeeCharged: payment.horizonFeeCharged ?? 0,
-    appCommission: payment.appCommission ?? 0,
-    appNetImpact: payment.appNetImpact ?? 0,
-    // Always expose state of critical flags
+    // Include identifiers only if they exist in checkpoint (never empty string fallbacks)
+    ...(payment.piPaymentId && { piPaymentId: payment.piPaymentId }),
+    ...(payment.a2uPaymentId && { a2uPaymentId: payment.a2uPaymentId }),
+    ...(payment.u2aTxid && { u2aTxid: payment.u2aTxid }),
+    ...(payment.a2uTxid && { a2uTxid: payment.a2uTxid }),
+    // Include addresses only if they exist (may be undefined in early processing states)
+    ...(payment.a2uFromAddress && { a2uFromAddress: payment.a2uFromAddress }),
+    ...(payment.a2uToAddress && { a2uToAddress: payment.a2uToAddress }),
+    // Include amounts only if they exist (may be undefined until confirmed)
+    ...(payment.customerAmount !== undefined && { customerAmount: payment.customerAmount }),
+    ...(payment.merchantAmount !== undefined && { merchantAmount: payment.merchantAmount }),
+    ...(payment.horizonFeeCharged !== undefined && { horizonFeeCharged: payment.horizonFeeCharged }),
+    ...(payment.appCommission !== undefined && { appCommission: payment.appCommission }),
+    ...(payment.appNetImpact !== undefined && { appNetImpact: payment.appNetImpact }),
+    // Always expose state of critical flags to show progression
     piCompleted: payment.piCompleted === true,
     dbRecorded: payment.dbRecorded === true,
   }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -33,15 +33,15 @@ export function CustomerPaymentView({
   const [authError, setAuthError] = useState<string>("")
   const [isPaymentPaid, setIsPaymentPaid] = useState(false)
   const [isInPiBrowser, setIsInPiBrowser] = useState(true)
-  // CRITICAL: Guard to ensure onSuccess callback runs exactly once per paymentId
-  const [successCallbackExecuted, setSuccessCallbackExecuted] = useState(false)
+  // CRITICAL: Synchronous per-paymentId ref guard for onSuccess callback (never multi-execute)
+  const successCallbackExecutedRef = useRef(false)
 
   useEffect(() => {
     console.log("[v0][CustomerView] Mounted with payment ID:", paymentId)
     console.log("[v0][CustomerView] Current domain:", typeof window !== "undefined" ? window.location.hostname : "N/A")
     
-    // GUARD: Reset callback execution flag when paymentId changes
-    setSuccessCallbackExecuted(false)
+    // GUARD: Reset ref when paymentId changes (sync, not deferred like setState)
+    successCallbackExecutedRef.current = false
     
     // Check if running in Pi Browser
     const checkPiBrowser = typeof window !== "undefined" && !!window.Pi
@@ -234,9 +234,25 @@ export function CustomerPaymentView({
               return
             }
 
-            // ONLY NOW that predicate is validated: call onSuccess EXACTLY ONCE per paymentId
-            console.log("[v0][CustomerView] ✓ Payment meets finality predicate")
-            console.log("[v0][CustomerView] Callback executed for this paymentId:", successCallbackExecuted)
+            // CRITICAL: Exact finality predicate matching server logic - all must be true
+            const finalityCheck =
+              serverPayment.status === "settled_to_merchant" &&
+              serverPayment.piCompleted === true &&
+              serverPayment.dbRecorded === true &&
+              serverPayment.requiresDbReconciliation !== true &&
+              !!serverPayment.piPaymentId &&
+              !!serverPayment.a2uPaymentId &&
+              !!serverPayment.u2aTxid &&
+              !!serverPayment.a2uTxid
+
+            if (!finalityCheck) {
+              // Should not reach here due to earlier check, but fail safely
+              console.error("[v0][CustomerView] ERROR: Finality predicate failed on callback - aborting onSuccess")
+              setIsPaying(false)
+              return
+            }
+            
+            console.log("[v0][CustomerView] ✓ Payment meets exact finality predicate - marking for callback")
             
             unifiedStore.addPayment(serverPayment)
             setPayment(serverPayment)
@@ -249,13 +265,14 @@ export function CustomerPaymentView({
               description: `Settlement complete. Transaction: ${serverPayment.u2aTxid}`,
             })
             
-            // GUARD: Execute onSuccess callback only once per paymentId (idempotent)
-            if (!successCallbackExecuted && onSuccess && serverPayment.u2aTxid) {
-              console.log("[v0][CustomerView] Executing onSuccess callback (will not repeat)")
-              setSuccessCallbackExecuted(true)
+            // GUARD: Execute onSuccess callback once per paymentId using synchronous ref guard
+            if (!successCallbackExecutedRef.current && onSuccess && serverPayment.u2aTxid) {
+              // Mark before calling to prevent re-entry
+              successCallbackExecutedRef.current = true
+              console.log("[v0][CustomerView] Executing onSuccess callback (ref guard prevents repeat)")
               onSuccess(serverPayment.u2aTxid)
-            } else if (successCallbackExecuted) {
-              console.log("[v0][CustomerView] onSuccess callback already executed for this paymentId - skipping")
+            } else if (successCallbackExecutedRef.current) {
+              console.log("[v0][CustomerView] onSuccess callback already executed for paymentId - skipping duplicate")
             }
           } catch (err) {
             console.error("[v0][CustomerView] Error fetching server state:", err)
