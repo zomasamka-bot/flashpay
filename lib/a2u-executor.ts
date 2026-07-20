@@ -204,8 +204,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         customerAmount: ctx.customerAmount,
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
       }
-      await persistCheckpointMerged(ctx.paymentId, stage1Updates)
-      ctx.payment = { ...ctx.payment, ...stage1Updates }
+      // Replace ctx.payment with fully merged record returned from persist
+      ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage1Updates)
     }
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
@@ -254,8 +254,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         status: "settlement_pending" as const,
         requiresDbReconciliation: isDevCompleted,
       }
-      await persistCheckpointMerged(ctx.paymentId, preserveUpdates)
-      ctx.payment = { ...ctx.payment, ...preserveUpdates }
+      // Replace ctx.payment with fully merged record
+      ctx.payment = await persistCheckpointMerged(ctx.paymentId, preserveUpdates)
       console.log("[A2U Executor] ✓ Txid preserved - will skip Stage 2")
       // txidFromHorizon is set, Stage 2 will be skipped
     } else {
@@ -268,8 +268,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         merchantAmount: fetchedAmount,
         status: "settlement_pending" as const,
       }
-      await persistCheckpointMerged(ctx.paymentId, continueUpdates)
-      ctx.payment = { ...ctx.payment, ...continueUpdates }
+      // Replace ctx.payment with fully merged record
+      ctx.payment = await persistCheckpointMerged(ctx.paymentId, continueUpdates)
     }
   }
 
@@ -301,8 +301,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       requiresDbReconciliation: false,
       horizonSuccessAt: new Date().toISOString(),
     }
-    await persistCheckpointMerged(ctx.paymentId, stage2Updates)
-    ctx.payment = { ...ctx.payment, ...stage2Updates }
+    // Replace ctx.payment with fully merged record
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage2Updates)
     console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged )
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
@@ -332,8 +332,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       piCompletionPending: false,
       paidAt: new Date().toISOString(),
     }
-    await persistCheckpointMerged(ctx.paymentId, stage3Updates)
-    ctx.payment = { ...ctx.payment, ...stage3Updates }
+    // Replace ctx.payment with fully merged record
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage3Updates)
     console.log("[A2U Executor] ✓ Pi /complete succeeded")
   } else {
     console.log("[A2U Executor] STAGE 3: Skipping Pi /complete - already piCompleted")
@@ -361,8 +361,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       requiresDbReconciliation: false,
       settledAt: new Date().toISOString(),
     }
-    await persistCheckpointMerged(ctx.paymentId, stage4Updates)
-    ctx.payment = { ...ctx.payment, ...stage4Updates }
+    // Replace ctx.payment with fully merged record
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage4Updates)
     console.log("[A2U Executor] ✓ DB reconciliation succeeded")
   } else {
     console.log("[A2U Executor] STAGE 4: Skipping DB reconciliation - already recorded")
@@ -498,12 +498,18 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const piPrivateSeed = process.env.PI_PRIVATE_SEED
     if (!piPrivateSeed) {
       console.error("[A2U Stage2] ❌ PI_PRIVATE_SEED not configured - cannot sign Horizon transaction")
-      // DO NOT set horizonSuccessFlag=true or persist a2uTxid on failure (crash-safe merge)
-      const failureUpdates = {
-        status: "settlement_pending" as const,
-        piCompletionPending: true,
+      // DO NOT set horizonSuccessFlag=true or persist a2uTxid on failure
+      // Update status with merge and stop workflow
+      try {
+        const failureUpdates = {
+          status: "settlement_pending" as const,
+          piCompletionPending: true,
+        }
+        ctx.payment = await persistCheckpointMerged(ctx.paymentId, failureUpdates)
+      } catch (persistError) {
+        console.error("[A2U Stage2] Failed to persist failure checkpoint:", persistError)
+        return { ok: false, error: "Configuration error and checkpoint persist failed", userFacingStatus: "settlement_pending" }
       }
-      await persistCheckpointMerged(ctx.paymentId, failureUpdates)
       return { ok: false, error: "PI_PRIVATE_SEED not configured - requires manual intervention", userFacingStatus: "settlement_pending" }
     }
 
@@ -711,44 +717,129 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 }
 
 /**
- * Crash-safe checkpoint persist with merge semantics
- * Reloads latest record from Redis before persisting to ensure monotonic advancement.
- * Never overwrites newer evidence (a2uPaymentId, a2uTxid, horizonSuccessFlag, piCompleted, dbRecorded).
+ * Crash-safe, strictly monotonic checkpoint merge and persist
+ * Returns the fully merged record on success; throws on failure to stop workflow immediately.
+ * CRITICAL: If persistence fails, caller must stop all further execution and return error.
+ * Reloads latest record and merges to ensure:
+ * - Terminal markers (a2uPaymentId, a2uTxid, horizonSuccessFlag, piCompleted, dbRecorded) never unset
+ * - Original timestamps preserved (horizonSuccessAt, paidAt, settledAt never downgraded)
+ * - Conflicting identifiers fail safely
+ * - settled_to_merchant never regresses
+ * - Merge is strictly monotonic and irreversible
  */
 async function persistCheckpointMerged(
   paymentId: string,
   updates: Partial<Payment>
-): Promise<void> {
+): Promise<Payment> {
   if (!isRedisConfigured) {
-    console.error("[A2U Checkpoint] Redis not configured - skipping persist")
-    return
+    const msg = "[A2U Checkpoint] Redis not configured - cannot persist checkpoint"
+    console.error(msg)
+    throw new Error(msg)
   }
 
   try {
     // Reload latest record to merge with new evidence
     const latestData = await redis.get(`payment:${paymentId}`)
-    const latest: Payment = latestData
-      ? (typeof latestData === "string" ? JSON.parse(latestData) : latestData)
-      : {}
-
-    // Merge strategy: never lose newer evidence
-    const merged: Payment = {
-      ...latest,
-      ...updates,
-      // Preserve already-set terminal markers (never unset)
-      a2uPaymentId: updates.a2uPaymentId || latest.a2uPaymentId,
-      a2uTxid: updates.a2uTxid || latest.a2uTxid,
-      horizonSuccessFlag: updates.horizonSuccessFlag ?? latest.horizonSuccessFlag,
-      piCompleted: updates.piCompleted ?? latest.piCompleted,
-      dbRecorded: updates.dbRecorded ?? latest.dbRecorded,
+    if (!latestData) {
+      const msg = "[A2U Checkpoint] Cannot reload payment after modification - data may be corrupted"
+      console.error(msg)
+      throw new Error(msg)
     }
 
+    const latest: Payment = typeof latestData === "string" ? JSON.parse(latestData) : latestData
+
+    // STRICT MONOTONICITY: Build merged record preserving all terminal evidence
+    const merged: Payment = { ...latest }
+
+    // Enforce immutable terminal markers (never unset once true)
+    // Conflicting a2uPaymentId must fail immediately - stop workflow
+    if (latest.a2uPaymentId && updates.a2uPaymentId && latest.a2uPaymentId !== updates.a2uPaymentId) {
+      const msg = `[A2U Checkpoint] FATAL: Conflicting a2uPaymentId - existing="${latest.a2uPaymentId}" vs new="${updates.a2uPaymentId}" - workflow stopped`
+      console.error(msg)
+      throw new Error(msg)
+    }
+    if (updates.a2uPaymentId) {
+      merged.a2uPaymentId = updates.a2uPaymentId
+    }
+
+    // Conflicting a2uTxid must fail immediately - stop workflow
+    if (latest.a2uTxid && updates.a2uTxid && latest.a2uTxid !== updates.a2uTxid) {
+      const msg = `[A2U Checkpoint] FATAL: Conflicting a2uTxid - existing="${latest.a2uTxid}" vs new="${updates.a2uTxid}" - workflow stopped`
+      console.error(msg)
+      throw new Error(msg)
+    }
+    if (updates.a2uTxid) {
+      merged.a2uTxid = updates.a2uTxid
+    }
+
+    // Never unset proven success evidence once true - always preserve
+    if (latest.horizonSuccessFlag === true) {
+      merged.horizonSuccessFlag = true
+    } else if (updates.horizonSuccessFlag) {
+      merged.horizonSuccessFlag = true
+    }
+
+    // Never unset piCompleted once true - always preserve
+    if (latest.piCompleted === true) {
+      merged.piCompleted = true
+    } else if (updates.piCompleted) {
+      merged.piCompleted = true
+    }
+
+    // Never unset dbRecorded once true - always preserve
+    if (latest.dbRecorded === true) {
+      merged.dbRecorded = true
+    } else if (updates.dbRecorded) {
+      merged.dbRecorded = true
+    }
+
+    // Preserve original success timestamps - never downgrade
+    if (latest.horizonSuccessAt && !updates.horizonSuccessAt) {
+      merged.horizonSuccessAt = latest.horizonSuccessAt
+    } else if (updates.horizonSuccessAt) {
+      merged.horizonSuccessAt = latest.horizonSuccessAt || updates.horizonSuccessAt
+    }
+
+    if (latest.paidAt && !updates.paidAt) {
+      merged.paidAt = latest.paidAt
+    } else if (updates.paidAt) {
+      merged.paidAt = latest.paidAt || updates.paidAt
+    }
+
+    if (latest.settledAt && !updates.settledAt) {
+      merged.settledAt = latest.settledAt
+    } else if (updates.settledAt) {
+      merged.settledAt = latest.settledAt || updates.settledAt
+    }
+
+    // Never regress from settled_to_merchant - terminal state must not downgrade
+    if (latest.status === "settled_to_merchant" && updates.status && updates.status !== "settled_to_merchant") {
+      const msg = `[A2U Checkpoint] FATAL: Cannot regress from settled_to_merchant to ${updates.status} - workflow stopped`
+      console.error(msg)
+      throw new Error(msg)
+    }
+    if (updates.status) {
+      merged.status = updates.status
+    }
+
+    // Merge all other fields while preserving evidence
+    for (const [key, value] of Object.entries(updates)) {
+      if (!["a2uPaymentId", "a2uTxid", "horizonSuccessFlag", "piCompleted", "dbRecorded", "horizonSuccessAt", "paidAt", "settledAt", "status"].includes(key)) {
+        ;(merged as Record<string, unknown>)[key] = value
+      }
+    }
+
+    // Persist merged record - if this fails, throw immediately to stop workflow
+    console.log("[A2U Checkpoint] Persisting strictly monotonic checkpoint to Redis")
     await redis.set(`payment:${paymentId}`, JSON.stringify(merged))
-    console.log("[A2U Checkpoint] ✓ Merged checkpoint persisted")
+    console.log("[A2U Checkpoint] ✓ Strictly monotonic checkpoint persisted successfully")
+
+    return merged
   } catch (error) {
-    console.error("[A2U Checkpoint] Failed to persist merged checkpoint:", error)
-    // Ensure we don't crash the entire executor on persist failure
-    // Recovery will detect stale state on next attempt
+    const msg = `[A2U Checkpoint] CRITICAL FAILURE: Checkpoint persistence failed - workflow stopped immediately: ${error instanceof Error ? error.message : String(error)}`
+    console.error(msg)
+    // Throw immediately - caller must not proceed to Pi /complete or DB
+    throw new Error(msg)
   }
 }
 

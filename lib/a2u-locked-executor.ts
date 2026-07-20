@@ -30,7 +30,8 @@ interface LockedExecutorParams {
 /**
  * Execute A2U under ONE shared concurrency lock.
  * If lock acquisition fails, reread payment and return its current state.
- * Inside lock, any valid a2uTxid or horizonSuccessFlag permanently skips Stage 2.
+ * CRITICAL: Inside lock, any valid a2uTxid or horizonSuccessFlag permanently skips Stage 2.
+ * ALL returns MUST be numeric HTTP status codes (never string | number).
  */
 export async function executeA2ULocked(params: LockedExecutorParams) {
   const { paymentId } = params
@@ -131,17 +132,42 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     }
 
     // Execute A2U with derived fields from latest authoritative checkpoint
-    const result = await executeA2U({
-      paymentId,
-      payment: latestPayment,
-      merchantUid: latestPayment.merchantUid,
-      accessToken: latestPayment.accessToken,
-      customerAmount: latestPayment.amount,
-      piPaymentId: latestPayment.piPaymentId,
-      isRecovery: params.isRecovery,
-    })
+    // CRITICAL: executeA2U will throw on checkpoint persistence failure - catch and return error
+    try {
+      const result = await executeA2U({
+        paymentId,
+        payment: latestPayment,
+        merchantUid: latestPayment.merchantUid,
+        accessToken: latestPayment.accessToken,
+        customerAmount: latestPayment.amount,
+        piPaymentId: latestPayment.piPaymentId,
+        isRecovery: params.isRecovery,
+      })
 
-    return result
+      // Map executor result string status to numeric HTTP status
+      let httpStatus: number = 400
+      if (result.ok) {
+        // Success case - executor returns settlement_pending as status
+        httpStatus = 200
+      } else {
+        // Error case - map status string to numeric code
+        if (result.status === "404" || result.status === 404) {
+          httpStatus = 404
+        } else if (result.status === "500" || result.status === 500) {
+          httpStatus = 500
+        } else if (result.status === "400" || result.status === 400) {
+          httpStatus = 400
+        } else {
+          httpStatus = 400 // Default for unknown statuses
+        }
+      }
+
+      return { ok: result.ok, status: httpStatus, error: result.error }
+    } catch (executeError) {
+      console.error("[A2U Locked Executor] Executor threw error (checkpoint persistence failed):", executeError)
+      // Return error state - never proceed after checkpoint failure
+      return { ok: false, status: 500, error: executeError instanceof Error ? executeError.message : String(executeError) }
+    }
   } finally {
     await releaseLockAtomic()
   }

@@ -150,9 +150,22 @@ export async function POST(request: NextRequest) {
 
     if (!result.ok) {
       console.error("[Pi A2U] Locked executor error:", result.error)
+      // Explicitly map executor status to numeric HTTP status code
+      let httpStatus: number = 400
+      if (result.status === 404) {
+        httpStatus = 404
+      } else if (result.status === 500) {
+        httpStatus = 500
+      } else if (result.status === 400) {
+        httpStatus = 400
+      } else if (result.status === 401) {
+        httpStatus = 401
+      } else {
+        httpStatus = 400 // Default to 400 for unknown status
+      }
       return NextResponse.json(
         { error: result.error, success: false },
-        { status: result.status || 400 }
+        { status: httpStatus }
       )
     }
 
