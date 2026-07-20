@@ -33,10 +33,15 @@ export function CustomerPaymentView({
   const [authError, setAuthError] = useState<string>("")
   const [isPaymentPaid, setIsPaymentPaid] = useState(false)
   const [isInPiBrowser, setIsInPiBrowser] = useState(true)
+  // CRITICAL: Guard to ensure onSuccess callback runs exactly once per paymentId
+  const [successCallbackExecuted, setSuccessCallbackExecuted] = useState(false)
 
   useEffect(() => {
     console.log("[v0][CustomerView] Mounted with payment ID:", paymentId)
     console.log("[v0][CustomerView] Current domain:", typeof window !== "undefined" ? window.location.hostname : "N/A")
+    
+    // GUARD: Reset callback execution flag when paymentId changes
+    setSuccessCallbackExecuted(false)
     
     // Check if running in Pi Browser
     const checkPiBrowser = typeof window !== "undefined" && !!window.Pi
@@ -229,8 +234,9 @@ export function CustomerPaymentView({
               return
             }
 
-            // ONLY NOW that predicate is validated: call onSuccess
-            console.log("[v0][CustomerView] ✓ Payment meets finality predicate - calling onSuccess exactly once")
+            // ONLY NOW that predicate is validated: call onSuccess EXACTLY ONCE per paymentId
+            console.log("[v0][CustomerView] ✓ Payment meets finality predicate")
+            console.log("[v0][CustomerView] Callback executed for this paymentId:", successCallbackExecuted)
             
             unifiedStore.addPayment(serverPayment)
             setPayment(serverPayment)
@@ -243,8 +249,13 @@ export function CustomerPaymentView({
               description: `Settlement complete. Transaction: ${serverPayment.u2aTxid}`,
             })
             
-            if (onSuccess && serverPayment.u2aTxid) {
+            // GUARD: Execute onSuccess callback only once per paymentId (idempotent)
+            if (!successCallbackExecuted && onSuccess && serverPayment.u2aTxid) {
+              console.log("[v0][CustomerView] Executing onSuccess callback (will not repeat)")
+              setSuccessCallbackExecuted(true)
               onSuccess(serverPayment.u2aTxid)
+            } else if (successCallbackExecuted) {
+              console.log("[v0][CustomerView] onSuccess callback already executed for this paymentId - skipping")
             }
           } catch (err) {
             console.error("[v0][CustomerView] Error fetching server state:", err)
