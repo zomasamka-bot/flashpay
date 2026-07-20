@@ -356,10 +356,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: dbResult.error,
       }
     }
-    // CRITICAL: Verify returned transaction belongs to same payment before persisting final markers
-    if (!dbResult.transactionId || typeof dbResult.transactionId !== 'string') {
-      console.error("[A2U Executor] CRITICAL: DB returned no transactionId - cannot verify reconciliation boundary")
-      // Preserve recovery checkpoint without final markers
+    // CRITICAL: Verify returned transaction record matches validated payment identifiers before persisting final markers
+    if (!dbResult.transaction) {
+      console.error("[A2U Executor] CRITICAL: DB returned no transaction identifiers - cannot verify reconciliation boundary")
       try {
         await persistCheckpointMerged(ctx.paymentId, {
           status: "settlement_pending",
@@ -372,27 +371,48 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         console.error("[A2U Executor] CRITICAL: Failed to preserve recovery checkpoint:", persistError)
         return { ok: false, status: "error", error: "DB verification failed and recovery checkpoint persistence failed" }
       }
-      return { ok: false, status: "settlement_pending", error: "DB reconciliation verification failed - no transaction ID returned" }
+      return { ok: false, status: "settlement_pending", error: "DB reconciliation verification failed - no transaction identifiers returned" }
     }
 
-    // Verify transaction ID is canonical UUID format (ensures transaction was actually recorded)
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dbResult.transactionId)) {
-      console.error("[A2U Executor] CRITICAL: DB returned non-UUID transactionId:", dbResult.transactionId)
+    // Verify EVERY canonical identifier matches validated payment data (ownership verification)
+    const identifierMismatches: string[] = []
+    if (dbResult.transaction.u2aIdentifier !== ctx.payment.piPaymentId) {
+      identifierMismatches.push(`u2aIdentifier: "${dbResult.transaction.u2aIdentifier}" !== "${ctx.payment.piPaymentId}"`)
+    }
+    if (dbResult.transaction.u2aTxid !== ctx.payment.u2aTxid) {
+      identifierMismatches.push(`u2aTxid: "${dbResult.transaction.u2aTxid}" !== "${ctx.payment.u2aTxid}"`)
+    }
+    if (dbResult.transaction.a2uIdentifier !== ctx.payment.a2uPaymentId) {
+      identifierMismatches.push(`a2uIdentifier: "${dbResult.transaction.a2uIdentifier}" !== "${ctx.payment.a2uPaymentId}"`)
+    }
+    if (dbResult.transaction.a2uTxid !== ctx.payment.a2uTxid) {
+      identifierMismatches.push(`a2uTxid: "${dbResult.transaction.a2uTxid}" !== "${ctx.payment.a2uTxid}"`)
+    }
+    if (dbResult.transaction.merchantId !== ctx.payment.merchantId) {
+      identifierMismatches.push(`merchantId: "${dbResult.transaction.merchantId}" !== "${ctx.payment.merchantId}"`)
+    }
+    if (dbResult.transaction.merchantUid !== ctx.payment.merchantUid) {
+      identifierMismatches.push(`merchantUid: "${dbResult.transaction.merchantUid}" !== "${ctx.payment.merchantUid}"`)
+    }
+
+    if (identifierMismatches.length > 0) {
+      console.error("[A2U Executor] CRITICAL: DB returned transaction with mismatched identifiers:", identifierMismatches.join("; "))
       try {
         await persistCheckpointMerged(ctx.paymentId, {
           status: "settlement_pending",
           dbRecorded: false,
           requiresDbReconciliation: true,
         })
+        console.log("[A2U Executor] Preserved recovery checkpoint (DB-only) due to identifier mismatch")
       } catch (persistErr) {
         const persistError = persistErr instanceof Error ? persistErr.message : String(persistErr)
-        console.error("[A2U Executor] CRITICAL: Failed to preserve recovery checkpoint:", persistError)
-        return { ok: false, status: "error", error: "DB verification failed and recovery checkpoint persistence failed" }
+        console.error("[A2U Executor] CRITICAL: Failed to preserve recovery checkpoint on mismatch:", persistError)
+        return { ok: false, status: "error", error: "DB reconciliation failed and recovery checkpoint persistence failed" }
       }
-      return { ok: false, status: "settlement_pending", error: "DB reconciliation verification failed - invalid transaction ID format" }
+      return { ok: false, status: "settlement_pending", error: "DB reconciliation verification failed - identifier mismatch" }
     }
 
-    console.log("[A2U Executor] ✓ DB reconciliation verified with transactionId:", dbResult.transactionId)
+    console.log("[A2U Executor] ✓ DB reconciliation verified - all canonical identifiers match, transactionId:", dbResult.transactionId)
     
     // Only NOW persist final markers after successful verification
     // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status after confirmed commit (crash-safe merge)
@@ -764,8 +784,12 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     }
 
     console.log("[A2U Stage4] ✓ DB reconciliation succeeded with transaction ID:", dbResult.transactionId)
-    // Return ok: true to proceed past stage 4 (executor will still return settlement_pending to caller)
-    return { ok: true }
+    // Return ok: true with transaction identifiers for boundary verification
+    return { 
+      ok: true, 
+      transactionId: dbResult.transactionId,
+      transaction: dbResult.transaction
+    }
   } catch (error) {
     console.error("[A2U Stage4] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }

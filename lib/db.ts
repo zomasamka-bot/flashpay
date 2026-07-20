@@ -696,7 +696,7 @@ export async function recordA2UTransactionAtomic(params: {
   appCommission: number      // REQUIRED: App commission (must be explicit, no fallback)
   note?: string
   createdAt?: Date
-}): Promise<{ success: boolean; error?: string; transactionId?: string }> {
+}): Promise<{ success: boolean; error?: string; transactionId?: string; transaction?: { u2aIdentifier: string; u2aTxid: string; a2uIdentifier: string; a2uTxid: string; merchantId: string; merchantUid: string } }> {
   // STRICT VALIDATION: Reject transaction if any required field is missing or invalid
   
   // Validate identifiers - must not be empty strings
@@ -902,7 +902,18 @@ export async function recordA2UTransactionAtomic(params: {
       })
       
       console.log('[DB] A2U transaction committed successfully:', { transactionId: result })
-      return { success: true, transactionId: result }
+      return { 
+        success: true, 
+        transactionId: result,
+        transaction: {
+          u2aIdentifier: params.u2aIdentifier,
+          u2aTxid: params.u2aTxid,
+          a2uIdentifier: params.a2uIdentifier,
+          a2uTxid: params.a2uTxid,
+          merchantId: params.merchantId,
+          merchantUid: params.merchantUid,
+        }
+      }
     } finally {
       await client.end()
     }
