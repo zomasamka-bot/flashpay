@@ -293,11 +293,18 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     txidFromHorizon = signResult.data.txidFromHorizon
 
     // Persist Stage 2: a2uTxid, horizonSuccessFlag, horizonSuccessAt after confirmed Horizon success (crash-safe merge)
+    // CRITICAL: Calculate accounting fields from verified payment data (only now available post-Horizon)
+    const horizonFeeCharged = signResult.data.horizonFeeCharged
+    const appNetImpact = ctx.customerAmount - (ctx.payment.merchantAmount || ctx.customerAmount) - horizonFeeCharged
+    const appCommission = 0 // Default per Payment type contract - no authoritative source to override
+    
     const stage2Updates = {
       status: "settlement_pending" as const,
       a2uTxid: txidFromHorizon,
       customerAmount: ctx.customerAmount,
-      horizonFeeCharged: signResult.data.horizonFeeCharged,
+      horizonFeeCharged: horizonFeeCharged,
+      appNetImpact: appNetImpact,
+      appCommission: appCommission,
       horizonSuccessFlag: true,
       horizonSuccessAt: new Date().toISOString(),
       piCompletionPending: true,
@@ -305,7 +312,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage2Updates)
-    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged )
+    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", horizonFeeCharged, "appNetImpact:", appNetImpact, "appCommission:", appCommission)
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
   }
