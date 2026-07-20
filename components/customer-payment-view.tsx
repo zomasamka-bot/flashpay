@@ -242,10 +242,10 @@ export function CustomerPaymentView({
             }
             
             // Verify response belongs to current paymentId before updating success UI or callback
-            if (serverPayment.paymentId !== paymentId) {
+            if (serverPayment.id !== paymentId) {
               console.error("[v0][CustomerView] ERROR: Response paymentId mismatch - aborting", {
                 current: paymentId,
-                response: serverPayment.paymentId,
+                response: serverPayment.id,
               })
               setIsPaying(false)
               return
