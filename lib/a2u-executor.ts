@@ -712,11 +712,14 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
           requiresDbReconciliation: true,
         })
         console.log("[A2U Stage4] Persisted settlement_pending with dbRecorded=false and requiresDbReconciliation=true via persistCheckpointMerged")
+        // Only return settlement_pending if recovery checkpoint was successfully stored
+        return { ok: false, error: dbResult?.error || "Unknown DB error", userFacingStatus: "settlement_pending" }
       } catch (persistErr) {
-        console.error("[A2U Stage4] Failed to persist checkpoint on DB failure:", persistErr)
-        // Continue returning error even if checkpoint persist fails
+        // Persistence failed - propagate error, do NOT return settlement_pending
+        const persistError = persistErr instanceof Error ? persistErr.message : String(persistErr)
+        console.error("[A2U Stage4] CRITICAL: Failed to persist recovery checkpoint on DB failure:", persistError)
+        return { ok: false, error: `DB failure AND recovery checkpoint persistence failed: ${persistError}`, userFacingStatus: "error" }
       }
-      return { ok: false, error: dbResult?.error || "Unknown DB error", userFacingStatus: "settlement_pending" }
     }
 
     console.log("[A2U Stage4] ✓ DB reconciliation succeeded with transaction ID:", dbResult.transactionId)
