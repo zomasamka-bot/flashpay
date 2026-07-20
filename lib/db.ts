@@ -937,30 +937,36 @@ export async function recordA2UTransactionAtomic(params: {
         return { success: false, error: 'Transaction row validation failed - required fields missing' }
       }
       
-      // Validate each property is a string (narrowed by 'in' checks above)
-      const row = committedRow as Record<string, unknown>
+      // After in-checks above, extract and validate each property is a non-empty string
+      const u2aIdentifier = committedRow['u2a_identifier']
+      const u2aTxid = committedRow['u2a_txid']
+      const a2uIdentifier = committedRow['a2u_identifier']
+      const a2uTxid = committedRow['a2u_txid']
+      const merchantId = committedRow['merchant_id']
+      const merchantUid = committedRow['merchant_uid']
+      
       if (
-        typeof row.u2a_identifier !== 'string' ||
-        typeof row.u2a_txid !== 'string' ||
-        typeof row.a2u_identifier !== 'string' ||
-        typeof row.a2u_txid !== 'string' ||
-        typeof row.merchant_id !== 'string' ||
-        typeof row.merchant_uid !== 'string'
+        typeof u2aIdentifier !== 'string' || u2aIdentifier.trim().length === 0 ||
+        typeof u2aTxid !== 'string' || u2aTxid.trim().length === 0 ||
+        typeof a2uIdentifier !== 'string' || a2uIdentifier.trim().length === 0 ||
+        typeof a2uTxid !== 'string' || a2uTxid.trim().length === 0 ||
+        typeof merchantId !== 'string' || merchantId.trim().length === 0 ||
+        typeof merchantUid !== 'string' || merchantUid.trim().length === 0
       ) {
-        console.error('[DB] CRITICAL: Committed row fields are not strings:', row)
-        return { success: false, error: 'Transaction row validation failed - field types invalid' }
+        console.error('[DB] CRITICAL: Committed row fields are not non-empty strings')
+        return { success: false, error: 'Transaction row validation failed - field types or values invalid' }
       }
       
       return { 
         success: true, 
         transactionId: result,
         transaction: {
-          u2aIdentifier: row.u2a_identifier,
-          u2aTxid: row.u2a_txid,
-          a2uIdentifier: row.a2u_identifier,
-          a2uTxid: row.a2u_txid,
-          merchantId: row.merchant_id,
-          merchantUid: row.merchant_uid,
+          u2aIdentifier,
+          u2aTxid,
+          a2uIdentifier,
+          a2uTxid,
+          merchantId,
+          merchantUid,
         }
       }
     } finally {
