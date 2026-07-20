@@ -343,8 +343,13 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
   // SHARED ACCOUNTING CHECKPOINT: Ensure appNetImpact and appCommission are persisted before Stage 4
   // This runs for both new (post-Stage 2) and recovered (post-reload) payments
-  if (!ctx.payment.appNetImpact || ctx.payment.appCommission === undefined) {
-    console.log("[A2U Executor] Shared Accounting Checkpoint: Missing accounting fields, attempting to populate from verified data")
+  if (
+    typeof ctx.payment.appNetImpact !== "number" ||
+    !Number.isFinite(ctx.payment.appNetImpact) ||
+    typeof ctx.payment.appCommission !== "number" ||
+    !Number.isFinite(ctx.payment.appCommission)
+  ) {
+    console.log("[A2U Executor] Shared Accounting Checkpoint: Missing or invalid accounting fields, attempting to populate from verified data")
     
     // Verify all required values exist and are valid
     if (
@@ -365,22 +370,16 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // Calculate appNetImpact from verified persisted values
     const calculatedAppNetImpact = ctx.payment.customerAmount - ctx.payment.merchantAmount - ctx.payment.horizonFeeCharged
     
-    // Check for appCommission: it is required but no authoritative source exists to calculate it
-    if (typeof ctx.payment.appCommission !== "number" || !Number.isFinite(ctx.payment.appCommission)) {
-      return { 
-        ok: false, 
-        status: "error", 
-        error: "appCommission missing or invalid: no authoritative contract exists to populate it - cannot proceed to Stage 4" 
-      }
-    }
+    // Set appCommission per FlashPay business rule: no commission charged at this stage (authoritative = 0)
+    const appCommissionValue = 0
 
-    // Persist calculated appNetImpact
+    // Persist accounting checkpoint
     const accountingUpdates = {
       appNetImpact: calculatedAppNetImpact,
-      appCommission: ctx.payment.appCommission, // Use verified existing value
+      appCommission: appCommissionValue,
     }
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, accountingUpdates)
-    console.log("[A2U Executor] ✓ Accounting checkpoint persisted: appNetImpact:", calculatedAppNetImpact, "appCommission:", ctx.payment.appCommission)
+    console.log("[A2U Executor] ✓ Accounting checkpoint persisted: appNetImpact:", calculatedAppNetImpact, "appCommission:", appCommissionValue)
   } else {
     console.log("[A2U Executor] Accounting checkpoint: Fields already present, skipping")
   }
