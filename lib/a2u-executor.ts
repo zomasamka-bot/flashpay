@@ -293,18 +293,11 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     txidFromHorizon = signResult.data.txidFromHorizon
 
     // Persist Stage 2: a2uTxid, horizonSuccessFlag, horizonSuccessAt after confirmed Horizon success (crash-safe merge)
-    // CRITICAL: Calculate accounting fields from verified payment data (only now available post-Horizon)
-    const horizonFeeCharged = signResult.data.horizonFeeCharged
-    const appNetImpact = ctx.customerAmount - (ctx.payment.merchantAmount || ctx.customerAmount) - horizonFeeCharged
-    const appCommission = 0 // Default per Payment type contract - no authoritative source to override
-    
     const stage2Updates = {
       status: "settlement_pending" as const,
       a2uTxid: txidFromHorizon,
       customerAmount: ctx.customerAmount,
-      horizonFeeCharged: horizonFeeCharged,
-      appNetImpact: appNetImpact,
-      appCommission: appCommission,
+      horizonFeeCharged: signResult.data.horizonFeeCharged,
       horizonSuccessFlag: true,
       horizonSuccessAt: new Date().toISOString(),
       piCompletionPending: true,
@@ -312,7 +305,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage2Updates)
-    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", horizonFeeCharged, "appNetImpact:", appNetImpact, "appCommission:", appCommission)
+    console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged)
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
   }
@@ -346,6 +339,50 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] ✓ Pi /complete succeeded")
   } else {
     console.log("[A2U Executor] STAGE 3: Skipping Pi /complete - already piCompleted")
+  }
+
+  // SHARED ACCOUNTING CHECKPOINT: Ensure appNetImpact and appCommission are persisted before Stage 4
+  // This runs for both new (post-Stage 2) and recovered (post-reload) payments
+  if (!ctx.payment.appNetImpact || ctx.payment.appCommission === undefined) {
+    console.log("[A2U Executor] Shared Accounting Checkpoint: Missing accounting fields, attempting to populate from verified data")
+    
+    // Verify all required values exist and are valid
+    if (
+      typeof ctx.payment.customerAmount !== "number" ||
+      !Number.isFinite(ctx.payment.customerAmount) ||
+      typeof ctx.payment.merchantAmount !== "number" ||
+      !Number.isFinite(ctx.payment.merchantAmount) ||
+      typeof ctx.payment.horizonFeeCharged !== "number" ||
+      !Number.isFinite(ctx.payment.horizonFeeCharged)
+    ) {
+      return { 
+        ok: false, 
+        status: "error", 
+        error: "Cannot populate accounting fields: customerAmount, merchantAmount, or horizonFeeCharged missing or invalid" 
+      }
+    }
+
+    // Calculate appNetImpact from verified persisted values
+    const calculatedAppNetImpact = ctx.payment.customerAmount - ctx.payment.merchantAmount - ctx.payment.horizonFeeCharged
+    
+    // Check for appCommission: it is required but no authoritative source exists to calculate it
+    if (typeof ctx.payment.appCommission !== "number" || !Number.isFinite(ctx.payment.appCommission)) {
+      return { 
+        ok: false, 
+        status: "error", 
+        error: "appCommission missing or invalid: no authoritative contract exists to populate it - cannot proceed to Stage 4" 
+      }
+    }
+
+    // Persist calculated appNetImpact
+    const accountingUpdates = {
+      appNetImpact: calculatedAppNetImpact,
+      appCommission: ctx.payment.appCommission, // Use verified existing value
+    }
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, accountingUpdates)
+    console.log("[A2U Executor] ✓ Accounting checkpoint persisted: appNetImpact:", calculatedAppNetImpact, "appCommission:", ctx.payment.appCommission)
+  } else {
+    console.log("[A2U Executor] Accounting checkpoint: Fields already present, skipping")
   }
 
   // STAGE 4: DB Reconciliation (skip if already dbRecorded)
