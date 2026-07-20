@@ -921,31 +921,46 @@ export async function recordA2UTransactionAtomic(params: {
       
       const committedRow = committedRowResult[0]
       
-      // Validate row has all required fields before returning
+      // Type guard: validate row is non-null object with all required string properties
+      // Using 'in' operator checks to narrow type and typeof checks to validate values
       if (
         typeof committedRow !== 'object' ||
         committedRow === null ||
-        typeof committedRow.u2a_identifier !== 'string' ||
-        typeof committedRow.u2a_txid !== 'string' ||
-        typeof committedRow.a2u_identifier !== 'string' ||
-        typeof committedRow.a2u_txid !== 'string' ||
-        typeof committedRow.merchant_id !== 'string' ||
-        typeof committedRow.merchant_uid !== 'string'
+        !('u2a_identifier' in committedRow) ||
+        !('u2a_txid' in committedRow) ||
+        !('a2u_identifier' in committedRow) ||
+        !('a2u_txid' in committedRow) ||
+        !('merchant_id' in committedRow) ||
+        !('merchant_uid' in committedRow)
       ) {
-        console.error('[DB] CRITICAL: Committed row missing or invalid required fields:', committedRow)
-        return { success: false, error: 'Transaction row validation failed - invalid data returned from database' }
+        console.error('[DB] CRITICAL: Committed row missing required fields:', committedRow)
+        return { success: false, error: 'Transaction row validation failed - required fields missing' }
+      }
+      
+      // Validate each property is a string (narrowed by 'in' checks above)
+      const row = committedRow as Record<string, unknown>
+      if (
+        typeof row.u2a_identifier !== 'string' ||
+        typeof row.u2a_txid !== 'string' ||
+        typeof row.a2u_identifier !== 'string' ||
+        typeof row.a2u_txid !== 'string' ||
+        typeof row.merchant_id !== 'string' ||
+        typeof row.merchant_uid !== 'string'
+      ) {
+        console.error('[DB] CRITICAL: Committed row fields are not strings:', row)
+        return { success: false, error: 'Transaction row validation failed - field types invalid' }
       }
       
       return { 
         success: true, 
         transactionId: result,
         transaction: {
-          u2aIdentifier: committedRow.u2a_identifier,
-          u2aTxid: committedRow.u2a_txid,
-          a2uIdentifier: committedRow.a2u_identifier,
-          a2uTxid: committedRow.a2u_txid,
-          merchantId: committedRow.merchant_id,
-          merchantUid: committedRow.merchant_uid,
+          u2aIdentifier: row.u2a_identifier,
+          u2aTxid: row.u2a_txid,
+          a2uIdentifier: row.a2u_identifier,
+          a2uTxid: row.a2u_txid,
+          merchantId: row.merchant_id,
+          merchantUid: row.merchant_uid,
         }
       }
     } finally {
