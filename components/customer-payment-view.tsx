@@ -11,6 +11,7 @@ import { executePayment, getPaymentFromServer, handlePaymentRecovery } from "@/l
 import { unifiedStore } from "@/lib/unified-store"
 import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
 import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
+import { isPaymentFinal } from "@/lib/a2u-response"
 import type { Payment, PaymentStatus } from "@/lib/types"
 
 export function CustomerPaymentView({ 
@@ -33,15 +34,15 @@ export function CustomerPaymentView({
   const [authError, setAuthError] = useState<string>("")
   const [isPaymentPaid, setIsPaymentPaid] = useState(false)
   const [isInPiBrowser, setIsInPiBrowser] = useState(true)
-  // CRITICAL: Synchronous per-paymentId ref guard for onSuccess callback (never multi-execute)
-  const successCallbackExecutedRef = useRef(false)
+  // CRITICAL: Store executed paymentId to prevent multi-execution per paymentId (synchronous ref guard)
+  const successCallbackExecutedPaymentIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     console.log("[v0][CustomerView] Mounted with payment ID:", paymentId)
     console.log("[v0][CustomerView] Current domain:", typeof window !== "undefined" ? window.location.hostname : "N/A")
     
-    // GUARD: Reset ref when paymentId changes (sync, not deferred like setState)
-    successCallbackExecutedRef.current = false
+    // GUARD: Reset ref when paymentId changes to allow callback for new payment
+    successCallbackExecutedPaymentIdRef.current = null
     
     // Check if running in Pi Browser
     const checkPiBrowser = typeof window !== "undefined" && !!window.Pi
@@ -234,25 +235,24 @@ export function CustomerPaymentView({
               return
             }
 
-            // CRITICAL: Exact finality predicate matching server logic - all must be true
-            const finalityCheck =
-              serverPayment.status === "settled_to_merchant" &&
-              serverPayment.piCompleted === true &&
-              serverPayment.dbRecorded === true &&
-              serverPayment.requiresDbReconciliation !== true &&
-              !!serverPayment.piPaymentId &&
-              !!serverPayment.a2uPaymentId &&
-              !!serverPayment.u2aTxid &&
-              !!serverPayment.a2uTxid
-
-            if (!finalityCheck) {
-              // Should not reach here due to earlier check, but fail safely
-              console.error("[v0][CustomerView] ERROR: Finality predicate failed on callback - aborting onSuccess")
+            // CRITICAL: Use single source of truth finality predicate
+            if (!isPaymentFinal(serverPayment)) {
+              console.error("[v0][CustomerView] ERROR: Finality predicate failed - aborting onSuccess")
               setIsPaying(false)
               return
             }
             
-            console.log("[v0][CustomerView] ✓ Payment meets exact finality predicate - marking for callback")
+            // Verify response belongs to current paymentId before updating success UI or callback
+            if (serverPayment.paymentId !== paymentId) {
+              console.error("[v0][CustomerView] ERROR: Response paymentId mismatch - aborting", {
+                current: paymentId,
+                response: serverPayment.paymentId,
+              })
+              setIsPaying(false)
+              return
+            }
+            
+            console.log("[v0][CustomerView] ✓ Payment meets finality predicate for paymentId:", paymentId)
             
             unifiedStore.addPayment(serverPayment)
             setPayment(serverPayment)
@@ -265,14 +265,14 @@ export function CustomerPaymentView({
               description: `Settlement complete. Transaction: ${serverPayment.u2aTxid}`,
             })
             
-            // GUARD: Execute onSuccess callback once per paymentId using synchronous ref guard
-            if (!successCallbackExecutedRef.current && onSuccess && serverPayment.u2aTxid) {
-              // Mark before calling to prevent re-entry
-              successCallbackExecutedRef.current = true
-              console.log("[v0][CustomerView] Executing onSuccess callback (ref guard prevents repeat)")
+            // GUARD: Execute onSuccess callback once per paymentId using stored paymentId ref
+            if (successCallbackExecutedPaymentIdRef.current !== paymentId && onSuccess && serverPayment.u2aTxid) {
+              // Mark this paymentId as executed before calling (prevent re-entry)
+              successCallbackExecutedPaymentIdRef.current = paymentId
+              console.log("[v0][CustomerView] Executing onSuccess callback for paymentId:", paymentId)
               onSuccess(serverPayment.u2aTxid)
-            } else if (successCallbackExecutedRef.current) {
-              console.log("[v0][CustomerView] onSuccess callback already executed for paymentId - skipping duplicate")
+            } else if (successCallbackExecutedPaymentIdRef.current === paymentId) {
+              console.log("[v0][CustomerView] onSuccess callback already executed for this paymentId - skipping duplicate")
             }
           } catch (err) {
             console.error("[v0][CustomerView] Error fetching server state:", err)

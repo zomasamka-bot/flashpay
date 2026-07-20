@@ -1,6 +1,25 @@
 import { redis } from "@/lib/redis"
 
 /**
+ * SINGLE SOURCE OF TRUTH: Finality predicate checked identically on server and client.
+ * ALL conditions must be true for success=true response and onSuccess callback.
+ * @param payment - The payment record from Redis checkpoint
+ * @returns true if payment meets all finality requirements
+ */
+export function isPaymentFinal(payment: any): boolean {
+  return (
+    payment.status === "settled_to_merchant" &&
+    payment.piCompleted === true &&
+    payment.dbRecorded === true &&
+    payment.requiresDbReconciliation !== true &&
+    !!payment.piPaymentId &&
+    !!payment.a2uPaymentId &&
+    !!payment.u2aTxid &&
+    !!payment.a2uTxid
+  )
+}
+
+/**
  * Unified payment response shape - used by ALL response paths (processing or final).
  * Re-reads Redis to ensure authoritative data, never trusts HTTP response fields.
  * 
@@ -13,6 +32,8 @@ import { redis } from "@/lib/redis"
  * - piCompleted === true
  * - dbRecorded === true
  * - requiresDbReconciliation !== true
+ * - piPaymentId exists
+ * - a2uPaymentId exists
  * - u2aTxid exists
  * - a2uTxid exists
  */
@@ -89,16 +110,18 @@ export async function buildA2USuccessResponse(
     return null
   }
 
-  // CRITICAL: Finality predicate - ALL must be true for success=true
-  const isFinalSuccess =
-    payment.status === "settled_to_merchant" &&
-    payment.piCompleted === true &&
-    payment.dbRecorded === true &&
-    payment.requiresDbReconciliation !== true &&
-    !!payment.piPaymentId &&
-    !!payment.a2uPaymentId &&
-    !!payment.u2aTxid &&
-    !!payment.a2uTxid
+  // CRITICAL: Validate status exists and is a known value
+  const validStatuses = ["settlement_pending", "paid_to_app", "settlement_failed", "settled_to_merchant"]
+  if (!payment.status || typeof payment.status !== "string" || !validStatuses.includes(payment.status)) {
+    console.error("[A2UResponse] Missing or invalid status in checkpoint - record corrupted:", {
+      status: payment.status,
+      paymentId,
+    })
+    return null
+  }
+
+  // CRITICAL: Use single source of truth finality predicate
+  const isFinalSuccess = isPaymentFinal(payment)
 
   // CRITICAL: Processing states (never success, preserve identifiers)
   const isProcessing = payment.status === "settlement_pending" || payment.status === "paid_to_app"
@@ -110,7 +133,7 @@ export async function buildA2USuccessResponse(
   // Never fabricate missing fields - use optional properties to indicate what exists
   const response: PaymentResponse = {
     success: isFinalSuccess,
-    status: payment.status || "settlement_pending",
+    status: payment.status,
     paymentId: recordId,
     // Include identifiers only if they exist in checkpoint (never empty string fallbacks)
     ...(payment.piPaymentId && { piPaymentId: payment.piPaymentId }),
