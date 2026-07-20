@@ -696,7 +696,10 @@ export async function recordA2UTransactionAtomic(params: {
   appCommission: number      // REQUIRED: App commission (must be explicit, no fallback)
   note?: string
   createdAt?: Date
-}): Promise<{ success: boolean; error?: string; transactionId?: string; transaction?: { u2aIdentifier: string; u2aTxid: string; a2uIdentifier: string; a2uTxid: string; merchantId: string; merchantUid: string } }> {
+}): Promise<
+  | { success: true; transactionId: string; transaction: { u2aIdentifier: string; u2aTxid: string; a2uIdentifier: string; a2uTxid: string; merchantId: string; merchantUid: string } }
+  | { success: false; error: string }
+> {
   // STRICT VALIDATION: Reject transaction if any required field is missing or invalid
   
   // Validate identifiers - must not be empty strings
@@ -916,7 +919,22 @@ export async function recordA2UTransactionAtomic(params: {
         return { success: false, error: 'Transaction committed but not found in database - integrity error' }
       }
       
-      const committedRow = committedRowResult[0] as { u2a_identifier: string; u2a_txid: string; a2u_identifier: string; a2u_txid: string; merchant_id: string; merchant_uid: string }
+      const committedRow = committedRowResult[0]
+      
+      // Validate row has all required fields before returning
+      if (
+        typeof committedRow !== 'object' ||
+        committedRow === null ||
+        typeof committedRow.u2a_identifier !== 'string' ||
+        typeof committedRow.u2a_txid !== 'string' ||
+        typeof committedRow.a2u_identifier !== 'string' ||
+        typeof committedRow.a2u_txid !== 'string' ||
+        typeof committedRow.merchant_id !== 'string' ||
+        typeof committedRow.merchant_uid !== 'string'
+      ) {
+        console.error('[DB] CRITICAL: Committed row missing or invalid required fields:', committedRow)
+        return { success: false, error: 'Transaction row validation failed - invalid data returned from database' }
+      }
       
       return { 
         success: true, 
