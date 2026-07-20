@@ -144,25 +144,23 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         isRecovery: params.isRecovery,
       })
 
-      // Map executor result string status to numeric HTTP status
-      let httpStatus: number = 400
+      // Map executor result string status to numeric HTTP status code
       if (result.ok) {
-        // Success case - executor returns settlement_pending as status
-        httpStatus = 200
+        return { ok: true, status: 200 }
       } else {
-        // Error case - map status string to numeric code
-        if (result.status === "404" || result.status === 404) {
+        // Error case - map string status values to numeric HTTP codes
+        let httpStatus: number = 400
+        if (result.status === "404") {
           httpStatus = 404
-        } else if (result.status === "500" || result.status === 500) {
+        } else if (result.status === "500") {
           httpStatus = 500
-        } else if (result.status === "400" || result.status === 400) {
+        } else if (result.status === "400") {
           httpStatus = 400
         } else {
           httpStatus = 400 // Default for unknown statuses
         }
+        return { ok: false, status: httpStatus, error: result.error }
       }
-
-      return { ok: result.ok, status: httpStatus, error: result.error }
     } catch (executeError) {
       console.error("[A2U Locked Executor] Executor threw error (checkpoint persistence failed):", executeError)
       // Return error state - never proceed after checkpoint failure
