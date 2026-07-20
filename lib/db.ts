@@ -905,18 +905,18 @@ export async function recordA2UTransactionAtomic(params: {
       
       // Select the actual committed transaction row from database to verify and return its canonical identifiers
       // This proves the transaction was actually persisted and returns evidence, not echoed params
-      const committedRowQuery = await client.query(
+      const committedRowResult = await query(
         `SELECT id, u2a_identifier, u2a_txid, a2u_identifier, a2u_txid, merchant_id, merchant_uid 
          FROM a2u_transactions WHERE id = $1`,
         [result]
       )
       
-      if (!committedRowQuery.rows || committedRowQuery.rows.length === 0) {
-        console.error('[DB] CRITICAL: Committed transaction ID not found in database:', result)
+      if (!committedRowResult || committedRowResult.length !== 1) {
+        console.error('[DB] CRITICAL: Committed transaction ID not found or multiple rows returned:', result)
         return { success: false, error: 'Transaction committed but not found in database - integrity error' }
       }
       
-      const committedRow = committedRowQuery.rows[0]
+      const committedRow = committedRowResult[0] as { u2a_identifier: string; u2a_txid: string; a2u_identifier: string; a2u_txid: string; merchant_id: string; merchant_uid: string }
       
       return { 
         success: true, 

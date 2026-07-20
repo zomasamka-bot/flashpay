@@ -73,7 +73,7 @@ type Stage3Result =
   | { ok: false; error: string; userFacingStatus: string }
 
 type Stage4Result =
-  | { ok: true; transactionId?: string; transaction?: { u2aIdentifier: string; u2aTxid: string; a2uIdentifier: string; a2uTxid: string; merchantId: string; merchantUid: string } }
+  | { ok: true; transactionId: string; transaction: { u2aIdentifier: string; u2aTxid: string; a2uIdentifier: string; a2uTxid: string; merchantId: string; merchantUid: string } }
   | { ok: false; error: string; userFacingStatus: string }
 
 /**
