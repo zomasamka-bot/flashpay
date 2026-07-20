@@ -649,10 +649,29 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
   try {
     console.log("[A2U Stage4] Reconciling database")
 
+    // CRITICAL: Reload latest payment record from Redis before validation
+    // Ensures every field is from the authoritative checkpoint where it was persisted
+    const latestPaymentData = await redis.get(`payment:${ctx.paymentId}`)
+    if (!latestPaymentData) {
+      console.error("[A2U Stage4] Cannot reload payment record from Redis - checkpoint may be corrupted")
+      return { ok: false, error: "Payment record not found in Redis - cannot proceed to DB", userFacingStatus: "error" }
+    }
+
+    let latestPayment: Payment
+    try {
+      latestPayment = typeof latestPaymentData === "string" ? JSON.parse(latestPaymentData) : latestPaymentData
+    } catch (parseErr) {
+      console.error("[A2U Stage4] Failed to parse payment record from Redis:", parseErr)
+      return { ok: false, error: "Payment record corrupted in Redis - cannot proceed to DB", userFacingStatus: "error" }
+    }
+
+    console.log("[A2U Stage4] Reloaded latest payment record from Redis checkpoint")
+
     // STRICT: Validate financial data first - will reject on missing values
-    const validation = validateFinancialData(ctx.payment)
+    const validation = validateFinancialData(latestPayment)
     if (!validation.success) {
       console.error("[A2U Stage4] Financial validation failed:", validation.error)
+      // Preserve checkpoint for DB-only recovery by not updating stale ctx.payment
       return { ok: false, error: validation.error, userFacingStatus: "error" }
     }
 
@@ -670,7 +689,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
       return { ok: false, error: "appCommission validation failed - cannot proceed to DB", userFacingStatus: "error" }
     }
 
-    console.log("[A2U Stage4] All financial fields validated - proceeding to DB:")
+    console.log("[A2U Stage4] All financial fields validated from Redis checkpoint - proceeding to DB:")
     console.log("[A2U Stage4]   - customerAmount:", financialData.customerAmount)
     console.log("[A2U Stage4]   - merchantAmount:", financialData.merchantAmount)
     console.log("[A2U Stage4]   - horizonFeeCharged:", financialData.horizonFeeCharged)
@@ -698,11 +717,11 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     if (!dbResult || !dbResult.success) {
       console.error("[A2U Stage4] DB reconciliation failed:", dbResult?.error)
-      // Persist failure state for recovery
-      ctx.payment.status = "settlement_pending"
-      ctx.payment.dbRecorded = false
-      ctx.payment.requiresDbReconciliation = true
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      // Preserve failure state for recovery by reloading, updating, and persisting
+      latestPayment.status = "settlement_pending"
+      latestPayment.dbRecorded = false
+      latestPayment.requiresDbReconciliation = true
+      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(latestPayment))
       console.log("[A2U Stage4] Persisted settlement_pending with dbRecorded=false and requiresDbReconciliation=true")
       return { ok: false, error: dbResult?.error || "Unknown DB error", userFacingStatus: "settlement_pending" }
     }

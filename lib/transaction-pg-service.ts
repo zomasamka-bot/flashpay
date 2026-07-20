@@ -15,10 +15,6 @@ function generateReference(): string {
 /**
  * Record a transaction to PostgreSQL after payment completion
  * This is called fire-and-forget and does NOT block payment flow
- *
- * CRITICAL: Before ANY DB write, this function validates the reconciliation guard.
- * If accounting data is incomplete or inconsistent, the write is BLOCKED and the
- * payment checkpoint is preserved in Redis for manual review.
  */
 export async function recordTransactionToPG(
   payment: Payment,
