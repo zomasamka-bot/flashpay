@@ -8,8 +8,8 @@ import type { SettlementRequest, TransactionRow, ReceiptRow, MerchantBalanceRow 
 
 /**
  * Normalize PostgreSQL NUMERIC value to validated number.
- * PostgreSQL NUMERIC is returned as string or Decimal; must be parsed and validated.
- * @throws Error if value cannot be safely converted to finite number
+ * PostgreSQL NUMERIC is returned as string or finite number; must be validated.
+ * @throws Error if value is not a finite number or fully valid numeric string
  */
 function normalizePostgresNumeric(value: unknown, fieldName: string): number {
   if (typeof value === 'number') {
@@ -20,19 +20,15 @@ function normalizePostgresNumeric(value: unknown, fieldName: string): number {
   }
   
   if (typeof value === 'string') {
-    const parsed = parseFloat(value)
-    if (!Number.isFinite(parsed)) {
-      throw new Error(`${fieldName} cannot be parsed as finite number from string: "${value}"`)
+    const trimmed = value.trim()
+    if (trimmed.length === 0) {
+      throw new Error(`${fieldName} is empty string`)
     }
-    return parsed
-  }
-  
-  if (value !== null && typeof value === 'object' && 'toNumber' in value) {
-    const decimal = (value as any).toNumber()
-    if (!Number.isFinite(decimal)) {
-      throw new Error(`${fieldName} Decimal.toNumber() is not finite: ${decimal}`)
+    const converted = Number(trimmed)
+    if (!Number.isFinite(converted)) {
+      throw new Error(`${fieldName} is not a valid finite number: "${value}"`)
     }
-    return decimal
+    return converted
   }
   
   throw new Error(`${fieldName} has unsupported type: ${typeof value}`)
