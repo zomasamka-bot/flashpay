@@ -6,6 +6,38 @@ import type { SettlementRequest, TransactionRow, ReceiptRow, MerchantBalanceRow 
 // Database layer - handles PostgreSQL/Neon integration via postgres client
 // Note: Functions that use database client are server-only
 
+/**
+ * Normalize PostgreSQL NUMERIC value to validated number.
+ * PostgreSQL NUMERIC is returned as string or Decimal; must be parsed and validated.
+ * @throws Error if value cannot be safely converted to finite number
+ */
+function normalizePostgresNumeric(value: unknown, fieldName: string): number {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`${fieldName} is not finite: ${value}`)
+    }
+    return value
+  }
+  
+  if (typeof value === 'string') {
+    const parsed = parseFloat(value)
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`${fieldName} cannot be parsed as finite number from string: "${value}"`)
+    }
+    return parsed
+  }
+  
+  if (value !== null && typeof value === 'object' && 'toNumber' in value) {
+    const decimal = (value as any).toNumber()
+    if (!Number.isFinite(decimal)) {
+      throw new Error(`${fieldName} Decimal.toNumber() is not finite: ${decimal}`)
+    }
+    return decimal
+  }
+  
+  throw new Error(`${fieldName} has unsupported type: ${typeof value}`)
+}
+
 // Singleton connection instance
 let sqlClient: any = null
 let initializationAttempted = false
@@ -767,15 +799,17 @@ export async function recordA2UTransactionAtomic(params: {
         
         if (existingTxCheck && existingTxCheck.length > 0) {
           const existing = existingTxCheck[0]
-          // IDEMPOTENCY: Verify the existing transaction matches merchant and amount
+          // IDEMPOTENCY: Verify the existing transaction matches merchant identity and canonical amount
           if (existing.merchant_id !== params.merchantId) {
             throw new Error(`Idempotency violation: existing transaction has different merchantId: ${existing.merchant_id} vs ${params.merchantId}`)
           }
           if (existing.merchant_uid !== params.merchantUid) {
             throw new Error(`Idempotency violation: existing transaction has different merchantUid: ${existing.merchant_uid} vs ${params.merchantUid}`)
           }
-          if (existing.amount !== merchantAmount) {
-            throw new Error(`Idempotency violation: existing transaction has different amount: ${existing.amount} vs ${merchantAmount}`)
+          // Normalize PostgreSQL NUMERIC to validated number for exact comparison
+          const storedAmount = normalizePostgresNumeric(existing.amount, 'existing.amount')
+          if (storedAmount !== merchantAmount) {
+            throw new Error(`Idempotency violation: existing transaction has different amount: ${storedAmount} vs ${merchantAmount}`)
           }
           console.log('[DB] Idempotency check passed - existing transaction matches all fields, reusing transaction ID')
         }
@@ -806,20 +840,26 @@ export async function recordA2UTransactionAtomic(params: {
         
         if (existingReceiptCheck && existingReceiptCheck.length > 0) {
           const existing = existingReceiptCheck[0]
-          // IDEMPOTENCY: Verify existing receipt matches all financial fields
-          if (Math.abs(existing.customer_amount - customerAmount) > 0.0001) {
-            throw new Error(`Idempotency violation: receipt has different customerAmount: ${existing.customer_amount} vs ${customerAmount}`)
+          // IDEMPOTENCY: Verify existing receipt matches every stored accounting amount exactly
+          // Normalize all PostgreSQL NUMERIC values to validated numbers for precise comparison
+          const storedCustomerAmount = normalizePostgresNumeric(existing.customer_amount, 'existing.customer_amount')
+          const storedMerchantAmount = normalizePostgresNumeric(existing.merchant_amount, 'existing.merchant_amount')
+          const storedHorizonFeeCharged = normalizePostgresNumeric(existing.horizon_fee_charged, 'existing.horizon_fee_charged')
+          const storedAppCommission = normalizePostgresNumeric(existing.app_commission, 'existing.app_commission')
+          
+          if (storedCustomerAmount !== customerAmount) {
+            throw new Error(`Idempotency violation: receipt has different customerAmount: ${storedCustomerAmount} vs ${customerAmount}`)
           }
-          if (Math.abs(existing.merchant_amount - merchantAmount) > 0.0001) {
-            throw new Error(`Idempotency violation: receipt has different merchantAmount: ${existing.merchant_amount} vs ${merchantAmount}`)
+          if (storedMerchantAmount !== merchantAmount) {
+            throw new Error(`Idempotency violation: receipt has different merchantAmount: ${storedMerchantAmount} vs ${merchantAmount}`)
           }
-          if (Math.abs(existing.horizon_fee_charged - horizonFeeCharged) > 0.0001) {
-            throw new Error(`Idempotency violation: receipt has different horizonFeeCharged: ${existing.horizon_fee_charged} vs ${horizonFeeCharged}`)
+          if (storedHorizonFeeCharged !== horizonFeeCharged) {
+            throw new Error(`Idempotency violation: receipt has different horizonFeeCharged: ${storedHorizonFeeCharged} vs ${horizonFeeCharged}`)
           }
-          if (Math.abs(existing.app_commission - appCommission) > 0.0001) {
-            throw new Error(`Idempotency violation: receipt has different appCommission: ${existing.app_commission} vs ${appCommission}`)
+          if (storedAppCommission !== appCommission) {
+            throw new Error(`Idempotency violation: receipt has different appCommission: ${storedAppCommission} vs ${appCommission}`)
           }
-          console.log('[DB] Idempotency check passed - existing receipt matches all financial fields, no duplicate credit')
+          console.log('[DB] Idempotency check passed - existing receipt matches all financial fields exactly, no duplicate credit')
         }
         
         const receiptResult = await tx`
