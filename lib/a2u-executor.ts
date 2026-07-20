@@ -240,7 +240,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // If any txid exists, preserve it and permanently skip Stage2
     if (typeof existingTxid === "string") {
       console.log("[A2U Executor] A2U has existing txid - preserving and skipping Stage 2")
-      const preserveUpdates = {
+      const preserveUpdates: Partial<Payment> = {
         a2uTxid: existingTxid,
         a2uFromAddress: fetchedPayment.from_address,
         a2uToAddress: fetchedPayment.to_address,
@@ -251,7 +251,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         horizonSuccessAt: new Date().toISOString(),
         piCompleted: isDevCompleted,
         piCompletionPending: !isDevCompleted,
-        requiresDbReconciliation: false,
+        ...(isDevCompleted && { paidAt: new Date().toISOString() }),
+        requiresDbReconciliation: isDevCompleted,
       }
       // Replace ctx.payment with fully merged record
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, preserveUpdates)
@@ -851,6 +852,7 @@ async function persistCheckpointMerged(
     if (updates.merchantAmount !== undefined) merged.merchantAmount = updates.merchantAmount
     if (updates.horizonFeeCharged !== undefined) merged.horizonFeeCharged = updates.horizonFeeCharged
     if (updates.appCommission !== undefined) merged.appCommission = updates.appCommission
+    if (updates.appNetImpact !== undefined) merged.appNetImpact = updates.appNetImpact
     if (updates.note !== undefined) merged.note = updates.note
     if (updates.settlementStage !== undefined) merged.settlementStage = updates.settlementStage
     if (updates.createdAt !== undefined) merged.createdAt = updates.createdAt
