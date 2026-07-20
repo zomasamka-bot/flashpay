@@ -195,16 +195,17 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     a2uPaymentId = stageResult.data.a2uPaymentId
     ctx.payment.a2uPaymentId = a2uPaymentId
 
-    // Extract and persist Stage 1 payment data from stageResult
+    // Persist Stage 1: a2uPaymentId immediately after creation (crash-safe merge)
     if (stageResult.data.a2uPayment) {
-      ctx.payment = {
-        ...ctx.payment,
+      const stage1Updates = {
+        a2uPaymentId: a2uPaymentId,
         a2uFromAddress: stageResult.data.a2uPayment.from_address,
         a2uToAddress: stageResult.data.a2uPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
       }
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      await persistCheckpointMerged(ctx.paymentId, stage1Updates)
+      ctx.payment = { ...ctx.payment, ...stage1Updates }
     }
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
@@ -239,35 +240,36 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // If any txid exists, preserve it and permanently skip Stage2
     if (typeof existingTxid === "string") {
       console.log("[A2U Executor] A2U has existing txid - preserving and skipping Stage 2")
-      ctx.payment = {
-        ...ctx.payment,
+      const preserveUpdates = {
         a2uTxid: existingTxid,
         a2uFromAddress: fetchedPayment.from_address,
         a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
         horizonSuccessFlag: true,
+        horizonSuccessAt: new Date().toISOString(),
         piCompleted: isDevCompleted,
         piCompletionPending: !isDevCompleted,
         paidAt: isDevCompleted ? new Date().toISOString() : undefined,
-        status: "settlement_pending",
+        status: "settlement_pending" as const,
         requiresDbReconciliation: isDevCompleted,
       }
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      await persistCheckpointMerged(ctx.paymentId, preserveUpdates)
+      ctx.payment = { ...ctx.payment, ...preserveUpdates }
       console.log("[A2U Executor] ✓ Txid preserved - will skip Stage 2")
       // txidFromHorizon is set, Stage 2 will be skipped
     } else {
       // No txid: continue through normal flow (Stage 2 signing)
       console.log("[A2U Executor] A2U has no txid - will continue through Stage 2 for signing")
-      ctx.payment = {
-        ...ctx.payment,
+      const continueUpdates = {
         a2uFromAddress: fetchedPayment.from_address,
         a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
-        status: "settlement_pending",
+        status: "settlement_pending" as const,
       }
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      await persistCheckpointMerged(ctx.paymentId, continueUpdates)
+      ctx.payment = { ...ctx.payment, ...continueUpdates }
     }
   }
 
@@ -287,11 +289,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // Discriminated union: ok: true includes txidFromHorizon and horizonFeeCharged
     txidFromHorizon = signResult.data.txidFromHorizon
 
-    ctx.payment = {
-      ...ctx.payment,
-      status: "settlement_pending",
+    // Persist Stage 2: a2uTxid, horizonSuccessFlag, horizonSuccessAt after confirmed Horizon success (crash-safe merge)
+    const stage2Updates = {
+      status: "settlement_pending" as const,
       a2uTxid: txidFromHorizon,
-      // a2uFromAddress, a2uToAddress, merchantAmount already persisted in stage 1; NEVER pull from undefined a2uPayment
       customerAmount: ctx.customerAmount,
       horizonFeeCharged: signResult.data.horizonFeeCharged,
       horizonSuccessFlag: true,
@@ -300,7 +301,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       requiresDbReconciliation: false,
       horizonSuccessAt: new Date().toISOString(),
     }
-    await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+    await persistCheckpointMerged(ctx.paymentId, stage2Updates)
+    ctx.payment = { ...ctx.payment, ...stage2Updates }
     console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged )
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
@@ -324,10 +326,14 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: piResult.error,
       }
     }
-    ctx.payment.piCompleted = true
-    ctx.payment.piCompletionPending = false
-    ctx.payment.paidAt = new Date().toISOString()
-    await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+    // Persist Stage 3: piCompleted and timestamp after confirmed or already-completed Pi state (crash-safe merge)
+    const stage3Updates = {
+      piCompleted: true,
+      piCompletionPending: false,
+      paidAt: new Date().toISOString(),
+    }
+    await persistCheckpointMerged(ctx.paymentId, stage3Updates)
+    ctx.payment = { ...ctx.payment, ...stage3Updates }
     console.log("[A2U Executor] ✓ Pi /complete succeeded")
   } else {
     console.log("[A2U Executor] STAGE 3: Skipping Pi /complete - already piCompleted")
@@ -348,11 +354,15 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: dbResult.error,
       }
     }
-    ctx.payment.dbRecorded = true
-    ctx.payment.status = "settled_to_merchant"
-    ctx.payment.requiresDbReconciliation = false
-    ctx.payment.settledAt = new Date().toISOString()
-    await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+    // Persist Stage 4: dbRecorded, settledAt, and settled_to_merchant status after atomic DB success (crash-safe merge)
+    const stage4Updates = {
+      dbRecorded: true,
+      status: "settled_to_merchant" as const,
+      requiresDbReconciliation: false,
+      settledAt: new Date().toISOString(),
+    }
+    await persistCheckpointMerged(ctx.paymentId, stage4Updates)
+    ctx.payment = { ...ctx.payment, ...stage4Updates }
     console.log("[A2U Executor] ✓ DB reconciliation succeeded")
   } else {
     console.log("[A2U Executor] STAGE 4: Skipping DB reconciliation - already recorded")
@@ -488,12 +498,12 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const piPrivateSeed = process.env.PI_PRIVATE_SEED
     if (!piPrivateSeed) {
       console.error("[A2U Stage2] ❌ PI_PRIVATE_SEED not configured - cannot sign Horizon transaction")
-      // Persist checkpoint with no Horizon flags set
-      ctx.payment.status = "settlement_pending"
-      ctx.payment.piCompletionPending = true
-      ctx.payment.horizonSuccessFlag = false // DO NOT set to true
-      ctx.payment.a2uTxid = undefined // DO NOT set txid
-      await redis.set(`payment:${ctx.paymentId}`, JSON.stringify(ctx.payment))
+      // DO NOT set horizonSuccessFlag=true or persist a2uTxid on failure (crash-safe merge)
+      const failureUpdates = {
+        status: "settlement_pending" as const,
+        piCompletionPending: true,
+      }
+      await persistCheckpointMerged(ctx.paymentId, failureUpdates)
       return { ok: false, error: "PI_PRIVATE_SEED not configured - requires manual intervention", userFacingStatus: "settlement_pending" }
     }
 
@@ -697,6 +707,48 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
   } catch (error) {
     console.error("[A2U Stage4] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }
+  }
+}
+
+/**
+ * Crash-safe checkpoint persist with merge semantics
+ * Reloads latest record from Redis before persisting to ensure monotonic advancement.
+ * Never overwrites newer evidence (a2uPaymentId, a2uTxid, horizonSuccessFlag, piCompleted, dbRecorded).
+ */
+async function persistCheckpointMerged(
+  paymentId: string,
+  updates: Partial<Payment>
+): Promise<void> {
+  if (!isRedisConfigured) {
+    console.error("[A2U Checkpoint] Redis not configured - skipping persist")
+    return
+  }
+
+  try {
+    // Reload latest record to merge with new evidence
+    const latestData = await redis.get(`payment:${paymentId}`)
+    const latest: Payment = latestData
+      ? (typeof latestData === "string" ? JSON.parse(latestData) : latestData)
+      : {}
+
+    // Merge strategy: never lose newer evidence
+    const merged: Payment = {
+      ...latest,
+      ...updates,
+      // Preserve already-set terminal markers (never unset)
+      a2uPaymentId: updates.a2uPaymentId || latest.a2uPaymentId,
+      a2uTxid: updates.a2uTxid || latest.a2uTxid,
+      horizonSuccessFlag: updates.horizonSuccessFlag ?? latest.horizonSuccessFlag,
+      piCompleted: updates.piCompleted ?? latest.piCompleted,
+      dbRecorded: updates.dbRecorded ?? latest.dbRecorded,
+    }
+
+    await redis.set(`payment:${paymentId}`, JSON.stringify(merged))
+    console.log("[A2U Checkpoint] ✓ Merged checkpoint persisted")
+  } catch (error) {
+    console.error("[A2U Checkpoint] Failed to persist merged checkpoint:", error)
+    // Ensure we don't crash the entire executor on persist failure
+    // Recovery will detect stale state on next attempt
   }
 }
 
