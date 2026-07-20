@@ -431,11 +431,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       const persistError = finalPersistErr instanceof Error ? finalPersistErr.message : String(finalPersistErr)
       console.error("[A2U Executor] CRITICAL: Final Redis checkpoint failed after DB success - returning error without retry:", persistError)
       // DO NOT attempt recovery checkpoint write - DB is already committed with verified transactionId
-      // Payment data in ctx.payment contains all DB-verified identifiers and evidence
-      // On next invocation, isRecovery=true will reload from Redis, verify DB matches, write only final markers
-      return { ok: false, status: "settlement_pending", error: "Final Redis checkpoint failed - DB committed successfully, retry only checkpoint" }
-    }
-      // Return error but signal recovery is preserved for retry
+      // On next invocation, isRecovery=true will use DB-only reconciliation to verify identifiers and write only final markers
       return { ok: false, status: "settlement_pending", error: "Final Redis checkpoint failed - DB committed successfully, retry only checkpoint" }
     }
   } else {
