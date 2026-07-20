@@ -356,7 +356,46 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: dbResult.error,
       }
     }
-    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status after atomic DB success (crash-safe merge)
+    // CRITICAL: Verify returned transaction belongs to same payment before persisting final markers
+    if (!dbResult.transactionId || typeof dbResult.transactionId !== 'string') {
+      console.error("[A2U Executor] CRITICAL: DB returned no transactionId - cannot verify reconciliation boundary")
+      // Preserve recovery checkpoint without final markers
+      try {
+        await persistCheckpointMerged(ctx.paymentId, {
+          status: "settlement_pending",
+          dbRecorded: false,
+          requiresDbReconciliation: true,
+        })
+        console.log("[A2U Executor] Preserved recovery checkpoint without final markers due to verification failure")
+      } catch (persistErr) {
+        const persistError = persistErr instanceof Error ? persistErr.message : String(persistErr)
+        console.error("[A2U Executor] CRITICAL: Failed to preserve recovery checkpoint:", persistError)
+        return { ok: false, status: "error", error: "DB verification failed and recovery checkpoint persistence failed" }
+      }
+      return { ok: false, status: "settlement_pending", error: "DB reconciliation verification failed - no transaction ID returned" }
+    }
+
+    // Verify transaction ID is canonical UUID format (ensures transaction was actually recorded)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dbResult.transactionId)) {
+      console.error("[A2U Executor] CRITICAL: DB returned non-UUID transactionId:", dbResult.transactionId)
+      try {
+        await persistCheckpointMerged(ctx.paymentId, {
+          status: "settlement_pending",
+          dbRecorded: false,
+          requiresDbReconciliation: true,
+        })
+      } catch (persistErr) {
+        const persistError = persistErr instanceof Error ? persistErr.message : String(persistErr)
+        console.error("[A2U Executor] CRITICAL: Failed to preserve recovery checkpoint:", persistError)
+        return { ok: false, status: "error", error: "DB verification failed and recovery checkpoint persistence failed" }
+      }
+      return { ok: false, status: "settlement_pending", error: "DB reconciliation verification failed - invalid transaction ID format" }
+    }
+
+    console.log("[A2U Executor] ✓ DB reconciliation verified with transactionId:", dbResult.transactionId)
+    
+    // Only NOW persist final markers after successful verification
+    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status after confirmed commit (crash-safe merge)
     const stage4Updates = {
       dbRecorded: true,
       status: "settled_to_merchant" as const,
@@ -365,7 +404,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
     // Replace ctx.payment with fully merged record
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage4Updates)
-    console.log("[A2U Executor] ✓ DB reconciliation succeeded")
+    console.log("[A2U Executor] ✓ Final DB markers persisted (dbRecorded=true, settled_to_merchant)")
   } else {
     console.log("[A2U Executor] STAGE 4: Skipping DB reconciliation - already recorded")
   }
