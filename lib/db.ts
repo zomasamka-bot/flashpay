@@ -973,9 +973,10 @@ export async function recordA2UTransactionAtomic(params: {
       // Select the actual committed transaction row from database to verify and return its canonical identifiers
       // This proves the transaction was actually persisted and returns evidence, not echoed params
       // Join transactions to receipts to verify both are committed and retrieve accounting identifiers
+      // U2A/A2U identifiers and txids are stored in receipts table, not transactions
       const committedRowResult = await query(
         `SELECT 
-           t.id, t.u2a_identifier, t.u2a_txid, t.a2u_identifier, t.a2u_txid, t.merchant_id, t.merchant_uid,
+           t.id, r.u2a_identifier, r.u2a_txid, r.a2u_identifier, r.a2u_txid, t.merchant_id, t.merchant_uid,
            r.customer_amount, r.horizon_fee_charged, r.app_commission, r.merchant_amount, r.app_net_impact
          FROM transactions t
          INNER JOIN receipts r ON r.transaction_id = t.id
@@ -1012,51 +1013,52 @@ export async function recordA2UTransactionAtomic(params: {
       }
       
       // After in-checks above, extract and validate each property type and value
-      const u2aIdentifier = committedRow['u2a_identifier']
-      const u2aTxid = committedRow['u2a_txid']
-      const a2uIdentifier = committedRow['a2u_identifier']
-      const a2uTxid = committedRow['a2u_txid']
-      const merchantId = committedRow['merchant_id']
-      const merchantUid = committedRow['merchant_uid']
-      const customerAmount = committedRow['customer_amount']
-      const horizonFeeCharged = committedRow['horizon_fee_charged']
-      const appCommission = committedRow['app_commission']
-      const merchantAmount = committedRow['merchant_amount']
-      const appNetImpact = committedRow['app_net_impact']
+      // Use distinct names to avoid shadowing validated transaction variables
+      const committedU2aIdentifier = committedRow['u2a_identifier']
+      const committedU2aTxid = committedRow['u2a_txid']
+      const committedA2uIdentifier = committedRow['a2u_identifier']
+      const committedA2uTxid = committedRow['a2u_txid']
+      const committedMerchantId = committedRow['merchant_id']
+      const committedMerchantUid = committedRow['merchant_uid']
+      const committedCustomerAmountRaw = committedRow['customer_amount']
+      const committedHorizonFeeChargedRaw = committedRow['horizon_fee_charged']
+      const committedAppCommissionRaw = committedRow['app_commission']
+      const committedMerchantAmountRaw = committedRow['merchant_amount']
+      const committedAppNetImpactRaw = committedRow['app_net_impact']
       
       // Validate transaction identifier strings are non-empty
       if (
-        typeof u2aIdentifier !== 'string' || u2aIdentifier.trim().length === 0 ||
-        typeof u2aTxid !== 'string' || u2aTxid.trim().length === 0 ||
-        typeof a2uIdentifier !== 'string' || a2uIdentifier.trim().length === 0 ||
-        typeof a2uTxid !== 'string' || a2uTxid.trim().length === 0 ||
-        typeof merchantId !== 'string' || merchantId.trim().length === 0 ||
-        typeof merchantUid !== 'string' || merchantUid.trim().length === 0
+        typeof committedU2aIdentifier !== 'string' || committedU2aIdentifier.trim().length === 0 ||
+        typeof committedU2aTxid !== 'string' || committedU2aTxid.trim().length === 0 ||
+        typeof committedA2uIdentifier !== 'string' || committedA2uIdentifier.trim().length === 0 ||
+        typeof committedA2uTxid !== 'string' || committedA2uTxid.trim().length === 0 ||
+        typeof committedMerchantId !== 'string' || committedMerchantId.trim().length === 0 ||
+        typeof committedMerchantUid !== 'string' || committedMerchantUid.trim().length === 0
       ) {
         console.error('[DB] CRITICAL: Committed row transaction fields are not non-empty strings')
         return { success: false, error: 'Transaction row validation failed - identifier field types or values invalid' }
       }
 
       // Validate accounting numeric fields are valid numbers (may be 0, null, or string representations from PostgreSQL)
-      const normalizedCustomerAmount = normalizePostgresNumeric(customerAmount, 'customerAmount')
-      const normalizedHorizonFeeCharged = normalizePostgresNumeric(horizonFeeCharged, 'horizonFeeCharged')
-      const normalizedAppCommission = normalizePostgresNumeric(appCommission, 'appCommission')
-      const normalizedMerchantAmount = normalizePostgresNumeric(merchantAmount, 'merchantAmount')
-      const normalizedAppNetImpact = normalizePostgresNumeric(appNetImpact, 'appNetImpact')
+      const normalizedCommittedCustomerAmount = normalizePostgresNumeric(committedCustomerAmountRaw, 'committedCustomerAmount')
+      const normalizedCommittedHorizonFeeCharged = normalizePostgresNumeric(committedHorizonFeeChargedRaw, 'committedHorizonFeeCharged')
+      const normalizedCommittedAppCommission = normalizePostgresNumeric(committedAppCommissionRaw, 'committedAppCommission')
+      const normalizedCommittedMerchantAmount = normalizePostgresNumeric(committedMerchantAmountRaw, 'committedMerchantAmount')
+      const normalizedCommittedAppNetImpact = normalizePostgresNumeric(committedAppNetImpactRaw, 'committedAppNetImpact')
       
       if (
-        !Number.isFinite(normalizedCustomerAmount) ||
-        !Number.isFinite(normalizedHorizonFeeCharged) ||
-        !Number.isFinite(normalizedAppCommission) ||
-        !Number.isFinite(normalizedMerchantAmount) ||
-        !Number.isFinite(normalizedAppNetImpact)
+        !Number.isFinite(normalizedCommittedCustomerAmount) ||
+        !Number.isFinite(normalizedCommittedHorizonFeeCharged) ||
+        !Number.isFinite(normalizedCommittedAppCommission) ||
+        !Number.isFinite(normalizedCommittedMerchantAmount) ||
+        !Number.isFinite(normalizedCommittedAppNetImpact)
       ) {
         console.error('[DB] CRITICAL: Accounting fields not finite numbers:', {
-          customerAmount: normalizedCustomerAmount,
-          horizonFeeCharged: normalizedHorizonFeeCharged,
-          appCommission: normalizedAppCommission,
-          merchantAmount: normalizedMerchantAmount,
-          appNetImpact: normalizedAppNetImpact
+          customerAmount: normalizedCommittedCustomerAmount,
+          horizonFeeCharged: normalizedCommittedHorizonFeeCharged,
+          appCommission: normalizedCommittedAppCommission,
+          merchantAmount: normalizedCommittedMerchantAmount,
+          appNetImpact: normalizedCommittedAppNetImpact
         })
         return { success: false, error: 'Transaction row validation failed - accounting field types or values invalid' }
       }
