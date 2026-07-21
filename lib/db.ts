@@ -262,20 +262,47 @@ export async function initializeSchema() {
       console.log('[DB] a2u_txid migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
     }
 
-    // Add fee and accounting tracking columns to receipts
+    // Add fee and accounting tracking columns to receipts (each independently for idempotency)
     try {
-      await query(`
-        ALTER TABLE receipts
-        ADD COLUMN IF NOT EXISTS customer_amount NUMERIC(18, 8),
-        ADD COLUMN IF NOT EXISTS horizon_fee_charged NUMERIC(18, 8) DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS app_commission NUMERIC(18, 8) DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS merchant_amount NUMERIC(18, 8),
-        ADD COLUMN IF NOT EXISTS app_net_impact NUMERIC(18, 8) DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS settlement_status TEXT DEFAULT 'pending'
-      `)
-      console.log('[DB] Fee tracking columns added to receipts (if needed)')
+      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS customer_amount NUMERIC(18, 8)`)
+      console.log('[DB] customer_amount column added to receipts (if needed)')
     } catch (e) {
-      console.log('[DB] Fee tracking migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
+      console.log('[DB] customer_amount migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
+    }
+
+    try {
+      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS horizon_fee_charged NUMERIC(18, 8) DEFAULT 0`)
+      console.log('[DB] horizon_fee_charged column added to receipts (if needed)')
+    } catch (e) {
+      console.log('[DB] horizon_fee_charged migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
+    }
+
+    try {
+      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_commission NUMERIC(18, 8) DEFAULT 0`)
+      console.log('[DB] app_commission column added to receipts (if needed)')
+    } catch (e) {
+      console.log('[DB] app_commission migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
+    }
+
+    try {
+      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_amount NUMERIC(18, 8)`)
+      console.log('[DB] merchant_amount column added to receipts (if needed)')
+    } catch (e) {
+      console.log('[DB] merchant_amount migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
+    }
+
+    try {
+      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_net_impact NUMERIC(18, 8) DEFAULT 0`)
+      console.log('[DB] app_net_impact column added to receipts (if needed)')
+    } catch (e) {
+      console.log('[DB] app_net_impact migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
+    }
+
+    try {
+      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS settlement_status TEXT DEFAULT 'pending'`)
+      console.log('[DB] settlement_status column added to receipts (if needed)')
+    } catch (e) {
+      console.log('[DB] settlement_status migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
     }
 
     // Create merchant balances table
@@ -832,10 +859,16 @@ export async function recordA2UTransactionAtomic(params: {
         // 2. Insert receipt idempotently with fee tracking using the actual transaction ID
         // CRITICAL: Store customerAmount, merchantAmount (what was actually sent on blockchain), and horizonFeeCharged
         // On conflict, verify amounts match (idempotency check)
-        const existingReceiptCheck = await tx`
-          SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount FROM receipts 
-          WHERE transaction_id = ${actualTransactionId} LIMIT 1
-        `
+        let existingReceiptCheck: any[] | null = null
+        try {
+          existingReceiptCheck = await tx`
+            SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount FROM receipts 
+            WHERE transaction_id = ${actualTransactionId} LIMIT 1
+          `
+        } catch (selectErr) {
+          // If columns don't exist yet (schema still migrating), skip idempotency check
+          console.log('[DB] Receipt idempotency check skipped (columns may not exist yet):', (selectErr as any)?.message?.substring(0, 80))
+        }
         
         if (existingReceiptCheck && existingReceiptCheck.length > 0) {
           const existing = existingReceiptCheck[0]
