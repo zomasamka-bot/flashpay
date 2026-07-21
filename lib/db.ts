@@ -1067,12 +1067,12 @@ export async function recordA2UTransactionAtomic(params: {
         success: true, 
         transactionId: result,
         transaction: {
-          u2aIdentifier,
-          u2aTxid,
-          a2uIdentifier,
-          a2uTxid,
-          merchantId,
-          merchantUid,
+          u2aIdentifier: committedU2aIdentifier,
+          u2aTxid: committedU2aTxid,
+          a2uIdentifier: committedA2uIdentifier,
+          a2uTxid: committedA2uTxid,
+          merchantId: committedMerchantId,
+          merchantUid: committedMerchantUid,
         }
       }
     } finally {
