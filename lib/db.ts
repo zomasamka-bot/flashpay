@@ -362,6 +362,42 @@ export async function initializeSchema() {
 }
 
 /**
+ * Ensure receipts table has all required accounting columns before transaction
+ * MUST fail explicitly if any column cannot be added - not wrapped in try-catch
+ * This is called before client.begin() to guarantee schema readiness
+ */
+export async function ensureReceiptsSchema() {
+  if (!process.env.DATABASE_URL) {
+    console.log('[DB] PostgreSQL not configured, skipping receipts schema check')
+    return
+  }
+
+  console.log('[DB] Ensuring receipts table accounting columns exist...')
+
+  // Each column add is separate and explicit - no nested try-catch during migration
+  // If any fail, the error propagates to Stage 4 caller
+  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS customer_amount NUMERIC(18, 8)`)
+  console.log('[DB] ✓ customer_amount column ensured')
+
+  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS horizon_fee_charged NUMERIC(18, 8) DEFAULT 0`)
+  console.log('[DB] ✓ horizon_fee_charged column ensured')
+
+  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_commission NUMERIC(18, 8) DEFAULT 0`)
+  console.log('[DB] ✓ app_commission column ensured')
+
+  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_amount NUMERIC(18, 8)`)
+  console.log('[DB] ✓ merchant_amount column ensured')
+
+  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_net_impact NUMERIC(18, 8) DEFAULT 0`)
+  console.log('[DB] ✓ app_net_impact column ensured')
+
+  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS settlement_status TEXT DEFAULT 'pending'`)
+  console.log('[DB] ✓ settlement_status column ensured')
+
+  console.log('[DB] Receipts schema accounting columns verified')
+}
+
+/**
  * Get transaction by ID
  */
 export async function getTransaction(transactionId: string): Promise<TransactionRow | null> {

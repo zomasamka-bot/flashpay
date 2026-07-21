@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic } from "@/lib/db"
+import { recordA2UTransactionAtomic, ensureReceiptsSchema } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import * as StellarSDK from "@stellar/stellar-sdk"
@@ -799,6 +799,16 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     console.log("[A2U Stage4]   - merchantAmount:", financialData.merchantAmount)
     console.log("[A2U Stage4]   - horizonFeeCharged:", financialData.horizonFeeCharged)
     console.log("[A2U Stage4]   - appCommission:", financialData.appCommission)
+
+    // CRITICAL: Ensure receipts table schema is ready before entering transaction
+    // This must succeed - any schema error fails Stage 4 immediately without fallback
+    try {
+      await ensureReceiptsSchema()
+    } catch (schemaErr) {
+      const schemaError = schemaErr instanceof Error ? schemaErr.message : String(schemaErr)
+      console.error("[A2U Stage4] CRITICAL: Receipts schema preparation failed - cannot proceed to transaction:", schemaError)
+      return { ok: false, error: `Schema preparation failed: ${schemaError}`, userFacingStatus: "error" }
+    }
 
     // Call DB with VALIDATED financial data only
     // CRITICAL: Pass ONLY validated identifiers from financialData
