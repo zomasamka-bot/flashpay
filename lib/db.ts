@@ -972,9 +972,14 @@ export async function recordA2UTransactionAtomic(params: {
       
       // Select the actual committed transaction row from database to verify and return its canonical identifiers
       // This proves the transaction was actually persisted and returns evidence, not echoed params
+      // Join transactions to receipts to verify both are committed and retrieve accounting identifiers
       const committedRowResult = await query(
-        `SELECT id, u2a_identifier, u2a_txid, a2u_identifier, a2u_txid, merchant_id, merchant_uid 
-         FROM a2u_transactions WHERE id = $1`,
+        `SELECT 
+           t.id, t.u2a_identifier, t.u2a_txid, t.a2u_identifier, t.a2u_txid, t.merchant_id, t.merchant_uid,
+           r.customer_amount, r.horizon_fee_charged, r.app_commission, r.merchant_amount, r.app_net_impact
+         FROM transactions t
+         INNER JOIN receipts r ON r.transaction_id = t.id
+         WHERE t.id = $1`,
         [result]
       )
       
@@ -985,7 +990,7 @@ export async function recordA2UTransactionAtomic(params: {
       
       const committedRow = committedRowResult[0]
       
-      // Type guard: validate row is non-null object with all required string properties
+      // Type guard: validate row is non-null object with all required properties (strings and numerics)
       // Using 'in' operator checks to narrow type and typeof checks to validate values
       if (
         typeof committedRow !== 'object' ||
@@ -995,20 +1000,31 @@ export async function recordA2UTransactionAtomic(params: {
         !('a2u_identifier' in committedRow) ||
         !('a2u_txid' in committedRow) ||
         !('merchant_id' in committedRow) ||
-        !('merchant_uid' in committedRow)
+        !('merchant_uid' in committedRow) ||
+        !('customer_amount' in committedRow) ||
+        !('horizon_fee_charged' in committedRow) ||
+        !('app_commission' in committedRow) ||
+        !('merchant_amount' in committedRow) ||
+        !('app_net_impact' in committedRow)
       ) {
         console.error('[DB] CRITICAL: Committed row missing required fields:', committedRow)
         return { success: false, error: 'Transaction row validation failed - required fields missing' }
       }
       
-      // After in-checks above, extract and validate each property is a non-empty string
+      // After in-checks above, extract and validate each property type and value
       const u2aIdentifier = committedRow['u2a_identifier']
       const u2aTxid = committedRow['u2a_txid']
       const a2uIdentifier = committedRow['a2u_identifier']
       const a2uTxid = committedRow['a2u_txid']
       const merchantId = committedRow['merchant_id']
       const merchantUid = committedRow['merchant_uid']
+      const customerAmount = committedRow['customer_amount']
+      const horizonFeeCharged = committedRow['horizon_fee_charged']
+      const appCommission = committedRow['app_commission']
+      const merchantAmount = committedRow['merchant_amount']
+      const appNetImpact = committedRow['app_net_impact']
       
+      // Validate transaction identifier strings are non-empty
       if (
         typeof u2aIdentifier !== 'string' || u2aIdentifier.trim().length === 0 ||
         typeof u2aTxid !== 'string' || u2aTxid.trim().length === 0 ||
@@ -1017,8 +1033,32 @@ export async function recordA2UTransactionAtomic(params: {
         typeof merchantId !== 'string' || merchantId.trim().length === 0 ||
         typeof merchantUid !== 'string' || merchantUid.trim().length === 0
       ) {
-        console.error('[DB] CRITICAL: Committed row fields are not non-empty strings')
-        return { success: false, error: 'Transaction row validation failed - field types or values invalid' }
+        console.error('[DB] CRITICAL: Committed row transaction fields are not non-empty strings')
+        return { success: false, error: 'Transaction row validation failed - identifier field types or values invalid' }
+      }
+
+      // Validate accounting numeric fields are valid numbers (may be 0, null, or string representations from PostgreSQL)
+      const normalizedCustomerAmount = normalizePostgresNumeric(customerAmount, 'customerAmount')
+      const normalizedHorizonFeeCharged = normalizePostgresNumeric(horizonFeeCharged, 'horizonFeeCharged')
+      const normalizedAppCommission = normalizePostgresNumeric(appCommission, 'appCommission')
+      const normalizedMerchantAmount = normalizePostgresNumeric(merchantAmount, 'merchantAmount')
+      const normalizedAppNetImpact = normalizePostgresNumeric(appNetImpact, 'appNetImpact')
+      
+      if (
+        !Number.isFinite(normalizedCustomerAmount) ||
+        !Number.isFinite(normalizedHorizonFeeCharged) ||
+        !Number.isFinite(normalizedAppCommission) ||
+        !Number.isFinite(normalizedMerchantAmount) ||
+        !Number.isFinite(normalizedAppNetImpact)
+      ) {
+        console.error('[DB] CRITICAL: Accounting fields not finite numbers:', {
+          customerAmount: normalizedCustomerAmount,
+          horizonFeeCharged: normalizedHorizonFeeCharged,
+          appCommission: normalizedAppCommission,
+          merchantAmount: normalizedMerchantAmount,
+          appNetImpact: normalizedAppNetImpact
+        })
+        return { success: false, error: 'Transaction row validation failed - accounting field types or values invalid' }
       }
       
       return { 
