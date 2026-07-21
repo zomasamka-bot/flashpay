@@ -859,18 +859,13 @@ export async function recordA2UTransactionAtomic(params: {
         // 2. Insert receipt idempotently with fee tracking using the actual transaction ID
         // CRITICAL: Store customerAmount, merchantAmount (what was actually sent on blockchain), and horizonFeeCharged
         // On conflict, verify amounts match (idempotency check)
-        let existingReceiptCheck: any[] | null = null
-        try {
-          existingReceiptCheck = await tx`
-            SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount FROM receipts 
-            WHERE transaction_id = ${actualTransactionId} LIMIT 1
-          `
-        } catch (selectErr) {
-          // If columns don't exist yet (schema still migrating), skip idempotency check
-          console.log('[DB] Receipt idempotency check skipped (columns may not exist yet):', (selectErr as any)?.message?.substring(0, 80))
-        }
+        // All required columns must exist before transaction begins
+        const existingReceiptCheck = await tx`
+          SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount FROM receipts 
+          WHERE transaction_id = ${actualTransactionId} LIMIT 1
+        `
         
-        if (existingReceiptCheck && existingReceiptCheck.length > 0) {
+        if (existingReceiptCheck.length > 0) {
           const existing = existingReceiptCheck[0]
           // IDEMPOTENCY: Verify existing receipt matches every stored accounting amount exactly
           // Normalize all PostgreSQL NUMERIC values to validated numbers for precise comparison
