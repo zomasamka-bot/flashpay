@@ -9,6 +9,8 @@ import { ROUTES } from "@/lib/router"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { config } from "@/lib/config"
 import { useToast } from "@/hooks/use-toast"
+import { useMerchant } from "@/lib/use-merchant"
+import { unifiedStore } from "@/lib/unified-store"
 import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet } from "lucide-react"
 
 function ProfileContent() {
@@ -20,6 +22,9 @@ function ProfileContent() {
   // Owner UID verification — stores result separately from payment system
   const { uidData, verifyUid, clearUid } = useOwnerUid()
   const piUsername = uidData.username
+  
+  // Canonical merchant state for continuity
+  const merchantState = useMerchant()
 
   useEffect(() => {
     setMounted(true)
@@ -27,7 +32,7 @@ function ProfileContent() {
 
 
 
-  // Independent Profile authentication - calls window.Pi.authenticate directly
+  // Profile authentication - verifies owner AND persists to canonical merchant state
   const handleConnectWallet = async () => {
     setIsAuthenticating(true)
 
@@ -36,7 +41,7 @@ function ProfileContent() {
         throw new Error("Pi SDK not available")
       }
 
-      // Direct call to Pi.authenticate - completely independent from Home
+      // Call Pi.authenticate with owner scopes
       const authResult = await window.Pi.authenticate(
         ["username", "payments", "wallet_address"],
         () => {
@@ -67,13 +72,19 @@ function ProfileContent() {
       }
 
       const username = authResult.user.username || ""
+      const walletAddress = authResult.user.wallet_address || ""
 
-      // Store ONLY in isolated ownerUidStore, verify against NEXT_PUBLIC_OWNER_UID
+      // PHASE 1: Store in isolated ownerUidStore and verify against NEXT_PUBLIC_OWNER_UID
       const verifyResult = await verifyUid(uid, accessToken, username)
 
       if (!verifyResult.success) {
         throw new Error(verifyResult.error || "Owner verification failed")
       }
+
+      // PHASE 1: Persist same verified identity through canonical merchant state
+      // This bridges Profile auth to the merchant pages (Home, Payments, etc.)
+      unifiedStore.completeMerchantSetup(username, walletAddress, uid)
+      unifiedStore.updateMerchantState({ accessToken })
 
       toast({
         title: "Connected",
@@ -91,10 +102,13 @@ function ProfileContent() {
     }
   }
 
-  // Disconnect wallet and clear owner UID
+  // Disconnect wallet and clear both owner UID and merchant state
   const handleDisconnect = () => {
     if (confirm("Disconnect wallet and clear authentication?")) {
+      // Clear from both stores for consistent state
       clearUid()
+      unifiedStore.clearMerchantAuth()
+      
       toast({
         title: "Disconnected",
         description: "Wallet connection cleared",
@@ -104,7 +118,10 @@ function ProfileContent() {
 
   const handleLogout = () => {
     if (confirm("Are you sure you want to log out?")) {
+      // Clear from both stores for consistent state
       clearUid()
+      unifiedStore.clearMerchantAuth()
+      
       router.push("/")
       toast({
         title: "Logged out",
