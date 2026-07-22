@@ -63,10 +63,18 @@ export default function TransactionsPage() {
     const matchesSearch =
       !searchQuery || txn.reference.toLowerCase().includes(searchQuery.toLowerCase()) ||
       txn.description.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesAmount =
-      !filterAmount ||
-      txn.amount >= parseFloat(filterAmount) * 0.95 ||
-      txn.amount <= parseFloat(filterAmount) * 1.05
+    
+    // Parse amount filter once - disable if empty or non-finite
+    let matchesAmount = true
+    if (filterAmount) {
+      const targetAmount = parseFloat(filterAmount)
+      if (isFinite(targetAmount)) {
+        matchesAmount = txn.amount >= targetAmount * 0.95 && txn.amount <= targetAmount * 1.05
+      } else {
+        matchesAmount = false
+      }
+    }
+    
     return matchesSearch && matchesAmount
   })
 
@@ -81,7 +89,7 @@ export default function TransactionsPage() {
         txn.reference,
         txn.amount.toString(),
         new Date(txn.createdAt).toLocaleDateString(),
-        txn.status,
+        txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status,
         txn.description,
       ]),
     ]
@@ -192,10 +200,14 @@ export default function TransactionsPage() {
                     <div className="text-right">
                       <div className="text-xl font-bold text-foreground">{txn.amount} π</div>
                       <Badge
-                        variant={txn.status === "completed" ? "default" : "secondary"}
+                        variant={
+                          txn.settlementStatus === "settled_to_merchant" || txn.status === "completed"
+                            ? "default"
+                            : "secondary"
+                        }
                         className="text-xs"
                       >
-                        {txn.status}
+                        {txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status}
                       </Badge>
                     </div>
                     <ChevronRight className="h-5 w-5 text-muted-foreground ml-2" />
