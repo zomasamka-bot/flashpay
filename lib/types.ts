@@ -72,6 +72,15 @@ export interface Transaction {
   
   // Status
   status: TransactionStatus
+  
+  // Receipt fields (from LEFT JOIN via /api/transactions)
+  settlementStatus?: PaymentStatus
+  piPaymentId?: string
+  u2aIdentifier?: string
+  u2aTxid?: string
+  a2uPaymentId?: string
+  a2uIdentifier?: string
+  a2uTxid?: string
 }
 
 export interface Receipt {
