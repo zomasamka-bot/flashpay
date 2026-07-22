@@ -55,25 +55,13 @@ export async function GET(request: NextRequest) {
     // Build query for PostgreSQL - only return settled_to_merchant payments
     let sql = `
       SELECT 
-        t.id,
-        t.payment_id,
-        t.type,
-        t.from_id,
-        t.from_type,
-        t.to_id,
-        t.to_type,
+        t.payment_id as id,
+        t.merchant_id as merchantId,
         t.amount,
-        t.currency,
         t.description as note,
-        t.reference,
+        'settled_to_merchant' as status,
         t.created_at as createdAt,
-        t.completed_at as settledAt,
-        t.status,
-        r.settlement_status as settlementStatus,
-        r.pi_payment_id as piPaymentId,
-        r.u2a_txid as u2aTxid,
-        r.a2u_payment_id as a2uPaymentId,
-        r.a2u_txid as a2uTxid
+        t.completed_at as settledAt
       FROM transactions t
       LEFT JOIN receipts r ON t.id = r.transaction_id
       WHERE t.merchant_id = $1 AND t.status = 'settled_to_merchant'
@@ -113,29 +101,15 @@ export async function GET(request: NextRequest) {
 
     console.log("[Merchant Payments API] Found", payments.length, "payments from PostgreSQL")
 
-    // Transform to camelCase and include receipt fields
+    // Transform to camelCase
     const transformedPayments = (payments || []).map((p: any) => ({
-      transactionId: p.id,
-      paymentId: p.payment_id,
-      type: p.type,
-      fromId: p.from_id,
-      fromType: p.from_type,
-      toId: p.to_id,
-      toType: p.to_type,
+      id: p.id,
+      merchantId: p.merchantId,
       amount: Number(p.amount),
-      currency: p.currency,
-      description: p.note,
-      reference: p.reference,
-      createdAt: p.createdAt,
-      completedAt: p.settledAt,
+      note: p.note,
       status: p.status,
-      settlementStatus: p.settlementStatus,
-      piPaymentId: p.piPaymentId,
-      u2aIdentifier: p.piPaymentId,
-      u2aTxid: p.u2aTxid,
-      a2uPaymentId: p.a2uPaymentId,
-      a2uIdentifier: p.a2uPaymentId,
-      a2uTxid: p.a2uTxid,
+      createdAt: p.createdAt,
+      settledAt: p.settledAt,
     }))
 
     // Calculate total balance from payments

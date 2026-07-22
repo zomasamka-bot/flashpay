@@ -84,8 +84,8 @@ export async function GET(request: NextRequest) {
       lastUpdated: balance?.last_updated,
     }
 
-    // Transform transactions to camelCase with transactionId
-    const transformedTransactions = (transactions || []).map((tx) => {
+    // Transform transactions to camelCase with transactionId and receipt fields
+    const transformedTransactions = (transactions || []).map((tx: any) => {
       const row = tx as TransactionRow
       return {
         transactionId: row.id,
@@ -99,6 +99,13 @@ export async function GET(request: NextRequest) {
         status: row.status,
         createdAt: row.created_at,
         completedAt: row.completed_at,
+        settlementStatus: tx.settlement_status,
+        piPaymentId: tx.u2a_identifier,
+        u2aIdentifier: tx.u2a_identifier,
+        u2aTxid: tx.u2a_txid,
+        a2uPaymentId: tx.a2u_identifier,
+        a2uIdentifier: tx.a2u_identifier,
+        a2uTxid: tx.a2u_txid,
       }
     })
 
@@ -176,8 +183,8 @@ export async function POST(request: NextRequest) {
       offset,
     })
 
-    // Transform transactions to camelCase with transactionId
-    const transformedTransactions = (transactions || []).map((tx) => {
+    // Transform transactions to camelCase with transactionId and receipt fields
+    const transformedTransactions = (transactions || []).map((tx: any) => {
       const row = tx as TransactionRow
       return {
         transactionId: row.id,
@@ -191,6 +198,13 @@ export async function POST(request: NextRequest) {
         status: row.status,
         createdAt: row.created_at,
         completedAt: row.completed_at,
+        settlementStatus: tx.settlement_status,
+        piPaymentId: tx.u2a_identifier,
+        u2aIdentifier: tx.u2a_identifier,
+        u2aTxid: tx.u2a_txid,
+        a2uPaymentId: tx.a2u_identifier,
+        a2uIdentifier: tx.a2u_identifier,
+        a2uTxid: tx.a2u_txid,
       }
     })
 

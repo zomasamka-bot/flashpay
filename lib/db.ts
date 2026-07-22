@@ -464,25 +464,25 @@ export async function getTransactionsByMerchant(
     const limit = options.limit || 50
     const offset = options.offset || 0
 
-    // Build WHERE clause with date filters
-    let whereClause = 'WHERE merchant_id = $1'
+    // Build WHERE clause with date filters - qualify all with t
+    let whereClause = 'WHERE t.merchant_id = $1'
     const params: any[] = [merchantId]
     let paramIndex = 2
 
     if (options.fromDate) {
-      whereClause += ` AND created_at >= $${paramIndex}`
+      whereClause += ` AND t.created_at >= $${paramIndex}`
       params.push(options.fromDate)
       paramIndex++
     }
 
     if (options.toDate) {
-      whereClause += ` AND created_at <= $${paramIndex}`
+      whereClause += ` AND t.created_at <= $${paramIndex}`
       params.push(options.toDate)
       paramIndex++
     }
 
     // Get total count
-    const countQuery = `SELECT COUNT(*) as count FROM transactions ${whereClause}`
+    const countQuery = `SELECT COUNT(*) as count FROM transactions t ${whereClause}`
     const countResult = await query(countQuery, params)
     
     // Validate and convert count
@@ -503,11 +503,7 @@ export async function getTransactionsByMerchant(
       SELECT 
         t.id,
         t.payment_id,
-        t.type,
-        t.from_id,
-        t.from_type,
-        t.to_id,
-        t.to_type,
+        t.merchant_id,
         t.amount,
         t.currency,
         t.description,
@@ -516,9 +512,9 @@ export async function getTransactionsByMerchant(
         t.completed_at,
         t.status,
         r.settlement_status,
-        r.pi_payment_id,
+        r.u2a_identifier,
         r.u2a_txid,
-        r.a2u_payment_id,
+        r.a2u_identifier,
         r.a2u_txid
       FROM transactions t
       LEFT JOIN receipts r ON r.transaction_id = t.id
