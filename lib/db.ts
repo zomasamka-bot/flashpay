@@ -498,14 +498,36 @@ export async function getTransactionsByMerchant(
       }
     }
 
-    // Get paginated results
+    // Get paginated results with receipt LEFT JOIN
     const transactionsQuery = `
-      SELECT * FROM transactions
+      SELECT 
+        t.id,
+        t.payment_id,
+        t.type,
+        t.from_id,
+        t.from_type,
+        t.to_id,
+        t.to_type,
+        t.amount,
+        t.currency,
+        t.description,
+        t.reference,
+        t.created_at,
+        t.completed_at,
+        t.status,
+        r.settlement_status,
+        r.pi_payment_id,
+        r.u2a_txid,
+        r.a2u_payment_id,
+        r.a2u_txid
+      FROM transactions t
+      LEFT JOIN receipts r ON r.transaction_id = t.id
       ${whereClause}
-      ORDER BY created_at DESC
-      LIMIT ${limit} OFFSET ${offset}
+      ORDER BY t.created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `
-    const transactionsResult = await query(transactionsQuery, params)
+    const paginationParams = [...params, limit, offset]
+    const transactionsResult = await query(transactionsQuery, paginationParams)
 
     return {
       transactions: transactionsResult || [],

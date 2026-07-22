@@ -208,6 +208,40 @@ export interface ReceiptRow {
   a2u_txid?: string
 }
 
+export interface TransactionWithReceiptRow extends TransactionRow {
+  // Receipt fields from LEFT JOIN
+  settlement_status?: string
+  pi_payment_id?: string
+  u2a_txid?: string
+  a2u_payment_id?: string
+  a2u_txid?: string
+}
+
+export interface MerchantPaymentResponse {
+  transactionId: string
+  paymentId: string
+  type: string
+  fromId: string
+  fromType: string
+  toId?: string
+  toType?: string
+  amount: number
+  currency: string
+  description: string
+  reference: string
+  createdAt: string
+  completedAt?: string
+  status: string
+  // Receipt fields (from LEFT JOIN)
+  settlementStatus?: string
+  piPaymentId?: string
+  u2aIdentifier?: string
+  u2aTxid?: string
+  a2uPaymentId?: string
+  a2uIdentifier?: string
+  a2uTxid?: string
+}
+
 export interface MerchantBalanceRow {
   merchant_id: string
   settled: number
