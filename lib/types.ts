@@ -126,7 +126,8 @@ export interface Receipt {
   a2uTxid?: string        // A2U transaction ID (Horizon txid)
   
   // Settlement status
-  settlementStatus?: "pending" | "completed" | "failed"
+  settlementStatus?: PaymentStatus
+  a2uPaymentId?: string        // A2U payment identifier
   settledAt?: string // When A2U transfer settled
   
   // Additional metadata

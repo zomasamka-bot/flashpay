@@ -136,7 +136,7 @@ export default function ReceiptPage() {
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Status</p>
                 <Badge variant="default" className="mt-1">
-                  COMPLETED
+                  {receipt.settlementStatus || "COMPLETED"}
                 </Badge>
               </div>
             </div>
@@ -237,6 +237,39 @@ export default function ReceiptPage() {
                 )}
               </Button>
             </div>
+
+            {/* Payment Trace - Conditional rendering when at least one canonical value exists */}
+            {(receipt.piPaymentId || receipt.u2aTxid || receipt.a2uPaymentId || receipt.a2uTxid) && (
+              <div className="p-4 bg-muted rounded-lg print:bg-gray-100">
+                <p className="text-xs font-semibold text-muted-foreground uppercase mb-3">Payment Trace</p>
+                <div className="space-y-2 text-sm">
+                  {receipt.piPaymentId && (
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground">Pi Payment ID</p>
+                      <p className="font-mono text-muted-foreground break-all">{receipt.piPaymentId}</p>
+                    </div>
+                  )}
+                  {receipt.u2aTxid && (
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground">U2A TXID</p>
+                      <p className="font-mono text-muted-foreground break-all">{receipt.u2aTxid}</p>
+                    </div>
+                  )}
+                  {receipt.a2uPaymentId && (
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground">A2U Payment ID</p>
+                      <p className="font-mono text-muted-foreground break-all">{receipt.a2uPaymentId}</p>
+                    </div>
+                  )}
+                  {receipt.a2uTxid && (
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground">A2U TXID</p>
+                      <p className="font-mono text-muted-foreground break-all">{receipt.a2uTxid}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Footer */}
             <div className="text-center pt-4 border-t border-border text-xs text-muted-foreground">
