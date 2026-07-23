@@ -70,6 +70,8 @@ export default function MerchantPaymentsPage() {
   const [filterStatus, setFilterStatus] = useState<PaymentStatusFilter>("all")
   const [filterDateFrom, setFilterDateFrom] = useState("")
   const [filterDateTo, setFilterDateTo] = useState("")
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -241,25 +243,97 @@ export default function MerchantPaymentsPage() {
     }
   }
 
-  const exportToCSV = () => {
-    const headers = ["Payment ID", "Amount (π)", "Status", "Note", "Created", "Completed"]
-    const rows = filteredPayments.map((p) => [
-      p.id,
-      p.amount.toString(),
-      p.status,
-      p.note,
-      formatDate(p.createdAt),
-      p.completedAt ? formatDate(p.completedAt) : "-",
-    ])
+  const formatCSVCell = (value: unknown): string => {
+    if (value === null || value === undefined) return ""
+    let str = String(value)
+    // Escape formulas by prefixing with single quote
+    if (/^[=+\-@]/.test(str)) {
+      str = "'" + str
+    }
+    // Escape double quotes by doubling them
+    str = str.replace(/"/g, '""')
+    // Always quote the cell
+    return `"${str}"`
+  }
 
-    const csv = [headers, ...rows].map((row) => row.map((cell) => `"${cell}"`).join(",")).join("\n")
+  const exportToCSV = async () => {
+    try {
+      setExportError(null)
 
-    const blob = new Blob([csv], { type: "text/csv" })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `payments-export-${new Date().toISOString().split("T")[0]}.csv`
-    a.click()
+      if (filteredPayments.length === 0) {
+        setExportError("No payments to export")
+        return
+      }
+
+      setExporting(true)
+
+      const headers = [
+        "Reference",
+        "Transaction ID",
+        "Payment ID",
+        "Amount (π)",
+        "Status",
+        "Note",
+        "Created",
+        "Completed",
+        "Pi Payment ID",
+        "U2A TXID",
+        "A2U Payment ID",
+        "A2U TXID",
+      ]
+
+      const rows = filteredPayments.map((p) => [
+        p.reference,
+        p.transactionId,
+        p.paymentId,
+        p.amount.toFixed(2),
+        p.status,
+        p.note,
+        p.createdAt,
+        p.completedAt || "",
+        p.piPaymentId || "",
+        p.u2aTxid || "",
+        p.a2uPaymentId || "",
+        p.a2uTxid || "",
+      ])
+
+      const headerRow = headers.map(formatCSVCell).join(",")
+      const bodyRows = rows.map((row) => row.map(formatCSVCell).join(",")).join("\r\n")
+      const csvContent = headerRow + "\r\n" + bodyRows
+
+      // Add UTF-8 BOM
+      const bomContent = "\ufeff" + csvContent
+      const blob = new Blob([bomContent], { type: "text/csv;charset=utf-8" })
+
+      const filename = `payments-export-${new Date().toISOString().split("T")[0]}.csv`
+
+      // Try navigator.share if available
+      if (navigator.canShare && navigator.canShare({ files: [new File([blob], filename, { type: "text/csv" })] })) {
+        await navigator.share({
+          files: [new File([blob], filename, { type: "text/csv" })],
+        })
+      } else {
+        // Fallback: use hidden anchor
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = filename
+        a.style.display = "none"
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // User cancelled share, silently ignore
+        return
+      }
+      setExportError("CSV export failed")
+      console.error("[Merchant Payments] CSV export error:", err)
+    } finally {
+      setExporting(false)
+    }
   }
 
   if (!merchant?.merchantId) {
@@ -423,7 +497,7 @@ export default function MerchantPaymentsPage() {
               </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Button
                 onClick={() => {
                   setSearchQuery("")
@@ -436,11 +510,30 @@ export default function MerchantPaymentsPage() {
               >
                 Reset Filters
               </Button>
-              <Button onClick={exportToCSV} variant="outline" className="gap-2">
-                <Download className="h-4 w-4" />
-                Export CSV
+              <Button
+                onClick={exportToCSV}
+                variant="outline"
+                className="gap-2"
+                disabled={loading || exporting || !!exportError || filteredPayments.length === 0}
+              >
+                {exporting ? (
+                  <>
+                    <Spinner className="h-4 w-4" />
+                    Exporting...
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-4 w-4" />
+                    Export CSV
+                  </>
+                )}
               </Button>
             </div>
+            {exportError && (
+              <div className="p-3 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded text-sm">
+                {exportError}
+              </div>
+            )}
           </CardContent>
         </Card>
 
