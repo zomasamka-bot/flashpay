@@ -692,12 +692,25 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
     if (Array.isArray(latestResult) && latestResult.length > 0) {
       const latestRow = latestResult[0] as Record<string, unknown>
       if (typeof latestRow === 'object' && latestRow !== null) {
-        // Validate required string fields
+        // Validate required string fields: transaction_id and reference
         if (
           typeof latestRow.transaction_id !== 'string' ||
-          typeof latestRow.reference !== 'string' ||
-          typeof latestRow.created_at !== 'string'
+          typeof latestRow.reference !== 'string'
         ) {
+          return null
+        }
+
+        // Validate and convert created_at: Date | string
+        const createdAtValue = latestRow.created_at
+        if (!(createdAtValue instanceof Date) && typeof createdAtValue !== 'string') {
+          return null
+        }
+
+        const createdAtTime = createdAtValue instanceof Date
+          ? createdAtValue.getTime()
+          : new Date(createdAtValue).getTime()
+
+        if (!Number.isFinite(createdAtTime)) {
           return null
         }
 
@@ -705,7 +718,7 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
           transactionId: latestRow.transaction_id,
           amount: normalizePostgresNumeric(latestRow.amount, 'latest.amount'),
           reference: latestRow.reference,
-          createdAt: latestRow.created_at,
+          createdAt: new Date(createdAtTime).toISOString(),
           settlementStatus: typeof latestRow.settlement_status === 'string' ? latestRow.settlement_status : null,
         }
       }
