@@ -32,11 +32,22 @@ interface MerchantPayment {
   a2uTxid: string | null
 }
 
+interface MerchantDashboardSummary {
+  total_requests: number
+  total_payment_volume: number
+  settled_transactions: number
+  total_settled_amount: number
+  pending_transactions: number
+  total_awaiting_amount: number
+  failed_transactions: number
+}
+
 export default function MerchantPaymentsPage() {
   const router = useRouter()
   const merchant = useMerchant()
 
   const [payments, setPayments] = useState<MerchantPayment[]>([])
+  const [summary, setSummary] = useState<MerchantDashboardSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
@@ -51,6 +62,7 @@ export default function MerchantPaymentsPage() {
       // Missing ID or token: clear and return
       if (!merchant?.merchantId || !merchant?.accessToken) {
         setPayments([])
+        setSummary(null)
         setError(null)
         setLoading(false)
         return
@@ -58,6 +70,7 @@ export default function MerchantPaymentsPage() {
 
       // Clear stale data and set loading
       setPayments([])
+      setSummary(null)
       setError(null)
       setLoading(true)
 
@@ -81,6 +94,7 @@ export default function MerchantPaymentsPage() {
 
         if (!response.ok) {
           setPayments([])
+          setSummary(null)
           setError(`Failed to load payments: ${response.statusText}`)
           return
         }
@@ -89,19 +103,61 @@ export default function MerchantPaymentsPage() {
 
         if (controller.signal.aborted) return
 
-        if (!Array.isArray(data.payments)) {
+        // Validate data structure
+        if (typeof data !== "object" || data === null || Array.isArray(data)) {
           setPayments([])
-          setError("Invalid payment data format")
+          setSummary(null)
+          setError("Invalid dashboard data format")
           return
         }
 
+        if (!Array.isArray(data.payments)) {
+          setPayments([])
+          setSummary(null)
+          setError("Invalid dashboard data format")
+          return
+        }
+
+        if (typeof data.summary !== "object" || data.summary === null || Array.isArray(data.summary)) {
+          setPayments([])
+          setSummary(null)
+          setError("Invalid dashboard data format")
+          return
+        }
+
+        const summary = data.summary as Record<string, unknown>
+
+        // Validate count fields (non-negative integers)
+        for (const field of ["total_requests", "settled_transactions", "pending_transactions", "failed_transactions"]) {
+          const value = summary[field]
+          if (!Number.isInteger(value) || (value as number) < 0) {
+            setPayments([])
+            setSummary(null)
+            setError("Invalid dashboard data format")
+            return
+          }
+        }
+
+        // Validate amount fields (finite non-negative numbers)
+        for (const field of ["total_payment_volume", "total_settled_amount", "total_awaiting_amount"]) {
+          const value = summary[field]
+          if (typeof value !== "number" || !isFinite(value) || (value as number) < 0) {
+            setPayments([])
+            setSummary(null)
+            setError("Invalid dashboard data format")
+            return
+          }
+        }
+
         setPayments(data.payments)
+        setSummary(data.summary)
         setError(null)
       } catch (err) {
         if (controller.signal.aborted) return
 
         console.error("[Merchant Payments] Error fetching payments:", err)
         setPayments([])
+        setSummary(null)
         setError(err instanceof Error ? err.message : "Failed to load payments")
       } finally {
         if (!controller.signal.aborted) {
@@ -121,14 +177,6 @@ export default function MerchantPaymentsPage() {
     const matchesStatus = filterStatus === "all" || p.status.toLowerCase() === filterStatus
     return matchesSearch && matchesStatus
   })
-
-  const stats = {
-    total: payments.length,
-    paid: payments.filter((p) => p.status === "settled_to_merchant").length,
-    pending: payments.filter((p) => p.status === "settlement_pending" || p.status === "paid_to_app" || p.status === "pending").length,
-    failed: payments.filter((p) => p.status === "settlement_failed" || p.status === "failed").length,
-    totalVolume: payments.filter((p) => p.status === "settled_to_merchant").reduce((sum, p) => sum + p.amount, 0),
-  }
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -214,29 +262,50 @@ export default function MerchantPaymentsPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-900/10 border-blue-200 dark:border-blue-800">
                 <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-blue-700 dark:text-blue-400">{stats.total}</div>
+                  <div className="text-3xl font-bold text-blue-700 dark:text-blue-400">{summary?.total_requests ?? "—"}</div>
                   <p className="text-sm text-blue-600 dark:text-blue-300 mt-1">Total Requests</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-900/10 border-green-200 dark:border-green-800">
                 <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-green-700 dark:text-green-400">{stats.paid}</div>
-                  <p className="text-sm text-green-600 dark:text-green-300 mt-1">Paid</p>
+                  <div className="text-3xl font-bold text-green-700 dark:text-green-400">{summary?.settled_transactions ?? "—"}</div>
+                  <p className="text-sm text-green-600 dark:text-green-300 mt-1">Settled Transactions</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-yellow-50 to-yellow-100 dark:from-yellow-900/20 dark:to-yellow-900/10 border-yellow-200 dark:border-yellow-800">
                 <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-yellow-700 dark:text-yellow-400">{stats.pending}</div>
-                  <p className="text-sm text-yellow-600 dark:text-yellow-300 mt-1">Pending</p>
+                  <div className="text-3xl font-bold text-yellow-700 dark:text-yellow-400">{summary?.pending_transactions ?? "—"}</div>
+                  <p className="text-sm text-yellow-600 dark:text-yellow-300 mt-1">Pending Transactions</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-900/10 border-red-200 dark:border-red-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-red-700 dark:text-red-400">{summary?.failed_transactions ?? "—"}</div>
+                  <p className="text-sm text-red-600 dark:text-red-300 mt-1">Failed Transactions</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-900/10 border-purple-200 dark:border-purple-800">
                 <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-purple-700 dark:text-purple-400">{stats.totalVolume.toFixed(2)}π</div>
-                  <p className="text-sm text-purple-600 dark:text-purple-300 mt-1">Total Volume</p>
+                  <div className="text-3xl font-bold text-purple-700 dark:text-purple-400">{summary ? `${summary.total_payment_volume.toFixed(2)}π` : "—"}</div>
+                  <p className="text-sm text-purple-600 dark:text-purple-300 mt-1">Total Payment Volume</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-900/10 border-indigo-200 dark:border-indigo-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-indigo-700 dark:text-indigo-400">{summary ? `${summary.total_settled_amount.toFixed(2)}π` : "—"}</div>
+                  <p className="text-sm text-indigo-600 dark:text-indigo-300 mt-1">Total Settled Amount</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-900/10 border-orange-200 dark:border-orange-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-orange-700 dark:text-orange-400">{summary ? `${summary.total_awaiting_amount.toFixed(2)}π` : "—"}</div>
+                  <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">Total Awaiting Amount</p>
                 </CardContent>
               </Card>
             </div>
