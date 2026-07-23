@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Verify merchant identity from Pi Bearer token
+  // Verify merchant identity from Pi Bearer token FIRST
   const authHeader = request.headers.get("authorization")
   const verifiedMerchant = await authorizeFromHeader(authHeader)
 
@@ -35,15 +35,12 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const merchantId = searchParams.get("merchantId")
-    const limit = Math.min(parseInt(searchParams.get("limit") || "100", 10), 1000)
-    const fromDateStr = searchParams.get("fromDate")
-    const toDateStr = searchParams.get("toDate")
 
     if (!merchantId) {
       return NextResponse.json({ error: "merchantId required" }, { status: 400 })
     }
 
-    // Verify merchant identity matches verified username
+    // Verify merchant identity matches verified username BEFORE work
     if (verifiedUsername !== merchantId) {
       return NextResponse.json(
         { error: "Unauthorized - merchant identity verification failed" },
@@ -51,51 +48,66 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Validate and parse dates (YYYY-MM-DD only)
+    // Validate limit as integer 1-1000
+    const limitStr = searchParams.get("limit") || "100"
+    const limitNum = parseInt(limitStr, 10)
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 1000) {
+      return NextResponse.json({ error: "limit must be integer 1-1000" }, { status: 400 })
+    }
+
+    // Validate dates by UTC round-trip
+    const fromDateStr = searchParams.get("fromDate")
+    const toDateStr = searchParams.get("toDate")
+    
     const params: any[] = [verifiedUsername]
     let paramIndex = 2
 
     if (fromDateStr) {
-      // Validate YYYY-MM-DD format
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDateStr)) {
-        return NextResponse.json({ error: "fromDate must be YYYY-MM-DD" }, { status: 400 })
+      try {
+        const fromDate = new Date(fromDateStr)
+        if (isNaN(fromDate.getTime())) throw new Error("invalid date")
+        // Round-trip: verify format matches input
+        if (fromDate.toISOString().slice(0, 10) !== fromDateStr) throw new Error("not UTC midnight")
+        // fromDate inclusive
+        params.push(fromDate.toISOString())
+        paramIndex++
+      } catch {
+        return NextResponse.json({ error: "fromDate invalid UTC date" }, { status: 400 })
       }
-      // fromDate inclusive: >= fromDate 00:00:00
-      params.push(`${fromDateStr}T00:00:00Z`)
-      paramIndex++
     }
 
     if (toDateStr) {
-      // Validate YYYY-MM-DD format
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(toDateStr)) {
-        return NextResponse.json({ error: "toDate must be YYYY-MM-DD" }, { status: 400 })
+      try {
+        const toDate = new Date(toDateStr)
+        if (isNaN(toDate.getTime())) throw new Error("invalid date")
+        // Round-trip: verify format matches input
+        if (toDate.toISOString().slice(0, 10) !== toDateStr) throw new Error("not UTC midnight")
+        // toDate exclusive: < next-day UTC midnight
+        toDate.setUTCDate(toDate.getUTCDate() + 1)
+        params.push(toDate.toISOString())
+        paramIndex++
+      } catch {
+        return NextResponse.json({ error: "toDate invalid UTC date" }, { status: 400 })
       }
-      // toDate: < next-day midnight
-      const toDate = new Date(toDateStr)
-      toDate.setDate(toDate.getDate() + 1)
-      params.push(toDate.toISOString())
-      paramIndex++
     }
 
-    // Build parameterized SQL
+    // Build parameterized SQL with snake_case keys
     let sql = `
       SELECT 
         t.id,
-        t.transaction_id as transactionId,
-        t.payment_id as paymentId,
-        t.merchant_id as merchantId,
+        t.payment_id,
+        t.merchant_id,
         t.amount,
         t.reference,
-        COALESCE(t.description, '') as description,
-        COALESCE(r.settlement_status, t.status) as compatibility_status,
-        t.status as paymentStatus,
-        r.settlement_status as settlementStatus,
-        t.created_at as createdAt,
-        t.completed_at as completedAt,
-        r.u2a_identifier as piPaymentId,
-        r.u2a_txid as u2aTxid,
-        r.a2u_identifier as a2uPaymentId,
-        r.a2u_txid as a2uTxid
+        t.description,
+        t.status as payment_status,
+        r.settlement_status,
+        t.created_at,
+        t.completed_at,
+        r.u2a_identifier,
+        r.u2a_txid,
+        r.a2u_identifier,
+        r.a2u_txid
       FROM transactions t
       LEFT JOIN receipts r ON r.transaction_id = t.id
       WHERE t.merchant_id = $1
@@ -123,33 +135,74 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Transform rows to response format
-    const payments = (result || []).map((row: any) => {
-      // Validate finite numeric amount
-      const amount = Number(row.amount)
-      if (!isFinite(amount)) {
-        throw new Error(`Invalid amount: ${row.amount}`)
+    // Transform and validate rows
+    const payments: Record<string, unknown>[] = []
+    for (const row of result as Record<string, unknown>[]) {
+      // Require non-empty id
+      if (!row.id || typeof row.id !== "string") {
+        throw new Error("Invalid row: missing or non-string id")
       }
 
-      return {
+      // Require non-empty reference
+      if (!row.reference || typeof row.reference !== "string") {
+        throw new Error(`Invalid row ${row.id}: missing or non-string reference`)
+      }
+
+      // Require non-empty payment_status
+      if (!row.payment_status || typeof row.payment_status !== "string") {
+        throw new Error(`Invalid row ${row.id}: missing or non-string payment_status`)
+      }
+
+      // Finite amount
+      const amount = Number(row.amount)
+      if (!isFinite(amount)) {
+        throw new Error(`Invalid row ${row.id}: non-finite amount`)
+      }
+
+      // Valid created_at
+      if (!row.created_at || typeof row.created_at !== "string") {
+        throw new Error(`Invalid row ${row.id}: missing or non-string created_at`)
+      }
+      if (isNaN(new Date(row.created_at as string).getTime())) {
+        throw new Error(`Invalid row ${row.id}: invalid created_at date`)
+      }
+
+      // completed_at: null or valid date
+      if (row.completed_at !== null && row.completed_at !== undefined) {
+        if (typeof row.completed_at !== "string") {
+          throw new Error(`Invalid row ${row.id}: non-string completed_at`)
+        }
+        if (isNaN(new Date(row.completed_at).getTime())) {
+          throw new Error(`Invalid row ${row.id}: invalid completed_at date`)
+        }
+      }
+
+      // Receipt fields: null or string
+      for (const field of ["u2a_identifier", "u2a_txid", "a2u_identifier", "a2u_txid"]) {
+        if (row[field] !== null && row[field] !== undefined && typeof row[field] !== "string") {
+          throw new Error(`Invalid row ${row.id}: ${field} must be null or string`)
+        }
+      }
+
+      payments.push({
         id: row.id,
-        transactionId: row.transactionId,
-        paymentId: row.paymentId,
-        merchantId: row.merchantId,
+        transactionId: row.id,
+        paymentId: row.payment_id,
+        merchantId: row.merchant_id,
         amount,
         reference: row.reference,
-        note: row.description,
-        status: row.compatibility_status,
-        paymentStatus: row.paymentStatus,
-        settlementStatus: row.settlementStatus,
-        createdAt: row.createdAt,
-        completedAt: row.completedAt,
-        piPaymentId: row.piPaymentId,
-        u2aTxid: row.u2aTxid,
-        a2uPaymentId: row.a2uPaymentId,
-        a2uTxid: row.a2uTxid,
-      }
-    })
+        note: row.description || "",
+        status: row.settlement_status ?? row.payment_status,
+        paymentStatus: row.payment_status,
+        settlementStatus: row.settlement_status,
+        createdAt: row.created_at,
+        completedAt: row.completed_at,
+        piPaymentId: row.u2a_identifier,
+        u2aTxid: row.u2a_txid,
+        a2uPaymentId: row.a2u_identifier,
+        a2uTxid: row.a2u_txid,
+      })
+    }
 
     return NextResponse.json({ payments })
   } catch (error) {
