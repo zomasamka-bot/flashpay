@@ -94,6 +94,7 @@ export default function MerchantPaymentsPage() {
 
       // Clear stale data and set loading
       setPayments([])
+      setSummary(null)
       setError(null)
       setLoading(true)
 
