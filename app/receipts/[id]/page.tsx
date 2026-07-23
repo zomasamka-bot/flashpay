@@ -135,9 +135,11 @@ export default function ReceiptPage() {
               </div>
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Status</p>
-                <Badge variant="default" className="mt-1">
-                  {receipt.settlementStatus || "COMPLETED"}
-                </Badge>
+                {receipt.settlementStatus && (
+                  <Badge variant="default" className="mt-1">
+                    {receipt.settlementStatus}
+                  </Badge>
+                )}
               </div>
             </div>
 

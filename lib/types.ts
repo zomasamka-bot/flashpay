@@ -381,10 +381,16 @@ export function parseReceipt(data: unknown): Receipt | null {
   if (obj.txid !== undefined && typeof obj.txid !== 'string') return null
   if (obj.piPaymentId !== undefined && typeof obj.piPaymentId !== 'string') return null
   if (obj.u2aTxid !== undefined && typeof obj.u2aTxid !== 'string') return null
+  if (obj.a2uPaymentId !== undefined && typeof obj.a2uPaymentId !== 'string') return null
   if (obj.a2uTxid !== undefined && typeof obj.a2uTxid !== 'string') return null
   
-  // Validate optional settlement fields
-  if (obj.settlementStatus !== undefined && !['pending', 'completed', 'failed'].includes(String(obj.settlementStatus))) return null
+  // Validate optional settlement fields using PaymentStatus values
+  const VALID_PAYMENT_STATUSES: PaymentStatus[] = ['pending', 'paid_to_app', 'settlement_pending', 'settled_to_merchant', 'settlement_failed', 'failed', 'cancelled']
+  let settlementStatus: PaymentStatus | undefined = undefined
+  if (obj.settlementStatus !== undefined) {
+    if (!VALID_PAYMENT_STATUSES.includes(obj.settlementStatus as PaymentStatus)) return null
+    settlementStatus = obj.settlementStatus as PaymentStatus
+  }
   if (obj.settledAt !== undefined && !isValidISODate(obj.settledAt)) return null
   
   // After validation, no casts needed
@@ -414,8 +420,9 @@ export function parseReceipt(data: unknown): Receipt | null {
     txid: obj.txid,
     piPaymentId: obj.piPaymentId,
     u2aTxid: obj.u2aTxid,
+    a2uPaymentId: obj.a2uPaymentId as string | undefined,
     a2uTxid: obj.a2uTxid,
-    settlementStatus: obj.settlementStatus as 'pending' | 'completed' | 'failed' | undefined,
+    settlementStatus,
     settledAt: obj.settledAt,
   }
 }
