@@ -10,7 +10,7 @@ import { BackButton } from "@/components/back-button"
 import { Spinner } from "@/components/ui/spinner"
 import { useMerchant } from "@/lib/use-merchant"
 import { config } from "@/lib/config"
-import { MerchantSettlementsView } from "@/components/merchant-settlements-view"
+
 import type { Payment } from "@/lib/types"
 import { Calendar, Search, Download, ChevronRight, TrendingUp, Filter } from "lucide-react"
 
@@ -22,7 +22,7 @@ interface MerchantPayment extends Payment {
 export default function MerchantPaymentsPage() {
   const router = useRouter()
   const merchant = useMerchant()
-  const [activeTab, setActiveTab] = useState<"payments" | "settlements">("payments")
+
   const [payments, setPayments] = useState<MerchantPayment[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
@@ -167,33 +167,7 @@ export default function MerchantPaymentsPage() {
           <p className="text-muted-foreground">Track payments and settlements</p>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-2 border-b">
-          <button
-            onClick={() => setActiveTab("payments")}
-            className={`px-4 py-2 font-medium border-b-2 transition ${
-              activeTab === "payments"
-                ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Payment Requests
-          </button>
-          <button
-            onClick={() => setActiveTab("settlements")}
-            className={`px-4 py-2 font-medium border-b-2 transition ${
-              activeTab === "settlements"
-                ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Settlements & Payouts
-          </button>
-        </div>
-
-        {/* Payments Tab */}
-        {activeTab === "payments" && (
-          <div className="space-y-6">
+        <div className="space-y-6">
             {/* Statistics Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-900/10 border-blue-200 dark:border-blue-800">
@@ -351,13 +325,7 @@ export default function MerchantPaymentsPage() {
             )}
           </CardContent>
         </Card>
-          </div>
-        )}
-
-        {/* Settlements Tab */}
-        {activeTab === "settlements" && (
-          <MerchantSettlementsView merchantId={merchant?.merchantId || null} />
-        )}
+        </div>
       </div>
     </main>
   )
