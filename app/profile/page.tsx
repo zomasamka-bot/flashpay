@@ -17,12 +17,13 @@ interface ProfileSummary {
   totalTransactions: number
   settledTransactions: number
   totalSettledAmount: number
-  latestTransaction?: {
+  latestTransaction: {
+    transactionId: string
     reference: string
     amount: number
     createdAt: string
-    settlementStatus?: string
-  }
+    settlementStatus: string | null
+  } | null
 }
 
 function ProfileContent() {
@@ -47,11 +48,14 @@ function ProfileContent() {
 
   // Fetch profile summary when merchant state changes
   useEffect(() => {
+    const controller = new AbortController()
+
     const fetchProfileSummary = async () => {
       // Clear if credentials missing
       if (!merchantState.merchantId || !merchantState.accessToken) {
         setSummary(null)
         setSummaryError(null)
+        setSummaryLoading(false)
         return
       }
 
@@ -66,7 +70,10 @@ function ProfileContent() {
           headers: {
             Authorization: `Bearer ${merchantState.accessToken}`,
           },
+          signal: controller.signal,
         })
+
+        if (controller.signal.aborted) return
 
         if (!response.ok) {
           setSummary(null)
@@ -75,16 +82,24 @@ function ProfileContent() {
         }
 
         const data = await response.json()
+
+        if (controller.signal.aborted) return
+
         setSummary(data)
       } catch (err) {
+        if (controller.signal.aborted) return
+
         setSummary(null)
         setSummaryError(err instanceof Error ? err.message : "Error loading profile")
       } finally {
-        setSummaryLoading(false)
+        if (!controller.signal.aborted) {
+          setSummaryLoading(false)
+        }
       }
     }
 
     fetchProfileSummary()
+    return () => controller.abort()
   }, [merchantState.merchantId, merchantState.accessToken])
 
 
