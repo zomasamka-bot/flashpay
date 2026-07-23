@@ -46,12 +46,28 @@ export default function MerchantPaymentsPage() {
   const router = useRouter()
   const merchant = useMerchant()
 
+  type PaymentStatusFilter = "all" | "pending" | "failed" | "cancelled" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed"
+
+  const isValidPaymentStatusFilter = (value: unknown): value is PaymentStatusFilter => {
+    const validStatuses: PaymentStatusFilter[] = [
+      "all",
+      "pending",
+      "failed",
+      "cancelled",
+      "paid_to_app",
+      "settlement_pending",
+      "settled_to_merchant",
+      "settlement_failed",
+    ]
+    return typeof value === "string" && validStatuses.includes(value as PaymentStatusFilter)
+  }
+
   const [payments, setPayments] = useState<MerchantPayment[]>([])
   const [summary, setSummary] = useState<MerchantDashboardSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "failed" | "cancelled" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed">("all")
+  const [filterStatus, setFilterStatus] = useState<PaymentStatusFilter>("all")
   const [filterDateFrom, setFilterDateFrom] = useState("")
   const [filterDateTo, setFilterDateTo] = useState("")
 
@@ -68,9 +84,16 @@ export default function MerchantPaymentsPage() {
         return
       }
 
+      // Invalid date range: clear payments, keep summary, set error
+      if (filterDateFrom && filterDateTo && filterDateFrom > filterDateTo) {
+        setPayments([])
+        setError("From date must be on or before To date")
+        setLoading(false)
+        return
+      }
+
       // Clear stale data and set loading
       setPayments([])
-      setSummary(null)
       setError(null)
       setLoading(true)
 
@@ -171,9 +194,13 @@ export default function MerchantPaymentsPage() {
   }, [merchant?.merchantId, merchant?.accessToken, filterDateFrom, filterDateTo])
 
   const filteredPayments = payments.filter((p) => {
+    const searchLower = searchQuery.trim().toLowerCase()
     const matchesSearch =
-      p.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.note.toLowerCase().includes(searchQuery.toLowerCase())
+      p.id.toLowerCase().includes(searchLower) ||
+      p.transactionId.toLowerCase().includes(searchLower) ||
+      p.paymentId.toLowerCase().includes(searchLower) ||
+      p.reference.toLowerCase().includes(searchLower) ||
+      p.note.toLowerCase().includes(searchLower)
     const matchesStatus = filterStatus === "all" || p.status.toLowerCase() === filterStatus
     return matchesSearch && matchesStatus
   })
@@ -258,6 +285,10 @@ export default function MerchantPaymentsPage() {
         </div>
 
         <div className="space-y-6">
+            <div>
+              <h2 className="text-lg font-semibold">All-time Merchant Summary</h2>
+            </div>
+
             {/* Statistics Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-900/10 border-blue-200 dark:border-blue-800">
@@ -316,47 +347,79 @@ export default function MerchantPaymentsPage() {
               <Filter className="h-5 w-5" />
               Filters
             </CardTitle>
+            <CardDescription>Filters affect the payment list only.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                <Input
-                  placeholder="Search by ID or note..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10"
+              <div>
+                <label htmlFor="search-input" className="text-sm font-medium mb-2 block">
+                  Search
+                </label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                  <Input
+                    id="search-input"
+                    placeholder="Search by ID or note..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="status-select" className="text-sm font-medium mb-2 block">
+                  Status
+                </label>
+                <select
+                  id="status-select"
+                  value={filterStatus}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    if (isValidPaymentStatusFilter(value)) {
+                      setFilterStatus(value)
+                    }
+                  }}
+                  className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full"
+                >
+                  <option value="all">All Status</option>
+                  <option value="settled_to_merchant">Settled to Merchant</option>
+                  <option value="paid_to_app">Paid to App</option>
+                  <option value="settlement_pending">Settlement Pending</option>
+                  <option value="settlement_failed">Settlement Failed</option>
+                  <option value="failed">Failed</option>
+                  <option value="pending">Pending</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="date-from" className="text-sm font-medium mb-2 block">
+                  From Date
+                </label>
+                <input
+                  id="date-from"
+                  type="date"
+                  value={filterDateFrom}
+                  onChange={(e) => setFilterDateFrom(e.target.value)}
+                  max={filterDateTo || undefined}
+                  className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full"
                 />
               </div>
 
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value as any)}
-                className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800"
-              >
-                <option value="all">All Status</option>
-                <option value="settled_to_merchant">Settled to Merchant</option>
-                <option value="paid_to_app">Paid to App</option>
-                <option value="settlement_pending">Settlement Pending</option>
-                <option value="settlement_failed">Settlement Failed</option>
-                <option value="failed">Failed</option>
-                <option value="pending">Pending</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-
-              <input
-                type="date"
-                value={filterDateFrom}
-                onChange={(e) => setFilterDateFrom(e.target.value)}
-                className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800"
-              />
-
-              <input
-                type="date"
-                value={filterDateTo}
-                onChange={(e) => setFilterDateTo(e.target.value)}
-                className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800"
-              />
+              <div>
+                <label htmlFor="date-to" className="text-sm font-medium mb-2 block">
+                  To Date
+                </label>
+                <input
+                  id="date-to"
+                  type="date"
+                  value={filterDateTo}
+                  onChange={(e) => setFilterDateTo(e.target.value)}
+                  min={filterDateFrom || undefined}
+                  className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full"
+                />
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -366,6 +429,7 @@ export default function MerchantPaymentsPage() {
                   setFilterStatus("all")
                   setFilterDateFrom("")
                   setFilterDateTo("")
+                  setError(null)
                 }}
                 variant="outline"
               >
