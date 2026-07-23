@@ -588,8 +588,8 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
     )
 
     if (!Array.isArray(statsResult) || statsResult.length === 0) return null
-    const stats = statsResult[0]
-    if (typeof stats !== 'object' || stats === null) return null
+    const statsRow = statsResult[0] as Record<string, unknown>
+    if (typeof statsRow !== 'object' || statsRow === null) return null
 
     // Get latest transaction
     const latestResult = await query(
@@ -616,22 +616,31 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
     } | null = null
 
     if (Array.isArray(latestResult) && latestResult.length > 0) {
-      const latest = latestResult[0]
-      if (typeof latest === 'object' && latest !== null) {
+      const latestRow = latestResult[0] as Record<string, unknown>
+      if (typeof latestRow === 'object' && latestRow !== null) {
+        // Validate required string fields
+        if (
+          typeof latestRow.transaction_id !== 'string' ||
+          typeof latestRow.reference !== 'string' ||
+          typeof latestRow.created_at !== 'string'
+        ) {
+          return null
+        }
+
         latestTransaction = {
-          transactionId: latest.transaction_id,
-          amount: normalizePostgresNumeric(latest.amount, 'latest.amount'),
-          reference: latest.reference,
-          createdAt: latest.created_at,
-          settlementStatus: typeof latest.settlement_status === 'string' ? latest.settlement_status : null,
+          transactionId: latestRow.transaction_id,
+          amount: normalizePostgresNumeric(latestRow.amount, 'latest.amount'),
+          reference: latestRow.reference,
+          createdAt: latestRow.created_at,
+          settlementStatus: typeof latestRow.settlement_status === 'string' ? latestRow.settlement_status : null,
         }
       }
     }
 
     return {
-      totalTransactions: normalizePostgresNumeric(stats.total_transactions, 'stats.total_transactions'),
-      settledTransactions: normalizePostgresNumeric(stats.settled_transactions, 'stats.settled_transactions'),
-      totalSettledAmount: normalizePostgresNumeric(stats.total_settled_amount, 'stats.total_settled_amount'),
+      totalTransactions: normalizePostgresNumeric(statsRow.total_transactions, 'stats.total_transactions'),
+      settledTransactions: normalizePostgresNumeric(statsRow.settled_transactions, 'stats.settled_transactions'),
+      totalSettledAmount: normalizePostgresNumeric(statsRow.total_settled_amount, 'stats.total_settled_amount'),
       latestTransaction,
     }
   } catch (error) {
