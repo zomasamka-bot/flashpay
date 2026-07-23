@@ -11,12 +11,25 @@ import { Spinner } from "@/components/ui/spinner"
 import { useMerchant } from "@/lib/use-merchant"
 import { config } from "@/lib/config"
 
-import type { Payment } from "@/lib/types"
 import { Calendar, Search, Download, ChevronRight, TrendingUp, Filter } from "lucide-react"
 
-interface MerchantPayment extends Payment {
-  paidAt?: string
+interface MerchantPayment {
+  id: string
+  transactionId: string
+  paymentId: string
+  merchantId: string
+  reference: string
+  note: string
+  status: string
+  paymentStatus: string
   createdAt: string
+  amount: number
+  settlementStatus: string | null
+  completedAt: string | null
+  piPaymentId: string | null
+  u2aTxid: string | null
+  a2uPaymentId: string | null
+  a2uTxid: string | null
 }
 
 export default function MerchantPaymentsPage() {
@@ -25,52 +38,81 @@ export default function MerchantPaymentsPage() {
 
   const [payments, setPayments] = useState<MerchantPayment[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "failed" | "cancelled" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed">("all")
   const [filterDateFrom, setFilterDateFrom] = useState("")
   const [filterDateTo, setFilterDateTo] = useState("")
 
-  const fetchPayments = async () => {
-    if (!merchant?.merchantId) return
-
-    try {
-      setLoading(true)
-      const params = new URLSearchParams({
-        merchantId: merchant.merchantId,
-        limit: "100",
-      })
-
-      if (filterDateFrom) params.append("fromDate", filterDateFrom)
-      if (filterDateTo) params.append("toDate", filterDateTo)
-
-      // Get accessToken from merchant context
-      const accessToken = merchant.accessToken || sessionStorage.getItem("accessToken")
-      const headers: HeadersInit = {
-        "Content-Type": "application/json",
-      }
-      
-      if (accessToken) {
-        headers["Authorization"] = `Bearer ${accessToken}`
-      }
-
-      const response = await fetch(`${config.appUrl}/api/merchant/payments?${params.toString()}`, {
-        headers,
-      })
-      if (response.ok) {
-        const data = await response.json()
-        setPayments(Array.isArray(data.payments) ? data.payments : [])
-      }
-    } catch (error) {
-      console.error("[Merchant Payments] Error fetching payments:", error)
-      setPayments([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
   useEffect(() => {
+    const controller = new AbortController()
+
+    const fetchPayments = async () => {
+      // Missing ID or token: clear and return
+      if (!merchant?.merchantId || !merchant?.accessToken) {
+        setPayments([])
+        setError(null)
+        setLoading(false)
+        return
+      }
+
+      // Clear stale data and set loading
+      setPayments([])
+      setError(null)
+      setLoading(true)
+
+      try {
+        const params = new URLSearchParams({
+          merchantId: merchant.merchantId,
+          limit: "100",
+        })
+
+        if (filterDateFrom) params.append("fromDate", filterDateFrom)
+        if (filterDateTo) params.append("toDate", filterDateTo)
+
+        const response = await fetch(`${config.appUrl}/api/merchant/payments?${params.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${merchant.accessToken}`,
+          },
+          signal: controller.signal,
+        })
+
+        if (controller.signal.aborted) return
+
+        if (!response.ok) {
+          setPayments([])
+          setError(`Failed to load payments: ${response.statusText}`)
+          return
+        }
+
+        const data = await response.json()
+
+        if (controller.signal.aborted) return
+
+        if (!Array.isArray(data.payments)) {
+          setPayments([])
+          setError("Invalid payment data format")
+          return
+        }
+
+        setPayments(data.payments)
+        setError(null)
+      } catch (err) {
+        if (controller.signal.aborted) return
+
+        console.error("[Merchant Payments] Error fetching payments:", err)
+        setPayments([])
+        setError(err instanceof Error ? err.message : "Failed to load payments")
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false)
+        }
+      }
+    }
+
     fetchPayments()
-  }, [merchant?.merchantId, filterDateFrom, filterDateTo])
+    return () => controller.abort()
+  }, [merchant?.merchantId, merchant?.accessToken, filterDateFrom, filterDateTo])
 
   const filteredPayments = payments.filter((p) => {
     const matchesSearch =
@@ -82,10 +124,10 @@ export default function MerchantPaymentsPage() {
 
   const stats = {
     total: payments.length,
-    paid: payments.filter((p) => p.status === "settled_to_merchant").length,
-    pending: payments.filter((p) => p.status === "settlement_pending" || p.status === "paid_to_app" || p.status === "pending").length,
-    failed: payments.filter((p) => p.status === "settlement_failed" || p.status === "failed").length,
-    totalVolume: payments.filter((p) => p.status === "settled_to_merchant").reduce((sum, p) => sum + p.amount, 0),
+    paid: payments.filter((p) => p.paymentStatus === "settled_to_merchant").length,
+    pending: payments.filter((p) => p.paymentStatus === "settlement_pending" || p.paymentStatus === "paid_to_app" || p.paymentStatus === "pending").length,
+    failed: payments.filter((p) => p.paymentStatus === "settlement_failed" || p.paymentStatus === "failed").length,
+    totalVolume: payments.filter((p) => p.paymentStatus === "settled_to_merchant").reduce((sum, p) => sum + p.amount, 0),
   }
 
   const getStatusColor = (status: string) => {
@@ -124,14 +166,14 @@ export default function MerchantPaymentsPage() {
   }
 
   const exportToCSV = () => {
-    const headers = ["Payment ID", "Amount (π)", "Status", "Note", "Created", "Paid"]
+    const headers = ["Payment ID", "Amount (π)", "Status", "Note", "Created", "Completed"]
     const rows = filteredPayments.map((p) => [
       p.id,
       p.amount.toString(),
-      p.status,
+      p.paymentStatus,
       p.note,
       formatDate(p.createdAt),
-      p.paidAt ? formatDate(p.paidAt) : "-",
+      p.completedAt ? formatDate(p.completedAt) : "-",
     ])
 
     const csv = [headers, ...rows].map((row) => row.map((cell) => `"${cell}"`).join(",")).join("\n")
@@ -274,6 +316,11 @@ export default function MerchantPaymentsPage() {
             <CardDescription>Click any payment to view receipt details</CardDescription>
           </CardHeader>
           <CardContent>
+            {error && (
+              <div className="mb-4 p-4 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded-lg text-sm">
+                {error}
+              </div>
+            )}
             {loading ? (
               <div className="flex items-center justify-center py-12">
                 <Spinner />
@@ -295,8 +342,8 @@ export default function MerchantPaymentsPage() {
                         <div className="font-mono text-sm text-muted-foreground truncate">
                           {payment.id.substring(0, 8)}...
                         </div>
-                        <Badge className={getStatusColor(payment.status)}>
-                          {payment.status}
+                        <Badge className={getStatusColor(payment.paymentStatus)}>
+                          {payment.paymentStatus}
                         </Badge>
                       </div>
                       <p className="text-sm text-muted-foreground mt-1 truncate">
@@ -311,9 +358,9 @@ export default function MerchantPaymentsPage() {
                       <div className="text-lg font-bold">
                         {payment.amount.toFixed(2)}π
                       </div>
-                      {payment.paidAt && (
+                      {payment.completedAt && (
                         <p className="text-xs text-green-600 dark:text-green-400">
-                          Paid: {formatDate(payment.paidAt)}
+                          Completed: {formatDate(payment.completedAt)}
                         </p>
                       )}
                     </div>
