@@ -124,10 +124,10 @@ export default function MerchantPaymentsPage() {
 
   const stats = {
     total: payments.length,
-    paid: payments.filter((p) => p.paymentStatus === "settled_to_merchant").length,
-    pending: payments.filter((p) => p.paymentStatus === "settlement_pending" || p.paymentStatus === "paid_to_app" || p.paymentStatus === "pending").length,
-    failed: payments.filter((p) => p.paymentStatus === "settlement_failed" || p.paymentStatus === "failed").length,
-    totalVolume: payments.filter((p) => p.paymentStatus === "settled_to_merchant").reduce((sum, p) => sum + p.amount, 0),
+    paid: payments.filter((p) => p.status === "settled_to_merchant").length,
+    pending: payments.filter((p) => p.status === "settlement_pending" || p.status === "paid_to_app" || p.status === "pending").length,
+    failed: payments.filter((p) => p.status === "settlement_failed" || p.status === "failed").length,
+    totalVolume: payments.filter((p) => p.status === "settled_to_merchant").reduce((sum, p) => sum + p.amount, 0),
   }
 
   const getStatusColor = (status: string) => {
@@ -170,7 +170,7 @@ export default function MerchantPaymentsPage() {
     const rows = filteredPayments.map((p) => [
       p.id,
       p.amount.toString(),
-      p.paymentStatus,
+      p.status,
       p.note,
       formatDate(p.createdAt),
       p.completedAt ? formatDate(p.completedAt) : "-",
@@ -316,14 +316,13 @@ export default function MerchantPaymentsPage() {
             <CardDescription>Click any payment to view receipt details</CardDescription>
           </CardHeader>
           <CardContent>
-            {error && (
-              <div className="mb-4 p-4 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded-lg text-sm">
-                {error}
-              </div>
-            )}
             {loading ? (
               <div className="flex items-center justify-center py-12">
                 <Spinner />
+              </div>
+            ) : error ? (
+              <div className="p-4 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded-lg text-sm">
+                {error}
               </div>
             ) : filteredPayments.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
@@ -342,8 +341,8 @@ export default function MerchantPaymentsPage() {
                         <div className="font-mono text-sm text-muted-foreground truncate">
                           {payment.id.substring(0, 8)}...
                         </div>
-                        <Badge className={getStatusColor(payment.paymentStatus)}>
-                          {payment.paymentStatus}
+                        <Badge className={getStatusColor(payment.status)}>
+                          {payment.status}
                         </Badge>
                       </div>
                       <p className="text-sm text-muted-foreground mt-1 truncate">
