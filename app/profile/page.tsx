@@ -210,6 +210,10 @@ function ProfileContent() {
   const isOwner = uidData.status === "success" && uidData.uid === config.ownerUid
   const isConnected = uidData.status === "success"
 
+  // Merchant authentication and username
+  const merchantAuthenticated = Boolean(merchantState.merchantId.trim() && merchantState.accessToken?.trim())
+  const merchantUsername = merchantState.piUsername?.trim() || merchantState.merchantId.trim()
+
   return (
     <div className="min-h-screen pb-20 pt-4">
       <div className="max-w-4xl mx-auto px-4 space-y-6">
@@ -226,7 +230,7 @@ function ProfileContent() {
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">Your account settings</p>
-          {isConnected && piUsername && <p className="text-xs text-muted-foreground mt-1">@{piUsername}</p>}
+          {merchantAuthenticated && <p className="text-xs text-muted-foreground mt-1">@{merchantUsername}</p>}
         </div>
 
         {/* Wallet Connection Status */}
@@ -267,63 +271,63 @@ function ProfileContent() {
         </Card>
 
         {/* Profile Summary */}
-        {isConnected && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Profile Summary</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {summaryLoading && (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Loading profile...</span>
+        <Card>
+          <CardHeader>
+            <CardTitle>Profile Summary</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {!merchantAuthenticated ? (
+              <p className="text-sm text-muted-foreground">
+                Authenticate from Home to load your merchant profile
+              </p>
+            ) : summaryLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Loading profile...</span>
+              </div>
+            ) : summaryError ? (
+              <p className="text-sm text-destructive">{summaryError}</p>
+            ) : summary ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Transactions</p>
+                    <p className="text-lg font-semibold">{summary.totalTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Settled Transactions</p>
+                    <p className="text-lg font-semibold">{summary.settledTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Settled Amount</p>
+                    <p className="text-lg font-semibold">π{summary.totalSettledAmount}</p>
+                  </div>
                 </div>
-              )}
-              {summaryError && !summaryLoading && (
-                <p className="text-sm text-destructive">{summaryError}</p>
-              )}
-              {summary && !summaryLoading && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Total Transactions</p>
-                      <p className="text-lg font-semibold">{summary.totalTransactions}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Settled Transactions</p>
-                      <p className="text-lg font-semibold">{summary.settledTransactions}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Total Settled Amount</p>
-                      <p className="text-lg font-semibold">π{summary.totalSettledAmount}</p>
+                {summary.latestTransaction && (
+                  <div className="pt-3 border-t">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Latest Transaction</p>
+                    <div className="space-y-1 text-sm">
+                      <p>
+                        <span className="text-muted-foreground">Reference:</span> {summary.latestTransaction.reference}
+                      </p>
+                      <p>
+                        <span className="text-muted-foreground">Amount:</span> π{summary.latestTransaction.amount}
+                      </p>
+                      <p>
+                        <span className="text-muted-foreground">Date:</span> {summary.latestTransaction.createdAt}
+                      </p>
+                      {summary.latestTransaction.settlementStatus && (
+                        <p>
+                          <span className="text-muted-foreground">Status:</span> {summary.latestTransaction.settlementStatus}
+                        </p>
+                      )}
                     </div>
                   </div>
-                  {summary.latestTransaction && (
-                    <div className="pt-3 border-t">
-                      <p className="text-xs font-medium text-muted-foreground mb-2">Latest Transaction</p>
-                      <div className="space-y-1 text-sm">
-                        <p>
-                          <span className="text-muted-foreground">Reference:</span> {summary.latestTransaction.reference}
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Amount:</span> π{summary.latestTransaction.amount}
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Date:</span> {summary.latestTransaction.createdAt}
-                        </p>
-                        {summary.latestTransaction.settlementStatus && (
-                          <p>
-                            <span className="text-muted-foreground">Status:</span> {summary.latestTransaction.settlementStatus}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
+                )}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
 
         {/* Owner Operations Console Link (Owner Only) */}
         {isOwner && (
