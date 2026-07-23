@@ -244,16 +244,15 @@ export default function MerchantPaymentsPage() {
   }
 
   const formatCSVCell = (value: unknown): string => {
-    if (value === null || value === undefined) return ""
-    let str = String(value)
+    let str = value == null ? "" : String(value)
     // Escape formulas by prefixing with single quote
-    if (/^[=+\-@]/.test(str)) {
+    if (/^[=+\-@]/.test(str.trimStart())) {
       str = "'" + str
     }
     // Escape double quotes by doubling them
     str = str.replace(/"/g, '""')
     // Always quote the cell
-    return `"${str}"`
+    return '"' + str + '"'
   }
 
   const exportToCSV = async () => {
@@ -303,18 +302,17 @@ export default function MerchantPaymentsPage() {
 
       // Add UTF-8 BOM
       const bomContent = "\ufeff" + csvContent
-      const blob = new Blob([bomContent], { type: "text/csv;charset=utf-8" })
-
       const filename = `payments-export-${new Date().toISOString().split("T")[0]}.csv`
+      const file = new File([bomContent], filename, { type: "text/csv;charset=utf-8" })
 
       // Try navigator.share if available
-      if (navigator.canShare && navigator.canShare({ files: [new File([blob], filename, { type: "text/csv" })] })) {
+      if (typeof navigator.share === "function" && navigator.canShare?.({ files: [file] }) === true) {
         await navigator.share({
-          files: [new File([blob], filename, { type: "text/csv" })],
+          files: [file],
         })
       } else {
         // Fallback: use hidden anchor
-        const url = URL.createObjectURL(blob)
+        const url = URL.createObjectURL(file)
         const a = document.createElement("a")
         a.href = url
         a.download = filename
@@ -325,7 +323,7 @@ export default function MerchantPaymentsPage() {
         setTimeout(() => URL.revokeObjectURL(url), 1000)
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
+      if (err && typeof err === "object" && (err as any).name === "AbortError") {
         // User cancelled share, silently ignore
         return
       }
@@ -505,6 +503,7 @@ export default function MerchantPaymentsPage() {
                   setFilterDateFrom("")
                   setFilterDateTo("")
                   setError(null)
+                  setExportError(null)
                 }}
                 variant="outline"
               >
@@ -514,7 +513,7 @@ export default function MerchantPaymentsPage() {
                 onClick={exportToCSV}
                 variant="outline"
                 className="gap-2"
-                disabled={loading || exporting || !!exportError || filteredPayments.length === 0}
+                disabled={loading || exporting || !!error}
               >
                 {exporting ? (
                   <>
