@@ -11,13 +11,28 @@ import { config } from "@/lib/config"
 import { useToast } from "@/hooks/use-toast"
 import { useMerchant } from "@/lib/use-merchant"
 import { unifiedStore } from "@/lib/unified-store"
-import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet } from "lucide-react"
+import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet, Loader2 } from "lucide-react"
+
+interface ProfileSummary {
+  totalTransactions: number
+  settledTransactions: number
+  totalSettledAmount: number
+  latestTransaction?: {
+    reference: string
+    amount: number
+    createdAt: string
+    settlementStatus?: string
+  }
+}
 
 function ProfileContent() {
   const router = useRouter()
   const { toast } = useToast()
   const [mounted, setMounted] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const [summary, setSummary] = useState<ProfileSummary | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
 
   // Owner UID verification — stores result separately from payment system
   const { uidData, verifyUid, clearUid } = useOwnerUid()
@@ -29,6 +44,48 @@ function ProfileContent() {
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  // Fetch profile summary when merchant state changes
+  useEffect(() => {
+    const fetchProfileSummary = async () => {
+      // Clear if credentials missing
+      if (!merchantState.merchantId || !merchantState.accessToken) {
+        setSummary(null)
+        setSummaryError(null)
+        return
+      }
+
+      // Clear before request
+      setSummary(null)
+      setSummaryError(null)
+      setSummaryLoading(true)
+
+      try {
+        const url = `${config.appUrl}/api/profile?merchantId=${encodeURIComponent(merchantState.merchantId)}`
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${merchantState.accessToken}`,
+          },
+        })
+
+        if (!response.ok) {
+          setSummary(null)
+          setSummaryError(`Failed to load profile: ${response.statusText}`)
+          return
+        }
+
+        const data = await response.json()
+        setSummary(data)
+      } catch (err) {
+        setSummary(null)
+        setSummaryError(err instanceof Error ? err.message : "Error loading profile")
+      } finally {
+        setSummaryLoading(false)
+      }
+    }
+
+    fetchProfileSummary()
+  }, [merchantState.merchantId, merchantState.accessToken])
 
 
 
@@ -193,6 +250,65 @@ function ProfileContent() {
             )}
           </CardContent>
         </Card>
+
+        {/* Profile Summary */}
+        {isConnected && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Profile Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {summaryLoading && (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Loading profile...</span>
+                </div>
+              )}
+              {summaryError && !summaryLoading && (
+                <p className="text-sm text-destructive">{summaryError}</p>
+              )}
+              {summary && !summaryLoading && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Total Transactions</p>
+                      <p className="text-lg font-semibold">{summary.totalTransactions}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Settled Transactions</p>
+                      <p className="text-lg font-semibold">{summary.settledTransactions}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Total Settled Amount</p>
+                      <p className="text-lg font-semibold">π{summary.totalSettledAmount}</p>
+                    </div>
+                  </div>
+                  {summary.latestTransaction && (
+                    <div className="pt-3 border-t">
+                      <p className="text-xs font-medium text-muted-foreground mb-2">Latest Transaction</p>
+                      <div className="space-y-1 text-sm">
+                        <p>
+                          <span className="text-muted-foreground">Reference:</span> {summary.latestTransaction.reference}
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Amount:</span> π{summary.latestTransaction.amount}
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Date:</span> {summary.latestTransaction.createdAt}
+                        </p>
+                        {summary.latestTransaction.settlementStatus && (
+                          <p>
+                            <span className="text-muted-foreground">Status:</span> {summary.latestTransaction.settlementStatus}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Owner Operations Console Link (Owner Only) */}
         {isOwner && (
