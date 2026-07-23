@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { query } from "@/lib/db"
+import { query, getMerchantPaymentDashboardSummary } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 
 export const dynamic = "force-dynamic"
@@ -243,7 +243,16 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    return NextResponse.json({ payments })
+    // Fetch dashboard summary
+    const summary = await getMerchantPaymentDashboardSummary(verifiedUsername)
+    if (summary === null) {
+      return NextResponse.json(
+        { error: "Failed to fetch payment summary" },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json({ payments, summary })
   } catch (error) {
     console.error("[Merchant Payments API] Error:", error)
     return NextResponse.json(

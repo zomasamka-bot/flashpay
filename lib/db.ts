@@ -557,6 +557,80 @@ export async function getMerchantBalance(merchantId: string): Promise<MerchantBa
 }
 
 /**
+ * Get merchant payment dashboard summary statistics
+ * Read-only query: transactions LEFT JOIN receipts for settlement tracking
+ * Returns 7 normalized numeric values or null on any error
+ */
+export async function getMerchantPaymentDashboardSummary(
+  merchantId: string
+): Promise<{
+  total_requests: number
+  total_payment_volume: number
+  settled_transactions: number
+  total_settled_amount: number
+  pending_transactions: number
+  total_awaiting_amount: number
+  failed_transactions: number
+} | null> {
+  if (!process.env.DATABASE_URL) return null
+
+  try {
+    // Parameterized CTE: transactions LEFT JOIN receipts, set effective_status
+    const result = await query(
+      `WITH payment_summary AS (
+        SELECT 
+          COUNT(*) as total_requests,
+          COALESCE(SUM(t.amount), 0) as total_payment_volume,
+          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'settled_to_merchant' THEN 1 END) as settled_transactions,
+          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'settled_to_merchant' THEN t.amount ELSE NULL END), 0) as total_settled_amount,
+          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('settlement_pending', 'paid_to_app', 'pending') THEN 1 END) as pending_transactions,
+          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('settlement_pending', 'paid_to_app', 'pending') THEN t.amount ELSE NULL END), 0) as total_awaiting_amount,
+          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('failed', 'settlement_failed') THEN 1 END) as failed_transactions
+        FROM transactions t
+        LEFT JOIN receipts r ON r.transaction_id = t.id
+        WHERE t.merchant_id = $1
+      )
+      SELECT * FROM payment_summary`,
+      [merchantId]
+    )
+
+    // Require array length 1
+    if (!Array.isArray(result) || result.length !== 1) {
+      console.error('[DB] getMerchantPaymentDashboardSummary: query returned non-array or wrong length')
+      return null
+    }
+
+    const candidate = result[0]
+    // Require row to be non-null object, not array
+    if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      console.error('[DB] getMerchantPaymentDashboardSummary: row is null, non-object, or array')
+      return null
+    }
+
+    const row = candidate as Record<string, unknown>
+
+    // Normalize all 7 values via normalizePostgresNumeric
+    try {
+      return {
+        total_requests: normalizePostgresNumeric(row.total_requests, 'total_requests'),
+        total_payment_volume: normalizePostgresNumeric(row.total_payment_volume, 'total_payment_volume'),
+        settled_transactions: normalizePostgresNumeric(row.settled_transactions, 'settled_transactions'),
+        total_settled_amount: normalizePostgresNumeric(row.total_settled_amount, 'total_settled_amount'),
+        pending_transactions: normalizePostgresNumeric(row.pending_transactions, 'pending_transactions'),
+        total_awaiting_amount: normalizePostgresNumeric(row.total_awaiting_amount, 'total_awaiting_amount'),
+        failed_transactions: normalizePostgresNumeric(row.failed_transactions, 'failed_transactions'),
+      }
+    } catch (err) {
+      console.error('[DB] getMerchantPaymentDashboardSummary: normalization failed:', err)
+      return null
+    }
+  } catch (error) {
+    console.error('[DB] getMerchantPaymentDashboardSummary failed:', error)
+    return null
+  }
+}
+
+/**
  * Get merchant profile summary with transaction statistics
  * Read-only query: transactions LEFT JOIN receipts for settlement tracking
  */
