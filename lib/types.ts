@@ -215,6 +215,7 @@ export interface ReceiptRow {
   u2a_txid?: string
   a2u_identifier?: string
   a2u_txid?: string
+  settlement_status?: PaymentStatus
 }
 
 export interface TransactionWithReceiptRow extends TransactionRow {

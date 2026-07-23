@@ -77,10 +77,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         username: receipt.payer_username,
         address: receipt.payer_address,
       },
+      settlementStatus: receipt.settlement_status,
       u2aIdentifier: receipt.u2a_identifier,
       u2aTxid: receipt.u2a_txid,
+      piPaymentId: receipt.u2a_identifier,
       a2uIdentifier: receipt.a2u_identifier,
       a2uTxid: receipt.a2u_txid,
+      a2uPaymentId: receipt.a2u_identifier,
       createdAt: receipt.created_at,
     }
 
