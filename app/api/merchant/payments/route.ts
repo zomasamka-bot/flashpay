@@ -123,16 +123,23 @@ export async function GET(request: NextRequest) {
 
     const result = await query(sql, params)
 
-    if (!Array.isArray(result) && typeof result !== "object") {
+    if (!Array.isArray(result)) {
       return NextResponse.json(
-        { error: "Database query returned invalid type" },
+        { error: "Database query returned non-array" },
         { status: 500 }
       )
     }
 
     // Transform and validate rows
     const payments: Record<string, unknown>[] = []
-    for (const row of (result as Record<string, unknown>[]) || []) {
+    for (const candidate of result) {
+      // Require candidate to be non-null, non-array object
+      if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+        throw new Error("Invalid row: null, non-object, or array")
+      }
+
+      const row = candidate as Record<string, unknown>
+
       // Validate trimmed id
       const id = typeof row.id === "string" ? row.id.trim() : row.id
       if (!id || typeof id !== "string") {
@@ -169,9 +176,9 @@ export async function GET(request: NextRequest) {
         throw new Error(`Invalid row ${id}: non-finite amount`)
       }
 
-      // Validate created_at (Date|string -> output ISO)
-      if (!row.created_at) {
-        throw new Error(`Invalid row ${id}: missing created_at`)
+      // Require created_at to be Date|string before parsing
+      if (!(row.created_at instanceof Date) && typeof row.created_at !== "string") {
+        throw new Error(`Invalid row ${id}: created_at must be Date|string`)
       }
       const createdAtTime = row.created_at instanceof Date ? row.created_at.getTime() : new Date(row.created_at as string).getTime()
       if (isNaN(createdAtTime)) {
@@ -179,7 +186,10 @@ export async function GET(request: NextRequest) {
       }
       const createdAtIso = new Date(createdAtTime).toISOString()
 
-      // Validate completed_at (null|Date|string -> output ISO or null)
+      // Require completed_at to be null|Date|string before parsing
+      if (row.completed_at !== null && !(row.completed_at instanceof Date) && typeof row.completed_at !== "string") {
+        throw new Error(`Invalid row ${id}: completed_at must be null|Date|string`)
+      }
       let completedAtIso: string | null = null
       if (row.completed_at !== null && row.completed_at !== undefined) {
         const completedAtTime = row.completed_at instanceof Date ? row.completed_at.getTime() : new Date(row.completed_at as string).getTime()
@@ -189,16 +199,27 @@ export async function GET(request: NextRequest) {
         completedAtIso = new Date(completedAtTime).toISOString()
       }
 
-      // Validate description, settlement_status, U2A/A2U fields (null|string)
-      if (row.description !== null && row.description !== undefined && typeof row.description !== "string") {
-        throw new Error(`Invalid row ${id}: description must be null or string`)
+      // Require description, settlement_status, u2a_identifier, u2a_txid, a2u_identifier, a2u_txid to be exactly null|string
+      if (!("description" in row)) {
+        throw new Error(`Invalid row ${id}: description field missing`)
       }
-      if (row.settlement_status !== null && row.settlement_status !== undefined && typeof row.settlement_status !== "string") {
-        throw new Error(`Invalid row ${id}: settlement_status must be null or string`)
+      if (row.description !== null && typeof row.description !== "string") {
+        throw new Error(`Invalid row ${id}: description must be exactly null|string`)
       }
+
+      if (!("settlement_status" in row)) {
+        throw new Error(`Invalid row ${id}: settlement_status field missing`)
+      }
+      if (row.settlement_status !== null && typeof row.settlement_status !== "string") {
+        throw new Error(`Invalid row ${id}: settlement_status must be exactly null|string`)
+      }
+
       for (const field of ["u2a_identifier", "u2a_txid", "a2u_identifier", "a2u_txid"]) {
-        if (row[field] !== null && row[field] !== undefined && typeof row[field] !== "string") {
-          throw new Error(`Invalid row ${id}: ${field} must be null or string`)
+        if (!(field in row)) {
+          throw new Error(`Invalid row ${id}: ${field} field missing`)
+        }
+        if (row[field] !== null && typeof row[field] !== "string") {
+          throw new Error(`Invalid row ${id}: ${field} must be exactly null|string`)
         }
       }
 
