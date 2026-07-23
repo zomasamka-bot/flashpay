@@ -557,6 +557,79 @@ export async function getMerchantBalance(merchantId: string): Promise<MerchantBa
 }
 
 /**
+ * Get merchant profile summary with transaction statistics
+ * Read-only query: transactions LEFT JOIN receipts for settlement tracking
+ */
+export async function getMerchantProfileSummary(merchantId: string): Promise<{
+  totalTransactions: number
+  settledTransactions: number
+  totalSettledAmount: number
+  latestTransaction: {
+    transactionId: string
+    amount: number
+    reference: string
+    createdAt: string
+    settlementStatus: string | null
+  } | null
+} | null> {
+  if (!process.env.DATABASE_URL) return null
+
+  try {
+    // Get total transaction count and settled statistics
+    const statsResult = await query(
+      `SELECT 
+        COUNT(*) as total_transactions,
+        COUNT(CASE WHEN r.settlement_status = $2 THEN 1 END) as settled_transactions,
+        COALESCE(SUM(CASE WHEN r.settlement_status = $2 THEN t.amount ELSE NULL END), 0) as total_settled_amount
+      FROM transactions t
+      LEFT JOIN receipts r ON r.transaction_id = t.id
+      WHERE t.merchant_id = $1`,
+      [merchantId, 'settled_to_merchant']
+    )
+
+    if (!Array.isArray(statsResult) || statsResult.length === 0) return null
+    const stats = statsResult[0]
+
+    // Get latest transaction
+    const latestResult = await query(
+      `SELECT 
+        t.id as transaction_id,
+        t.amount,
+        t.reference,
+        t.created_at,
+        r.settlement_status
+      FROM transactions t
+      LEFT JOIN receipts r ON r.transaction_id = t.id
+      WHERE t.merchant_id = $1
+      ORDER BY t.created_at DESC
+      LIMIT 1`,
+      [merchantId]
+    )
+
+    const latestTransaction =
+      Array.isArray(latestResult) && latestResult.length > 0
+        ? {
+            transactionId: latestResult[0].transaction_id,
+            amount: Number(latestResult[0].amount),
+            reference: latestResult[0].reference,
+            createdAt: latestResult[0].created_at,
+            settlementStatus: latestResult[0].settlement_status || null,
+          }
+        : null
+
+    return {
+      totalTransactions: Number(stats.total_transactions),
+      settledTransactions: Number(stats.settled_transactions),
+      totalSettledAmount: Number(stats.total_settled_amount),
+      latestTransaction,
+    }
+  } catch (error) {
+    console.error('[DB] getMerchantProfileSummary failed:', error)
+    return null
+  }
+}
+
+/**
  * Update merchant balance
  */
 export async function updateMerchantBalance(
