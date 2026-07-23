@@ -589,6 +589,7 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
 
     if (!Array.isArray(statsResult) || statsResult.length === 0) return null
     const stats = statsResult[0]
+    if (typeof stats !== 'object' || stats === null) return null
 
     // Get latest transaction
     const latestResult = await query(
@@ -606,21 +607,31 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
       [merchantId]
     )
 
-    const latestTransaction =
-      Array.isArray(latestResult) && latestResult.length > 0
-        ? {
-            transactionId: latestResult[0].transaction_id,
-            amount: Number(latestResult[0].amount),
-            reference: latestResult[0].reference,
-            createdAt: latestResult[0].created_at,
-            settlementStatus: latestResult[0].settlement_status || null,
-          }
-        : null
+    let latestTransaction: {
+      transactionId: string
+      amount: number
+      reference: string
+      createdAt: string
+      settlementStatus: string | null
+    } | null = null
+
+    if (Array.isArray(latestResult) && latestResult.length > 0) {
+      const latest = latestResult[0]
+      if (typeof latest === 'object' && latest !== null) {
+        latestTransaction = {
+          transactionId: latest.transaction_id,
+          amount: normalizePostgresNumeric(latest.amount, 'latest.amount'),
+          reference: latest.reference,
+          createdAt: latest.created_at,
+          settlementStatus: typeof latest.settlement_status === 'string' ? latest.settlement_status : null,
+        }
+      }
+    }
 
     return {
-      totalTransactions: Number(stats.total_transactions),
-      settledTransactions: Number(stats.settled_transactions),
-      totalSettledAmount: Number(stats.total_settled_amount),
+      totalTransactions: normalizePostgresNumeric(stats.total_transactions, 'stats.total_transactions'),
+      settledTransactions: normalizePostgresNumeric(stats.settled_transactions, 'stats.settled_transactions'),
+      totalSettledAmount: normalizePostgresNumeric(stats.total_settled_amount, 'stats.total_settled_amount'),
       latestTransaction,
     }
   } catch (error) {
