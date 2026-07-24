@@ -1154,13 +1154,13 @@ export async function recordA2UTransactionAtomic(params: {
           INSERT INTO receipts (
             transaction_id, merchant_id, merchant_uid, amount, currency, timestamp, txid,
             u2a_identifier, u2a_txid, a2u_identifier, a2u_txid, metadata, created_at,
-            customer_amount, horizon_fee_charged, app_commission, merchant_amount, app_net_impact
+            customer_amount, horizon_fee_charged, app_commission, merchant_amount, app_net_impact, settlement_status
           ) VALUES (${actualTransactionId}, ${params.merchantId}, ${params.merchantUid}, ${merchantAmount},
                     ${'π'}, NOW(), ${params.a2uTxid}, ${params.u2aIdentifier}, ${params.u2aTxid},
                     ${params.a2uIdentifier}, ${params.a2uTxid},
                     ${JSON.stringify({ u2aIdentifier: params.u2aIdentifier, u2aTxid: params.u2aTxid, a2uIdentifier: params.a2uIdentifier, a2uTxid: params.a2uTxid })},
                     NOW(),
-                    ${customerAmount}, ${horizonFeeCharged}, ${appCommission}, ${merchantAmount}, ${appNetImpact})
+                    ${customerAmount}, ${horizonFeeCharged}, ${appCommission}, ${merchantAmount}, ${appNetImpact}, ${'settled_to_merchant'})
           ON CONFLICT (transaction_id) DO NOTHING
           RETURNING id
         `
