@@ -573,6 +573,8 @@ export async function getMerchantPaymentDashboardSummary(
   failed_transactions: number
   cancelled_transactions: number
   total_cancelled_amount: number
+  completed_transactions: number
+  total_completed_amount: number
   other_transactions: number
   total_other_amount: number
 } | null> {
@@ -592,8 +594,10 @@ export async function getMerchantPaymentDashboardSummary(
           COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('failed', 'settlement_failed') THEN 1 END) as failed_transactions,
           COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'cancelled' THEN 1 END) as cancelled_transactions,
           COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'cancelled' THEN t.amount ELSE NULL END), 0) as total_cancelled_amount,
-          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IS NULL OR COALESCE(r.settlement_status, t.status) NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled') THEN 1 END) as other_transactions,
-          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IS NULL OR COALESCE(r.settlement_status, t.status) NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled') THEN t.amount ELSE NULL END), 0) as total_other_amount
+          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN 1 END) as completed_transactions,
+          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount,
+          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IS NULL OR COALESCE(r.settlement_status, t.status) NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled', 'completed') THEN 1 END) as other_transactions,
+          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IS NULL OR COALESCE(r.settlement_status, t.status) NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled', 'completed') THEN t.amount ELSE NULL END), 0) as total_other_amount
         FROM transactions t
         LEFT JOIN receipts r ON r.transaction_id = t.id
         WHERE t.merchant_id = $1
@@ -617,7 +621,7 @@ export async function getMerchantPaymentDashboardSummary(
 
     const row = candidate as Record<string, unknown>
 
-    // Normalize all 11 values via normalizePostgresNumeric
+    // Normalize all 13 values via normalizePostgresNumeric
     try {
       return {
         total_requests: normalizePostgresNumeric(row.total_requests, 'total_requests'),
@@ -629,6 +633,8 @@ export async function getMerchantPaymentDashboardSummary(
         failed_transactions: normalizePostgresNumeric(row.failed_transactions, 'failed_transactions'),
         cancelled_transactions: normalizePostgresNumeric(row.cancelled_transactions, 'cancelled_transactions'),
         total_cancelled_amount: normalizePostgresNumeric(row.total_cancelled_amount, 'total_cancelled_amount'),
+        completed_transactions: normalizePostgresNumeric(row.completed_transactions, 'completed_transactions'),
+        total_completed_amount: normalizePostgresNumeric(row.total_completed_amount, 'total_completed_amount'),
         other_transactions: normalizePostgresNumeric(row.other_transactions, 'other_transactions'),
         total_other_amount: normalizePostgresNumeric(row.total_other_amount, 'total_other_amount'),
       }
