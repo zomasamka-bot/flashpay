@@ -16,9 +16,12 @@ import { Calendar, Search, Download, ChevronRight } from "lucide-react"
 type TransactionSummary = {
   total_payment_volume: number
   total_awaiting_amount: number
-  total_completed_amount: number
+  total_failed_amount: number
+  total_cancelled_amount: number
   total_settled_amount: number
 }
+
+type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -34,6 +37,24 @@ function formatTransactionDate(createdAt: string): string {
   return dateFormatter.format(date)
 }
 
+function mapSettlementStatus(status: SettlementStatus): string {
+  if (status === "settled_to_merchant") return "Settled"
+  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "Processing"
+  if (status === "failed" || status === "settlement_failed") return "Failed"
+  if (status === "cancelled") return "Cancelled"
+  if (status === "completed") return "Legacy Completed"
+  return "Other"
+}
+
+function getSettlementCategory(status: SettlementStatus): "settled" | "processing" | "failed" | "cancelled" | "legacy" | "other" {
+  if (status === "settled_to_merchant") return "settled"
+  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "processing"
+  if (status === "failed" || status === "settlement_failed") return "failed"
+  if (status === "cancelled") return "cancelled"
+  if (status === "completed") return "legacy"
+  return "other"
+}
+
 export default function TransactionsPage() {
   const router = useRouter()
   const merchant = useMerchant()
@@ -42,6 +63,7 @@ export default function TransactionsPage() {
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [filterAmount, setFilterAmount] = useState("")
+  const [statusFilter, setStatusFilter] = useState<"all" | "settled" | "processing" | "failed" | "cancelled">("all")
 
   const fetchTransactions = async () => {
     if (!merchant?.merchantId) return
@@ -96,7 +118,15 @@ export default function TransactionsPage() {
       }
     }
     
-    return matchesSearch && matchesAmount
+    // Status filter
+    let matchesStatus = true
+    if (statusFilter !== "all") {
+      const status = txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status
+      const category = getSettlementCategory(status)
+      matchesStatus = category === statusFilter
+    }
+    
+    return matchesSearch && matchesAmount && matchesStatus
   })
 
   const handleViewReceipt = (transactionId: string) => {
@@ -190,16 +220,20 @@ export default function TransactionsPage() {
                 <span className="font-semibold text-lg">{summary.total_payment_volume.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Total Settled Amount:</span>
+                <span className="font-semibold">{summary.total_settled_amount.toFixed(2)}π</span>
+              </div>
+              <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Total Awaiting Amount:</span>
                 <span className="font-semibold">{summary.total_awaiting_amount.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Completed Amount:</span>
-                <span className="font-semibold">{summary.total_completed_amount.toFixed(2)}π</span>
+                <span className="text-muted-foreground">Total Failed Amount:</span>
+                <span className="font-semibold">{summary.total_failed_amount.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Settled Amount:</span>
-                <span className="font-semibold">{summary.total_settled_amount.toFixed(2)}π</span>
+                <span className="text-muted-foreground">Total Cancelled Amount:</span>
+                <span className="font-semibold">{summary.total_cancelled_amount.toFixed(2)}π</span>
               </div>
             </CardContent>
           </Card>
@@ -228,6 +262,19 @@ export default function TransactionsPage() {
               <Download className="h-4 w-4 mr-2" />
               Export CSV
             </Button>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {(["all", "settled", "processing", "failed", "cancelled"] as const).map((filter) => (
+              <Button
+                key={filter}
+                variant={statusFilter === filter ? "default" : "outline"}
+                size="sm"
+                onClick={() => setStatusFilter(filter)}
+                className="capitalize"
+              >
+                {filter === "all" ? "All" : filter === "settled" ? "Settled" : filter === "processing" ? "Processing" : filter === "failed" ? "Failed" : "Cancelled"}
+              </Button>
+            ))}
           </div>
         </div>
 
@@ -267,13 +314,13 @@ export default function TransactionsPage() {
                         <div className="font-bold text-foreground">{txn.amount} π</div>
                         <Badge
                           variant={
-                            txn.settlementStatus === "settled_to_merchant" || txn.status === "completed"
+                            (txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status) === "settled_to_merchant"
                               ? "default"
                               : "secondary"
                           }
                           className="text-xs"
                         >
-                          {txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status}
+                          {mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status)}
                         </Badge>
                       </div>
                     </div>
@@ -281,13 +328,13 @@ export default function TransactionsPage() {
                       <div className="font-bold text-foreground">{txn.amount} π</div>
                       <Badge
                         variant={
-                          txn.settlementStatus === "settled_to_merchant" || txn.status === "completed"
+                          (txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status) === "settled_to_merchant"
                             ? "default"
                             : "secondary"
                         }
                         className="text-xs"
                       >
-                        {txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status}
+                        {mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status)}
                       </Badge>
                     </div>
                     <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
