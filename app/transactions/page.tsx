@@ -151,7 +151,7 @@ export default function TransactionsPage() {
       escapeCsvCell(txn.reference),
       escapeCsvCell(txn.amount.toString()),
       escapeCsvCell(formatTransactionDate(txn.createdAt)),
-      escapeCsvCell(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status),
+      escapeCsvCell(mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status)),
       escapeCsvCell(txn.description),
     ])
 
