@@ -659,8 +659,12 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
   totalTransactions: number
   settledTransactions: number
   totalSettledAmount: number
-  completedTransactions: number
-  totalCompletedAmount: number
+  pendingTransactions: number
+  totalAwaitingAmount: number
+  failedTransactions: number
+  totalFailedAmount: number
+  cancelledTransactions: number
+  totalCancelledAmount: number
   latestTransaction: {
     transactionId: string
     amount: number
@@ -672,14 +676,18 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
   if (!process.env.DATABASE_URL) return null
 
   try {
-    // Get total transaction count and settled statistics, using r.settlement_status as single source of truth
+    // Get total transaction count and settlement statistics, using r.settlement_status as single source of truth
     const statsResult = await query(
       `SELECT 
         COUNT(*) as total_transactions,
         COUNT(CASE WHEN r.settlement_status = $2 THEN 1 END) as settled_transactions,
         COALESCE(SUM(CASE WHEN r.settlement_status = $2 THEN t.amount ELSE NULL END), 0) as total_settled_amount,
-        COUNT(CASE WHEN r.settlement_status = 'completed' THEN 1 END) as completed_transactions,
-        COALESCE(SUM(CASE WHEN r.settlement_status = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount
+        COUNT(CASE WHEN r.settlement_status IN ('settlement_pending', 'paid_to_app', 'pending') THEN 1 END) as pending_transactions,
+        COALESCE(SUM(CASE WHEN r.settlement_status IN ('settlement_pending', 'paid_to_app', 'pending') THEN t.amount ELSE NULL END), 0) as total_awaiting_amount,
+        COUNT(CASE WHEN r.settlement_status IN ('failed', 'settlement_failed') THEN 1 END) as failed_transactions,
+        COALESCE(SUM(CASE WHEN r.settlement_status IN ('failed', 'settlement_failed') THEN t.amount ELSE NULL END), 0) as total_failed_amount,
+        COUNT(CASE WHEN r.settlement_status = 'cancelled' THEN 1 END) as cancelled_transactions,
+        COALESCE(SUM(CASE WHEN r.settlement_status = 'cancelled' THEN t.amount ELSE NULL END), 0) as total_cancelled_amount
       FROM transactions t
       LEFT JOIN receipts r ON r.transaction_id = t.id
       WHERE t.merchant_id = $1`,
@@ -753,8 +761,12 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
       totalTransactions: normalizePostgresNumeric(statsRow.total_transactions, 'stats.total_transactions'),
       settledTransactions: normalizePostgresNumeric(statsRow.settled_transactions, 'stats.settled_transactions'),
       totalSettledAmount: normalizePostgresNumeric(statsRow.total_settled_amount, 'stats.total_settled_amount'),
-      completedTransactions: normalizePostgresNumeric(statsRow.completed_transactions, 'stats.completed_transactions'),
-      totalCompletedAmount: normalizePostgresNumeric(statsRow.total_completed_amount, 'stats.total_completed_amount'),
+      pendingTransactions: normalizePostgresNumeric(statsRow.pending_transactions, 'stats.pending_transactions'),
+      totalAwaitingAmount: normalizePostgresNumeric(statsRow.total_awaiting_amount, 'stats.total_awaiting_amount'),
+      failedTransactions: normalizePostgresNumeric(statsRow.failed_transactions, 'stats.failed_transactions'),
+      totalFailedAmount: normalizePostgresNumeric(statsRow.total_failed_amount, 'stats.total_failed_amount'),
+      cancelledTransactions: normalizePostgresNumeric(statsRow.cancelled_transactions, 'stats.cancelled_transactions'),
+      totalCancelledAmount: normalizePostgresNumeric(statsRow.total_cancelled_amount, 'stats.total_cancelled_amount'),
       latestTransaction,
     }
   } catch (error) {

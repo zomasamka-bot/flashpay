@@ -17,8 +17,12 @@ interface ProfileSummary {
   totalTransactions: number
   settledTransactions: number
   totalSettledAmount: number
-  completedTransactions: number
-  totalCompletedAmount: number
+  pendingTransactions: number
+  totalAwaitingAmount: number
+  failedTransactions: number
+  totalFailedAmount: number
+  cancelledTransactions: number
+  totalCancelledAmount: number
   latestTransaction: {
     transactionId: string
     reference: string
@@ -305,12 +309,28 @@ function ProfileContent() {
                     <p className="text-lg font-semibold">{summary.totalSettledAmount.toFixed(2)}π</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Completed Transactions</p>
-                    <p className="text-lg font-semibold">{summary.completedTransactions}</p>
+                    <p className="text-xs text-muted-foreground">Pending Transactions</p>
+                    <p className="text-lg font-semibold">{summary.pendingTransactions}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Total Completed Amount</p>
-                    <p className="text-lg font-semibold">{summary.totalCompletedAmount.toFixed(2)}π</p>
+                    <p className="text-xs text-muted-foreground">Total Awaiting Amount</p>
+                    <p className="text-lg font-semibold">{summary.totalAwaitingAmount.toFixed(2)}π</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Failed Transactions</p>
+                    <p className="text-lg font-semibold">{summary.failedTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Failed Amount</p>
+                    <p className="text-lg font-semibold">{summary.totalFailedAmount.toFixed(2)}π</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Cancelled Transactions</p>
+                    <p className="text-lg font-semibold">{summary.cancelledTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Cancelled Amount</p>
+                    <p className="text-lg font-semibold">{summary.totalCancelledAmount.toFixed(2)}π</p>
                   </div>
                 </div>
                 {summary.latestTransaction && (
