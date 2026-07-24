@@ -12,6 +12,27 @@ import type { Receipt } from "@/lib/types"
 import { Download, Copy, Check } from "lucide-react"
 import { useUnifiedStore } from "@/lib/unified-store"
 
+const receiptDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+})
+
+const receiptTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: true,
+})
+
+function formatReceiptDateTime(timestamp: string): string {
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) {
+    return "Unavailable"
+  }
+  return `${receiptDateFormatter.format(date)}, ${receiptTimeFormatter.format(date)}`
+}
+
 export default function ReceiptPage() {
   const params = useParams()
   const receiptId = params.id as string
@@ -129,8 +150,8 @@ export default function ReceiptPage() {
             <div className="grid grid-cols-2 gap-6 print:grid-cols-2">
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Date & Time</p>
-                <p className="font-semibold">
-                  {new Date(receipt.timestamp).toLocaleDateString()} {new Date(receipt.timestamp).toLocaleTimeString()}
+                <p className="font-semibold" dir="ltr" lang="en">
+                  {formatReceiptDateTime(receipt.timestamp)}
                 </p>
               </div>
               <div>
