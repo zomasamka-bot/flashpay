@@ -253,19 +253,32 @@ export default function TransactionsPage() {
                 onClick={() => handleViewReceipt(txn.transactionId)}
               >
                 <CardContent className="pt-6">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-3 mb-2">
                         <Badge variant="secondary">{txn.reference}</Badge>
                         <span className="text-sm text-muted-foreground flex items-center gap-1" dir="ltr" lang="en">
                           <Calendar className="h-3 w-3" />
                           {formatTransactionDate(txn.createdAt)}
                         </span>
                       </div>
-                      <p className="text-sm text-muted-foreground">{txn.description}</p>
+                      <p className="text-sm text-muted-foreground break-words">{txn.description}</p>
+                      <div className="flex gap-3 mt-3 sm:hidden">
+                        <div className="font-bold text-foreground">{txn.amount} π</div>
+                        <Badge
+                          variant={
+                            txn.settlementStatus === "settled_to_merchant" || txn.status === "completed"
+                              ? "default"
+                              : "secondary"
+                          }
+                          className="text-xs"
+                        >
+                          {txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status}
+                        </Badge>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-xl font-bold text-foreground">{txn.amount} π</div>
+                    <div className="hidden sm:flex sm:flex-col sm:items-end sm:gap-2 sm:shrink-0">
+                      <div className="font-bold text-foreground">{txn.amount} π</div>
                       <Badge
                         variant={
                           txn.settlementStatus === "settled_to_merchant" || txn.status === "completed"
@@ -277,7 +290,7 @@ export default function TransactionsPage() {
                         {txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status}
                       </Badge>
                     </div>
-                    <ChevronRight className="h-5 w-5 text-muted-foreground ml-2" />
+                    <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
                   </div>
                 </CardContent>
               </Card>
