@@ -10,14 +10,21 @@ import { BackButton } from "@/components/back-button"
 import { Spinner } from "@/components/ui/spinner"
 import { useMerchant } from "@/lib/use-merchant"
 import { config } from "@/lib/config"
-import type { Transaction, MerchantBalance } from "@/lib/types"
+import type { Transaction } from "@/lib/types"
 import { Calendar, Search, Download, ChevronRight } from "lucide-react"
+
+type TransactionSummary = {
+  total_payment_volume: number
+  total_awaiting_amount: number
+  total_completed_amount: number
+  total_settled_amount: number
+}
 
 export default function TransactionsPage() {
   const router = useRouter()
   const merchant = useMerchant()
   const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [balance, setBalance] = useState<MerchantBalance | null>(null)
+  const [summary, setSummary] = useState<TransactionSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [filterAmount, setFilterAmount] = useState("")
@@ -44,7 +51,7 @@ export default function TransactionsPage() {
       if (response.ok) {
         const data = await response.json()
         setTransactions(data.transactions || [])
-        setBalance(data.balance)
+        setSummary(data.summary)
       }
     } catch (error) {
       console.error("Error fetching transactions:", error)
@@ -115,24 +122,28 @@ export default function TransactionsPage() {
           <BackButton />
         </div>
 
-        {/* Balance Summary */}
-        {balance && (
+        {/* Payment Summary */}
+        {summary && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Balance Summary</CardTitle>
+              <CardTitle className="text-lg">Payment Summary</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Received:</span>
-                <span className="font-semibold text-lg">{balance.total.toFixed(2)} π</span>
+                <span className="text-muted-foreground">Total Payment Volume:</span>
+                <span className="font-semibold text-lg">{summary.total_payment_volume.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Unsettled:</span>
-                <span className="font-semibold">{balance.unsettled.toFixed(2)} π</span>
+                <span className="text-muted-foreground">Total Awaiting Amount:</span>
+                <span className="font-semibold">{summary.total_awaiting_amount.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Settled:</span>
-                <span className="font-semibold">{balance.settled.toFixed(2)} π</span>
+                <span className="text-muted-foreground">Total Completed Amount:</span>
+                <span className="font-semibold">{summary.total_completed_amount.toFixed(2)}π</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Total Settled Amount:</span>
+                <span className="font-semibold">{summary.total_settled_amount.toFixed(2)}π</span>
               </div>
             </CardContent>
           </Card>
