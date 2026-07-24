@@ -40,6 +40,13 @@ interface MerchantDashboardSummary {
   pending_transactions: number
   total_awaiting_amount: number
   failed_transactions: number
+  total_failed_amount: number
+  cancelled_transactions: number
+  total_cancelled_amount: number
+  completed_transactions: number
+  total_completed_amount: number
+  other_transactions: number
+  total_other_amount: number
 }
 
 export default function MerchantPaymentsPage() {
@@ -154,7 +161,7 @@ export default function MerchantPaymentsPage() {
         const summary = data.summary as Record<string, unknown>
 
         // Validate count fields (non-negative integers)
-        for (const field of ["total_requests", "settled_transactions", "pending_transactions", "failed_transactions"]) {
+        for (const field of ["total_requests", "settled_transactions", "pending_transactions", "failed_transactions", "cancelled_transactions", "completed_transactions", "other_transactions"]) {
           const value = summary[field]
           if (!Number.isInteger(value) || (value as number) < 0) {
             setPayments([])
@@ -165,7 +172,7 @@ export default function MerchantPaymentsPage() {
         }
 
         // Validate amount fields (finite non-negative numbers)
-        for (const field of ["total_payment_volume", "total_settled_amount", "total_awaiting_amount"]) {
+        for (const field of ["total_payment_volume", "total_settled_amount", "total_awaiting_amount", "total_failed_amount", "total_cancelled_amount", "total_completed_amount", "total_other_amount"]) {
           const value = summary[field]
           if (typeof value !== "number" || !isFinite(value) || (value as number) < 0) {
             setPayments([])
@@ -410,6 +417,55 @@ export default function MerchantPaymentsPage() {
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-orange-700 dark:text-orange-400">{summary ? `${summary.total_awaiting_amount.toFixed(2)}π` : "—"}</div>
                   <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">Total Awaiting Amount</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-900/20 dark:to-pink-900/10 border-pink-200 dark:border-pink-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-pink-700 dark:text-pink-400">{summary ? `${summary.total_failed_amount.toFixed(2)}π` : "—"}</div>
+                  <p className="text-sm text-pink-600 dark:text-pink-300 mt-1">Total Failed Amount</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900/20 dark:to-slate-900/10 border-slate-200 dark:border-slate-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-slate-700 dark:text-slate-400">{summary?.cancelled_transactions ?? "—"}</div>
+                  <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">Cancelled Transactions</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-cyan-50 to-cyan-100 dark:from-cyan-900/20 dark:to-cyan-900/10 border-cyan-200 dark:border-cyan-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-cyan-700 dark:text-cyan-400">{summary ? `${summary.total_cancelled_amount.toFixed(2)}π` : "—"}</div>
+                  <p className="text-sm text-cyan-600 dark:text-cyan-300 mt-1">Total Cancelled Amount</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900/20 dark:to-teal-900/10 border-teal-200 dark:border-teal-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-teal-700 dark:text-teal-400">{summary?.completed_transactions ?? "—"}</div>
+                  <p className="text-sm text-teal-600 dark:text-teal-300 mt-1">Completed Transactions</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-lime-50 to-lime-100 dark:from-lime-900/20 dark:to-lime-900/10 border-lime-200 dark:border-lime-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-lime-700 dark:text-lime-400">{summary ? `${summary.total_completed_amount.toFixed(2)}π` : "—"}</div>
+                  <p className="text-sm text-lime-600 dark:text-lime-300 mt-1">Total Completed Amount</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-rose-50 to-rose-100 dark:from-rose-900/20 dark:to-rose-900/10 border-rose-200 dark:border-rose-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-rose-700 dark:text-rose-400">{summary?.other_transactions ?? "—"}</div>
+                  <p className="text-sm text-rose-600 dark:text-rose-300 mt-1">Other Transactions</p>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-900/20 dark:to-amber-900/10 border-amber-200 dark:border-amber-800">
+                <CardContent className="pt-6">
+                  <div className="text-3xl font-bold text-amber-700 dark:text-amber-400">{summary ? `${summary.total_other_amount.toFixed(2)}π` : "—"}</div>
+                  <p className="text-sm text-amber-600 dark:text-amber-300 mt-1">Total Other Amount</p>
                 </CardContent>
               </Card>
             </div>
