@@ -93,7 +93,33 @@ export default function ReceiptPage() {
   }
 
   const handlePrint = () => {
-    window.print()
+    // Try native print dialog first (works on desktop and some mobile browsers)
+    if (window.print) {
+      const printResult = window.print()
+      
+      // If print dialog is not shown (returns undefined on iOS Pi Browser),
+      // fall back to iframe method for print preview
+      if (printResult === undefined && navigator.userAgent.includes("iPad")) {
+        const receiptElement = document.getElementById("receipt-content")
+        if (receiptElement) {
+          const iframe = document.createElement("iframe")
+          iframe.style.display = "none"
+          document.body.appendChild(iframe)
+          
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document
+          if (iframeDoc) {
+            iframeDoc.open()
+            iframeDoc.write(receiptElement.innerHTML)
+            iframeDoc.close()
+            
+            iframe.onload = () => {
+              iframe.contentWindow?.print()
+              document.body.removeChild(iframe)
+            }
+          }
+        }
+      }
+    }
   }
 
   if (loading) {
@@ -134,7 +160,7 @@ export default function ReceiptPage() {
         </div>
 
         {/* Receipt Card */}
-        <Card className="print:shadow-none">
+        <Card id="receipt-content" className="print:shadow-none">
           <CardHeader className="border-b print:border-b">
             <div className="flex items-start justify-between">
               <div>
