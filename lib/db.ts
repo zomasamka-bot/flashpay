@@ -582,24 +582,24 @@ export async function getMerchantPaymentDashboardSummary(
   if (!process.env.DATABASE_URL) return null
 
   try {
-    // Parameterized CTE: transactions LEFT JOIN receipts, set effective_status
+    // Parameterized CTE: transactions LEFT JOIN receipts, use r.settlement_status as single source of truth
     const result = await query(
       `WITH payment_summary AS (
         SELECT 
           COUNT(*) as total_requests,
           COALESCE(SUM(t.amount), 0) as total_payment_volume,
-          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'settled_to_merchant' THEN 1 END) as settled_transactions,
-          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'settled_to_merchant' THEN t.amount ELSE NULL END), 0) as total_settled_amount,
-          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('settlement_pending', 'paid_to_app', 'pending') THEN 1 END) as pending_transactions,
-          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('settlement_pending', 'paid_to_app', 'pending') THEN t.amount ELSE NULL END), 0) as total_awaiting_amount,
-          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('failed', 'settlement_failed') THEN 1 END) as failed_transactions,
-          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('failed', 'settlement_failed') THEN t.amount ELSE NULL END), 0) as total_failed_amount,
-          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'cancelled' THEN 1 END) as cancelled_transactions,
-          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'cancelled' THEN t.amount ELSE NULL END), 0) as total_cancelled_amount,
-          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN 1 END) as completed_transactions,
-          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount,
-          COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IS NULL OR COALESCE(r.settlement_status, t.status) NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled', 'completed') THEN 1 END) as other_transactions,
-          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IS NULL OR COALESCE(r.settlement_status, t.status) NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled', 'completed') THEN t.amount ELSE NULL END), 0) as total_other_amount
+          COUNT(CASE WHEN r.settlement_status = 'settled_to_merchant' THEN 1 END) as settled_transactions,
+          COALESCE(SUM(CASE WHEN r.settlement_status = 'settled_to_merchant' THEN t.amount ELSE NULL END), 0) as total_settled_amount,
+          COUNT(CASE WHEN r.settlement_status IN ('settlement_pending', 'paid_to_app', 'pending') THEN 1 END) as pending_transactions,
+          COALESCE(SUM(CASE WHEN r.settlement_status IN ('settlement_pending', 'paid_to_app', 'pending') THEN t.amount ELSE NULL END), 0) as total_awaiting_amount,
+          COUNT(CASE WHEN r.settlement_status IN ('failed', 'settlement_failed') THEN 1 END) as failed_transactions,
+          COALESCE(SUM(CASE WHEN r.settlement_status IN ('failed', 'settlement_failed') THEN t.amount ELSE NULL END), 0) as total_failed_amount,
+          COUNT(CASE WHEN r.settlement_status = 'cancelled' THEN 1 END) as cancelled_transactions,
+          COALESCE(SUM(CASE WHEN r.settlement_status = 'cancelled' THEN t.amount ELSE NULL END), 0) as total_cancelled_amount,
+          COUNT(CASE WHEN r.settlement_status = 'completed' THEN 1 END) as completed_transactions,
+          COALESCE(SUM(CASE WHEN r.settlement_status = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount,
+          COUNT(CASE WHEN r.settlement_status IS NULL OR r.settlement_status NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled', 'completed') THEN 1 END) as other_transactions,
+          COALESCE(SUM(CASE WHEN r.settlement_status IS NULL OR r.settlement_status NOT IN ('settled_to_merchant', 'pending', 'paid_to_app', 'settlement_pending', 'failed', 'settlement_failed', 'cancelled', 'completed') THEN t.amount ELSE NULL END), 0) as total_other_amount
         FROM transactions t
         LEFT JOIN receipts r ON r.transaction_id = t.id
         WHERE t.merchant_id = $1
@@ -672,14 +672,14 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
   if (!process.env.DATABASE_URL) return null
 
   try {
-    // Get total transaction count and settled statistics
+    // Get total transaction count and settled statistics, using r.settlement_status as single source of truth
     const statsResult = await query(
       `SELECT 
         COUNT(*) as total_transactions,
         COUNT(CASE WHEN r.settlement_status = $2 THEN 1 END) as settled_transactions,
         COALESCE(SUM(CASE WHEN r.settlement_status = $2 THEN t.amount ELSE NULL END), 0) as total_settled_amount,
-        COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN 1 END) as completed_transactions,
-        COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount
+        COUNT(CASE WHEN r.settlement_status = 'completed' THEN 1 END) as completed_transactions,
+        COALESCE(SUM(CASE WHEN r.settlement_status = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount
       FROM transactions t
       LEFT JOIN receipts r ON r.transaction_id = t.id
       WHERE t.merchant_id = $1`,
