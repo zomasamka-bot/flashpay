@@ -17,6 +17,8 @@ interface ProfileSummary {
   totalTransactions: number
   settledTransactions: number
   totalSettledAmount: number
+  completedTransactions: number
+  totalCompletedAmount: number
   latestTransaction: {
     transactionId: string
     reference: string
@@ -289,7 +291,7 @@ function ProfileContent() {
               <p className="text-sm text-destructive">{summaryError}</p>
             ) : summary ? (
               <div className="space-y-3">
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <div>
                     <p className="text-xs text-muted-foreground">Total Transactions</p>
                     <p className="text-lg font-semibold">{summary.totalTransactions}</p>
@@ -300,7 +302,15 @@ function ProfileContent() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Total Settled Amount</p>
-                    <p className="text-lg font-semibold">π{summary.totalSettledAmount}</p>
+                    <p className="text-lg font-semibold">${summary.totalSettledAmount.toFixed(2)}π</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Completed Transactions</p>
+                    <p className="text-lg font-semibold">{summary.completedTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Completed Amount</p>
+                    <p className="text-lg font-semibold">${summary.totalCompletedAmount.toFixed(2)}π</p>
                   </div>
                 </div>
                 {summary.latestTransaction && (

@@ -659,6 +659,8 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
   totalTransactions: number
   settledTransactions: number
   totalSettledAmount: number
+  completedTransactions: number
+  totalCompletedAmount: number
   latestTransaction: {
     transactionId: string
     amount: number
@@ -675,7 +677,9 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
       `SELECT 
         COUNT(*) as total_transactions,
         COUNT(CASE WHEN r.settlement_status = $2 THEN 1 END) as settled_transactions,
-        COALESCE(SUM(CASE WHEN r.settlement_status = $2 THEN t.amount ELSE NULL END), 0) as total_settled_amount
+        COALESCE(SUM(CASE WHEN r.settlement_status = $2 THEN t.amount ELSE NULL END), 0) as total_settled_amount,
+        COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN 1 END) as completed_transactions,
+        COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount
       FROM transactions t
       LEFT JOIN receipts r ON r.transaction_id = t.id
       WHERE t.merchant_id = $1`,
@@ -749,6 +753,8 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
       totalTransactions: normalizePostgresNumeric(statsRow.total_transactions, 'stats.total_transactions'),
       settledTransactions: normalizePostgresNumeric(statsRow.settled_transactions, 'stats.settled_transactions'),
       totalSettledAmount: normalizePostgresNumeric(statsRow.total_settled_amount, 'stats.total_settled_amount'),
+      completedTransactions: normalizePostgresNumeric(statsRow.completed_transactions, 'stats.completed_transactions'),
+      totalCompletedAmount: normalizePostgresNumeric(statsRow.total_completed_amount, 'stats.total_completed_amount'),
       latestTransaction,
     }
   } catch (error) {

@@ -526,28 +526,48 @@ export default function MerchantPaymentsPage() {
                 <label htmlFor="date-from" className="text-sm font-medium mb-2 block">
                   From Date
                 </label>
-                <input
-                  id="date-from"
-                  type="date"
-                  value={filterDateFrom}
-                  onChange={(e) => setFilterDateFrom(e.target.value)}
-                  max={filterDateTo || undefined}
-                  className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full"
-                />
+                <div className="relative">
+                  <div
+                    dir="ltr"
+                    lang="en"
+                    aria-hidden="true"
+                    className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full text-sm"
+                  >
+                    {filterDateFrom || "YYYY-MM-DD"}
+                  </div>
+                  <input
+                    id="date-from"
+                    type="date"
+                    value={filterDateFrom}
+                    onChange={(e) => setFilterDateFrom(e.target.value)}
+                    max={filterDateTo || undefined}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                </div>
               </div>
 
               <div>
                 <label htmlFor="date-to" className="text-sm font-medium mb-2 block">
                   To Date
                 </label>
-                <input
-                  id="date-to"
-                  type="date"
-                  value={filterDateTo}
-                  onChange={(e) => setFilterDateTo(e.target.value)}
-                  min={filterDateFrom || undefined}
-                  className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full"
-                />
+                <div className="relative">
+                  <div
+                    dir="ltr"
+                    lang="en"
+                    aria-hidden="true"
+                    className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full text-sm"
+                  >
+                    {filterDateTo || "YYYY-MM-DD"}
+                  </div>
+                  <input
+                    id="date-to"
+                    type="date"
+                    value={filterDateTo}
+                    onChange={(e) => setFilterDateTo(e.target.value)}
+                    min={filterDateFrom || undefined}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                </div>
               </div>
             </div>
 
