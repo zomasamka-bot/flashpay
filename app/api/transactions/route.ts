@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getTransactionsByMerchant, getMerchantBalance } from "@/lib/db"
+import { getTransactionsByMerchant, getMerchantBalance, getMerchantPaymentDashboardSummary } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import type { TransactionRow, MerchantBalanceRow } from "@/lib/types"
 
@@ -70,6 +70,15 @@ export async function GET(request: NextRequest) {
       offset,
     })
 
+    // Get merchant payment dashboard summary
+    const summary = await getMerchantPaymentDashboardSummary(merchantId)
+    if (summary === null) {
+      return NextResponse.json(
+        { error: "Failed to retrieve transaction summary" },
+        { status: 500 }
+      )
+    }
+
     // Get merchant balance and ensure camelCase response
     const balance = await getMerchantBalance(merchantId)
 
@@ -112,6 +121,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       transactions: transformedTransactions,
       balance: balanceResponse,
+      summary,
       pagination: {
         page,
         limit,
