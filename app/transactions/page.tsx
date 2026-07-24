@@ -103,26 +103,68 @@ export default function TransactionsPage() {
     router.push(`/receipts/${transactionId}`)
   }
 
-  const handleExport = () => {
-    const csv = [
-      ["Reference", "Amount (π)", "Date", "Status", "Description"],
-      ...filteredTransactions.map((txn) => [
-        txn.reference,
-        txn.amount.toString(),
-        new Date(txn.createdAt).toLocaleDateString(),
-        txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status,
-        txn.description,
-      ]),
-    ]
-      .map((row) => row.map((cell) => `"${cell}"`).join(","))
-      .join("\n")
+  const handleExport = async () => {
+    if (filteredTransactions.length === 0) {
+      return
+    }
 
-    const blob = new Blob([csv], { type: "text/csv" })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `transactions-${new Date().toISOString().split("T")[0]}.csv`
-    a.click()
+    // Helper function to escape CSV cell values
+    const escapeCsvCell = (cell: unknown): string => {
+      const value = cell === null || cell === undefined ? "" : String(cell)
+      const escaped = value.replace(/"/g, '""')
+      return `"${escaped}"`
+    }
+
+    // Build CSV content
+    const headers = ["Reference", "Amount (π)", "Date", "Status", "Description"]
+    const rows = filteredTransactions.map((txn) => [
+      escapeCsvCell(txn.reference),
+      escapeCsvCell(txn.amount.toString()),
+      escapeCsvCell(formatTransactionDate(txn.createdAt)),
+      escapeCsvCell(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status),
+      escapeCsvCell(txn.description),
+    ])
+
+    const csvContent =
+      "\uFEFF" +
+      [headers.map(escapeCsvCell).join(","), ...rows.map((row) => row.join(","))].join("\r\n")
+
+    // Create File with correct date format
+    const today = new Date().toISOString().split("T")[0]
+    const file = new File([csvContent], `transactions-${today}.csv`, {
+      type: "text/csv;charset=utf-8",
+    })
+
+    // Try navigator.share if supported
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: "Transactions Export",
+          text: "Export of transaction history",
+        })
+        return
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return
+        }
+        console.error("Share failed:", error)
+      }
+    }
+
+    // Fallback: download via hidden link
+    const url = URL.createObjectURL(file)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = file.name
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+
+    // Revoke URL after delay
+    setTimeout(() => {
+      URL.revokeObjectURL(url)
+    }, 1000)
   }
 
   return (
