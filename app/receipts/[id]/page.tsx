@@ -93,32 +93,45 @@ export default function ReceiptPage() {
   }
 
   const handlePrint = () => {
-    // Try native print dialog first (works on desktop and some mobile browsers)
-    if (window.print) {
-      const printResult = window.print()
-      
-      // If print dialog is not shown (returns undefined on iOS Pi Browser),
-      // fall back to iframe method for print preview
-      if (printResult === undefined && navigator.userAgent.includes("iPad")) {
-        const receiptElement = document.getElementById("receipt-content")
-        if (receiptElement) {
-          const iframe = document.createElement("iframe")
-          iframe.style.display = "none"
-          document.body.appendChild(iframe)
-          
-          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document
-          if (iframeDoc) {
-            iframeDoc.open()
-            iframeDoc.write(receiptElement.innerHTML)
-            iframeDoc.close()
-            
-            iframe.onload = () => {
-              iframe.contentWindow?.print()
-              document.body.removeChild(iframe)
-            }
+    const receiptElement = document.getElementById("receipt-content")
+    if (!receiptElement) {
+      return
+    }
+
+    // Create a print-friendly window with receipt content
+    const printWindow = window.open("", "_blank")
+    if (!printWindow) {
+      // Popup blocked, fall back to native print
+      window.print()
+      return
+    }
+
+    // Write receipt HTML to print window
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.5; color: #1a1a1a; }
+          @media print {
+            body { margin: 0; padding: 0; }
+            .no-print { display: none !important; }
           }
-        }
-      }
+        </style>
+      </head>
+      <body>
+        ${receiptElement.innerHTML}
+      </body>
+      </html>
+    `)
+    printWindow.document.close()
+
+    // Trigger print dialog when content loads
+    printWindow.onload = () => {
+      printWindow.print()
     }
   }
 
