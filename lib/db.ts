@@ -571,6 +571,7 @@ export async function getMerchantPaymentDashboardSummary(
   pending_transactions: number
   total_awaiting_amount: number
   failed_transactions: number
+  total_failed_amount: number
   cancelled_transactions: number
   total_cancelled_amount: number
   completed_transactions: number
@@ -592,6 +593,7 @@ export async function getMerchantPaymentDashboardSummary(
           COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('settlement_pending', 'paid_to_app', 'pending') THEN 1 END) as pending_transactions,
           COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('settlement_pending', 'paid_to_app', 'pending') THEN t.amount ELSE NULL END), 0) as total_awaiting_amount,
           COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('failed', 'settlement_failed') THEN 1 END) as failed_transactions,
+          COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) IN ('failed', 'settlement_failed') THEN t.amount ELSE NULL END), 0) as total_failed_amount,
           COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'cancelled' THEN 1 END) as cancelled_transactions,
           COALESCE(SUM(CASE WHEN COALESCE(r.settlement_status, t.status) = 'cancelled' THEN t.amount ELSE NULL END), 0) as total_cancelled_amount,
           COUNT(CASE WHEN COALESCE(r.settlement_status, t.status) = 'completed' THEN 1 END) as completed_transactions,
@@ -621,7 +623,7 @@ export async function getMerchantPaymentDashboardSummary(
 
     const row = candidate as Record<string, unknown>
 
-    // Normalize all 13 values via normalizePostgresNumeric
+    // Normalize all 14 values via normalizePostgresNumeric
     try {
       return {
         total_requests: normalizePostgresNumeric(row.total_requests, 'total_requests'),
@@ -631,6 +633,7 @@ export async function getMerchantPaymentDashboardSummary(
         pending_transactions: normalizePostgresNumeric(row.pending_transactions, 'pending_transactions'),
         total_awaiting_amount: normalizePostgresNumeric(row.total_awaiting_amount, 'total_awaiting_amount'),
         failed_transactions: normalizePostgresNumeric(row.failed_transactions, 'failed_transactions'),
+        total_failed_amount: normalizePostgresNumeric(row.total_failed_amount, 'total_failed_amount'),
         cancelled_transactions: normalizePostgresNumeric(row.cancelled_transactions, 'cancelled_transactions'),
         total_cancelled_amount: normalizePostgresNumeric(row.total_cancelled_amount, 'total_cancelled_amount'),
         completed_transactions: normalizePostgresNumeric(row.completed_transactions, 'completed_transactions'),
