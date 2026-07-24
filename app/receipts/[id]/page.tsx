@@ -39,8 +39,14 @@ export default function ReceiptPage() {
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [isIOS, setIsIOS] = useState(false)
   const store = useUnifiedStore()
   const merchant = store.getMerchantState()
+
+  // Detect iOS only on client-side to avoid SSR issues
+  useEffect(() => {
+    setIsIOS(/iPad|iPhone|iPod/.test(navigator.userAgent))
+  }, [])
 
   useEffect(() => {
     const fetchReceipt = async () => {
@@ -93,10 +99,13 @@ export default function ReceiptPage() {
   }
 
   const handlePrint = async () => {
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-
     if (isIOS) {
       // On iOS, use navigator.share to share the receipt
+      if (typeof navigator.share !== "function") {
+        console.error("Receipt sharing is unavailable")
+        return
+      }
+
       try {
         await navigator.share({
           title: `FlashPay Receipt ${receipt?.reference || ""}`,
@@ -115,8 +124,6 @@ export default function ReceiptPage() {
       window.print()
     }
   }
-
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
 
   if (loading) {
     return (
@@ -156,7 +163,7 @@ export default function ReceiptPage() {
         </div>
 
         {/* Receipt Card */}
-        <Card id="receipt-content" className="print:shadow-none">
+        <Card className="print:shadow-none">
           <CardHeader className="border-b print:border-b">
             <div className="flex items-start justify-between">
               <div>
