@@ -92,48 +92,31 @@ export default function ReceiptPage() {
     }
   }
 
-  const handlePrint = () => {
-    const receiptElement = document.getElementById("receipt-content")
-    if (!receiptElement) {
-      return
-    }
+  const handlePrint = async () => {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
 
-    // Create a print-friendly window with receipt content
-    const printWindow = window.open("", "_blank")
-    if (!printWindow) {
-      // Popup blocked, fall back to native print
+    if (isIOS) {
+      // On iOS, use navigator.share to share the receipt
+      try {
+        await navigator.share({
+          title: `FlashPay Receipt ${receipt?.reference || ""}`,
+          url: window.location.href,
+        })
+      } catch (error) {
+        // Silently ignore AbortError (user cancelled share)
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return
+        }
+        // Log other failures but don't block
+        console.error("Share failed:", error)
+      }
+    } else {
+      // On non-iOS, use native print
       window.print()
-      return
-    }
-
-    // Write receipt HTML to print window
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.5; color: #1a1a1a; }
-          @media print {
-            body { margin: 0; padding: 0; }
-            .no-print { display: none !important; }
-          }
-        </style>
-      </head>
-      <body>
-        ${receiptElement.innerHTML}
-      </body>
-      </html>
-    `)
-    printWindow.document.close()
-
-    // Trigger print dialog when content loads
-    printWindow.onload = () => {
-      printWindow.print()
     }
   }
+
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
 
   if (loading) {
     return (
@@ -166,7 +149,7 @@ export default function ReceiptPage() {
           <div className="flex gap-2">
             <Button onClick={handlePrint} variant="outline" size="sm">
               <Download className="h-4 w-4 mr-2" />
-              Print
+              {isIOS ? "Share Receipt" : "Print"}
             </Button>
             <BackButton />
           </div>
