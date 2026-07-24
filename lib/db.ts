@@ -559,7 +559,7 @@ export async function getMerchantBalance(merchantId: string): Promise<MerchantBa
 /**
  * Get merchant payment dashboard summary statistics
  * Read-only query: transactions LEFT JOIN receipts for settlement tracking
- * Returns 7 normalized numeric values or null on any error
+ * Returns 14 normalized numeric values or null on any error
  */
 export async function getMerchantPaymentDashboardSummary(
   merchantId: string
