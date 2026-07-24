@@ -302,7 +302,7 @@ function ProfileContent() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Total Settled Amount</p>
-                    <p className="text-lg font-semibold">${summary.totalSettledAmount.toFixed(2)}π</p>
+                    <p className="text-lg font-semibold">{summary.totalSettledAmount.toFixed(2)}π</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Completed Transactions</p>
@@ -310,7 +310,7 @@ function ProfileContent() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Total Completed Amount</p>
-                    <p className="text-lg font-semibold">${summary.totalCompletedAmount.toFixed(2)}π</p>
+                    <p className="text-lg font-semibold">{summary.totalCompletedAmount.toFixed(2)}π</p>
                   </div>
                 </div>
                 {summary.latestTransaction && (
