@@ -20,6 +20,20 @@ type TransactionSummary = {
   total_settled_amount: number
 }
 
+const dateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+})
+
+function formatTransactionDate(createdAt: string): string {
+  const date = new Date(createdAt)
+  if (!Number.isFinite(date.getTime())) {
+    return "Unavailable"
+  }
+  return dateFormatter.format(date)
+}
+
 export default function TransactionsPage() {
   const router = useRouter()
   const merchant = useMerchant()
@@ -201,9 +215,9 @@ export default function TransactionsPage() {
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
                         <Badge variant="secondary">{txn.reference}</Badge>
-                        <span className="text-sm text-muted-foreground flex items-center gap-1">
+                        <span className="text-sm text-muted-foreground flex items-center gap-1" dir="ltr" lang="en">
                           <Calendar className="h-3 w-3" />
-                          {new Date(txn.createdAt).toLocaleDateString()}
+                          {formatTransactionDate(txn.createdAt)}
                         </span>
                       </div>
                       <p className="text-sm text-muted-foreground">{txn.description}</p>
