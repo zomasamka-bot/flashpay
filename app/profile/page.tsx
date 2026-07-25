@@ -13,6 +13,34 @@ import { useMerchant } from "@/lib/use-merchant"
 import { unifiedStore } from "@/lib/unified-store"
 import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet, Loader2 } from "lucide-react"
 
+type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
+
+const profileDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+})
+
+function formatProfileDateTime(createdAt: string): string {
+  const date = new Date(createdAt)
+  if (!Number.isFinite(date.getTime())) {
+    return "Unavailable"
+  }
+  return profileDateFormatter.format(date)
+}
+
+function mapSettlementStatus(status: SettlementStatus): string {
+  if (status === "settled_to_merchant") return "Settled"
+  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "Processing"
+  if (status === "failed" || status === "settlement_failed") return "Failed"
+  if (status === "cancelled") return "Cancelled"
+  if (status === "completed") return "Legacy Completed"
+  return "Other"
+}
+
 interface ProfileSummary {
   totalTransactions: number
   settledTransactions: number
@@ -344,11 +372,11 @@ function ProfileContent() {
                         <span className="text-muted-foreground">Amount:</span> π{summary.latestTransaction.amount}
                       </p>
                       <p>
-                        <span className="text-muted-foreground">Date:</span> {summary.latestTransaction.createdAt}
+                        <span className="text-muted-foreground">Date:</span> {formatProfileDateTime(summary.latestTransaction.createdAt)}
                       </p>
                       {summary.latestTransaction.settlementStatus && (
                         <p>
-                          <span className="text-muted-foreground">Status:</span> {summary.latestTransaction.settlementStatus}
+                          <span className="text-muted-foreground">Status:</span> {mapSettlementStatus(summary.latestTransaction.settlementStatus)}
                         </p>
                       )}
                     </div>
