@@ -236,6 +236,16 @@ export default function MerchantPaymentsPage() {
     }
   }
 
+  const mapStatusLabel = (status: string): string => {
+    const lowerStatus = status.toLowerCase()
+    if (lowerStatus === "settled_to_merchant") return "Settled"
+    if (lowerStatus === "pending" || lowerStatus === "paid_to_app" || lowerStatus === "settlement_pending") return "Processing"
+    if (lowerStatus === "failed" || lowerStatus === "settlement_failed") return "Failed"
+    if (lowerStatus === "cancelled") return "Cancelled"
+    if (lowerStatus === "completed") return "Legacy Completed"
+    return "Other"
+  }
+
   const formatDate = (dateStr: string) => {
     try {
       return new Date(dateStr).toLocaleDateString("en-US", {
@@ -644,7 +654,7 @@ export default function MerchantPaymentsPage() {
                           {payment.id.substring(0, 8)}...
                         </div>
                         <Badge className={getStatusColor(payment.status)}>
-                          {payment.status}
+                          {mapStatusLabel(payment.status)}
                         </Badge>
                       </div>
                       <p className="text-sm text-muted-foreground mt-1">
