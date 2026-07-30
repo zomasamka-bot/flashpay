@@ -51,6 +51,8 @@ interface ProfileSummary {
   totalFailedAmount: number
   cancelledTransactions: number
   totalCancelledAmount: number
+  completedTransactions: number
+  totalCompletedAmount: number
   latestTransaction: {
     transactionId: string
     reference: string
@@ -360,6 +362,18 @@ function ProfileContent() {
                     <p className="text-xs text-muted-foreground">Total Cancelled Amount</p>
                     <p className="text-lg font-semibold">{summary.totalCancelledAmount.toFixed(2)}π</p>
                   </div>
+                  {(summary.completedTransactions > 0 || summary.totalCompletedAmount > 0) && (
+                    <>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Legacy Completed Transactions</p>
+                        <p className="text-lg font-semibold">{summary.completedTransactions}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Legacy Completed Amount</p>
+                        <p className="text-lg font-semibold">{summary.totalCompletedAmount.toFixed(2)}π</p>
+                      </div>
+                    </>
+                  )}
                 </div>
                 {summary.latestTransaction && (
                   <div className="pt-3 border-t">

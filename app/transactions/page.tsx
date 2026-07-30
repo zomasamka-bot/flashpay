@@ -19,6 +19,8 @@ type TransactionSummary = {
   total_failed_amount: number
   total_cancelled_amount: number
   total_settled_amount: number
+  completed_transactions: number
+  total_completed_amount: number
 }
 
 type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
@@ -235,6 +237,18 @@ export default function TransactionsPage() {
                 <span className="text-muted-foreground">Total Cancelled Amount:</span>
                 <span className="font-semibold">{summary.total_cancelled_amount.toFixed(2)}π</span>
               </div>
+              {(summary.completed_transactions > 0 || summary.total_completed_amount > 0) && (
+                <>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Legacy Completed Transactions:</span>
+                    <span className="font-semibold">{summary.completed_transactions}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Legacy Completed Amount:</span>
+                    <span className="font-semibold">{summary.total_completed_amount.toFixed(2)}π</span>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
         )}

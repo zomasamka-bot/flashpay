@@ -665,6 +665,8 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
   totalFailedAmount: number
   cancelledTransactions: number
   totalCancelledAmount: number
+  completedTransactions: number
+  totalCompletedAmount: number
   latestTransaction: {
     transactionId: string
     amount: number
@@ -687,7 +689,9 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
         COUNT(CASE WHEN r.settlement_status IN ('failed', 'settlement_failed') THEN 1 END) as failed_transactions,
         COALESCE(SUM(CASE WHEN r.settlement_status IN ('failed', 'settlement_failed') THEN t.amount ELSE NULL END), 0) as total_failed_amount,
         COUNT(CASE WHEN r.settlement_status = 'cancelled' THEN 1 END) as cancelled_transactions,
-        COALESCE(SUM(CASE WHEN r.settlement_status = 'cancelled' THEN t.amount ELSE NULL END), 0) as total_cancelled_amount
+        COALESCE(SUM(CASE WHEN r.settlement_status = 'cancelled' THEN t.amount ELSE NULL END), 0) as total_cancelled_amount,
+        COUNT(CASE WHEN r.settlement_status = 'completed' THEN 1 END) as completed_transactions,
+        COALESCE(SUM(CASE WHEN r.settlement_status = 'completed' THEN t.amount ELSE NULL END), 0) as total_completed_amount
       FROM transactions t
       LEFT JOIN receipts r ON r.transaction_id = t.id
       WHERE t.merchant_id = $1`,
@@ -767,6 +771,8 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
       totalFailedAmount: normalizePostgresNumeric(statsRow.total_failed_amount, 'stats.total_failed_amount'),
       cancelledTransactions: normalizePostgresNumeric(statsRow.cancelled_transactions, 'stats.cancelled_transactions'),
       totalCancelledAmount: normalizePostgresNumeric(statsRow.total_cancelled_amount, 'stats.total_cancelled_amount'),
+      completedTransactions: normalizePostgresNumeric(statsRow.completed_transactions, 'stats.completed_transactions'),
+      totalCompletedAmount: normalizePostgresNumeric(statsRow.total_completed_amount, 'stats.total_completed_amount'),
       latestTransaction,
     }
   } catch (error) {
