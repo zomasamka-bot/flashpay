@@ -37,7 +37,7 @@
 
 **Replaces all three paths with ONE implementation:**
 
-```
+\`\`\`
 STAGE 0: Check if already settled_to_merchant
   └─ If yes → return success (idempotent)
 
@@ -60,7 +60,7 @@ STAGE 4: DB Reconciliation
   └─ If already dbRecorded → skip
   └─ If successful → set status=settled_to_merchant
   └─ If failed → set requiresDbReconciliation=true
-```
+\`\`\`
 
 **Key properties:**
 - ✅ Resumes from stored stage (recovery mode)
@@ -97,7 +97,7 @@ STAGE 4: DB Reconciliation
 ## PROOF: NO SECOND HORIZON PATH REMAINS
 
 **Grep confirmation:**
-```
+\`\`\`
 BEFORE:  3 files with submitTransaction calls
 - app/api/pi/a2u/route.ts (line 1212)
 - app/api/pi/complete/route.ts (inline, removed)
@@ -105,7 +105,7 @@ BEFORE:  3 files with submitTransaction calls
 
 AFTER:   1 file with submitTransaction call
 - lib/a2u-executor.ts (stage2SignAndSubmit only)
-```
+\`\`\`
 
 **Audit trail:**
 - ✅ All inline Horizon submissions removed from route handlers

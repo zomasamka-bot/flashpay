@@ -25,12 +25,23 @@ const receiptTimeFormatter = new Intl.DateTimeFormat("en-US", {
   hour12: true,
 })
 
+type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
+
 function formatReceiptDateTime(timestamp: string): string {
   const date = new Date(timestamp)
   if (!Number.isFinite(date.getTime())) {
     return "Unavailable"
   }
   return `${receiptDateFormatter.format(date)}, ${receiptTimeFormatter.format(date)}`
+}
+
+function mapSettlementStatus(status: SettlementStatus): string {
+  if (status === "settled_to_merchant") return "Settled"
+  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "Processing"
+  if (status === "failed" || status === "settlement_failed") return "Failed"
+  if (status === "cancelled") return "Cancelled"
+  if (status === "completed") return "Legacy Completed"
+  return "Other"
 }
 
 export default function ReceiptPage() {
@@ -187,7 +198,7 @@ export default function ReceiptPage() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Status</p>
                 {receipt.settlementStatus && (
                   <Badge variant="default" className="mt-1">
-                    {receipt.settlementStatus}
+                    {mapSettlementStatus(receipt.settlementStatus)}
                   </Badge>
                 )}
               </div>

@@ -636,7 +636,7 @@ export default function MerchantPaymentsPage() {
                   <div
                     key={payment.id}
                     onClick={() => router.push(`/receipts/${payment.id}`)}
-                    className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-slate-900/50 cursor-pointer transition-colors"
+                    className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-slate-900/50 cursor-pointer transition-colors gap-4 sm:gap-0"
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3 flex-wrap">
@@ -647,7 +647,7 @@ export default function MerchantPaymentsPage() {
                           {payment.status}
                         </Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground mt-1 truncate">
+                      <p className="text-sm text-muted-foreground mt-1">
                         {payment.note || "No note"}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
@@ -655,7 +655,7 @@ export default function MerchantPaymentsPage() {
                       </p>
                     </div>
 
-                    <div className="text-right ml-4">
+                    <div className="text-left sm:text-right sm:ml-4">
                       <div className="text-lg font-bold">
                         {payment.amount.toFixed(2)}π
                       </div>
@@ -666,7 +666,7 @@ export default function MerchantPaymentsPage() {
                       )}
                     </div>
 
-                    <ChevronRight className="h-5 w-5 text-muted-foreground ml-4 flex-shrink-0" />
+                    <ChevronRight className="h-5 w-5 text-muted-foreground sm:ml-4 flex-shrink-0 hidden sm:block" />
                   </div>
                 ))}
               </div>

@@ -56,9 +56,9 @@
 - ✅ No console.log("[v0]") debug statements remain in production code
 
 **Risk Found:** Line in `canClientRetryPayment()` has debug log:
-```typescript
+\`\`\`typescript
 console.log("[v0] Payment blocked from retry: terminal settlement_failed state detected")
-```
+\`\`\`
 
 ---
 
@@ -234,9 +234,9 @@ console.log("[v0] Payment blocked from retry: terminal settlement_failed state d
 **Severity:** LOW  
 **Type:** Code cleanup
 
-```typescript
+\`\`\`typescript
 console.log("[v0] Payment blocked from retry: terminal settlement_failed state detected")
-```
+\`\`\`
 
 **Fix required:** Remove this debug statement
 

@@ -21,7 +21,7 @@ The payment status and retry system is **fully aligned** across all layers (API,
 
 ## AUTHORITATIVE STATUS ENUM (lib/types.ts)
 
-```typescript
+\`\`\`typescript
 type PaymentStatus = 
   | "pending"              // Fresh state, awaiting Pi Wallet
   | "failed"               // Pre-U2A failure, client may retry with new U2A
@@ -30,7 +30,7 @@ type PaymentStatus =
   | "settlement_pending"   // ⚠️ PROCESSING: A2U transfer in progress
   | "settled_to_merchant"  // ✅ FINAL: Settlement complete, immutable
   | "settlement_failed"    // Error: Retryable unless a2uTxid or horizonSuccessFlag set
-```
+\`\`\`
 
 ---
 

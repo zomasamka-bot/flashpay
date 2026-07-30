@@ -23,7 +23,7 @@ BUILD BLOCKERS - EXACT FIXES APPLIED
 4. Contained `JSON.parse(existingData)` without null check
 
 **Removed Code:**
-```typescript
+\`\`\`typescript
 if (isKvConfigured) {
   try {
     const existingData = await redis.get(`payment:${paymentId}`)
@@ -38,7 +38,7 @@ if (isKvConfigured) {
     console.error("[API] Error checking existing payment:", checkError)
   }
 }
-```
+\`\`\`
 
 **Impact:** Removed 1 unnecessary try/catch, 1 unsafe JSON.parse, restored code clarity
 

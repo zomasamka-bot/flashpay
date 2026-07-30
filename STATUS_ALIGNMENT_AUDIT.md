@@ -2,10 +2,10 @@
 
 ## AUTHORITATIVE STATUS ENUM (7 values only)
 
-```typescript
+\`\`\`typescript
 type PaymentStatus = "pending" | "failed" | "cancelled" | "paid_to_app" | 
                      "settlement_pending" | "settled_to_merchant" | "settlement_failed"
-```
+\`\`\`
 
 ## FINAL STATUS/RETRY DECISION TABLE
 

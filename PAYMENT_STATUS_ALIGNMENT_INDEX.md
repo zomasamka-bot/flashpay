@@ -41,7 +41,7 @@
 ## 🎯 QUICK REFERENCE: STATUS ENUM & RULES
 
 ### The 7 Payment Statuses (lib/types.ts)
-```
+\`\`\`
 1. pending              — Fresh, awaiting Pi Wallet
 2. failed              — Pre-U2A failure, retryable
 3. cancelled           — User cancelled, retryable
@@ -49,7 +49,7 @@
 5. settlement_pending  — A2U in progress (poll only)
 6. settled_to_merchant — ✅ FINAL SUCCESS (immutable)
 7. settlement_failed   — A2U failed (retryable unless terminal flags)
-```
+\`\`\`
 
 ### The 5 Critical Rules
 1. **Terminal flags block everything** — If a2uTxid OR horizonSuccessFlag exist
@@ -206,7 +206,7 @@
 - **Allows:** failed, cancelled, settlement_failed (without flags)
 
 ### Status Routing
-```
+\`\`\`
 pending → show poll spinner
 failed/cancelled → show retry button (new U2A)
 paid_to_app → poll /api/payments/[id]
@@ -214,16 +214,16 @@ settlement_pending → poll /api/payments/[id]
 settled_to_merchant → show "Paid" receipt
 settlement_failed (no flags) → show retry button (new U2A)
 settlement_failed (+ flags) → show recovery link
-```
+\`\`\`
 
 ### Blocking Rules
-```
+\`\`\`
 Rule 1: a2uTxid OR horizonSuccessFlag → BLOCK ALL operations
 Rule 2: paid_to_app OR settlement_pending → POLL ONLY
 Rule 3: Only pending → Start fresh U2A
 Rule 4: settled_to_merchant → IMMUTABLE
 Rule 5: settlementStage → INTERNAL ONLY
-```
+\`\`\`
 
 ---
 

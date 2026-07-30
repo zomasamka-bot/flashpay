@@ -5,7 +5,7 @@
 
 ## 📊 COMPREHENSIVE DECISION TABLE
 
-```
+\`\`\`
 ┌──────────────────────┬──────────┬────────────┬────────────┬──────────┬──────────────────┬─────────────────────┐
 │ Current Status       │ Category │ Can Retry? │ Can Poll?  │ Can U2A? │ Blocking Flags   │ Next Action         │
 ├──────────────────────┼──────────┼────────────┼────────────┼──────────┼──────────────────┼─────────────────────┤
@@ -35,7 +35,7 @@
 │ (+ a2uTxid)          │ (ON-CHAIN)│(on-chain) │            │          │ OR                │ → /api/recovery/[id]│
 │                      │          │            │            │          │ horizonSuccessFlag│                     │
 └──────────────────────┴──────────┴────────────┴────────────┴──────────┴──────────────────┴─────────────────────┘
-```
+\`\`\`
 
 ---
 
@@ -85,7 +85,7 @@
 
 ### For Client Retry Click
 
-```
+\`\`\`
 payment = fetch from Redis
   ↓
 if (a2uTxid OR horizonSuccessFlag)
@@ -102,11 +102,11 @@ else if (getRetryDecision().canRetry === true)
   ↓
 else
   → 🔴 BLOCKED: Show error message
-```
+\`\`\`
 
 ### For Payment Poll/Refresh
 
-```
+\`\`\`
 payment = fetch from Redis
   ↓
 if (status === "paid_to_app" OR "settlement_pending")
@@ -120,11 +120,11 @@ else if (status === "settled_to_merchant")
   ↓
 else
   → ⏹️  STOP: Payment not in processing state
-```
+\`\`\`
 
 ### For Create Fresh U2A
 
-```
+\`\`\`
 if (status !== "pending")
   → 🔴 REJECT: Current status doesn't allow fresh U2A
   ↓
@@ -136,7 +136,7 @@ if (horizonSuccessFlag === true)
   ↓
 else
   → ✅ ALLOW: Call /api/pi/approve for fresh Pi Wallet
-```
+\`\`\`
 
 ---
 
@@ -203,45 +203,45 @@ else
 ## 🎓 EXAMPLES BY STATUS
 
 ### Example 1: Fresh Payment (pending)
-```
+\`\`\`
 Status: pending
 Action: Show retry button (new U2A)
 Reason: Fresh payment, not yet processed
-```
+\`\`\`
 
 ### Example 2: Processing U2A (paid_to_app)
-```
+\`\`\`
 Status: paid_to_app
 a2uTxid: undefined
 Action: Show "Processing..." spinner, poll /api/payments/[id]
 Reason: U2A done, settling A2U in progress
-```
+\`\`\`
 
 ### Example 3: Horizon Sent (settlement_failed + a2uTxid)
-```
+\`\`\`
 Status: settlement_failed
 a2uTxid: "abcd1234..."
 horizonSuccessFlag: false
 Action: Show recovery link → /api/recovery/[id]
 Reason: Horizon received transaction, must recover server-side
-```
+\`\`\`
 
 ### Example 4: Horizon Confirmed (settlement_failed + horizonSuccessFlag)
-```
+\`\`\`
 Status: settlement_failed
 a2uTxid: "abcd1234..."
 horizonSuccessFlag: true
 Action: Show recovery link → /api/recovery/[id]
 Reason: Horizon confirmed, must complete settlement server-side
-```
+\`\`\`
 
 ### Example 5: Final Success (settled_to_merchant)
-```
+\`\`\`
 Status: settled_to_merchant
 a2uTxid: "abcd1234..."
 Action: Show "Paid" badge + receipt, no further action
 Reason: Settlement complete, immutable final state
-```
+\`\`\`
 
 ---
 

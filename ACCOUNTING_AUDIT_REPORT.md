@@ -10,7 +10,7 @@ Three call sites of `recordA2UTransactionAtomic()` identified. One has fallback 
 ### Status: ✅ STRICT (No changes needed)
 
 **Current Implementation:**
-```typescript
+\`\`\`typescript
 const dbAppCommission = typeof checkpoint.appCommission === 'number' ? checkpoint.appCommission : 0
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: checkpoint.piPaymentId,
@@ -24,7 +24,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: checkpoint.horizonFeeCharged,
   appCommission: dbAppCommission,
 })
-```
+\`\`\`
 
 **Analysis:**
 - ✅ All fields from Redis checkpoint (authoritative source)
@@ -45,7 +45,7 @@ const dbResult = await recordA2UTransactionAtomic({
 ### Status: ❌ FALLBACK ABUSE & WRONG FIELD
 
 **Current Implementation:**
-```typescript
+\`\`\`typescript
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: ctx.piPaymentId,
   u2aTxid: ctx.payment.u2aTxid,
@@ -58,7 +58,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: ctx.payment.horizonFeeCharged || 0,  // ❌ || 0 FALLBACK
   appCommission: 0,                                         // ❌ HARDCODED - no validation
 })
-```
+\`\`\`
 
 **Problems:**
 1. **`horizonFeeCharged: ctx.payment.horizonFeeCharged || 0`** — Fallback masks missing data
@@ -79,7 +79,7 @@ const dbResult = await recordA2UTransactionAtomic({
 ### Status: ✅ STRICT (Already implemented correctly)
 
 **Current Implementation:**
-```typescript
+\`\`\`typescript
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: payment.piPaymentId,
   u2aTxid: financialData.u2aTxid,
@@ -92,7 +92,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: financialData.horizonFeeCharged,
   appCommission: financialData.appCommission,
 })
-```
+\`\`\`
 
 **Analysis:**
 - ✅ All fields from `financialData` (validated via `validateFinancialData()`)
@@ -111,7 +111,7 @@ const dbResult = await recordA2UTransactionAtomic({
 ## Key Idempotency Safeguards in `recordA2UTransactionAtomic()`
 
 ### 1. Strict Input Validation (Lines 674-717)
-```typescript
+\`\`\`typescript
 // NO empty strings, NO fallbacks, NO undefined
 if (!params.u2aIdentifier || typeof params.u2aIdentifier !== 'string') {
   throw new Error('u2aIdentifier is required...')
@@ -119,10 +119,10 @@ if (!params.u2aIdentifier || typeof params.u2aIdentifier !== 'string') {
 if (typeof params.appCommission !== 'number' || !Number.isFinite(params.appCommission)) {
   throw new Error('appCommission is required...')
 }
-```
+\`\`\`
 
 ### 2. Transaction Lookup & Verification (Lines 763-781)
-```typescript
+\`\`\`typescript
 const existingTxCheck = await tx`
   SELECT id, merchant_id, merchant_uid, amount FROM transactions WHERE payment_id = ${params.u2aIdentifier}
 `
@@ -134,33 +134,33 @@ if (existingTxCheck && existingTxCheck.length > 0) {
   }
   // Verify all identifiers and amounts match
 }
-```
+\`\`\`
 
 ### 3. Receipt Insertion with Conflict Handling (Line 836)
-```typescript
+\`\`\`typescript
 ON CONFLICT (transaction_id) DO NOTHING
 RETURNING id
-```
+\`\`\`
 This ensures merchant balance credit only increments on NEW receipt (line 842: `receiptWasInserted`).
 
 ### 4. Merchant Balance Credit Guard (Lines 846-863)
-```typescript
+\`\`\`typescript
 const receiptWasInserted = receiptResult && receiptResult.length > 0
 
 if (receiptWasInserted) {
   // Only credit merchant if receipt was NEW
   await tx`INSERT INTO merchant_balances...`
 }
-```
+\`\`\`
 
 ### 5. Atomic Transaction Context
-```typescript
+\`\`\`typescript
 const result = await client.begin(async (tx) => {
   // ALL operations in single transaction
   // On error: entire transaction rolls back
   // On success: all committed atomically
 })
-```
+\`\`\`
 
 ### 6. Post-DB Redis Persistence
 - `dbRecorded=true` flag set ONLY AFTER DB commit succeeds

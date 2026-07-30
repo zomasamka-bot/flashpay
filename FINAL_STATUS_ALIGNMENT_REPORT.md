@@ -17,7 +17,7 @@ Payment statuses and retry logic have been **audited and unified** across all 14
 
 ## STATUS ENUM (Authoritative Source: lib/types.ts)
 
-```typescript
+\`\`\`typescript
 type PaymentStatus = 
   | "pending"              // Fresh, awaiting Pi Wallet
   | "failed"               // Pre-U2A failure, retryable
@@ -26,7 +26,7 @@ type PaymentStatus =
   | "settlement_pending"   // A2U in progress (poll only)
   | "settled_to_merchant"  // ✅ ONLY final success, immutable
   | "settlement_failed"    // A2U failed (retryable OR terminal)
-```
+\`\`\`
 
 ---
 

@@ -6,15 +6,15 @@
 **Location:** Lines 390-429
 
 ### Deletion: Fallback Abuse
-```diff
+\`\`\`diff
 - horizonFeeCharged: ctx.payment.horizonFeeCharged || 0,  ❌ REMOVED
 - appCommission: 0,                                        ❌ REMOVED
-```
+\`\`\`
 
 ### Addition: Pre-Transaction Validation Block
 **Before line 405 (original call to recordA2UTransactionAtomic):**
 
-```typescript
+\`\`\`typescript
 // CRITICAL VALIDATION: Reject if horizonFeeCharged missing - NO fallback to 0
 if (typeof financialData.horizonFeeCharged !== 'number' || !Number.isFinite(financialData.horizonFeeCharged)) {
   console.error("[A2U Stage4] ❌ AUDIT FAILURE: horizonFeeCharged must be a finite number, got:", financialData.horizonFeeCharged)
@@ -32,11 +32,11 @@ console.log("[A2U Stage4]   - customerAmount:", financialData.customerAmount)
 console.log("[A2U Stage4]   - merchantAmount:", financialData.merchantAmount)
 console.log("[A2U Stage4]   - horizonFeeCharged:", financialData.horizonFeeCharged)
 console.log("[A2U Stage4]   - appCommission:", financialData.appCommission)
-```
+\`\`\`
 
 ### Replacement: Correct Parameter Mapping
 **Old parameters (Lines 405-416):**
-```typescript
+\`\`\`typescript
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: ctx.piPaymentId,
   u2aTxid: ctx.payment.u2aTxid,
@@ -49,10 +49,10 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: ctx.payment.horizonFeeCharged || 0,
   appCommission: 0,
 })
-```
+\`\`\`
 
 **New parameters (Lines 424-436):**
-```typescript
+\`\`\`typescript
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: ctx.piPaymentId,
   u2aTxid: financialData.u2aTxid,                    // ✅ From validated data
@@ -65,7 +65,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: financialData.horizonFeeCharged, // ✅ NO || 0
   appCommission: financialData.appCommission,         // ✅ NO hardcoded 0
 })
-```
+\`\`\`
 
 ### Lines Changed
 - **Added:** Lines 407-425 (19 new validation lines + audit logging)
@@ -109,20 +109,20 @@ const dbResult = await recordA2UTransactionAtomic({
 ## Proof: No Second Horizon Path
 
 ### Grep Search: All `submitTransaction` calls
-```
+\`\`\`
 lib/a2u-executor.ts (ONLY ONE)
 ├─ Line ~250: submitResult = await submitTransaction()
 
 Found 1 file with Horizon submission
-```
+\`\`\`
 
 ### Grep Search: All `horizonServer.submit` calls
-```
+\`\`\`
 No results (submitTransaction wrapper abstracts Horizon)
-```
+\`\`\`
 
 ### Grep Search: All `piCompleteResponse` calls (Pi /complete)
-```
+\`\`\`
 app/api/pi/complete/route.ts
 └─ Line ~675: piCompleteResponse = await fetch(.../v2/payments/complete)
 
@@ -133,10 +133,10 @@ Found 2 files, but:
 - /api/pi/complete uses unified executor (it IS the executor's caller)
 - /lib/a2u-executor is THE executor
 - No duplicate implementation (one executor, one result flow)
-```
+\`\`\`
 
 ### Proof of Single Source of Truth
-```
+\`\`\`
 Callers of recordA2UTransactionAtomic:
 
 1. /app/api/pi/complete/route.ts:598
@@ -159,13 +159,13 @@ NONE of the above call each other (no daisy-chaining):
 KEY: All three INDEPENDENTLY call recordA2UTransactionAtomic()
      with validated financial data
      NO delegation chain = NO lost data path = NO duplicate logic
-```
+\`\`\`
 
 ---
 
 ## Proof: No Duplicate Horizon Signing
 
-```
+\`\`\`
 Stage 2 in unified executor (a2u-executor.ts):
 └─ async function stage2SignAndSubmit() (line ~230)
    └─ Checks: if (ctx.payment.a2uTxid) return { success: true }
@@ -181,13 +181,13 @@ Recovery flow:
 No other Horizon path exists:
 └─ grep -r "sign.*transaction\|stellarSDK.*sign" finds only Stage 2
 └─ Proof: Only one signing implementation
-```
+\`\`\`
 
 ---
 
 ## Proof: No Duplicate DB Recording
 
-```
+\`\`\`
 recordA2UTransactionAtomic() is SOLE implementation:
 
 Called by:
@@ -205,26 +205,26 @@ Idempotency mechanism (inside recordA2UTransactionAtomic):
 
 Proof: One DB function + three validated callers + conflict guards
        = Perfect idempotency, impossible to duplicate credit
-```
+\`\`\`
 
 ---
 
 ## Validation Before Transaction Entry
 
 ### Call Site 1: /app/api/pi/complete (Lines 567-592)
-```typescript
+\`\`\`typescript
 // Validation happens BEFORE line 598 call
 const checkpoint = ...  // Load from Redis
 if (!checkpoint.customerAmount) return error
 if (!checkpoint.merchantAmount) return error
 if (typeof checkpoint.horizonFeeCharged !== 'number') return error
 // All checks complete, then call recordA2UTransactionAtomic at line 598
-```
+\`\`\`
 
 **Status:** ✅ STRICT
 
 ### Call Site 2: /lib/a2u-executor (Lines 397-424) — FIXED
-```typescript
+\`\`\`typescript
 // NEW: Validation happens BEFORE call
 const validation = validateFinancialData(ctx.payment)
 if (!validation.success) return error  // Line 398-400
@@ -236,12 +236,12 @@ if (typeof financialData.horizonFeeCharged !== 'number') return error  // Line 4
 if (typeof financialData.appCommission !== 'number') return error      // Line 412
 
 // Then call recordA2UTransactionAtomic at line 424 with validated data
-```
+\`\`\`
 
 **Status:** ✅ FIXED (was ❌)
 
 ### Call Site 3: /lib/a2u-recovery-service (Lines 227-256)
-```typescript
+\`\`\`typescript
 // Validation happens BEFORE line 265 call
 const validation = validateFinancialData(payment)
 if (!validation.success) return error
@@ -252,7 +252,7 @@ if (!payment.a2uPaymentId) return error
 // ... all fields checked
 
 // Then call recordA2UTransactionAtomic at line 265 with validated data
-```
+\`\`\`
 
 **Status:** ✅ STRICT
 
@@ -300,7 +300,7 @@ if (!payment.a2uPaymentId) return error
 
 ## Verification Commands
 
-```bash
+\`\`\`bash
 # Find all calls to recordA2UTransactionAtomic
 grep -r "recordA2UTransactionAtomic(" .
 # Result: 3 files (api/pi/complete, lib/a2u-executor, lib/a2u-recovery-service)
@@ -320,7 +320,7 @@ grep -r "submitTransaction\|horizonServer.submit" .
 # Find all Pi /complete calls
 grep -r "v2/payments.*complete" .
 # Result: 2 files, but unified (one executor, one caller chain)
-```
+\`\`\`
 
 ---
 

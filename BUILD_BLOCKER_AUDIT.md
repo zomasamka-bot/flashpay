@@ -12,7 +12,7 @@ After generating a NEW UUID with `crypto.randomUUID()`, the code checks if a pay
 4. Any existing record would be from a different flow entirely
 
 REMOVED CODE:
-```typescript
+\`\`\`typescript
 // CRITICAL: Check if a payment with this ID already exists and has a2uTxid or horizonSuccessFlag
 // This blocks resubmission of payments that have already been submitted to Horizon
 if (isKvConfigured) {
@@ -36,7 +36,7 @@ if (isKvConfigured) {
     // Continue - it's likely just a cache miss
   }
 }
-```
+\`\`\`
 
 IMPACT: 1 useless try/catch removed, 1 unneeded JSON.parse removed, code clarity improved
 
@@ -72,10 +72,10 @@ AFFECTED FILES (15 total):
 - /lib/unified-store.ts:319 - Uses JSON.parse on event.newValue (assumed from JSON.stringify)
 
 ### RECOMMENDED PATTERN (adopt universally):
-```typescript
+\`\`\`typescript
 const data = await redis.get(key)
 const parsed = data ? (typeof data === 'string' ? JSON.parse(data) : data) : null
-```
+\`\`\`
 
 This handles:
 - redis.get returning string from Upstash

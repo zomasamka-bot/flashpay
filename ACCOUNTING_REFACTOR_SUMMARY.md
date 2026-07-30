@@ -15,7 +15,7 @@ Goal: Unify to ZERO fallbacks, NO defaults before transaction entry, strict idem
 ### Call Site 2: `/lib/a2u-executor.ts` stage4ReconcileDB() — CRITICAL FIX
 
 **BEFORE (Lines 405-416):**
-```typescript
+\`\`\`typescript
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: ctx.piPaymentId,
   u2aTxid: ctx.payment.u2aTxid,
@@ -28,10 +28,10 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: ctx.payment.horizonFeeCharged || 0,   // ❌ || 0 FALLBACK
   appCommission: 0,                                         // ❌ HARDCODED 0
 })
-```
+\`\`\`
 
 **AFTER (Lines 405-436):**
-```typescript
+\`\`\`typescript
 // STRICT: Validate ALL fields first
 const validation = validateFinancialData(ctx.payment)
 if (!validation.success) {
@@ -66,7 +66,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: financialData.horizonFeeCharged,     // ✅ NO || 0
   appCommission: financialData.appCommission,             // ✅ NO hardcoded 0
 })
-```
+\`\`\`
 
 **Changes:**
 1. ✅ Removed `|| 0` fallback — reject if horizonFeeCharged undefined
@@ -100,10 +100,10 @@ All three call sites now guaranteed idempotent via:
 **Where:** Caller validates ALL fields before function call
 **What:** Reject missing/invalid values BEFORE transaction entry
 **Example:**
-```
+\`\`\`
 horizonFeeCharged: undefined → REJECTED before DB call
 appCommission: 0 (hardcoded) → Now VALIDATED, not blindly passed
-```
+\`\`\`
 
 ### 2. Transaction Entry Verification
 **Where:** DB function checks for existing transaction by u2aIdentifier
@@ -198,7 +198,7 @@ appCommission: 0 (hardcoded) → Now VALIDATED, not blindly passed
 ## Proof of Unification
 
 ### Before
-```
+\`\`\`
 /api/pi/a2u/route.ts
 ├─ New payment path (full flow)
 ├─ Ongoing payment reuse path (reuse A2U)
@@ -217,10 +217,10 @@ appCommission: 0 (hardcoded) → Now VALIDATED, not blindly passed
 
 /lib/a2u-recovery-service.ts::completePiA2UAndReconcile()
 └─ Standalone Pi /complete + DB record (DUPLICATE)
-```
+\`\`\`
 
 ### After
-```
+\`\`\`
 /lib/a2u-executor.ts (SINGLE SOURCE OF TRUTH)
 ├─ Stage 0: Check if already settled
 ├─ Stage 1: Create/reuse/detect A2U payment
@@ -238,7 +238,7 @@ Idempotency:
 ├─ Horizon re-submission: NEVER (txid check)
 ├─ Pi /complete re-call: NEVER (piCompleted check)
 └─ DB re-record: NEVER (receipt conflict + receiptWasInserted guard)
-```
+\`\`\`
 
 ---
 

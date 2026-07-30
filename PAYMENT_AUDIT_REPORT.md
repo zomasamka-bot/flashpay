@@ -40,7 +40,7 @@
 **Total lines removed:** 15 (a2u-executor.ts dead code)
 
 ### Dead Code in a2u-executor.ts (Lines 92-105)
-```typescript
+\`\`\`typescript
 // FOR settled_to_merchant, use stored txid and fee
 const txid = ctx.payment.a2uTxid
 const fee = ctx.payment.horizonFeeCharged
@@ -54,7 +54,7 @@ if (!ctx.payment.a2uPaymentId || typeof ctx.payment.a2uPaymentId !== 'string') {
   return { success: false, status: "error", error: "Settled payment missing required a2uPaymentId" }
 }
 return { success: true, status: "settled_to_merchant", txidFromHorizon: txid, horizonFeeCharged: fee, a2uPaymentId: ctx.payment.a2uPaymentId }
-```
+\`\`\`
 
 **Reason:** Unreachable after Stage 0 early return. Violated unified response contract (success: true).
 
@@ -94,7 +94,7 @@ return { success: true, status: "settled_to_merchant", txidFromHorizon: txid, ho
 ## 4. FINALITY PREDICATE AUDIT
 
 **Exact predicate (lib/a2u-response.ts lines 107-112):**
-```typescript
+\`\`\`typescript
 const isFinalSuccess =
   payment.status === "settled_to_merchant" &&
   payment.piCompleted === true &&
@@ -102,7 +102,7 @@ const isFinalSuccess =
   payment.requiresDbReconciliation !== true &&
   !!payment.u2aTxid &&
   !!payment.a2uTxid
-```
+\`\`\`
 
 **Enforced locations:**
 1. buildA2USuccessResponse() - Returns success: true ONLY when all 6 conditions met

@@ -56,9 +56,9 @@
 ### ✅ submitTransaction - EXISTS IN ONLY ONE PLACE
 
 **Location:** `/lib/a2u-executor.ts`
-```
+\`\`\`
 grep -r "submitTransaction" --include="*.ts" --include="*.tsx"
-```
+\`\`\`
 
 **Results:**
 - `lib/a2u-executor.ts` — Stage 2: Sign and submit (ONLY IMPLEMENTATION)
@@ -75,9 +75,9 @@ grep -r "submitTransaction" --include="*.ts" --include="*.tsx"
 ### ✅ Pi /complete - EXISTS IN ONLY ONE PLACE
 
 **Location:** `/lib/a2u-executor.ts`
-```
+\`\`\`
 grep -r "/v2/payments.*complete" --include="*.ts" --include="*.tsx"
-```
+\`\`\`
 
 **Results:**
 - `app/api/pi/complete/route.ts` — Separate recovery route (NOT A2U route)
@@ -143,7 +143,7 @@ grep -r "/v2/payments.*complete" --include="*.ts" --include="*.tsx"
 
 ## VERIFICATION COMMANDS
 
-```bash
+\`\`\`bash
 # Verify submitTransaction is ONLY in executor
 grep -rn "submitTransaction" app/ lib/ --include="*.ts" --include="*.tsx"
 # Should return ONLY: lib/a2u-executor.ts (plus tests/docs)
@@ -156,7 +156,7 @@ grep -rn "/v2/payments.*complete" app/ lib/ --include="*.ts" --include="*.tsx"
 # Verify route file is lean
 wc -l app/api/pi/a2u/route.ts
 # Should return: 276 app/api/pi/a2u/route.ts (down from 2019)
-```
+\`\`\`
 
 ---
 

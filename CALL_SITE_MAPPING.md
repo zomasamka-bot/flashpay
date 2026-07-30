@@ -23,7 +23,7 @@ Pre-call validation at lines 567-592:
 - `appCommission` explicitly set (default 0 only if not provided, via ternary)
 
 ### Call Parameters
-```typescript
+\`\`\`typescript
 const dbAppCommission = typeof checkpoint.appCommission === 'number' ? checkpoint.appCommission : 0
 
 const dbResult = await recordA2UTransactionAtomic({
@@ -38,7 +38,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: checkpoint.horizonFeeCharged,   // ✅ Validated, no fallback
   appCommission: dbAppCommission,                    // ✅ Explicit number (never undefined)
 })
-```
+\`\`\`
 
 ### Idempotency Guarantee
 1. **Transaction Lookup** via `u2aIdentifier` (piPaymentId)
@@ -63,7 +63,7 @@ const dbResult = await recordA2UTransactionAtomic({
    - If Redis fails after DB commit: Next call detects `dbRecorded=false` despite DB success, reconciliation flag set for recovery
 
 ### Example Retry Scenario
-```
+\`\`\`
 Attempt 1: DB succeeds, receipt inserted, merchant balance +100
          Redis fails while saving dbRecorded=true
          Payment state in Redis: dbRecorded=false (payment still shows settlement_pending)
@@ -77,7 +77,7 @@ Attempt 2: Checkpoint reloaded from Redis (dbRecorded=false)
          dbRecorded=true set in Redis
          
 Result: Merchant credited EXACTLY ONCE, despite 2 calls
-```
+\`\`\`
 
 ---
 
@@ -98,7 +98,7 @@ Pre-call validation at lines 397-424:
 - All values logged before DB call
 
 ### Call Parameters (FIXED)
-```typescript
+\`\`\`typescript
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: ctx.piPaymentId,                        // ✅ From context
   u2aTxid: financialData.u2aTxid,                        // ✅ From validated data
@@ -111,7 +111,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: financialData.horizonFeeCharged,    // ✅ NO || 0 FALLBACK
   appCommission: financialData.appCommission,            // ✅ NO HARDCODED 0
 })
-```
+\`\`\`
 
 ### Idempotency Guarantee
 Same as Call Site 1:
@@ -154,7 +154,7 @@ Pre-call validation at lines 227-256:
 - Transaction entry absolutely prevented if any value invalid
 
 ### Call Parameters (ALREADY STRICT)
-```typescript
+\`\`\`typescript
 const dbResult = await recordA2UTransactionAtomic({
   u2aIdentifier: payment.piPaymentId,              // ✅ Validated, audited
   u2aTxid: financialData.u2aTxid,                  // ✅ Validated
@@ -167,7 +167,7 @@ const dbResult = await recordA2UTransactionAtomic({
   horizonFeeCharged: financialData.horizonFeeCharged,  // ✅ Validated, no fallback
   appCommission: financialData.appCommission,      // ✅ Validated, explicit number
 })
-```
+\`\`\`
 
 ### Idempotency Guarantee
 Same as Call Sites 1 & 2:
@@ -178,7 +178,7 @@ Same as Call Sites 1 & 2:
 5. On error: `dbRecorded=false` + `requiresDbReconciliation=true` for next retry
 
 ### Failure Mode Example
-```
+\`\`\`
 Recovery attempt: reconcileA2UInDatabase() called
 
 Validation catches: horizonFeeCharged = undefined
@@ -190,7 +190,7 @@ Payment state saved: requiresDbReconciliation=true, dbRecorded=false
 Result: Next recovery attempt will repeat same audit failure
         (prevents silent partial write to DB)
         Manual review required
-```
+\`\`\`
 
 ---
 
@@ -199,7 +199,7 @@ Result: Next recovery attempt will repeat same audit failure
 All three call sites implement this pattern in `recordA2UTransactionAtomic()`:
 
 ### Pattern: Conflict-Check-Then-Insert
-```typescript
+\`\`\`typescript
 // 1. Lookup existing
 const existing = await tx`SELECT * FROM transactions WHERE payment_id = ?`
 
@@ -241,10 +241,10 @@ const receiptWasInserted = receiptResult && receiptResult.length > 0
 if (receiptWasInserted) {
   await tx`INSERT INTO merchant_balances ... ON CONFLICT DO UPDATE ...`
 }
-```
+\`\`\`
 
 ### Pattern: Post-Transaction Checkpoint
-```typescript
+\`\`\`typescript
 // After DB commit succeeds
 // Set dbRecorded=true ONLY HERE
 payment.dbRecorded = true
@@ -253,7 +253,7 @@ await redis.set(`payment:${paymentId}`, JSON.stringify(payment))
 // If this Redis call fails: next recovery attempt detects dbRecorded=false
 // Despite DB success, will recheck DB (idempotency guard catches duplicate)
 // and skip merchant balance credit (receiptWasInserted flag)
-```
+\`\`\`
 
 ---
 

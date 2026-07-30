@@ -124,7 +124,7 @@
 
 **To verify no code breaks after field removals:**
 
-```bash
+\`\`\`bash
 # Check for any remaining references to u2aCompletedAt (should be none after fix)
 grep -r "u2aCompletedAt" --include="*.ts" --include="*.tsx" .
 
@@ -133,7 +133,7 @@ grep -r "\.a2uPayment" --include="*.ts" --include="*.tsx" .
 
 # Check for any remaining references to a2uAmount field (should be none after fix)
 grep -r "\.a2uAmount" --include="*.ts" --include="*.tsx" .
-```
+\`\`\`
 
 **Status:** These searches not run in this environment. User must verify post-deployment.
 
