@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { ExternalLink } from "lucide-react"
+import { ExternalLink, Copy, Share2 } from "lucide-react"
 import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
@@ -13,6 +13,16 @@ import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/opera
 import { getPiNetUrl } from "@/lib/router"
 import { unifiedStore } from "@/lib/unified-store"
 import type { Payment } from "@/lib/types"
+
+// UI-only mapper for settlement status display
+function mapSettlementStatusForDisplay(status: string): string {
+  const lowerStatus = status.toLowerCase()
+  if (lowerStatus === "settled_to_merchant") return "Settled"
+  if (lowerStatus === "pending" || lowerStatus === "paid_to_app" || lowerStatus === "settlement_pending") return "Processing"
+  if (lowerStatus === "failed" || lowerStatus === "settlement_failed") return "Failed"
+  if (lowerStatus === "cancelled") return "Cancelled"
+  return "Other"
+}
 
 export default function PaymentContentWithId({ 
   paymentId, 
@@ -426,6 +436,56 @@ export default function PaymentContentWithId({
 
   const isPaid = payment.status === "settled_to_merchant"
   const paymentQR = getPiNetUrl(paymentId)
+
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast({
+        title: "Copied",
+        description: `${label} copied to clipboard`,
+      })
+    } catch {
+      toast({
+        title: "Copy Failed",
+        description: "Could not copy to clipboard",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const shareReceipt = async () => {
+    const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "FlashPay Receipt",
+          text: receiptText,
+        })
+      } catch (error) {
+        if (String(error).includes("AbortError")) return
+        copyToClipboard(receiptText, "Receipt")
+      }
+    } else {
+      copyToClipboard(receiptText, "Receipt")
+    }
+  }
+
+  const sharePaymentId = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "FlashPay Payment ID",
+          text: paymentId,
+        })
+      } catch (error) {
+        if (String(error).includes("AbortError")) return
+        copyToClipboard(paymentId, "Payment ID")
+      }
+    } else {
+      copyToClipboard(paymentId, "Payment ID")
+    }
+  }
   
   // CRITICAL: Log the origin context to diagnose app_id mismatches
   if (typeof window !== "undefined") {
@@ -461,12 +521,16 @@ export default function PaymentContentWithId({
 
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Payment Details</CardTitle>
-              <Badge variant={isPaid ? "default" : "secondary"}>
-                {payment.status}
-              </Badge>
-            </div>
+            {isPaid ? (
+              <CardTitle className="text-center">FlashPay Receipt</CardTitle>
+            ) : (
+              <div className="flex items-center justify-between">
+                <CardTitle>Payment Details</CardTitle>
+                <Badge variant="secondary">
+                  {payment.status}
+                </Badge>
+              </div>
+            )}
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="text-center py-4">
@@ -474,7 +538,39 @@ export default function PaymentContentWithId({
               {payment.note && <p className="text-sm text-muted-foreground mt-2">{payment.note}</p>}
             </div>
 
-            {!isPaid && (
+            {isPaid ? (
+              <>
+                <div className="p-4 bg-accent/10 text-accent rounded-lg space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Status</span>
+                    <Badge variant="default">{mapSettlementStatusForDisplay(payment.status)}</Badge>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Merchant</span>
+                    <span className="text-sm font-mono">{payment.merchantId}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Button
+                    onClick={shareReceipt}
+                    variant="outline"
+                    className="w-full gap-2"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share Receipt
+                  </Button>
+                  <Button
+                    onClick={() => copyToClipboard(paymentId, "Payment ID")}
+                    variant="outline"
+                    className="w-full gap-2"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy Payment ID
+                  </Button>
+                </div>
+              </>
+            ) : (
               <>
                 <div className="flex items-center justify-center">
                   <QRCode value={paymentQR} size={240} />
@@ -518,43 +614,10 @@ export default function PaymentContentWithId({
                 )}
               </>
             )}
-
-            {isPaid && (
-              <div className="p-4 bg-accent/10 text-accent rounded-lg text-center">
-                <p className="font-semibold mb-1">Payment Completed</p>
-                {(payment.u2aTxid || payment.a2uTxid) && <p className="text-xs font-mono mt-2">{payment.u2aTxid || payment.a2uTxid}</p>}
-              </div>
-            )}
-
-            <div className="text-center text-xs text-muted-foreground">Payment ID: {paymentId}</div>
           </CardContent>
         </Card>
 
-        <div className="text-center">
-          <Link href="/">
-            <Button variant="ghost" className="gap-2">
-              <ExternalLink className="h-4 w-4" />
-              Create Your Own Payment
-            </Button>
-          </Link>
-        </div>
 
-        {diagnostics.length > 0 && (
-          <Card className="bg-muted/50">
-            <CardHeader>
-              <CardTitle className="text-sm">System Diagnostics</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-1 max-h-64 overflow-y-auto">
-                {diagnostics.map((msg, idx) => (
-                  <div key={idx} className="text-xs font-mono text-muted-foreground">
-                    {msg}
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
       </div>
     </div>
   )
