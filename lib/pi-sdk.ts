@@ -22,6 +22,7 @@ declare global {
           onError: (error: Error, payment?: any) => void
         },
       ) => void
+      openShareDialog?: (title: string, message: string) => void
     }
   }
 }

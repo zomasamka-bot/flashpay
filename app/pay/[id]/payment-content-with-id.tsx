@@ -453,8 +453,13 @@ export default function PaymentContentWithId({
     }
   }
 
+  const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
+
   const shareReceipt = async () => {
-    const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
+    if (window.Pi?.openShareDialog) {
+      window.Pi.openShareDialog("FlashPay Receipt", receiptText)
+      return
+    }
     
     if (navigator.share) {
       try {
@@ -464,11 +469,23 @@ export default function PaymentContentWithId({
         })
       } catch (error) {
         if (String(error).includes("AbortError")) return
-        copyToClipboard(receiptText, "Receipt")
+        toast({
+          title: "Share Failed",
+          description: error instanceof Error ? error.message : "Could not share receipt",
+          variant: "destructive",
+        })
       }
     } else {
-      copyToClipboard(receiptText, "Receipt")
+      toast({
+        title: "Share Not Supported",
+        description: "Share is not supported on this device",
+        variant: "destructive",
+      })
     }
+  }
+
+  const copyReceipt = () => {
+    copyToClipboard(receiptText, "Receipt")
   }
 
   const sharePaymentId = async () => {
@@ -559,6 +576,14 @@ export default function PaymentContentWithId({
                   >
                     <Share2 className="h-4 w-4" />
                     Share Receipt
+                  </Button>
+                  <Button
+                    onClick={copyReceipt}
+                    variant="outline"
+                    className="w-full gap-2"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy Receipt
                   </Button>
                   <Button
                     onClick={() => copyToClipboard(paymentId, "Payment ID")}
