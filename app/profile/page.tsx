@@ -250,6 +250,9 @@ function ProfileContent() {
   const merchantAuthenticated = Boolean(merchantState.merchantId.trim() && merchantState.accessToken?.trim())
   const merchantUsername = merchantState.piUsername?.trim() || merchantState.merchantId.trim()
 
+  // Owner-only visibility for Wallet Connection card
+  const showOwnerWalletCard = merchantAuthenticated && Boolean(config.ownerUid) && Boolean(merchantState.uid) && merchantState.uid === config.ownerUid
+
   return (
     <div className="min-h-screen pb-20 pt-4">
       <div className="max-w-4xl mx-auto px-4 space-y-6">
@@ -270,41 +273,43 @@ function ProfileContent() {
         </div>
 
         {/* Wallet Connection Status */}
-        <Card className={isConnected ? "border-green-200 bg-green-50" : "border-yellow-200 bg-yellow-50"}>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Wallet className="h-5 w-5" />
-              Wallet Connection
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isConnected ? (
-              <div className="space-y-3">
-                <div className="text-sm">
-                  <p className="font-medium text-green-900">Wallet Connected</p>
-                  <p className="text-xs text-green-700 mt-1">Your wallet has been authenticated with FlashPay</p>
+        {showOwnerWalletCard && (
+          <Card className={isConnected ? "border-green-200 bg-green-50" : "border-yellow-200 bg-yellow-50"}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Wallet className="h-5 w-5" />
+                Wallet Connection
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isConnected ? (
+                <div className="space-y-3">
+                  <div className="text-sm">
+                    <p className="font-medium text-green-900">Wallet Connected</p>
+                    <p className="text-xs text-green-700 mt-1">Your wallet has been authenticated with FlashPay</p>
+                  </div>
+                  <Button onClick={handleDisconnect} variant="outline" className="w-full gap-2">
+                    Disconnect Wallet
+                  </Button>
                 </div>
-                <Button onClick={handleDisconnect} variant="outline" className="w-full gap-2">
-                  Disconnect Wallet
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-sm text-yellow-900">
-                  Connect your Pi Wallet to access your profile features
-                </p>
-                <Button 
-                  onClick={handleConnectWallet} 
-                  disabled={isAuthenticating}
-                  className="w-full gap-2"
-                >
-                  <Wallet className="h-4 w-4" />
-                  {isAuthenticating ? "Connecting..." : "Connect Wallet"}
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-yellow-900">
+                    Connect your Pi Wallet to access your profile features
+                  </p>
+                  <Button 
+                    onClick={handleConnectWallet} 
+                    disabled={isAuthenticating}
+                    className="w-full gap-2"
+                  >
+                    <Wallet className="h-4 w-4" />
+                    {isAuthenticating ? "Connecting..." : "Connect Wallet"}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Profile Summary */}
         <Card>
