@@ -28,17 +28,16 @@ export function getPaymentLink(id: string): string {
 }
 
 /**
- * Returns a Pi Browser deep link (pi://) for use in QR codes.
- * Safely detects runtime host and routes to allowlisted environments:
- * - PiNet: pi://flashpayaefebeff3375.pinet.com/pay/${id}
- * - Default (Vercel): pi://flashpay-two.vercel.app/pay/${id}
+ * Returns an HTTPS URL for QR encoding. Safely detects runtime host and routes to allowlisted environments:
+ * - PiNet: https://flashpayaefebeff3375.pinet.com/pay/${id}
+ * - Default (Vercel): https://flashpay-two.vercel.app/pay/${id}
  * Never derives from window.location.origin and blocks preview/demo/vusercontent.net hosts.
  */
 export function getPiNetPaymentUrl(id: string): string {
   if (typeof window !== "undefined" && window.location.hostname === "flashpayaefebeff3375.pinet.com") {
-    return `pi://flashpayaefebeff3375.pinet.com/pay/${id}`
+    return `https://flashpayaefebeff3375.pinet.com/pay/${id}`
   }
-  return `pi://flashpay-two.vercel.app/pay/${id}`
+  return `https://flashpay-two.vercel.app/pay/${id}`
 }
 
 /** @deprecated Use getPiNetPaymentUrl instead */
