@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { ExternalLink, Copy, Share2 } from "lucide-react"
+import { ExternalLink, Copy } from "lucide-react"
 import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
@@ -453,13 +453,8 @@ export default function PaymentContentWithId({
     }
   }
 
-  const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
-
   const shareReceipt = async () => {
-    if (window.Pi?.openShareDialog) {
-      window.Pi.openShareDialog("FlashPay Receipt", receiptText)
-      return
-    }
+    const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
     
     if (navigator.share) {
       try {
@@ -469,23 +464,11 @@ export default function PaymentContentWithId({
         })
       } catch (error) {
         if (String(error).includes("AbortError")) return
-        toast({
-          title: "Share Failed",
-          description: error instanceof Error ? error.message : "Could not share receipt",
-          variant: "destructive",
-        })
+        copyToClipboard(receiptText, "Receipt")
       }
     } else {
-      toast({
-        title: "Share Not Supported",
-        description: "Share is not supported on this device",
-        variant: "destructive",
-      })
+      copyToClipboard(receiptText, "Receipt")
     }
-  }
-
-  const copyReceipt = () => {
-    copyToClipboard(receiptText, "Receipt")
   }
 
   const sharePaymentId = async () => {
@@ -571,14 +554,6 @@ export default function PaymentContentWithId({
                 <div className="space-y-2">
                   <Button
                     onClick={shareReceipt}
-                    variant="outline"
-                    className="w-full gap-2"
-                  >
-                    <Share2 className="h-4 w-4" />
-                    Share Receipt
-                  </Button>
-                  <Button
-                    onClick={copyReceipt}
                     variant="outline"
                     className="w-full gap-2"
                   >
