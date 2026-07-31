@@ -10,7 +10,7 @@ import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
 import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/operations"
-import { getPiNetUrl } from "@/lib/router"
+import { getSmartQRUrl } from "@/lib/router"
 import { unifiedStore } from "@/lib/unified-store"
 import type { Payment } from "@/lib/types"
 
@@ -435,7 +435,7 @@ export default function PaymentContentWithId({
   }
 
   const isPaid = payment.status === "settled_to_merchant"
-  const paymentQR = getPiNetUrl(paymentId)
+  const paymentQR = getSmartQRUrl(paymentId, payment.amount, payment.note)
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
