@@ -302,13 +302,13 @@ export default function HomePage() {
     const amount = payment?.amount || 0
     const noteParam = payment?.note ? `&note=${encodeURIComponent(payment.note)}` : ""
     
-    // Detect Pi Browser via User-Agent at QR generation time
-    let domain = "flashpayaefebeff3375.pinet.com"
-    if (typeof window !== "undefined" && typeof navigator !== "undefined") {
-      const userAgent = navigator.userAgent
-      const isPiBrowser = userAgent.includes("PiBrowser") || userAgent.includes("pi-browser")
-      if (!isPiBrowser) {
-        domain = "flashpay-two.vercel.app"
+    // Detect Pi Browser via hostname at QR generation time
+    let domain = "flashpay-two.vercel.app"  // Default to Vercel
+    if (typeof window !== "undefined") {
+      const hostname = window.location.hostname
+      // If app is running on pinet.com, we're in Pi Browser
+      if (hostname.includes("pinet.com")) {
+        domain = "flashpayaefebeff3375.pinet.com"
       }
     }
     
