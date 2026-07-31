@@ -28,44 +28,6 @@ export function getPaymentLink(id: string): string {
 }
 
 /**
- * Intelligently generates QR URL based on runtime environment.
- * - On Vercel: QR opens payment page on Vercel
- * - In Pi Browser: QR opens payment page on flashpayaefebeff3375.pinet.com
- * - Includes amount and note as URL parameters
- */
-export function getSmartQRUrl(id: string, amount?: number, note?: string): string {
-  let domain = "flashpay-two.vercel.app"
-  
-  // Detect if running in Pi Browser or pinet.com environment
-  if (typeof window !== "undefined") {
-    const hostname = window.location.hostname
-    console.log("[v0][QR-Smart] Generating QR URL - Current hostname:", hostname)
-    
-    // If already on pinet.com, use pinet.com in the QR code
-    if (hostname.includes("pinet.com")) {
-      domain = "flashpayaefebeff3375.pinet.com"
-      console.log("[v0][QR-Smart] Running on pinet.com - using pinet.com domain")
-    } else {
-      console.log("[v0][QR-Smart] Running on Vercel - using Vercel domain")
-    }
-  }
-  
-  const baseUrl = `pi://${domain}/pay/${id}`
-  
-  // Add query parameters if provided
-  const params = new URLSearchParams()
-  if (amount !== undefined) {
-    params.append("amount", amount.toString())
-  }
-  if (note) {
-    params.append("note", note)
-  }
-  
-  const queryString = params.toString()
-  return queryString ? `${baseUrl}?${queryString}` : baseUrl
-}
-
-/**
  * Returns a Pi Browser deep link (pi://) for use in QR codes.
  * Always uses the stable Vercel domain to ensure consistent QR behavior
  * regardless of whether the merchant is on Vercel, Pi Browser, or PiNet.
