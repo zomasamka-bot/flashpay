@@ -297,12 +297,22 @@ export default function HomePage() {
 
   // CRITICAL: Include payment data in URL for Preview environments without KV
   // QR links use Pi deep link (entry=pi) and stable Vercel domain via getPiNetUrl
-  // Generate QR with pi:// URL format for Pi Browser
+  // Generate QR with pi:// URL format for Pi Browser, detect Pi Browser at generation time
   const getPaymentLinkForQR = (paymentId: string) => {
-    const baseUrl = getPiNetUrl(paymentId)
     const amount = payment?.amount || 0
     const noteParam = payment?.note ? `&note=${encodeURIComponent(payment.note)}` : ""
-    return `${baseUrl}?amount=${amount}&entry=pi${noteParam}`
+    
+    // Detect Pi Browser via User-Agent at QR generation time
+    let domain = "flashpay-two.vercel.app"
+    if (typeof window !== "undefined" && typeof navigator !== "undefined") {
+      const userAgent = navigator.userAgent
+      const isPiBrowser = userAgent.includes("PiBrowser") || userAgent.includes("pi-browser")
+      if (isPiBrowser) {
+        domain = "flashpayaefebeff3375.pinet.com"
+      }
+    }
+    
+    return `pi://${domain}/pay/${paymentId}?amount=${amount}&entry=pi${noteParam}`
   }
   
   const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""
