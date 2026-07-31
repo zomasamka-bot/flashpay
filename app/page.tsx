@@ -302,12 +302,12 @@ export default function HomePage() {
     const amount = payment?.amount || 0
     const noteParam = payment?.note ? `&note=${encodeURIComponent(payment.note)}` : ""
     
-    // Detect Pi Browser via hostname at QR generation time
+    // Detect Pi Browser at QR generation time
     let domain = "flashpay-two.vercel.app"  // Default to Vercel
     if (typeof window !== "undefined") {
-      const hostname = window.location.hostname
-      // If app is running on pinet.com, we're in Pi Browser
-      if (hostname.includes("pinet.com")) {
+      // Pi Browser provides window.pi object
+      const isPiBrowser = typeof (window as any).pi !== "undefined"
+      if (isPiBrowser) {
         domain = "flashpayaefebeff3375.pinet.com"
       }
     }
