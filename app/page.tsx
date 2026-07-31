@@ -303,12 +303,12 @@ export default function HomePage() {
     const noteParam = payment?.note ? `&note=${encodeURIComponent(payment.note)}` : ""
     
     // Detect Pi Browser via User-Agent at QR generation time
-    let domain = "flashpay-two.vercel.app"
+    let domain = "flashpayaefebeff3375.pinet.com"
     if (typeof window !== "undefined" && typeof navigator !== "undefined") {
       const userAgent = navigator.userAgent
       const isPiBrowser = userAgent.includes("PiBrowser") || userAgent.includes("pi-browser")
-      if (isPiBrowser) {
-        domain = "flashpayaefebeff3375.pinet.com"
+      if (!isPiBrowser) {
+        domain = "flashpay-two.vercel.app"
       }
     }
     
