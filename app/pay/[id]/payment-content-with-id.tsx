@@ -43,6 +43,7 @@ export default function PaymentContentWithId({
   const [authStatus, setAuthStatus] = useState<"idle" | "authenticating" | "authenticated" | "failed">("idle")
   const [diagnostics, setDiagnostics] = useState<string[]>([])
   const [entryMode, setEntryMode] = useState<"pi" | "share">(entry)
+  const [authoritativeLoaded, setAuthoritativeLoaded] = useState(false)
 
   const addDiagnostic = (message: string) => {
     const timestamp = new Date().toLocaleTimeString()
@@ -50,29 +51,10 @@ export default function PaymentContentWithId({
     console.log("[v0][Diagnostic]", message)
   }
 
-  console.log("[v0][PaymentPage] ========== PAYMENT PAGE COMPONENT LOADED ==========")
-  console.log("[v0][PaymentPage] Payment ID from URL path:", paymentId)
-  console.log("[v0][PaymentPage] URL params from props - amount:", urlAmount, "note:", urlNote)
-  console.log("[v0][PaymentPage] urlAmount type:", typeof urlAmount)
-  console.log("[v0][PaymentPage] urlAmount value:", urlAmount)
-  console.log("[v0][PaymentPage] urlAmount is undefined?", urlAmount === undefined)
-  console.log("[v0][PaymentPage] urlAmount is null?", urlAmount === null)
-  console.log("[v0][PaymentPage] Current URL:", typeof window !== "undefined" ? window.location.href : "SSR")
-  
-  // Also check window.location.search for URL params
-  if (typeof window !== "undefined") {
-    const urlParams = new URLSearchParams(window.location.search)
-    console.log("[v0][PaymentPage] URL search params:", window.location.search)
-    console.log("[v0][PaymentPage] Parsed amount from URL:", urlParams.get('amount'))
-    console.log("[v0][PaymentPage] Parsed note from URL:", urlParams.get('note'))
-  }
-  
   // Check if we have a stored payment ID from before auth (in case of redirect)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const storedPaymentId = sessionStorage.getItem("flashpay_current_payment_id")
-      console.log("[v0][PaymentPage] Stored payment ID in sessionStorage:", storedPaymentId)
-      console.log("[v0][PaymentPage] Current payment ID from URL:", paymentId)
       
       if (storedPaymentId && storedPaymentId !== paymentId) {
         console.warn("[v0][PaymentPage] ⚠️ Payment ID mismatch after navigation!")
@@ -97,84 +79,102 @@ export default function PaymentContentWithId({
   }, [])
 
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout
+    let abortController: AbortController | null = null
 
     async function fetchPayment() {
       addDiagnostic(`Fetching payment: ${paymentId}`)
-      setLoading(true)
-
+      
       try {
-        // Retry logic: Try up to 3 times with 30 second timeout each
-        let serverPayment: Payment | null = null
-        let attempts = 0
-        const maxAttempts = 3
-
-        while (!serverPayment && attempts < maxAttempts) {
-          attempts++
-          addDiagnostic(`Attempt ${attempts}/${maxAttempts} to fetch payment`)
-          
-          try {
-            const timeoutPromise = new Promise((_, reject) => {
-              timeoutId = setTimeout(() => reject(new Error("Timeout")), 30000)
-            })
-
-            serverPayment = await Promise.race([
-              getPaymentFromServer(paymentId),
-              timeoutPromise
-            ]) as Payment | null
-
-            clearTimeout(timeoutId)
+        // For entry=pi with URL amount, show provisionally and fetch authoritatively once
+        const urlAmountStr = urlAmount || (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get('amount') : null)
+        const urlNoteStr = urlNote || (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get('note') : null)
+        
+        if (entryMode === "pi" && urlAmountStr) {
+          const amount = parseFloat(urlAmountStr)
+          if (!isNaN(amount) && amount > 0) {
+            // Show provisional payment data immediately
+            const provisionalPayment: Payment = {
+              id: paymentId,
+              amount: amount,
+              note: urlNoteStr || "",
+              status: "pending",
+              createdAt: new Date().toISOString(),
+              merchantId: "unknown",
+              accessToken: "",
+            }
+            console.log("[v0] ✅ Showing provisional payment from URL params:", provisionalPayment)
+            setPayment(provisionalPayment)
+            setLoading(false)
             
-            if (serverPayment) {
-              addDiagnostic("Payment retrieved successfully")
-            } else if (attempts < maxAttempts) {
-              addDiagnostic(`No payment found, retrying in 2 seconds...`)
-              await new Promise(resolve => setTimeout(resolve, 2000))
+            // Fetch authoritative payment ONCE with short timeout
+            try {
+              abortController = new AbortController()
+              const timeoutId = setTimeout(() => abortController?.abort(), 5000) // 5 second timeout
+              
+              const serverPayment = await getPaymentFromServer(paymentId, true, abortController.signal)
+              clearTimeout(timeoutId)
+              
+              if (serverPayment) {
+                console.log("[v0] ✅ Authoritative payment loaded:", serverPayment)
+                setPayment(serverPayment)
+                setAuthoritativeLoaded(true)
+                // Store in unifiedStore for payment execution
+                unifiedStore.createPaymentWithId(
+                  serverPayment.id,
+                  serverPayment.amount,
+                  serverPayment.note || "",
+                  serverPayment.createdAt,
+                  serverPayment.merchantId,
+                  serverPayment.merchantAddress,
+                  serverPayment.merchantUid,
+                  serverPayment.accessToken
+                )
+              } else {
+                console.warn("[v0] ⚠️ Authoritative payment not available from server")
+                addDiagnostic("Server payment not available - using provisional data")
+                // Keep showing provisional payment, disable Pay button
+              }
+            } catch (fetchError) {
+              console.warn("[v0] ⚠️ Failed to fetch authoritative payment:", fetchError)
+              addDiagnostic(`Failed to fetch payment from server: ${fetchError}`)
+              // Keep showing provisional payment, disable Pay button
             }
-          } catch (attemptError) {
-            addDiagnostic(`Attempt ${attempts} failed: ${attemptError}`)
-            if (attempts < maxAttempts) {
-              await new Promise(resolve => setTimeout(resolve, 2000))
-            }
+            return
           }
         }
-
-        if (serverPayment) {
-          console.log("[v0] ✅ Payment found from server:", serverPayment)
-          setPayment(serverPayment)
-          // Pass all required fields including merchantId, merchantAddress, merchantUid, and accessToken from server
-          unifiedStore.createPaymentWithId(
-            serverPayment.id,
-            serverPayment.amount,
-            serverPayment.note || "",
-            serverPayment.createdAt,
-            serverPayment.merchantId,
-            serverPayment.merchantAddress,
-            serverPayment.merchantUid,
-            serverPayment.accessToken
-          )
-        } else {
-          // FALLBACK: Use URL parameters when server doesn't have the payment
-          // Check both props and window.location as backup
-          let amountStr = urlAmount
-          let noteStr = urlNote
+        
+        // Standard flow for non-pi entries or no URL amount - fetch once
+        setLoading(true)
+        
+        try {
+          abortController = new AbortController()
+          const timeoutId = setTimeout(() => abortController?.abort(), 5000) // 5 second timeout
           
-          if (!amountStr && typeof window !== "undefined") {
-            const urlParams = new URLSearchParams(window.location.search)
-            amountStr = urlParams.get('amount') || undefined
-            noteStr = urlParams.get('note') || undefined
-            console.log("[v0] ⚠️ Props urlAmount was empty, using window.location.search")
-            console.log("[v0] Extracted amount:", amountStr, "note:", noteStr)
-          }
+          const serverPayment = await getPaymentFromServer(paymentId, false, abortController.signal)
+          clearTimeout(timeoutId)
           
-          if (amountStr) {
-            console.log("[v0] ⚠️ Payment NOT found on server, using URL parameters as fallback")
-            const amount = parseFloat(amountStr)
+          if (serverPayment) {
+            console.log("[v0] ✅ Payment found from server:", serverPayment)
+            setPayment(serverPayment)
+            setAuthoritativeLoaded(true)
+            unifiedStore.createPaymentWithId(
+              serverPayment.id,
+              serverPayment.amount,
+              serverPayment.note || "",
+              serverPayment.createdAt,
+              serverPayment.merchantId,
+              serverPayment.merchantAddress,
+              serverPayment.merchantUid,
+              serverPayment.accessToken
+            )
+          } else if (urlAmountStr) {
+            // Fallback to URL parameters if no server payment
+            const amount = parseFloat(urlAmountStr)
             if (!isNaN(amount) && amount > 0) {
               const fallbackPayment: Payment = {
                 id: paymentId,
                 amount: amount,
-                note: noteStr || "",
+                note: urlNoteStr || "",
                 status: "pending",
                 createdAt: new Date().toISOString(),
                 merchantId: "unknown",
@@ -182,33 +182,25 @@ export default function PaymentContentWithId({
               }
               console.log("[v0] ✅ Created fallback payment from URL params:", fallbackPayment)
               setPayment(fallbackPayment)
-              unifiedStore.createPaymentWithId(
-                paymentId,
-                amount,
-                noteStr || "",
-                new Date().toISOString(),
-                "unknown",
-                "",  // No merchantAddress available in fallback
-                "",  // No merchantUid available in fallback
-                ""   // No accessToken available in fallback
-              )
             } else {
-              console.error("[v0] ❌ Invalid amount in URL parameters:", amountStr)
+              console.error("[v0] ❌ Invalid amount in URL parameters:", urlAmountStr)
               setPayment(null)
             }
           } else {
             console.error("[v0] ❌ Payment NOT found and no URL parameters available")
-            console.error("[v0] urlAmount prop:", urlAmount)
-            console.error("[v0] window.location.search:", typeof window !== "undefined" ? window.location.search : "N/A")
             setPayment(null)
           }
+        } catch (error) {
+          console.error("[v0] Error fetching payment:", error)
+          setPayment(null)
         }
+        
+        setLoading(false)
       } catch (error) {
-        console.error("[v0] Error fetching payment:", error)
+        console.error("[v0] Error in fetchPayment:", error)
         setPayment(null)
+        setLoading(false)
       }
-
-      setLoading(false)
     }
 
     async function initPiSDK() {
@@ -245,9 +237,9 @@ export default function PaymentContentWithId({
     }
 
     return () => {
-      if (timeoutId) clearTimeout(timeoutId)
+      if (abortController) abortController.abort()
     }
-  }, [paymentId, toast])
+  }, [paymentId, entryMode, toast])
 
   const handlePay = async () => {
     addDiagnostic("PAY BUTTON CLICKED")
@@ -592,7 +584,7 @@ export default function PaymentContentWithId({
 
                 <Button
                   onClick={handlePay}
-                  disabled={isPaying || !piSDKReady || authStatus === "failed"}
+                  disabled={isPaying || !piSDKReady || authStatus === "failed" || !authoritativeLoaded}
                   className="w-full h-12 text-lg"
                   size="lg"
                 >
@@ -604,7 +596,9 @@ export default function PaymentContentWithId({
                         ? "Authentication Failed"
                         : !piSDKReady
                           ? "Loading Pi Wallet..."
-                          : "Pay with Pi Wallet"}
+                          : !authoritativeLoaded
+                            ? "Loading Payment..."
+                            : "Pay with Pi Wallet"}
                 </Button>
                 
                 {isPaying && (

@@ -209,16 +209,18 @@ export function getPaymentStats() {
   return unifiedStore.getPaymentStats()
 }
 
-export async function getPaymentFromServer(id: string): Promise<Payment | null> {
+export async function getPaymentFromServer(id: string, forceServer?: boolean, signal?: AbortSignal): Promise<Payment | null> {
   try {
-    // Check in-memory store first
-    const localPayment = unifiedStore.getPayment(id)
-    if (localPayment) {
-      return localPayment
+    // Check in-memory store first unless forceServer is true
+    if (!forceServer) {
+      const localPayment = unifiedStore.getPayment(id)
+      if (localPayment) {
+        return localPayment
+      }
     }
 
-    // Fetch from Redis via API
-    const response = await fetch(`${config.appUrl}/api/payments/${id}`)
+    // Fetch from Redis via API (with optional signal for timeout/cancellation)
+    const response = await fetch(`${config.appUrl}/api/payments/${id}`, { signal })
 
     if (!response.ok) {
       return null
