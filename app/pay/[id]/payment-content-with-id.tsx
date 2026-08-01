@@ -204,6 +204,22 @@ export default function PaymentContentWithId({
     }
 
     async function initPiSDK() {
+      // For Pi entry mode, wait for SDK readiness promise once
+      if (entryMode === "pi") {
+        try {
+          if (window.__PI_SDK_READY__) {
+            addDiagnostic("Awaiting Pi SDK readiness...")
+            await window.__PI_SDK_READY__
+            addDiagnostic("Pi SDK readiness resolved")
+          }
+        } catch (error) {
+          addDiagnostic(`Pi SDK readiness rejected: ${error}`)
+          setPiSDKReady(false)
+          setAuthStatus("failed")
+          return
+        }
+      }
+
       const hasPiSDK = typeof window !== "undefined" && !!window.Pi
       addDiagnostic(`Checking Pi SDK: ${hasPiSDK ? "FOUND" : "NOT FOUND"}`)
 

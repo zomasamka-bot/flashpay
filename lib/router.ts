@@ -5,34 +5,6 @@
 
 import { config } from "./config"
 
-/**
- * Detects if running in Pi Browser on vusercontent.
- * In vusercontent, we use relative /api/... URLs instead of config.appUrl
- * to avoid cross-origin fetch issues.
- */
-export function isInPiBrowser(): boolean {
-  if (typeof window === "undefined") return false
-  const origin = window.location.origin
-  // Pi Browser vusercontent domains: *.vusercontent.net
-  return origin.includes("vusercontent.net")
-}
-
-/**
- * Returns the correct API base URL for the current environment.
- * - Pi Browser (vusercontent): relative /api/
- * - Vercel/other: config.appUrl/api/
- */
-export function getApiUrl(endpoint: string): string {
-  const path = endpoint.startsWith("/") ? endpoint : `/${endpoint}`
-  if (isInPiBrowser()) {
-    console.log(`[v0][router] Pi Browser detected - using relative URL: /api${path}`)
-    return `/api${path}`
-  }
-  const url = `${config.appUrl}/api${path}`
-  console.log(`[v0][router] Using config.appUrl: ${url}`)
-  return url
-}
-
 export const ROUTES = {
   HOME: "/",
   CREATE: "/create",

@@ -3,7 +3,6 @@
 import { unifiedStore } from "./unified-store"
 import { CoreLogger } from "./core"
 import { config } from "./config"
-import { getApiUrl } from "./router"
 
 declare global {
   interface Window {
@@ -182,13 +181,12 @@ export const createPiPayment = async (
 
         CoreLogger.info("Payment ready for approval", { piPaymentId, paymentId, merchantId, merchantAddress })
 
-  // Call approval endpoint - this marks payment as approved but does NOT complete it
-  // The actual settlement happens in onReadyForServerCompletion
-  console.log(`[v0][Pi SDK] Calling approve endpoint at ${getApiUrl("/pi/approve")} - ${new Date().toISOString()}`)
-  fetch(getApiUrl("/pi/approve"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+        // Call approval endpoint - this marks payment as approved but does NOT complete it
+        // The actual settlement happens in onReadyForServerCompletion
+        fetch(`${config.appUrl}/api/pi/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
             identifier: piPaymentId,
             amount,
             memo,
@@ -224,14 +222,13 @@ export const createPiPayment = async (
 
         CoreLogger.info("Payment ready for completion", { piPaymentId, txid, paymentId, merchantId })
 
-  // Complete on backend and ONLY call onSuccess when status is settled_to_merchant
-  // SECURITY: Send ONLY piPaymentId + txid (verified by Pi Wallet signature)
-  // Server derives paymentId from canonical payment metadata
-  console.log(`[v0][Pi SDK] Calling complete endpoint at ${getApiUrl("/pi/complete")} - ${new Date().toISOString()}`)
-  fetch(getApiUrl("/pi/complete"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
+        // Complete on backend and ONLY call onSuccess when status is settled_to_merchant
+        // SECURITY: Send ONLY piPaymentId + txid (verified by Pi Wallet signature)
+        // Server derives paymentId from canonical payment metadata
+        fetch(`${config.appUrl}/api/pi/complete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({ piPaymentId, txid }),
         })
@@ -332,12 +329,11 @@ export const authenticateCustomer = async (): Promise<{
         return
       }
       
-  try {
-    console.log(`[v0][Pi SDK] Recovery: Calling complete endpoint at ${getApiUrl("/pi/complete")} - ${new Date().toISOString()}`)
-    const completeResponse = await fetch(getApiUrl("/pi/complete"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ piPaymentId, txid }),
+      try {
+        const completeResponse = await fetch(`${config.appUrl}/api/pi/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ piPaymentId, txid }),
         })
         
         if (completeResponse.ok) {
@@ -494,8 +490,7 @@ export const authenticateMerchant = async (): Promise<{
     }
     
     try {
-      console.log(`[v0][Pi SDK] Auth recovery: Calling complete endpoint at ${getApiUrl("/pi/complete")} - ${new Date().toISOString()}`)
-      const completeResponse = await fetch(getApiUrl("/pi/complete"), {
+      const completeResponse = await fetch(`${config.appUrl}/api/pi/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ piPaymentId, txid }),

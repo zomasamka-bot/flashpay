@@ -8,7 +8,6 @@ import { SecurityGuard, InputValidator, rateLimiter, errorTracker, auditLogger }
 import { config } from "./config"
 import { isProcessingStatus, isTerminalState } from "./payment-status"
 import { getRetryDecision, shouldSuppressErrorCallback } from "./retry-decision"
-import { getApiUrl } from "./router"
 
 function generateUUID(): string {
   if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
@@ -139,12 +138,11 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     // CRITICAL: Send amount, note, and accessToken for server verification.
     // Do NOT send merchantId or merchantUid - server will verify from /v2/me call.
     // The server will call Pi /v2/me with the accessToken to derive verified username and UID.
-    console.log(`[v0][createPayment] Starting fetch to ${getApiUrl("/payments")} at ${new Date().toISOString()}`)
-    const response = await fetch(getApiUrl("/payments"), {
+    const response = await fetch(`${config.appUrl}/api/payments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount,
+      body: JSON.stringify({ 
+        amount, 
         note,
         accessToken
       }),
@@ -154,8 +152,6 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
       throw new Error(`Failed to create payment: ${response.statusText}`)
     }
 
-    console.log(`[v0][createPayment] Received response status ${response.status} at ${new Date().toISOString()}`)
-    
     const contentType = response.headers.get("content-type")
     if (!contentType || !contentType.includes("application/json")) {
       const text = await response.text()
@@ -163,7 +159,6 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     }
 
     const result = await response.json()
-    console.log(`[v0][createPayment] Response parsed at ${new Date().toISOString()} - payment ID: ${result.payment?.id}`)
     // CRITICAL: Use VERIFIED merchantId and merchantUid from server response, not client values
     // The server verified the identity via Pi /v2/me and derived the authoritative username and UID
     const payment = unifiedStore.createPaymentWithId(
@@ -224,10 +219,8 @@ export async function getPaymentFromServer(id: string, forceServer?: boolean, si
       }
     }
 
-  // Fetch from Redis via API (with optional signal for timeout/cancellation)
-  console.log(`[v0][getPaymentFromServer] Fetching payment ${id} from ${getApiUrl(`/payments/${id}`)} at ${new Date().toISOString()}`)
-  const response = await fetch(getApiUrl(`/payments/${id}`), { signal })
-  console.log(`[v0][getPaymentFromServer] Response status: ${response.status} at ${new Date().toISOString()}`)
+    // Fetch from Redis via API (with optional signal for timeout/cancellation)
+    const response = await fetch(`${config.appUrl}/api/payments/${id}`, { signal })
 
     if (!response.ok) {
       return null

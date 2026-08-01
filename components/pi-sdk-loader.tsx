@@ -26,6 +26,7 @@ declare global {
       ) => void
     }
     __PI_SDK_LOADED__?: boolean
+    __PI_SDK_READY__?: Promise<void>
   }
 }
 
@@ -41,15 +42,30 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const skipSDKRoutes = ["/operations", "/control-panel", "/diagnostics", "/reset"]
   const shouldSkipSDK = skipSDKRoutes.some((route) => pathname?.startsWith(route))
 
+  // For /pay/[id] routes, render children immediately and expose readiness promise
+  const isPayRoute = pathname?.startsWith("/pay/")
+
   useEffect(() => {
     // Skip SDK loading for admin routes - owner is already verified
     if (shouldSkipSDK) {
       setScriptLoaded(true)
       return
     }
+
+    // For /pay/[id] routes, render children immediately
+    if (isPayRoute) {
+      setScriptLoaded(true)
+    }
+
     // Check if script is already loaded
     if (window.__PI_SDK_LOADED__ || (window.Pi && typeof window.Pi.init === "function")) {
-      setScriptLoaded(true)
+      if (!isPayRoute) {
+        setScriptLoaded(true)
+      }
+      // Ensure readiness promise is set
+      if (!window.__PI_SDK_READY__) {
+        window.__PI_SDK_READY__ = Promise.resolve()
+      }
       return
     }
 
@@ -59,19 +75,41 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
     script.async = false
     script.defer = false
 
+    // Create a promise that resolves when window.Pi.init is available
+    let resolveReady: () => void
+    let rejectReady: (error: Error) => void
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
+    })
+
+    // Set timeout to reject promise after 15s
+    const timeoutId = setTimeout(() => {
+      rejectReady(new Error("Pi SDK readiness timeout (15s)"))
+    }, 15000)
+
     // Handle successful load
     script.onload = () => {
       setTimeout(() => {
         if (window.Pi && typeof window.Pi.init === "function") {
           window.__PI_SDK_LOADED__ = true
-          setScriptLoaded(true)
+          window.__PI_SDK_READY__ = Promise.resolve()
+          clearTimeout(timeoutId)
+          resolveReady()
+          if (!isPayRoute) {
+            setScriptLoaded(true)
+          }
         } else {
           CoreLogger.error("Pi SDK script loaded but Pi object not available", {
             hasPi: !!window.Pi,
             piType: typeof window.Pi,
           })
+          clearTimeout(timeoutId)
+          rejectReady(new Error("Pi SDK loaded but Pi.init not available"))
           setError("Pi SDK loaded but not initialized properly")
-          setScriptLoaded(true)
+          if (!isPayRoute) {
+            setScriptLoaded(true)
+          }
         }
       }, 100)
     }
@@ -82,23 +120,42 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
         error: event,
         url: script.src,
       })
+      clearTimeout(timeoutId)
+      rejectReady(new Error("Failed to load Pi SDK from CDN"))
       setError("Failed to load Pi SDK from CDN")
-      setScriptLoaded(true)
+      if (!isPayRoute) {
+        setScriptLoaded(true)
+      }
     }
+
+    // Set readiness promise immediately for /pay routes
+    window.__PI_SDK_READY__ = readyPromise
 
     // Add script to document
     document.head.appendChild(script)
 
-    // Cleanup
+    // Cleanup: never remove the loaded script
     return () => {
-      if (script.parentNode) {
-        script.parentNode.removeChild(script)
-      }
+      clearTimeout(timeoutId)
     }
-  }, [])
+  }, [isPayRoute, shouldSkipSDK])
 
-  // Render app immediately - SDK loads in background without blocking UI
-  // SDK errors are logged but don't prevent app initialization
+  // For /pay/[id] routes, render children immediately
+  if (isPayRoute) {
+    return <>{children}</>
+  }
+
+  if (!scriptLoaded) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          <p className="text-sm text-muted-foreground">Loading Pi SDK...</p>
+        </div>
+      </div>
+    )
+  }
+
   if (error) {
     CoreLogger.error("Pi SDK Loader error:", error)
   }
