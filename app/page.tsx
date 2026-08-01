@@ -288,18 +288,13 @@ export default function HomePage() {
 
 
   // CRITICAL: Include payment data in URL for Preview environments without KV
-  // QR links use Pi deep link (entry=pi) with runtime origin detection
-  // Generate QR with pi:// URL format using current domain
+  // QR links use Pi deep link (entry=pi) with getPiNetUrl helper
+  // Generate QR with pi:// URL format using stable Vercel domain
   const getPaymentLinkForQR = (paymentId: string) => {
     const amount = payment?.amount || 0
     const noteParam = payment?.note ? `&note=${encodeURIComponent(payment.note)}` : ""
     
-    // Extract domain from current runtime origin
-    let domain = window.location.origin
-      .replace("https://", "")
-      .replace("http://", "")
-    
-    return `pi://${domain}/pay/${paymentId}?amount=${amount}&entry=pi${noteParam}`
+    return `${getPiNetUrl(paymentId)}?amount=${amount}&entry=pi${noteParam}`
   }
   
   const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""
