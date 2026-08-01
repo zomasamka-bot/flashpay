@@ -97,17 +97,8 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  if (!scriptLoaded) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          <p className="text-sm text-muted-foreground">Loading Pi SDK...</p>
-        </div>
-      </div>
-    )
-  }
-
+  // Render app immediately - SDK loads in background without blocking UI
+  // SDK errors are logged but don't prevent app initialization
   if (error) {
     CoreLogger.error("Pi SDK Loader error:", error)
   }
