@@ -71,17 +71,9 @@ export default function HomePage() {
       const result = await initializePiSDK()
 
       if (result.success) {
-        console.log("[v0] Pi SDK initialized - waiting for wallet session to be ready...")
-        
-        // CRITICAL FIX: Wait a moment for the Pi Wallet session to fully initialize
-        // Pi.init() makes the SDK available, but the user's wallet session needs time to be ready
-        // This prevents "Pi wallet not responding" errors by ensuring the wallet is listening
-        // when we call Pi.authenticate()
-        setTimeout(() => {
-          setSdkInitStatus("ready")
-          setSdkError(null)
-          console.log("[v0] Wallet session ready - authentication can now proceed")
-        }, 500)
+        console.log("[v0] Pi SDK initialized - wallet session ready")
+        setSdkInitStatus("ready")
+        setSdkError(null)
       } else {
         setSdkInitStatus("error")
         setSdkError(result.error || "Failed to initialize Pi SDK")
@@ -315,7 +307,7 @@ export default function HomePage() {
   // Payment sharing handlers
   // Shared HTTPS URL with entry=share for bridge UI, includes amount and note
   const sharePaymentUrl = currentPaymentId && payment 
-    ? `https://flashpay-two.vercel.app/pay/${currentPaymentId}?amount=${payment.amount}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    ? `${typeof window !== "undefined" ? window.location.origin : "https://flashpay.pi"}/pay/${currentPaymentId}?amount=${payment.amount}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   
   const handleSharePayment = async () => {

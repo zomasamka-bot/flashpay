@@ -34,7 +34,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en">
       <head>
         <style>{`
 html {
@@ -43,8 +43,6 @@ html {
   --font-mono: ${GeistMono.variable};
 }
         `}</style>
-        {/* Preload Pi SDK script to start loading early */}
-        <link rel="preload" href="https://sdk.minepi.com/pi-sdk.js" as="script" />
       </head>
       <body>
         <ErrorBoundary>

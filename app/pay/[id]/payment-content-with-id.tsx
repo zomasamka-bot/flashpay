@@ -80,24 +80,19 @@ export default function PaymentContentWithId({
 
   useEffect(() => {
     let abortController: AbortController | null = null
-    let timeoutId: NodeJS.Timeout | null = null
 
     async function fetchPayment() {
       addDiagnostic(`Fetching payment: ${paymentId}`)
-      console.log("[v0][PaymentPage] Entry mode:", entryMode)
       
       try {
         // For entry=pi with URL amount, show provisionally and fetch authoritatively once
         const urlAmountStr = urlAmount || (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get('amount') : null)
         const urlNoteStr = urlNote || (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get('note') : null)
         
-        // CRITICAL FIX: Pi Browser deep link detection
-        // When scanning QR code, Pi Browser opens pi://... which redirects to https://demo-.../pay/...
-        // The entry=pi parameter tells us this is a deep-linked payment request
         if (entryMode === "pi" && urlAmountStr) {
           const amount = parseFloat(urlAmountStr)
           if (!isNaN(amount) && amount > 0) {
-            // Show provisional payment data immediately to user
+            // Show provisional payment data immediately
             const provisionalPayment: Payment = {
               id: paymentId,
               amount: amount,
@@ -107,28 +102,22 @@ export default function PaymentContentWithId({
               merchantId: "unknown",
               accessToken: "",
             }
-            console.log("[v0] ✅ Showing provisional payment from deep link:", provisionalPayment)
-            addDiagnostic("✅ Payment loaded from QR code link")
+            console.log("[v0] ✅ Showing provisional payment from URL params:", provisionalPayment)
             setPayment(provisionalPayment)
             setLoading(false)
             
-            // Fetch authoritative payment in background with generous timeout for slow networks
+            // Fetch authoritative payment ONCE with short timeout
             try {
               abortController = new AbortController()
-              // Use 15 second timeout for Pi Browser (slower networks, older phones)
-              timeoutId = setTimeout(() => {
-                console.log("[v0] ⚠️ Payment fetch timeout after 15s - keeping provisional payment")
-                abortController?.abort()
-              }, 15000)
+              const timeoutId = setTimeout(() => abortController?.abort(), 5000) // 5 second timeout
               
               const serverPayment = await getPaymentFromServer(paymentId, true, abortController.signal)
-              if (timeoutId) clearTimeout(timeoutId)
+              clearTimeout(timeoutId)
               
               if (serverPayment) {
                 console.log("[v0] ✅ Authoritative payment loaded:", serverPayment)
                 setPayment(serverPayment)
                 setAuthoritativeLoaded(true)
-                addDiagnostic("✅ Payment verified from server")
                 // Store in unifiedStore for payment execution
                 unifiedStore.createPaymentWithId(
                   serverPayment.id,
@@ -142,13 +131,12 @@ export default function PaymentContentWithId({
                 )
               } else {
                 console.warn("[v0] ⚠️ Authoritative payment not available from server")
-                addDiagnostic("⚠️ Using payment data from QR code")
+                addDiagnostic("Server payment not available - using provisional data")
                 // Keep showing provisional payment, disable Pay button
               }
             } catch (fetchError) {
-              if (timeoutId) clearTimeout(timeoutId)
               console.warn("[v0] ⚠️ Failed to fetch authoritative payment:", fetchError)
-              addDiagnostic(`Using provisional: ${fetchError}`)
+              addDiagnostic(`Failed to fetch payment from server: ${fetchError}`)
               // Keep showing provisional payment, disable Pay button
             }
             return
@@ -157,22 +145,16 @@ export default function PaymentContentWithId({
         
         // Standard flow for non-pi entries or no URL amount - fetch once
         setLoading(true)
-        addDiagnostic("Loading payment data...")
         
         try {
           abortController = new AbortController()
-          // Use 15 second timeout for Pi Browser (slower networks)
-          timeoutId = setTimeout(() => {
-            console.log("[v0] ⚠️ Payment fetch timeout after 15s")
-            abortController?.abort()
-          }, 15000)
+          const timeoutId = setTimeout(() => abortController?.abort(), 5000) // 5 second timeout
           
           const serverPayment = await getPaymentFromServer(paymentId, false, abortController.signal)
-          if (timeoutId) clearTimeout(timeoutId)
+          clearTimeout(timeoutId)
           
           if (serverPayment) {
             console.log("[v0] ✅ Payment found from server:", serverPayment)
-            addDiagnostic("✅ Payment loaded from server")
             setPayment(serverPayment)
             setAuthoritativeLoaded(true)
             unifiedStore.createPaymentWithId(
@@ -199,38 +181,31 @@ export default function PaymentContentWithId({
                 accessToken: "",
               }
               console.log("[v0] ✅ Created fallback payment from URL params:", fallbackPayment)
-              addDiagnostic("✅ Using payment data from link")
               setPayment(fallbackPayment)
             } else {
               console.error("[v0] ❌ Invalid amount in URL parameters:", urlAmountStr)
-              addDiagnostic("❌ Invalid payment amount")
               setPayment(null)
             }
           } else {
             console.error("[v0] ❌ Payment NOT found and no URL parameters available")
-            addDiagnostic("❌ Payment not found")
             setPayment(null)
           }
         } catch (error) {
           console.error("[v0] Error fetching payment:", error)
-          addDiagnostic(`❌ Error: ${error}`)
           setPayment(null)
         }
         
         setLoading(false)
       } catch (error) {
         console.error("[v0] Error in fetchPayment:", error)
-        addDiagnostic(`❌ Fatal error: ${error}`)
         setPayment(null)
         setLoading(false)
       }
     }
 
     async function initPiSDK() {
-      // CRITICAL FIX: Non-blocking Pi SDK initialization
-      // Don't delay payment page rendering while waiting for SDK
       const hasPiSDK = typeof window !== "undefined" && !!window.Pi
-      console.log("[v0][PaymentPage] Checking Pi SDK:", hasPiSDK ? "FOUND" : "NOT FOUND")
+      addDiagnostic(`Checking Pi SDK: ${hasPiSDK ? "FOUND" : "NOT FOUND"}`)
 
       if (hasPiSDK) {
         addDiagnostic("Initializing Pi SDK...")
@@ -238,36 +213,31 @@ export default function PaymentContentWithId({
         setPiSDKReady(result.success)
         
         if (result.success) {
-          addDiagnostic("✅ Pi SDK ready - ready to pay")
+          addDiagnostic("Pi SDK ready - you can now pay")
           setAuthStatus("idle")
         } else {
-          addDiagnostic("⚠️ Pi SDK init failed")
+          addDiagnostic("Pi SDK initialization failed")
           setAuthStatus("failed")
         }
       } else {
         setPiSDKReady(false)
         setAuthStatus("failed")
-        addDiagnostic("⚠️ Pi SDK not available")
+        addDiagnostic("ERROR: Not in Pi Browser - window.Pi not found")
       }
     }
 
-    // Start payment fetch immediately
     fetchPayment()
-    
     // Only initialize Pi SDK if entry mode is "pi" (not "share")
-    // Do this asynchronously without blocking page render
     if (entryMode === "pi") {
-      // Don't await - let it load in background
-      initPiSDK().catch((e) => console.log("[v0] SDK init error (non-blocking):", e))
+      initPiSDK()
     } else {
       // Shared link mode - no Pi SDK initialization
-      addDiagnostic("Shared link mode - no SDK needed")
+      addDiagnostic("Shared link mode - Pi SDK initialization skipped")
       setPiSDKReady(false)
     }
 
     return () => {
       if (abortController) abortController.abort()
-      if (timeoutId) clearTimeout(timeoutId)
     }
   }, [paymentId, entryMode, toast])
 
@@ -373,7 +343,8 @@ export default function PaymentContentWithId({
 
   // If entry mode is "share", show bridge UI to open Pi Browser
   if (entryMode === "share" && urlAmount) {
-    const piDeepLink = `pi://flashpay-two.vercel.app/pay/${paymentId}?amount=${urlAmount}&entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
+    const origin = typeof window !== "undefined" ? window.location.origin : "https://flashpay.pi"
+    const piDeepLink = `pi://${origin.replace(/^https?:\/\//, "")}/pay/${paymentId}?amount=${urlAmount}&entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4 flex items-center">

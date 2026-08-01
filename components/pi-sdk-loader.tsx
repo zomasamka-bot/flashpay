@@ -31,11 +31,10 @@ declare global {
 
 /**
  * Component that ensures Pi SDK is loaded before the app initializes
- * OPTIMIZED FOR PI BROWSER: Non-blocking, renders content immediately
  */
 export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const [isReady, setIsReady] = useState(true) // Always render immediately
+  const [scriptLoaded, setScriptLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Routes that don't need Pi SDK initialization
@@ -43,71 +42,75 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const shouldSkipSDK = skipSDKRoutes.some((route) => pathname?.startsWith(route))
 
   useEffect(() => {
-    // For /pay/* routes in Pi Browser, render immediately without blocking
-    // The payment page will handle SDK initialization independently if needed
-    if (pathname?.startsWith("/pay/")) {
-      console.log("[v0][PiSDKLoader] Payment route detected - rendering immediately in Pi Browser")
-      setIsReady(true)
-      // Still load SDK in background without blocking
-      loadPiSDKAsync()
-      return
-    }
-
-    // For other routes, still attempt to load SDK but don't block rendering
-    loadPiSDKAsync()
-  }, [pathname])
-
-  const loadPiSDKAsync = () => {
-    // Skip SDK loading for admin routes
+    // Skip SDK loading for admin routes - owner is already verified
     if (shouldSkipSDK) {
+      setScriptLoaded(true)
       return
     }
-
     // Check if script is already loaded
     if (window.__PI_SDK_LOADED__ || (window.Pi && typeof window.Pi.init === "function")) {
+      setScriptLoaded(true)
       return
     }
-
-    // Load SDK in the background (non-blocking)
-    if (typeof window === "undefined") return
 
     // Create script element
     const script = document.createElement("script")
     script.src = "https://sdk.minepi.com/pi-sdk.js"
-    script.async = true // Allow async to not block page
-    script.defer = true
+    script.async = false
+    script.defer = false
 
     // Handle successful load
     script.onload = () => {
       setTimeout(() => {
         if (window.Pi && typeof window.Pi.init === "function") {
           window.__PI_SDK_LOADED__ = true
-          console.log("[v0][PiSDKLoader] Pi SDK loaded successfully in background")
+          setScriptLoaded(true)
         } else {
           CoreLogger.error("Pi SDK script loaded but Pi object not available", {
             hasPi: !!window.Pi,
             piType: typeof window.Pi,
           })
+          setError("Pi SDK loaded but not initialized properly")
+          setScriptLoaded(true)
         }
-      }, 50) // Minimal delay
+      }, 100)
     }
 
-    // Handle load error (non-blocking failure)
+    // Handle load error
     script.onerror = (event) => {
       CoreLogger.error("Failed to load Pi SDK script", {
         error: event,
         url: script.src,
       })
-      // Don't set error state - page renders anyway
+      setError("Failed to load Pi SDK from CDN")
+      setScriptLoaded(true)
     }
 
-    // Add script to document (will load in background)
-    if (document.head) {
-      document.head.appendChild(script)
+    // Add script to document
+    document.head.appendChild(script)
+
+    // Cleanup
+    return () => {
+      if (script.parentNode) {
+        script.parentNode.removeChild(script)
+      }
     }
+  }, [])
+
+  if (!scriptLoaded) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          <p className="text-sm text-muted-foreground">Loading Pi SDK...</p>
+        </div>
+      </div>
+    )
   }
 
-  // CRITICAL FIX: Always render content immediately, never block
-  // Pi SDK loads in background if needed
+  if (error) {
+    CoreLogger.error("Pi SDK Loader error:", error)
+  }
+
   return <>{children}</>
 }
