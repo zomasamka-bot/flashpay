@@ -6,6 +6,26 @@ export const runtime = 'nodejs'
 
 import { redis, isRedisConfigured as isKvConfigured } from "@/lib/redis"
 
+// Helper: Check if origin is allowed for CORS
+function isOriginAllowed(origin: string | null): boolean {
+  if (!origin) return false
+  
+  // Allow flashpay-two.vercel.app
+  if (origin === 'https://flashpay-two.vercel.app') return true
+  
+  // Allow vusercontent.net origins matching pattern
+  if (/^https:\/\/[a-z0-9-]+\.vusercontent\.net$/i.test(origin)) return true
+  
+  return false
+}
+
+// Helper: Add CORS headers to response
+function addCorsHeaders(response: NextResponse, origin: string): NextResponse {
+  response.headers.set('Access-Control-Allow-Origin', origin)
+  response.headers.set('Vary', 'Origin')
+  return response
+}
+
 interface Payment {
   id: string
   merchantId?: string
@@ -40,16 +60,23 @@ function getPublicPayment(payment: any) {
 
 // GET /api/payments/[id] - Retrieve a specific payment
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const origin = request.headers.get("origin")
+  const allowCors = isOriginAllowed(origin)
+
   try {
     const { id } = await params
     
     console.log("[API] GET /api/payments/[id] called for:", id)
 
     if (!isKvConfigured) {
-      return NextResponse.json({ 
+      const errorResponse = NextResponse.json({ 
         error: "Redis not configured",
         paymentId: id,
       }, { status: 500 })
+      if (allowCors && origin) {
+        return addCorsHeaders(errorResponse, origin)
+      }
+      return errorResponse
     }
 
     console.log("[API][ID] ========================================")
@@ -65,21 +92,33 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     if (!payment) {
       console.log("[API][ID] ❌ Payment not found:", id)
-      return NextResponse.json({ 
+      const notFoundResponse = NextResponse.json({ 
         error: "Payment not found",
         paymentId: id,
       }, { status: 404 })
+      if (allowCors && origin) {
+        return addCorsHeaders(notFoundResponse, origin)
+      }
+      return notFoundResponse
     }
 
     console.log("[API] Payment retrieved:", id, "status:", payment.status)
 
-    return NextResponse.json({
+    const successResponse = NextResponse.json({
       success: true,
       payment: getPublicPayment(payment),
     })
+    if (allowCors && origin) {
+      return addCorsHeaders(successResponse, origin)
+    }
+    return successResponse
   } catch (error) {
     console.error("[API] Error fetching payment:", error)
-    return NextResponse.json({ error: "Failed to fetch payment" }, { status: 500 })
+    const errorResponse = NextResponse.json({ error: "Failed to fetch payment" }, { status: 500 })
+    if (allowCors && origin) {
+      return addCorsHeaders(errorResponse, origin)
+    }
+    return errorResponse
   }
 }
 
