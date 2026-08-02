@@ -85,7 +85,13 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
 
     // Set timeout to reject promise after 15s
     const timeoutId = setTimeout(() => {
-      rejectReady(new Error("Pi SDK readiness timeout (15s)"))
+      const timeoutError = new Error("Pi SDK readiness timeout (15s)")
+      CoreLogger.error("Pi SDK readiness timeout", { error: timeoutError.message })
+      rejectReady(timeoutError)
+      // For /pay routes, set error to release UI after timeout
+      if (isPayRoute) {
+        setError("Pi SDK not available (timeout)")
+      }
     }, 15000)
 
     // Handle successful load
@@ -140,8 +146,22 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
     }
   }, [isPayRoute, shouldSkipSDK])
 
-  // For /pay/[id] routes, render children immediately
+  // For /pay/[id] routes, render children immediately but show error if SDK failed
   if (isPayRoute) {
+    if (error) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-background">
+          <div className="text-center max-w-sm px-4">
+            <div className="mb-4 inline-block h-12 w-12 text-yellow-600">
+              <span className="text-4xl">⚠️</span>
+            </div>
+            <h1 className="text-xl font-semibold mb-2">SDK Unavailable</h1>
+            <p className="text-sm text-muted-foreground mb-4">{error}</p>
+            <p className="text-xs text-muted-foreground">Please refresh or try again in Pi Browser</p>
+          </div>
+        </div>
+      )
+    }
     return <>{children}</>
   }
 

@@ -10,5 +10,8 @@ export default async function PaymentPageWithId({
   const { id } = await params
   const { amount, note, entry } = await searchParams
 
+  // Debug: Log what we received from Next.js router
+  console.log("[v0][PaymentPageWithId] Route params:", { id, amount, note, entry })
+
   return <PaymentContentWithId paymentId={id} urlAmount={amount} urlNote={note} entry={entry as "pi" | "share" | undefined} />
 }

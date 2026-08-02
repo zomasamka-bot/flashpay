@@ -288,18 +288,15 @@ export default function HomePage() {
 
 
   // CRITICAL: Include payment data in URL for Preview environments without KV
-  // QR links use Pi deep link (entry=pi) with runtime origin detection
-  // Generate QR with pi:// URL format using current domain
+  // QR links use stable PiNet domain for Pi authentication reliability
+  // Generate QR with HTTPS URL format (not pi://) to preserve full path and query parameters
   const getPaymentLinkForQR = (paymentId: string) => {
     const amount = payment?.amount || 0
     const noteParam = payment?.note ? `&note=${encodeURIComponent(payment.note)}` : ""
     
-    // Extract domain from current runtime origin
-    let domain = window.location.origin
-      .replace("https://", "")
-      .replace("http://", "")
-    
-    return `pi://${domain}/pay/${paymentId}?amount=${amount}&entry=pi${noteParam}`
+    // Always use stable PiNet domain for QR to ensure Pi authentication works
+    // Use HTTPS instead of pi:// because pi:// format drops path/query parameters
+    return `https://flashpayaefebeff3375.pinet.com/pay/${paymentId}?amount=${amount}&entry=pi${noteParam}`
   }
   
   const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""

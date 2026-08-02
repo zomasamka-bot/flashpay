@@ -35,6 +35,9 @@ export default function PaymentContentWithId({
   urlNote?: string
   entry?: "pi" | "share"
 }) {
+  // Debug: Log props received from server route
+  console.log("[v0][PaymentContentWithId] Component initialized with props:", { paymentId, urlAmount, urlNote, entry })
+
   const { toast } = useToast()
   const [payment, setPayment] = useState<Payment | null>(null)
   const [loading, setLoading] = useState(true)
@@ -69,11 +72,22 @@ export default function PaymentContentWithId({
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search)
       const mode = urlParams.get("entry") as "pi" | "share" | null
+      const urlAmount = urlParams.get("amount")
+      console.log("[v0][EntryMode] URL search string:", window.location.search)
+      console.log("[v0][EntryMode] Parsed entry param:", mode)
+      console.log("[v0][EntryMode] Parsed amount param:", urlAmount)
+      console.log("[v0][EntryMode] entry prop received:", entry)
+      
       if (mode === "share" || mode === "pi") {
         setEntryMode(mode)
         console.log("[v0][EntryMode] Detected entry mode from URL:", mode)
+      } else if (urlAmount && !isNaN(parseFloat(urlAmount))) {
+        // Default to 'pi' mode if amount is in URL but entry param missing
+        // This handles QR codes that include amount but may lose entry param in some browsers
+        setEntryMode("pi")
+        console.log("[v0][EntryMode] Auto-detected pi mode from amount param in URL")
       } else {
-        console.log("[v0][EntryMode] No entry mode in URL, using default:", entry)
+        console.log("[v0][EntryMode] No entry mode detected, entry prop:", entry)
       }
     }
   }, [])
@@ -359,8 +373,9 @@ export default function PaymentContentWithId({
 
   // If entry mode is "share", show bridge UI to open Pi Browser
   if (entryMode === "share" && urlAmount) {
-    const origin = typeof window !== "undefined" ? window.location.origin : "https://flashpay.pi"
-    const piDeepLink = `pi://${origin.replace(/^https?:\/\//, "")}/pay/${paymentId}?amount=${urlAmount}&entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
+    // Always use stable PiNet domain for deep links to ensure Pi authentication works
+    // Use HTTPS instead of pi:// because pi:// format drops path/query parameters
+    const piDeepLink = `https://flashpayaefebeff3375.pinet.com/pay/${paymentId}?amount=${urlAmount}&entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4 flex items-center">
