@@ -62,8 +62,9 @@ export default function HomePage() {
     console.log("[v0][Home-Init] Parsed entry param:", entry)
     
     if (id) {
-      console.log("[v0][Home-Init] Setting customer payment ID:", id)
-      setCurrentPaymentId(id)
+      console.log("[v0][Home-Init] Setting customer payment view:", id)
+      setIsCustomerView(true)
+      setCustomerPaymentId(id)
       return
     }
     console.log("[v0][Home-Init] No ID in URL, rendering merchant form")
