@@ -29,17 +29,11 @@ export function getPaymentLink(id: string): string {
 
 /**
  * Returns a Pi Browser deep link for use in QR codes.
- * Uses HTTPS URL with stable PiNet domain (flashpayaefebeff3375.pinet.com) for QR codes.
- * HTTPS preserves the full path and query parameters, while pi:// deep link format drops them.
- * Ensuring Pi authentication works with correct payment route regardless of runtime domain.
+ * Routes through app root with ?id= param since PiNet facade serves root only.
+ * Payment data is fetched from backend, not URL (authoritative source).
  */
 export function getPiNetPaymentUrl(id: string, amount?: number, note?: string): string {
-  const baseLink = `https://flashpayaefebeff3375.pinet.com/pay/${id}`
-  if (amount !== undefined) {
-    const encodedNote = note ? encodeURIComponent(note) : ""
-    return `${baseLink}?amount=${amount}&entry=pi${encodedNote ? `&note=${encodedNote}` : ""}`
-  }
-  return baseLink
+  return `https://flashpayaefebeff3375.pinet.com/?id=${id}&entry=pi`
 }
 
 /** @deprecated Use getPiNetPaymentUrl instead */

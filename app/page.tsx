@@ -43,6 +43,10 @@ export default function HomePage() {
   // CRITICAL: Check for payment ID on mount
   const [isCustomerView, setIsCustomerView] = useState(false)
   const [customerPaymentId, setCustomerPaymentId] = useState<string | null>(null)
+  
+  console.log("[v0][Home-Render] currentPaymentId state:", currentPaymentId)
+  console.log("[v0][Home-Render] isCustomerView state:", isCustomerView)
+  console.log("[v0][Home-Render] Will render CustomerPaymentView:", !!currentPaymentId)
   const [showShareMenu, setShowShareMenu] = useState(false)
   const [showConversion, setShowConversion] = useState(false)
   const [localAmount, setLocalAmount] = useState("")
@@ -51,13 +55,18 @@ export default function HomePage() {
   
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
-    const paymentId = urlParams.get('id')
+    const id = urlParams.get("id")
+    const entry = urlParams.get("entry")
+    console.log("[v0][Home-Init] URL search string:", window.location.search)
+    console.log("[v0][Home-Init] Parsed ID param:", id)
+    console.log("[v0][Home-Init] Parsed entry param:", entry)
     
-    if (paymentId) {
-      setIsCustomerView(true)
-      setCustomerPaymentId(paymentId)
+    if (id) {
+      console.log("[v0][Home-Init] Setting customer payment ID:", id)
+      setCurrentPaymentId(id)
       return
     }
+    console.log("[v0][Home-Init] No ID in URL, rendering merchant form")
   }, [])
 
   // Initialize Pi SDK on app load
@@ -287,19 +296,19 @@ export default function HomePage() {
   }
 
 
-  // CRITICAL: Include payment data in URL for Preview environments without KV
-  // QR links use stable PiNet domain for Pi authentication reliability
-  // Generate QR with HTTPS URL format (not pi://) to preserve full path and query parameters
+  // QR routes through app root with ?id= param (PiNet facade serves root only)
+  // Payment data is fetched from backend, not URL (authoritative source)
   const getPaymentLinkForQR = (paymentId: string) => {
-    const amount = payment?.amount || 0
-    const noteParam = payment?.note ? `&note=${encodeURIComponent(payment.note)}` : ""
-    
-    // Always use stable PiNet domain for QR to ensure Pi authentication works
-    // Use HTTPS instead of pi:// because pi:// format drops path/query parameters
-    return `https://flashpayaefebeff3375.pinet.com/pay/${paymentId}?amount=${amount}&entry=pi${noteParam}`
+    const qrUrl = `https://flashpayaefebeff3375.pinet.com/?id=${paymentId}&entry=pi`
+    console.log("[v0][QR] Generated QR payload:", qrUrl)
+    console.log("[v0][QR] Payment ID in QR:", paymentId)
+    return qrUrl
   }
   
   const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""
+  console.log("[v0][Home] Current payment ID:", currentPaymentId)
+  console.log("[v0][Home] Payment object exists:", !!payment)
+  console.log("[v0][Home] Final payment link:", paymentLink)
 
   // Payment sharing handlers
   // Shared HTTPS URL with entry=share for bridge UI, includes amount and note

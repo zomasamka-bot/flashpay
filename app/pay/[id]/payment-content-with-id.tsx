@@ -373,9 +373,8 @@ export default function PaymentContentWithId({
 
   // If entry mode is "share", show bridge UI to open Pi Browser
   if (entryMode === "share" && urlAmount) {
-    // Always use stable PiNet domain for deep links to ensure Pi authentication works
-    // Use HTTPS instead of pi:// because pi:// format drops path/query parameters
-    const piDeepLink = `https://flashpayaefebeff3375.pinet.com/pay/${paymentId}?amount=${urlAmount}&entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
+    // Route through app root with ?id= param (PiNet facade serves root only)
+    const piDeepLink = `https://flashpayaefebeff3375.pinet.com/?id=${paymentId}&entry=pi`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4 flex items-center">
