@@ -43,10 +43,7 @@ export default function HomePage() {
   // CRITICAL: Check for payment ID on mount
   const [isCustomerView, setIsCustomerView] = useState(false)
   const [customerPaymentId, setCustomerPaymentId] = useState<string | null>(null)
-  
-  console.log("[v0][Home-Render] currentPaymentId state:", currentPaymentId)
-  console.log("[v0][Home-Render] isCustomerView state:", isCustomerView)
-  console.log("[v0][Home-Render] Will render CustomerPaymentView:", !!currentPaymentId)
+  const [routeResolved, setRouteResolved] = useState(false)
   const [showShareMenu, setShowShareMenu] = useState(false)
   const [showConversion, setShowConversion] = useState(false)
   const [localAmount, setLocalAmount] = useState("")
@@ -54,25 +51,35 @@ export default function HomePage() {
   const [piRate, setPiRate] = useState("1")
   
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search)
-    const id = urlParams.get("id")
-    const entry = urlParams.get("entry")
-    console.log("[v0][Home-Init] URL search string:", window.location.search)
-    console.log("[v0][Home-Init] Parsed ID param:", id)
-    console.log("[v0][Home-Init] Parsed entry param:", entry)
-    
-    if (id) {
-      console.log("[v0][Home-Init] Setting customer payment view:", id)
+    // Check pathname first (PiNet QR route: /pay/{id})
+    const pathnameMatch = window.location.pathname.match(/^\/pay\/([0-9a-f-]{36})\/?$/i)
+    if (pathnameMatch && pathnameMatch[1]) {
+      const id = pathnameMatch[1]
+      console.log("[v0][Home-Init] Detected pathname payment ID:", id)
       setIsCustomerView(true)
       setCustomerPaymentId(id)
+      setRouteResolved(true)
       return
     }
-    console.log("[v0][Home-Init] No ID in URL, rendering merchant form")
+    
+    // Fallback: check query param (backward compatibility)
+    const urlParams = new URLSearchParams(window.location.search)
+    const id = urlParams.get("id")
+    if (id) {
+      console.log("[v0][Home-Init] Detected query param payment ID:", id)
+      setIsCustomerView(true)
+      setCustomerPaymentId(id)
+      setRouteResolved(true)
+      return
+    }
+    
+    console.log("[v0][Home-Init] No payment ID detected, rendering merchant form")
+    setRouteResolved(true)
   }, [])
 
-  // Initialize Pi SDK on app load
+  // Initialize Pi SDK on app load (skip for customer view)
   useEffect(() => {
-    if (redirecting) {
+    if (redirecting || !routeResolved || isCustomerView) {
       return
     }
     
@@ -98,7 +105,7 @@ export default function HomePage() {
     }
 
     init()
-  }, [redirecting, toast])
+  }, [redirecting, toast, routeResolved, isCustomerView])
 
   // Manual authentication - user controls when to authenticate
   const handleManualAuthenticate = async () => {
@@ -297,10 +304,10 @@ export default function HomePage() {
   }
 
 
-  // QR routes through app root with ?id= param (PiNet facade serves root only)
-  // Payment data is fetched from backend, not URL (authoritative source)
+  // QR routes through pathname for PiNet (PiNet preserves pathname in address bar while serving app root)
+  // Payment data is fetched from backend by ID, not from URL (authoritative source)
   const getPaymentLinkForQR = (paymentId: string) => {
-    const qrUrl = `https://flashpayaefebeff3375.pinet.com/?id=${paymentId}&entry=pi`
+    const qrUrl = `https://flashpayaefebeff3375.pinet.com/pay/${encodeURIComponent(paymentId)}`
     console.log("[v0][QR] Generated QR payload:", qrUrl)
     console.log("[v0][QR] Payment ID in QR:", paymentId)
     return qrUrl
@@ -449,6 +456,18 @@ export default function HomePage() {
       title: "Amount set",
       description: `Pi amount set to ${piAmount}π`,
     })
+  }
+
+  // Show loader while route is resolving
+  if (!routeResolved) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-border border-t-primary"></div>
+          <p className="text-sm text-muted-foreground">Loading payment...</p>
+        </div>
+      </div>
+    )
   }
 
   // CUSTOMER VIEW: Show payment page when ID detected in URL
