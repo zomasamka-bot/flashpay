@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { createPayment } from "@/lib/operations"
-import { getPiNetUrl } from "@/lib/router"
+import { getPiNetPaymentUrl } from "@/lib/router"
 import { config } from "@/lib/config"
 import { initializePiSDK, authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
@@ -51,7 +51,18 @@ export default function HomePage() {
   const [piRate, setPiRate] = useState("1")
   
   useEffect(() => {
-    // Check pathname first (PiNet QR route: /pay/{id})
+    // Check hash first (Pi Browser QR route: #/pay/{id})
+    const hashMatch = window.location.hash.match(/^#\/pay\/([0-9a-f-]{36})\/?$/i)
+    if (hashMatch && hashMatch[1]) {
+      const id = hashMatch[1]
+      console.log("[v0][Home-Init] Detected hash payment ID:", id)
+      setIsCustomerView(true)
+      setCustomerPaymentId(id)
+      setRouteResolved(true)
+      return
+    }
+    
+    // Fallback: check pathname (Vercel production: /pay/{id})
     const pathnameMatch = window.location.pathname.match(/^\/pay\/([0-9a-f-]{36})\/?$/i)
     if (pathnameMatch && pathnameMatch[1]) {
       const id = pathnameMatch[1]
@@ -304,24 +315,17 @@ export default function HomePage() {
   }
 
 
-  // QR routes through pathname for PiNet (PiNet preserves pathname in address bar while serving app root)
+  // QR routes through hash for Pi Browser (#/pay/{id})
   // Payment data is fetched from backend by ID, not from URL (authoritative source)
-  const getPaymentLinkForQR = (paymentId: string) => {
-    const qrUrl = `https://flashpayaefebeff3375.pinet.com/pay/${encodeURIComponent(paymentId)}`
-    console.log("[v0][QR] Generated QR payload:", qrUrl)
-    console.log("[v0][QR] Payment ID in QR:", paymentId)
-    return qrUrl
-  }
-  
-  const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""
+  const paymentLink = currentPaymentId && payment ? getPiNetPaymentUrl(currentPaymentId) : ""
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
-  console.log("[v0][Home] Final payment link:", paymentLink)
+  console.log("[v0][Home] Final payment link (QR):", paymentLink)
 
   // Payment sharing handlers
-  // Shared HTTPS URL with entry=share for bridge UI, includes amount and note
+  // Use getPiNetPaymentUrl for Pi Browser link generation (hash-based)
   const sharePaymentUrl = currentPaymentId && payment 
-    ? `${typeof window !== "undefined" ? window.location.origin : "https://flashpay.pi"}/pay/${currentPaymentId}?amount=${payment.amount}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    ? getPiNetPaymentUrl(currentPaymentId)
     : ""
   
   const handleSharePayment = async () => {

@@ -29,11 +29,12 @@ export function getPaymentLink(id: string): string {
 
 /**
  * Returns a Pi Browser deep link for use in QR codes.
- * Routes through pathname (/pay/{id}) which PiNet preserves in address bar while serving app root.
+ * Routes through hash (#/pay/{id}) since PiNet App Studio reduces inner app URL to / before React.
+ * Hash routing persists across the PiNet facade and is visible in address bar.
  * Payment data is fetched from backend by ID, not URL (authoritative source).
  */
 export function getPiNetPaymentUrl(id: string, amount?: number, note?: string): string {
-  return `https://flashpayaefebeff3375.pinet.com/pay/${encodeURIComponent(id)}`
+  return `https://flashpayaefebeff3375.pinet.com/#/pay/${encodeURIComponent(id)}`
 }
 
 /** @deprecated Use getPiNetPaymentUrl instead */
