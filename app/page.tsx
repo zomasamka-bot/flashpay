@@ -3,13 +3,14 @@
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Check, Wallet, AlertCircle, Share2, Copy, DollarSign, X, AlertTriangle } from "lucide-react"
+import { ArrowLeft, Check, Wallet, AlertCircle, Share2, Copy, DollarSign, X, AlertTriangle, Camera } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { createPayment } from "@/lib/operations"
-import { getPiNetPaymentUrl } from "@/lib/router"
+import { getPiNetUrl, getPiScanQRPayload } from "@/lib/router"
 import { config } from "@/lib/config"
+import { PiBrowserScanner } from "@/components/pi-browser-scanner"
 import { initializePiSDK, authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
 import { usePaymentById, usePaymentStats } from "@/lib/use-payments"
@@ -49,20 +50,10 @@ export default function HomePage() {
   const [localAmount, setLocalAmount] = useState("")
   const [currency, setCurrency] = useState("USD")
   const [piRate, setPiRate] = useState("1")
+  const [showPiBrowserScanner, setShowPiBrowserScanner] = useState(false)
   
   useEffect(() => {
-    // Check hash first (Pi Browser QR route: #/pay/{id})
-    const hashMatch = window.location.hash.match(/^#\/pay\/([0-9a-f-]{36})\/?$/i)
-    if (hashMatch && hashMatch[1]) {
-      const id = hashMatch[1]
-      console.log("[v0][Home-Init] Detected hash payment ID:", id)
-      setIsCustomerView(true)
-      setCustomerPaymentId(id)
-      setRouteResolved(true)
-      return
-    }
-    
-    // Fallback: check pathname (Vercel production: /pay/{id})
+    // Check pathname first (Vercel: /pay/{id})
     const pathnameMatch = window.location.pathname.match(/^\/pay\/([0-9a-f-]{36})\/?$/i)
     if (pathnameMatch && pathnameMatch[1]) {
       const id = pathnameMatch[1]
@@ -315,17 +306,42 @@ export default function HomePage() {
   }
 
 
-  // QR routes through hash for Pi Browser (#/pay/{id})
+  // QR routes through pathname for Vercel (/pay/{id})
   // Payment data is fetched from backend by ID, not from URL (authoritative source)
-  const paymentLink = currentPaymentId && payment ? getPiNetPaymentUrl(currentPaymentId) : ""
+  const getPaymentLinkForQR = (paymentId: string) => {
+    const qrUrl = `${typeof window !== "undefined" ? window.location.origin : "https://flashpay.pi"}/pay/${encodeURIComponent(paymentId)}`
+    console.log("[v0][QR] Generated QR payload:", qrUrl)
+    console.log("[v0][QR] Payment ID in QR:", paymentId)
+    return qrUrl
+  }
+  
+  // Pi Browser "Scan to Pay" QR payload (just "flashpay:{UUID}")
+  const getPiBrowserQRPayload = (paymentId: string) => {
+    const payload = getPiScanQRPayload(paymentId)
+    console.log("[v0][PiBrowserQR] Generated scan payload:", payload)
+    return payload
+  }
+  
+  const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""
+  const piBrowserQRPayload = currentPaymentId && payment ? getPiBrowserQRPayload(currentPaymentId) : ""
+  
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
-  console.log("[v0][Home] Final payment link (QR):", paymentLink)
+  console.log("[v0][Home] Final payment link:", paymentLink)
+  console.log("[v0][Home] Pi Browser scan payload:", piBrowserQRPayload)
+  
+  // Handle scanned payment ID from Pi Browser scanner
+  const handleScanPaymentId = (scannedId: string) => {
+    console.log("[v0][Home] Scanned payment ID:", scannedId)
+    setShowPiBrowserScanner(false)
+    setIsCustomerView(true)
+    setCustomerPaymentId(scannedId)
+  }
 
   // Payment sharing handlers
-  // Use getPiNetPaymentUrl for Pi Browser link generation (hash-based)
+  // Shared HTTPS URL with entry=share for bridge UI, includes amount and note
   const sharePaymentUrl = currentPaymentId && payment 
-    ? getPiNetPaymentUrl(currentPaymentId)
+    ? `${typeof window !== "undefined" ? window.location.origin : "https://flashpay.pi"}/pay/${currentPaymentId}?amount=${payment.amount}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   
   const handleSharePayment = async () => {
@@ -758,6 +774,16 @@ export default function HomePage() {
           Generate QR Code
         </Button>
 
+        {/* Pi Browser Scan to Pay Button */}
+        <Button
+          onClick={() => setShowPiBrowserScanner(true)}
+          variant="outline"
+          className="w-full mt-3 gap-2"
+        >
+          <Camera className="h-4 w-4" />
+          Scan to Pay (Pi Browser)
+        </Button>
+
         {/* Convert Local Price Button */}
         <Button
           onClick={() => setShowConversion(true)}
@@ -865,6 +891,19 @@ export default function HomePage() {
                 ) : null
               })()}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pi Browser Scanner Modal */}
+      {showPiBrowserScanner && (
+        <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center p-4 md:p-0 pt-16 md:pt-0 overflow-y-auto">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowPiBrowserScanner(false)} />
+          <div className="relative bg-background rounded-t-lg md:rounded-lg w-full md:max-w-md max-h-[calc(100vh-120px)] md:max-h-[90vh] overflow-y-auto pb-6">
+            <PiBrowserScanner
+              onPaymentIdDetected={handleScanPaymentId}
+              onClose={() => setShowPiBrowserScanner(false)}
+            />
           </div>
         </div>
       )}
