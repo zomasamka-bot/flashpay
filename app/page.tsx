@@ -17,7 +17,7 @@ import { usePaymentById, usePaymentStats } from "@/lib/use-payments"
 import { useLoadPaymentHistory } from "@/lib/use-load-payment-history"
 import { useMerchant } from "@/lib/use-merchant"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { CustomerPaymentView } from "@/components/customer-payment-view"
+
 
 export default function HomePage() {
   const router = useRouter()
@@ -322,19 +322,28 @@ export default function HomePage() {
     return payload
   }
   
+  // Detect if running in App Studio (demo-*.vusercontent.net) vs Vercel
+  const isAppStudio = typeof window !== "undefined" && /^demo-.*\.vusercontent\.net$/.test(window.location.hostname)
+  
   const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""
   const piBrowserQRPayload = currentPaymentId && payment ? getPiBrowserQRPayload(currentPaymentId) : ""
   
+  // Choose QR payload based on environment
+  const visibleQRPayload = isAppStudio ? piBrowserQRPayload : paymentLink
+  
+  console.log("[v0][Home] Hostname:", typeof window !== "undefined" ? window.location.hostname : "N/A")
+  console.log("[v0][Home] Is App Studio:", isAppStudio)
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
-  console.log("[v0][Home] Final payment link:", paymentLink)
-  console.log("[v0][Home] Pi Browser scan payload:", piBrowserQRPayload)
+  console.log("[v0][Home] Final QR payload:", visibleQRPayload)
   
   // Handle scanned payment ID from Pi Browser scanner
+  // Render PaymentContentWithId with entry="pi" without navigation
   const handleScanPaymentId = (scannedId: string) => {
     console.log("[v0][Home] Scanned payment ID:", scannedId)
+    console.log("[v0][Home] Will render PaymentContentWithId with entry=pi")
     setShowPiBrowserScanner(false)
-    setIsCustomerView(true)
+    // Set state to trigger PaymentContentWithId render
     setCustomerPaymentId(scannedId)
   }
 
@@ -490,9 +499,11 @@ export default function HomePage() {
     )
   }
 
-  // CUSTOMER VIEW: Show payment page when ID detected in URL
-  if (isCustomerView && customerPaymentId) {
-    return <CustomerPaymentView paymentId={customerPaymentId} />
+  // CUSTOMER VIEW: Show payment page when ID detected in URL or via Pi Browser scan
+  if (customerPaymentId) {
+    // Dynamic import PaymentContentWithId for Pi Browser scan flow
+    const PaymentContentWithId = require("@/app/pay/[id]/payment-content-with-id").default
+    return <PaymentContentWithId paymentId={customerPaymentId} entry="pi" />
   }
 
   if (showQR && currentPaymentId) {
@@ -533,15 +544,19 @@ export default function HomePage() {
 
         {/* QR Payment View */}
         <div className="flex-1 flex flex-col items-center justify-center px-4 py-8">
-          <div className="text-sm text-muted-foreground mb-4">Scan QR Code to Pay</div>
+          <div className="text-sm text-muted-foreground mb-4">
+            {isAppStudio ? "Scan with Pi Browser" : "Scan QR Code to Pay"}
+          </div>
 
           <div className="bg-white p-8 rounded-3xl shadow-2xl mb-6">
-            <QRCode value={paymentLink} size={300} />
+            <QRCode value={visibleQRPayload} size={300} />
           </div>
 
           <div className="text-xs text-center text-muted-foreground mb-6 max-w-xs">
-            Scan and open in Pi Browser for fastest payment
+            {isAppStudio ? "Pi Browser Scan to Pay code" : "Scan with any QR reader or Pi Browser"}
           </div>
+
+
 
           <div className="text-6xl font-bold mb-4 tabular-nums">
             {displayAmount}

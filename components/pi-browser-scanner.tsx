@@ -1,12 +1,22 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Camera, Upload, X, AlertCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+
+// Lazy-load jsQR for QR code decoding
+let jsQR: any = null
+const loadJsQR = async () => {
+  if (!jsQR) {
+    const module = await import("jsqr")
+    jsQR = module.default
+  }
+  return jsQR
+}
 
 interface PiBrowserScannerProps {
   onPaymentIdDetected: (paymentId: string) => void
@@ -71,7 +81,7 @@ export function PiBrowserScanner({ onPaymentIdDetected, onClose }: PiBrowserScan
     }
   }
 
-  const scanFrame = () => {
+  const scanFrame = async () => {
     if (!videoRef.current || !canvasRef.current || !scanning) return
 
     const ctx = canvasRef.current.getContext("2d")
@@ -82,9 +92,18 @@ export function PiBrowserScanner({ onPaymentIdDetected, onClose }: PiBrowserScan
     ctx.drawImage(videoRef.current, 0, 0)
 
     try {
-      // Use canvas to read QR code via built-in browser APIs if available
-      // For now, fallback to manual entry or image upload
-      // In production, integrate a QR decoder library like jsQR
+      const decoder = await loadJsQR()
+      const imageData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height)
+      const code = decoder(imageData.data, imageData.width, imageData.height)
+      
+      if (code) {
+        console.log("[v0][PiBrowserScanner] QR data detected:", code.data)
+        const paymentId = extractPaymentId(code.data)
+        if (paymentId) {
+          handlePaymentIdFound(paymentId)
+          return
+        }
+      }
     } catch (err) {
       console.error("[v0][PiBrowserScanner] Frame scan error:", err)
     }
@@ -98,9 +117,10 @@ export function PiBrowserScanner({ onPaymentIdDetected, onClose }: PiBrowserScan
     setError(null)
     try {
       const reader = new FileReader()
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         const img = new Image()
-        img.onload = () => {
+        img.crossOrigin = "anonymous"
+        img.onload = async () => {
           if (canvasRef.current) {
             const ctx = canvasRef.current.getContext("2d")
             if (!ctx) return
@@ -108,12 +128,25 @@ export function PiBrowserScanner({ onPaymentIdDetected, onClose }: PiBrowserScan
             canvasRef.current.height = img.height
             ctx.drawImage(img, 0, 0)
             
-            // In production, integrate jsQR or similar to decode QR from canvas
-            // For now, show placeholder message
-            toast({
-              title: "Image Upload",
-              description: "QR decoder will process uploaded image. For now, use manual entry or camera scan.",
-            })
+            try {
+              const decoder = await loadJsQR()
+              const imageData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height)
+              const code = decoder(imageData.data, imageData.width, imageData.height)
+              
+              if (code) {
+                console.log("[v0][PiBrowserScanner] QR from image detected:", code.data)
+                const paymentId = extractPaymentId(code.data)
+                if (paymentId) {
+                  handlePaymentIdFound(paymentId)
+                  return
+                }
+              }
+              
+              setError("No valid flashpay QR code found in image")
+            } catch (decodeErr) {
+              setError("Failed to decode QR code from image")
+              console.error("[v0][PiBrowserScanner] Image decode error:", decodeErr)
+            }
           }
         }
         img.src = e.target?.result as string
