@@ -627,7 +627,8 @@ export const authenticateMerchant = async (): Promise<{
         verifiedUid: "",
         accessToken: "",
         walletAddress: "",
-        connectedAt: null,
+        uid: "",
+        connectedAt: undefined,
       })
       
       unifiedStore.updateWalletStatus({
