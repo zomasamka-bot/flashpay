@@ -62,39 +62,9 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     }
 
     // Get merchant state snapshot
-    let merchantState = unifiedStore.getMerchantState()
-    
-    // Check wallet permission first - if missing, refresh auth
-    if (!merchantState.walletAddress || !merchantState.walletAddress.trim()) {
-      console.log("[v0] Wallet address missing - refreshing authentication...")
-      unifiedStore.clearMerchantAuth()
-      unifiedStore.updateWalletStatus({ isConnected: false })
-      const authResult = await authenticateMerchant()
-      if (!authResult.success) {
-        const trackingId = errorTracker.logError(operation, authResult.error)
-        return { success: false, error: authResult.error, trackingId }
-      }
-      merchantState = unifiedStore.getMerchantState()
-    }
-    
+    const merchantState = unifiedStore.getMerchantState()
     const merchantId = merchantState.merchantId
     let merchantUid = merchantState.uid || ""
-    const walletAddress = merchantState.walletAddress || ""
-    const accessTokenFromState = merchantState.accessToken || ""
-    
-    // Verify all required auth fields are present before calling API
-    if (!walletAddress || !walletAddress.trim()) {
-      const trackingId = errorTracker.logError(operation, "Wallet address missing after authentication refresh")
-      return { success: false, error: "Wallet permission required. Please reconnect your wallet.", trackingId }
-    }
-    if (!merchantUid || !merchantUid.trim()) {
-      const trackingId = errorTracker.logError(operation, "Merchant UID missing after authentication refresh")
-      return { success: false, error: "Authentication incomplete. Please try again.", trackingId }
-    }
-    if (!accessTokenFromState || !accessTokenFromState.trim()) {
-      const trackingId = errorTracker.logError(operation, "Access token missing after authentication refresh")
-      return { success: false, error: "Authentication incomplete. Please try again.", trackingId }
-    }
     
     console.log("[v0] ===== PAYMENT CREATION - UID EXTRACTION =====")
     console.log("[v0] merchantId (merchantId field):", merchantId)
