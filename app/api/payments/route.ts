@@ -121,6 +121,18 @@ export async function POST(request: NextRequest) {
     
     console.log("[API] Using verified username as merchantId:", trustedMerchantId)
 
+    // Require wallet_address for A2U creation
+    const verifiedWalletAddress = verifiedUser.wallet_address
+    if (typeof verifiedWalletAddress !== "string" || !verifiedWalletAddress.trim()) {
+      console.error("[API] ❌ Wallet address missing or invalid - cannot proceed with A2U")
+      return NextResponse.json(
+        { error: "Wallet permission required to create payments" },
+        { status: 403, headers: corsHeaders }
+      )
+    }
+
+    console.log("[API] ✅ Wallet address verified:", verifiedWalletAddress)
+
     // Generate unique payment ID (Edge Runtime compatible)
     const paymentId = crypto.randomUUID()
 
@@ -129,6 +141,7 @@ export async function POST(request: NextRequest) {
       id: paymentId,
       merchantId: trustedMerchantId, // Use verified username as source of truth
       merchantUid: verifiedMerchantUid, // Use the verified UID from Pi /v2/me
+      merchantAddress: verifiedWalletAddress, // Store verified wallet_address for A2U verification
       accessToken: accessToken, // Store accessToken to verify uid again at A2U time
       amount: amount,
       note: note || "",

@@ -614,8 +614,15 @@ export const authenticateMerchant = async (): Promise<{
     
     console.log("[MERCHANT-AUTH] ✅ Username validated:", username)
     
-    let walletAddress = authResult.user.wallet_address || ""
+    const walletAddress = authResult.user.wallet_address
+    if (typeof walletAddress !== "string" || !walletAddress.trim()) {
+      console.error("[MERCHANT-AUTH] ERROR: No valid wallet_address in authentication response")
+      unifiedStore.clearMerchantAuth()
+      unifiedStore.updateWalletStatus({ isConnected: false })
+      return { success: false, error: "Wallet permission required. Reconnect and approve wallet access." }
+    }
     
+    console.log("[MERCHANT-AUTH] ✅ Wallet address validated")
     console.log("[MERCHANT-AUTH] Storing merchant data and accessToken...")
     unifiedStore.completeMerchantSetup(username, walletAddress, rawAuthUid)
     
