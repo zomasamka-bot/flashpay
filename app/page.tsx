@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { createPayment } from "@/lib/operations"
-import { getPiNetPaymentUrl } from "@/lib/router"
 import { config } from "@/lib/config"
 import { initializePiSDK, authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
@@ -315,17 +314,18 @@ export default function HomePage() {
   }
 
 
-  // QR routes through hash for Pi Browser (#/pay/{id})
   // Payment data is fetched from backend by ID, not from URL (authoritative source)
-  const paymentLink = currentPaymentId && payment ? getPiNetPaymentUrl(currentPaymentId) : ""
+  const origin = typeof window !== "undefined" ? window.location.origin : config.appUrl
+  const paymentLink = currentPaymentId && payment
+    ? `${origin}/pay/${encodeURIComponent(currentPaymentId)}`
+    : ""
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
   console.log("[v0][Home] Final payment link (QR):", paymentLink)
 
   // Payment sharing handlers
-  // Use getPiNetPaymentUrl for Pi Browser link generation (hash-based)
-  const sharePaymentUrl = currentPaymentId && payment 
-    ? getPiNetPaymentUrl(currentPaymentId)
+  const sharePaymentUrl = currentPaymentId && payment
+    ? `${origin}/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   
   const handleSharePayment = async () => {
