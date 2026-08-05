@@ -373,8 +373,7 @@ export default function PaymentContentWithId({
 
   // If entry mode is "share", show bridge UI to open Pi Browser
   if (entryMode === "share" && urlAmount) {
-    // Route through app root with ?id= param (PiNet facade serves root only)
-    const piDeepLink = `https://flashpayaefebeff3375.pinet.com/?id=${paymentId}&entry=pi`
+    const piDeepLink = `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(paymentId)}?amount=${encodeURIComponent(urlAmount)}&entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4 flex items-center">
