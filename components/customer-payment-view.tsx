@@ -23,27 +23,6 @@ export function CustomerPaymentView({
   onError?: (error: string) => void
 }) {
   const { toast } = useToast()
-  
-  // BRIDGE PATTERN: Detect if we're in share mode (vusercontent bridge page)
-  const [isBridgeMode, setIsBridgeMode] = useState(false)
-  const [shareNote, setShareNote] = useState<string>("")
-  
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search)
-      const entryMode = params.get("entry")
-      const note = params.get("note")
-      
-      if (entryMode === "share") {
-        console.log("[v0][BridgeMode] Detected entry=share - showing bridge UI")
-        setIsBridgeMode(true)
-        if (note) {
-          setShareNote(decodeURIComponent(note))
-        }
-      }
-    }
-  }, [])
-  
   const [payment, setPayment] = useState<Payment | null>(null)
   const [loading, setLoading] = useState(true)
   const [isPaying, setIsPaying] = useState(false)
@@ -60,16 +39,9 @@ export function CustomerPaymentView({
   useEffect(() => {
     console.log("[v0][CustomerView] Mounted with payment ID:", paymentId)
     console.log("[v0][CustomerView] Current domain:", typeof window !== "undefined" ? window.location.hostname : "N/A")
-    console.log("[v0][CustomerView] Bridge mode:", isBridgeMode)
     
     // GUARD: Reset ref when paymentId changes to allow callback for new payment
     successCallbackExecutedPaymentIdRef.current = null
-    
-    // BRIDGE MODE: Skip SDK initialization, just show bridge UI
-    if (isBridgeMode) {
-      console.log("[v0][CustomerView] In bridge mode - skipping SDK initialization")
-      return
-    }
     
     // Check if running in Pi Browser
     const checkPiBrowser = typeof window !== "undefined" && !!window.Pi
@@ -99,7 +71,7 @@ export function CustomerPaymentView({
     }
     
     init()
-  }, [paymentId, toast, isBridgeMode])
+  }, [paymentId, toast])
 
   useEffect(() => {
     async function fetchPayment() {
@@ -340,94 +312,6 @@ export function CustomerPaymentView({
         setProgressMessage("")
         setPaymentStatus(null)
       },
-    )
-  }
-
-  // BRIDGE MODE: Show payment info with "Open in Pi Browser & Pay" button
-  if (isBridgeMode && loading) {
-    // Fetch payment for bridge display
-    useEffect(() => {
-      const fetchForBridge = async () => {
-        const serverPayment = await getPaymentFromServer(paymentId)
-        if (serverPayment) {
-          setPayment(serverPayment)
-        }
-        setLoading(false)
-      }
-      fetchForBridge()
-    }, [paymentId])
-  }
-
-  if (isBridgeMode && payment) {
-    // FIXED: Use pathname-based URL to match Next.js route /pay/[id]
-    // When user clicks button, navigate to https://flashpay.pi/pay/{id}?entry=pi
-    // This triggers Next.js server-side routing to /app/pay/[id]/page.tsx
-    // which renders PaymentContentWithId with entry="pi" mode
-    const piDeepLink = `https://flashpay.pi/pay/${paymentId}?entry=pi${shareNote ? `&note=${encodeURIComponent(shareNote)}` : ""}`
-    
-    console.log("[v0][BridgeMode] Generated deep link (pathname-based):", piDeepLink)
-    console.log("[v0][BridgeMode] Navigating to registered app URL with entry=pi query param")
-    
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-b from-background to-muted">
-        <Card className="max-w-md w-full">
-          <CardHeader>
-            <CardTitle className="text-center">FlashPay Request</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Payment Status */}
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground mb-2">Payment Ready</p>
-              <div className="text-5xl font-bold mb-2">
-                {payment.amount}
-                <span className="text-3xl text-muted-foreground ml-2">π</span>
-              </div>
-              {shareNote && (
-                <p className="text-sm text-muted-foreground mt-2">
-                  Note: {shareNote}
-                </p>
-              )}
-            </div>
-
-            {/* Payment ID */}
-            <div className="bg-muted p-3 rounded-lg">
-              <p className="text-xs text-muted-foreground mb-1">Payment ID</p>
-              <p className="text-xs font-mono break-all">{paymentId}</p>
-            </div>
-
-            {/* Open in Pi Browser & Pay Button */}
-            <Button
-              onClick={() => {
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] ========== BEFORE LAUNCH ==========")
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] piDeepLink variable:", piDeepLink)
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] paymentId:", paymentId)
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] Current window.location.href:", window.location.href)
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] Current window.location.hash:", window.location.hash)
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] Current window.location.search:", window.location.search)
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] Current window.location.pathname:", window.location.pathname)
-                console.log("[v0][BRIDGE-LAUNCH-DEBUG] About to set window.location.href to:", piDeepLink)
-                
-                window.location.href = piDeepLink
-                
-                // Log after (this may not execute if page unloads)
-                setTimeout(() => {
-                  console.log("[v0][BRIDGE-LAUNCH-DEBUG] After setting href - new window.location.href:", window.location.href)
-                }, 100)
-              }}
-              className="w-full"
-              size="lg"
-            >
-              <ExternalLink className="h-4 w-4 mr-2" />
-              Open in Pi Browser & Pay
-            </Button>
-
-            {/* Info note */}
-            <p className="text-xs text-muted-foreground text-center">
-              You will be redirected to the FlashPay app to complete payment securely.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
     )
   }
 

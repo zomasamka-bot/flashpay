@@ -28,16 +28,6 @@ export function getPaymentLink(id: string): string {
 }
 
 /**
- * Returns a Pi Browser "Scan to Pay" QR code payload.
- * Encodes as "flashpay:{UUID}" for merchant Home scanner.
- * Scanner extracts UUID and renders PaymentContentWithId.
- * Payment data is fetched from backend by ID, not URL (authoritative source).
- */
-export function getPiScanQRPayload(id: string): string {
-  return `flashpay:${id}`
-}
-
-/**
  * Returns a Pi Browser deep link for use in QR codes.
  * Routes through hash (#/pay/{id}) since PiNet App Studio reduces inner app URL to / before React.
  * Hash routing persists across the PiNet facade and is visible in address bar.

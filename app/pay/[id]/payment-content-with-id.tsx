@@ -373,13 +373,8 @@ export default function PaymentContentWithId({
 
   // If entry mode is "share", show bridge UI to open Pi Browser
   if (entryMode === "share" && urlAmount) {
-    // Route to registered app URL with pathname-based routing
-    // Next.js server-side routing handles /pay/{id} and renders PaymentContentWithId
-    // with entry="pi" parameter indicating user came from bridge (Pi Browser context)
-    const piDeepLink = `https://flashpay.pi/pay/${paymentId}?entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
-    
-    console.log("[v0][BridgeButton] Constructed deep link:", piDeepLink)
-    console.log("[v0][BridgeButton] Using pathname routing /pay/{id} with entry=pi param")
+    // Route through app root with ?id= param (PiNet facade serves root only)
+    const piDeepLink = `https://flashpayaefebeff3375.pinet.com/?id=${paymentId}&entry=pi`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4 flex items-center">
@@ -407,11 +402,6 @@ export default function PaymentContentWithId({
 
               <Button
                 onClick={() => {
-                  console.log("[v0][BridgeButton-Click] User clicked 'Open in Pi Browser & Pay'")
-                  console.log("[v0][BridgeButton-Click] Navigating to:", piDeepLink)
-                  console.log("[v0][BridgeButton-Click] Payment ID:", paymentId)
-                  console.log("[v0][BridgeButton-Click] URL breakdown:")
-                  console.log("  href:", piDeepLink)
                   window.location.href = piDeepLink
                 }}
                 className="w-full h-12 text-lg gap-2"

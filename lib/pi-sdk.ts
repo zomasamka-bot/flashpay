@@ -294,10 +294,6 @@ export const authenticateCustomer = async (): Promise<{
   error?: string
 }> => {
   console.log("[CUSTOMER-AUTH] authenticateCustomer() started")
-  console.log("[CUSTOMER-AUTH] ===== PI APP CONTEXT CONFIRMATION =====")
-  console.log("[CUSTOMER-AUTH] window.location.href:", typeof window !== "undefined" ? window.location.href : "N/A")
-  console.log("[CUSTOMER-AUTH] Pi SDK available:", typeof window !== "undefined" && !!window.Pi)
-  console.log("[CUSTOMER-AUTH] In genuine Pi app context: YES")
   
   if (typeof window === "undefined" || !window.Pi || typeof window.Pi.authenticate !== "function") {
     console.error("[CUSTOMER-AUTH] Pi SDK not available")
@@ -314,7 +310,6 @@ export const authenticateCustomer = async (): Promise<{
 
   try {
     console.log("[CUSTOMER-AUTH] Requesting ['payments'] scope from Pi.authenticate()...")
-    console.log("[CUSTOMER-AUTH] Note: First Pi.authenticate() call in Pi Browser can take 30-90s (wallet UI + user confirmation)")
     CoreLogger.operation("Authenticating customer with Pi SDK (payments scope)")
 
     const authPromise = window.Pi.authenticate(["payments"], async (payment: any) => {
@@ -357,8 +352,8 @@ export const authenticateCustomer = async (): Promise<{
 
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(
-        () => reject(new Error("Authentication timeout - Pi wallet did not respond after 90 seconds")),
-        90000,
+        () => reject(new Error("Authentication timeout - Pi wallet did not respond after 30 seconds")),
+        30000,
       )
     })
 
