@@ -339,39 +339,20 @@ export default function HomePage() {
     }
 
     // Try native share first if available
-    if (navigator.share) {
-      try {
-        // Check if device can share the full data
-        if (navigator.canShare && navigator.canShare({ url: sharePaymentUrl })) {
-          await navigator.share({
-            title: "FlashPay Invoice",
-            text: `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}`,
-            url: sharePaymentUrl,
-          })
-          return
-        }
-      } catch (error) {
-        // Only proceed to fallback if it's not a user cancel
-        if ((error as Error).name === "AbortError") {
-          return
-        }
-        // If full share failed, try text-only share
-        try {
-          await navigator.share({
-            title: "FlashPay Invoice",
-            text: `Pay ${payment?.amount || 0}π: ${sharePaymentUrl}`,
-          })
-          return
-        } catch (textError) {
-          if ((textError as Error).name === "AbortError") {
-            return
-          }
-        }
-      }
+    if (typeof navigator.share !== "function") {
+      setShowShareMenu(true)
+      return
     }
-
-    // Native share unavailable or failed - show fallback menu
-    setShowShareMenu(true)
+    try {
+      await navigator.share({
+        title: "FlashPay Invoice",
+        url: sharePaymentUrl,
+      })
+    } catch (error) {
+      if ((error as Error).name === "AbortError") return
+      console.error("Native share failed:", error)
+      setShowShareMenu(true)
+    }
   }
 
   const handleShareWhatsApp = () => {
