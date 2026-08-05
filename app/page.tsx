@@ -243,38 +243,6 @@ export default function HomePage() {
       return
     }
 
-    // GUARD: Check if wallet address is missing despite isSetupComplete
-    if (!merchantSetup.walletAddress || merchantSetup.walletAddress.trim() === "") {
-      console.log("[v0][handleGenerateQR] Wallet address missing, re-authenticating merchant...")
-      setIsConnecting(true)
-      
-      try {
-        const authResult = await authenticateMerchant()
-        
-        if (!authResult.success) {
-          toast({
-            title: "Authentication Failed",
-            description: authResult.error || "Could not authenticate merchant",
-            variant: "destructive",
-          })
-          setIsConnecting(false)
-          return
-        }
-        
-        console.log("[v0][handleGenerateQR] Re-authentication successful, proceeding with payment")
-        setIsConnecting(false)
-      } catch (error) {
-        console.error("[v0][handleGenerateQR] Re-authentication error:", error)
-        toast({
-          title: "Error",
-          description: "Failed to re-authenticate wallet",
-          variant: "destructive",
-        })
-        setIsConnecting(false)
-        return
-      }
-    }
-
     try {
       const result = await createPayment(amountNum, "")
 

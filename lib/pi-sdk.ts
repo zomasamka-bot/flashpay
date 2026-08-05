@@ -616,32 +616,6 @@ export const authenticateMerchant = async (): Promise<{
     
     let walletAddress = authResult.user.wallet_address || ""
     
-    // GUARD: Validate wallet_address is a non-empty string
-    if (!walletAddress || typeof walletAddress !== "string" || walletAddress.trim() === "") {
-      console.error("[MERCHANT-AUTH] ERROR: No wallet_address provided by Pi wallet")
-      console.error("[MERCHANT-AUTH] wallet_address value:", authResult.user.wallet_address)
-      
-      // Clear setup state on wallet permission failure
-      unifiedStore.updateMerchantState({
-        isSetupComplete: false,
-        verifiedUid: "",
-        accessToken: "",
-        walletAddress: "",
-        uid: "",
-        connectedAt: undefined,
-      })
-      
-      unifiedStore.updateWalletStatus({
-        isConnected: false,
-        isInitialized: true,
-      })
-      
-      return { success: false, error: "Wallet permission required. Reconnect and approve wallet access." }
-    }
-    
-    console.log("[MERCHANT-AUTH] ✅ Wallet address validated")
-    walletAddress = walletAddress.trim()
-    
     console.log("[MERCHANT-AUTH] Storing merchant data and accessToken...")
     unifiedStore.completeMerchantSetup(username, walletAddress, rawAuthUid)
     
