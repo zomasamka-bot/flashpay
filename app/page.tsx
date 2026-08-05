@@ -315,9 +315,8 @@ export default function HomePage() {
 
 
   // Payment data is fetched from backend by ID, not from URL (authoritative source)
-  const origin = typeof window !== "undefined" ? window.location.origin : config.appUrl
   const paymentLink = currentPaymentId && payment
-    ? `${origin}/pay/${encodeURIComponent(currentPaymentId)}`
+    ? `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=pi${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
@@ -325,7 +324,7 @@ export default function HomePage() {
 
   // Payment sharing handlers
   const sharePaymentUrl = currentPaymentId && payment
-    ? `${origin}/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    ? `https://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   
   const handleSharePayment = async () => {
