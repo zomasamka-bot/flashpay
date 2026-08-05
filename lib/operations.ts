@@ -32,10 +32,15 @@ const RATE_LIMITS = {
   EXECUTE_PAYMENT: { maxAttempts: 5, windowMs: 60000 },
 }
 
+// Track retry state to prevent duplicate records on 401 + re-auth
+const retryState: { [key: string]: boolean } = {}
+
 export async function createPayment(amount: number, note = ""): Promise<OperationResult<Payment>> {
   const operation = "createPayment"
   CoreLogger.operation(operation, { amount, noteLength: note.length })
 
+  const trackingId = generateUUID()
+  
   try {
     const rateLimitCheck = rateLimiter.check("create_payment", RATE_LIMITS.CREATE_PAYMENT)
     if (!rateLimitCheck.allowed) {
@@ -112,42 +117,94 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     console.log("[v0] merchantUid matches merchant state UID:", merchantUid === merchantState.uid)
     console.log("[v0]")
 
-    console.log("[v0] ===== PAYMENT CREATION - UID FLOW SUMMARY =====")
-    console.log("[v0] Frontend Context (Pi Browser):")
-    console.log("[v0]   - merchantUid from state = " + merchantUid)
-    console.log("[v0]   - accessToken available = YES")
-    console.log("[v0] Sending to /api/payments with:")
-    console.log("[v0]   - merchantUid = " + merchantUid)
-    console.log("[v0]   - accessToken = PROVIDED")
-    console.log("[v0]")
-    console.log("[v0] Backend will:")
-    console.log("[v0]   1. Call /v2/me(accessToken) to verify UID")
-    console.log("[v0]   2. Get fresh verified UID from /v2/me response")
-    console.log("[v0]   3. Store fresh verified UID in Redis (may differ from frontend UID)")
-    console.log("[v0]   4. Include accessToken in Redis for later A2U verification")
-    console.log("[v0]")
-    console.log("[v0] Later during A2U settlement:")
-    console.log("[v0]   1. A2U retrieves payment from Redis")
-    console.log("[v0]   2. Gets merchantUid from Redis (the verified one, not frontend's)")
-    console.log("[v0]   3. Gets accessToken from Redis")
-    console.log("[v0]   4. Calls /v2/me(accessToken) again to verify accessToken still valid")
-    console.log("[v0]   5. Sends UID to Pi createPayment API using PI_API_KEY")
-    console.log("[v0]   → If Pi rejects: user_not_found = UID is valid but not in PI_API_KEY's app")
-    console.log("[v0]")
-
-    // CRITICAL: Send amount, note, and accessToken for server verification.
-    // Do NOT send merchantId or merchantUid - server will verify from /v2/me call.
-    // The server will call Pi /v2/me with the accessToken to derive verified username and UID.
-    const response = await fetch(`${config.appUrl}/api/payments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        amount, 
-        note,
-        accessToken
-      }),
-    })
-
+    console.log("[v0] ===== PAYMENT CREATION - INITIAL ATTEMPT =====")
+    
+    // Attempt payment creation with complete flow including 401 retry and token refresh
+    // This returns either an error result OR makes the full API call with potential re-auth
+    let response: Response | null = null
+    let result: any = null
+    
+    const attemptWithAuth = async (): Promise<{ response: Response; result: any } | OperationResult<Payment>> => {
+      let currentToken = accessToken
+      let isRetry = false
+      
+      while (true) {
+        console.log(`[v0][${operation}] ${isRetry ? "RETRY" : "INITIAL"} attempt with token`)
+        
+        const resp = await fetch(`${config.appUrl}/api/payments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            amount, 
+            note,
+            accessToken: currentToken
+          }),
+        })
+        
+        // Handle 401 - token expired
+        if (resp.status === 401) {
+          if (isRetry) {
+            // Already retried once - stop
+            console.error(`[v0][${operation}] 401 on RETRY - authentication failed, stopping`)
+            return { 
+              success: false, 
+              error: "Reconnect wallet required. Please refresh and authenticate again.",
+              trackingId 
+            }
+          }
+          
+          // First 401 - clear state and re-authenticate
+          console.log(`[v0][${operation}] 401 received - clearing merchant state and re-authenticating`)
+          unifiedStore.clearMerchantState()
+          
+          const authResult = await authenticateMerchant()
+          if (!authResult.success) {
+            console.error(`[v0][${operation}] Re-authentication failed:`, authResult.error)
+            return { 
+              success: false, 
+              error: "Reconnect wallet required. Authentication failed.",
+              trackingId 
+            }
+          }
+          
+          // Get new token and retry exactly once
+          const newMerchantState = unifiedStore.getMerchantState()
+          const newToken = newMerchantState.accessToken
+          
+          if (!newToken) {
+            console.error(`[v0][${operation}] New token not available after re-authentication`)
+            return { 
+              success: false, 
+              error: "Reconnect wallet required. Token not available after re-authentication.",
+              trackingId 
+            }
+          }
+          
+          console.log(`[v0][${operation}] New token obtained, retrying payment creation exactly once`)
+          currentToken = newToken
+          isRetry = true
+          continue // Retry the loop with new token
+        }
+        
+        // Non-401 error
+        if (!resp.ok) {
+          const errorText = await resp.text()
+          console.error(`[v0][${operation}] Payment creation failed with status ${resp.status}: ${errorText}`)
+          throw new Error(`Failed to create payment: ${resp.statusText} - ${errorText.substring(0, 100)}`)
+        }
+        
+        // Success - return response and continue
+        return { response: resp, result: null }
+      }
+    }
+    
+    const authCheckResult = await attemptWithAuth()
+    if ("error" in authCheckResult) {
+      return authCheckResult // 401 handling returned an error
+    }
+    
+    response = authCheckResult.response
+    
     if (!response.ok) {
       throw new Error(`Failed to create payment: ${response.statusText}`)
     }
@@ -158,7 +215,7 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
       throw new Error(`API returned non-JSON response: ${text.substring(0, 100)}`)
     }
 
-    const result = await response.json()
+    result = await response.json()
     // CRITICAL: Use VERIFIED merchantId and merchantUid from server response, not client values
     // The server verified the identity via Pi /v2/me and derived the authoritative username and UID
     const payment = unifiedStore.createPaymentWithId(
@@ -169,7 +226,7 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
       result.payment.merchantId,           // VERIFIED by server via /v2/me
       result.payment.merchantAddress || undefined,
       result.payment.merchantUid,          // VERIFIED by server via /v2/me, no fallback
-      accessToken           // Store accessToken for A2U verification at settlement time
+      result.payment.accessToken || accessToken  // Use server-provided token or fallback to current
     )
 
     const trackingId = auditLogger.log(

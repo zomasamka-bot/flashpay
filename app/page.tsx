@@ -17,7 +17,7 @@ import { usePaymentById, usePaymentStats } from "@/lib/use-payments"
 import { useLoadPaymentHistory } from "@/lib/use-load-payment-history"
 import { useMerchant } from "@/lib/use-merchant"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-
+import { CustomerPaymentView } from "@/components/customer-payment-view"
 
 export default function HomePage() {
   const router = useRouter()
@@ -53,11 +53,33 @@ export default function HomePage() {
   const [showPiBrowserScanner, setShowPiBrowserScanner] = useState(false)
   
   useEffect(() => {
-    // Check pathname first (Vercel: /pay/{id})
+    // DEBUG: Log raw URL components
+    console.log("[v0][Home-Init] URL BREAKDOWN:")
+    console.log("  origin:", window.location.origin)
+    console.log("  pathname:", window.location.pathname)
+    console.log("  search:", window.location.search)
+    console.log("  hash:", window.location.hash)
+    console.log("  href:", window.location.href)
+    
+    // Check hash first (Pi Browser deep links: #/pay/{id})
+    // Hash routing persists through PiNet facade when path routing is stripped
+    console.log("[v0][Home-Init] Checking hash:", window.location.hash)
+    const hashMatch = window.location.hash.match(/^#\/pay\/([0-9a-f-]{36})$/i)
+    console.log("[v0][Home-Init] Hash regex match result:", hashMatch ? `Match found: ${hashMatch[1]}` : "No match")
+    if (hashMatch && hashMatch[1]) {
+      const id = hashMatch[1]
+      console.log("[v0][Home-Init] ✅ Detected hash payment route:", id)
+      setIsCustomerView(true)
+      setCustomerPaymentId(id)
+      setRouteResolved(true)
+      return
+    }
+    
+    // Check pathname second (Vercel direct: /pay/{id})
     const pathnameMatch = window.location.pathname.match(/^\/pay\/([0-9a-f-]{36})\/?$/i)
     if (pathnameMatch && pathnameMatch[1]) {
       const id = pathnameMatch[1]
-      console.log("[v0][Home-Init] Detected pathname payment ID:", id)
+      console.log("[v0][Home-Init] ✅ Detected pathname payment ID:", id)
       setIsCustomerView(true)
       setCustomerPaymentId(id)
       setRouteResolved(true)
@@ -68,14 +90,16 @@ export default function HomePage() {
     const urlParams = new URLSearchParams(window.location.search)
     const id = urlParams.get("id")
     if (id) {
-      console.log("[v0][Home-Init] Detected query param payment ID:", id)
+      console.log("[v0][Home-Init] ✅ Detected query param payment ID:", id)
+      console.log("[v0][Home-Init] Setting isCustomerView=true, customerPaymentId=", id)
       setIsCustomerView(true)
       setCustomerPaymentId(id)
       setRouteResolved(true)
       return
     }
     
-    console.log("[v0][Home-Init] No payment ID detected, rendering merchant form")
+    console.log("[v0][Home-Init] ⚠️ No payment ID detected, rendering merchant form")
+    console.log("[v0][Home-Init] isCustomerView will be false, showing merchant UI")
     setRouteResolved(true)
   }, [])
 
@@ -322,40 +346,37 @@ export default function HomePage() {
     return payload
   }
   
-  // Detect if running in App Studio (demo-*.vusercontent.net) vs Vercel
-  const isAppStudio = typeof window !== "undefined" && /^demo-.*\.vusercontent\.net$/.test(window.location.hostname)
-  
   const paymentLink = currentPaymentId && payment ? getPaymentLinkForQR(currentPaymentId) : ""
   const piBrowserQRPayload = currentPaymentId && payment ? getPiBrowserQRPayload(currentPaymentId) : ""
   
-  // Choose QR payload based on environment
-  const visibleQRPayload = isAppStudio ? piBrowserQRPayload : paymentLink
-  
-  console.log("[v0][Home] Hostname:", typeof window !== "undefined" ? window.location.hostname : "N/A")
-  console.log("[v0][Home] Is App Studio:", isAppStudio)
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
-  console.log("[v0][Home] Final QR payload:", visibleQRPayload)
+  console.log("[v0][Home] Final payment link:", paymentLink)
+  console.log("[v0][Home] Pi Browser scan payload:", piBrowserQRPayload)
   
   // Handle scanned payment ID from Pi Browser scanner
-  // Render PaymentContentWithId with entry="pi" without navigation
   const handleScanPaymentId = (scannedId: string) => {
     console.log("[v0][Home] Scanned payment ID:", scannedId)
-    console.log("[v0][Home] Will render PaymentContentWithId with entry=pi")
     setShowPiBrowserScanner(false)
-    // Set state to trigger PaymentContentWithId render
+    setIsCustomerView(true)
     setCustomerPaymentId(scannedId)
   }
 
   // Payment sharing handlers
-  // Shared HTTPS URL with entry=share for bridge UI, includes amount and note
-  const sharePaymentUrl = currentPaymentId && payment 
+  // Bridge URL (vusercontent): Shows payment details, launches into registered app
+  // This two-stage pattern ensures Pi.authenticate() works in the genuine app context
+  const bridgePaymentUrl = currentPaymentId && payment 
     ? `${typeof window !== "undefined" ? window.location.origin : "https://flashpay.pi"}/pay/${currentPaymentId}?amount=${payment.amount}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    : ""
+  
+  // App URL (flashpay.pi): Inside genuine registered app context where Pi.authenticate() works
+  const appPaymentUrl = currentPaymentId && payment
+    ? `https://flashpay.pi/pay/${currentPaymentId}?entry=pi${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   
   const handleSharePayment = async () => {
     // Validate payment data exists
-    if (!currentPaymentId || !sharePaymentUrl) {
+    if (!currentPaymentId || !bridgePaymentUrl) {
       toast({
         title: "Share failed",
         description: "Payment data not available",
@@ -368,11 +389,11 @@ export default function HomePage() {
     if (navigator.share) {
       try {
         // Check if device can share the full data
-        if (navigator.canShare && navigator.canShare({ url: sharePaymentUrl })) {
+        if (navigator.canShare && navigator.canShare({ url: bridgePaymentUrl })) {
           await navigator.share({
             title: "FlashPay Invoice",
             text: `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}`,
-            url: sharePaymentUrl,
+            url: bridgePaymentUrl,
           })
           return
         }
@@ -385,7 +406,7 @@ export default function HomePage() {
         try {
           await navigator.share({
             title: "FlashPay Invoice",
-            text: `Pay ${payment?.amount || 0}π: ${sharePaymentUrl}`,
+            text: `Pay ${payment?.amount || 0}π: ${bridgePaymentUrl}`,
           })
           return
         } catch (textError) {
@@ -401,21 +422,21 @@ export default function HomePage() {
   }
 
   const handleShareWhatsApp = () => {
-    const text = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}: ${sharePaymentUrl}`
+    const text = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}: ${bridgePaymentUrl}`
     const wa = `https://wa.me/?text=${encodeURIComponent(text)}`
     window.open(wa, "_blank")
     setShowShareMenu(false)
   }
 
   const handleShareTelegram = () => {
-    const text = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}\n${sharePaymentUrl}`
-    const tg = `https://t.me/share/url?url=${encodeURIComponent(sharePaymentUrl)}&text=${encodeURIComponent(`Pay ${payment?.amount || 0}π`)}`
+    const text = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}\n${bridgePaymentUrl}`
+    const tg = `https://t.me/share/url?url=${encodeURIComponent(bridgePaymentUrl)}&text=${encodeURIComponent(`Pay ${payment?.amount || 0}π`)}`
     window.open(tg, "_blank")
     setShowShareMenu(false)
   }
 
   const handleShareSMS = () => {
-    const text = `Pay ${payment?.amount || 0}π: ${sharePaymentUrl}`
+    const text = `Pay ${payment?.amount || 0}π: ${bridgePaymentUrl}`
     const sms = `sms:?body=${encodeURIComponent(text)}`
     window.location.href = sms
     setShowShareMenu(false)
@@ -423,7 +444,7 @@ export default function HomePage() {
 
   const handleShareEmail = () => {
     const subject = "FlashPay Invoice"
-    const body = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}\n\n${sharePaymentUrl}`
+    const body = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}\n\n${bridgePaymentUrl}`
     const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
     window.location.href = mailto
     setShowShareMenu(false)
@@ -431,7 +452,7 @@ export default function HomePage() {
 
   const handleCopyLink = async () => {
     try {
-      await navigator.clipboard.writeText(sharePaymentUrl)
+      await navigator.clipboard.writeText(bridgePaymentUrl)
       toast({
         title: "Copied!",
         description: "Payment link copied to clipboard",
@@ -489,6 +510,7 @@ export default function HomePage() {
 
   // Show loader while route is resolving
   if (!routeResolved) {
+    console.log("[v0][Home-Render] Still resolving route...")
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="text-center">
@@ -499,12 +521,14 @@ export default function HomePage() {
     )
   }
 
-  // CUSTOMER VIEW: Show payment page when ID detected in URL or via Pi Browser scan
-  if (customerPaymentId) {
-    // Dynamic import PaymentContentWithId for Pi Browser scan flow
-    const PaymentContentWithId = require("@/app/pay/[id]/payment-content-with-id").default
-    return <PaymentContentWithId paymentId={customerPaymentId} entry="pi" />
+  // CUSTOMER VIEW: Show payment page when ID detected in URL
+  console.log("[v0][Home-Render] Route resolved. isCustomerView:", isCustomerView, "customerPaymentId:", customerPaymentId)
+  if (isCustomerView && customerPaymentId) {
+    console.log("[v0][Home-Render] ✅ Rendering CustomerPaymentView for:", customerPaymentId)
+    return <CustomerPaymentView paymentId={customerPaymentId} />
   }
+  
+  console.log("[v0][Home-Render] Rendering merchant form (not customer view)")
 
   if (showQR && currentPaymentId) {
     if (typeof window !== "undefined") {
@@ -542,21 +566,17 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* QR Payment View */}
+        {/* QR Payment View - Points to Bridge Page */}
         <div className="flex-1 flex flex-col items-center justify-center px-4 py-8">
-          <div className="text-sm text-muted-foreground mb-4">
-            {isAppStudio ? "Scan with Pi Browser" : "Scan QR Code to Pay"}
-          </div>
+          <div className="text-sm text-muted-foreground mb-4">Scan QR Code to Pay</div>
 
           <div className="bg-white p-8 rounded-3xl shadow-2xl mb-6">
-            <QRCode value={visibleQRPayload} size={300} />
+            <QRCode value={bridgePaymentUrl} size={300} />
           </div>
 
           <div className="text-xs text-center text-muted-foreground mb-6 max-w-xs">
-            {isAppStudio ? "Pi Browser Scan to Pay code" : "Scan with any QR reader or Pi Browser"}
+            Scan with any camera to get payment details and launch secure payment
           </div>
-
-
 
           <div className="text-6xl font-bold mb-4 tabular-nums">
             {displayAmount}

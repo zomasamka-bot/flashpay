@@ -815,6 +815,23 @@ class UnifiedStateStore {
     CoreLogger.info("Merchant state updated", updates)
   }
 
+  clearMerchantState() {
+    console.log("[v0] [STORE] Clearing merchant state (token expiration)")
+    this.state.merchant = {
+      isSetupComplete: false,
+      merchantId: "",
+      piUsername: undefined,
+      uid: undefined,
+      accessToken: undefined,
+      verifiedUid: undefined,
+      walletAddress: undefined,
+      connectedAt: undefined,
+    }
+    this.saveToStorage()
+    this.notify("merchant" as StateSection)
+    CoreLogger.info("Merchant state cleared")
+  }
+
   completeMerchantSetup(piUsername: string, walletAddress?: string, uid?: string) {
     // Use piUsername as the stable merchantId
     // This ensures the same merchant always has the same ID across sessions
