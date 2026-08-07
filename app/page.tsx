@@ -16,8 +16,6 @@ import { useLoadPaymentHistory } from "@/lib/use-load-payment-history"
 import { useMerchant } from "@/lib/use-merchant"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CustomerPaymentView } from "@/components/customer-payment-view"
-import { verifyMerchantTokenForHome } from "@/lib/merchant-auth"
-import { unifiedStore } from "@/lib/unified-store"
 
 export default function HomePage() {
   const router = useRouter()
@@ -36,8 +34,6 @@ export default function HomePage() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [sdkInitStatus, setSdkInitStatus] = useState<"loading" | "ready" | "error">("loading")
   const [sdkError, setSdkError] = useState<string | null>(null)
-  const [homeTokenStatus, setHomeTokenStatus] = useState<"pending" | "valid" | "reconnect_required" | "verification_unavailable">("pending")
-  const [homeValidationRequest, setHomeValidationRequest] = useState(0)
 
   const paymentStats = usePaymentStats()
 
@@ -121,45 +117,6 @@ export default function HomePage() {
     init()
   }, [redirecting, toast, routeResolved, isCustomerView])
 
-  const validatedHomeTokenRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (
-      redirecting ||
-      !routeResolved ||
-      isCustomerView ||
-      !merchantSetup.isSetupComplete
-    ) {
-      return
-    }
-
-    if (!merchantSetup.accessToken) {
-      setHomeTokenStatus("reconnect_required")
-      return
-    }
-
-    if (validatedHomeTokenRef.current === merchantSetup.accessToken) {
-      return
-    }
-
-    setHomeTokenStatus("pending")
-    const token = merchantSetup.accessToken
-
-    verifyMerchantTokenForHome(token, merchantSetup.uid, merchantSetup.piUsername).then((result) => {
-      setHomeTokenStatus(result.status)
-      if (result.status === "valid") {
-        validatedHomeTokenRef.current = token
-        unifiedStore.updateMerchantState({ verifiedUid: result.uid })
-      } else if (result.status === "verification_unavailable") {
-        validatedHomeTokenRef.current = null
-        console.warn("[v0][Home] Merchant token validation:", result.status, result.reason)
-      } else {
-        validatedHomeTokenRef.current = null
-        console.warn("[v0][Home] Merchant token validation:", result.status, result.reason)
-      }
-    })
-  }, [redirecting, routeResolved, isCustomerView, merchantSetup.isSetupComplete, merchantSetup.accessToken, merchantSetup.uid, merchantSetup.piUsername, homeValidationRequest])
-
   // Manual authentication - user controls when to authenticate
   const handleManualAuthenticate = async () => {
     setIsConnecting(true)
@@ -169,9 +126,6 @@ export default function HomePage() {
       const result = await authenticateMerchant()
       
       if (result.success) {
-        validatedHomeTokenRef.current = null
-        setHomeTokenStatus("pending")
-        setHomeValidationRequest((request) => request + 1)
         console.log("[v0] ✓ Merchant authenticated successfully")
         toast({
           title: "Connected",
@@ -280,15 +234,10 @@ export default function HomePage() {
       return
     }
 
-    if (!merchantSetup.isSetupComplete || homeTokenStatus !== "valid") {
-      if (homeTokenStatus === "verification_unavailable") {
-        setHomeValidationRequest((request) => request + 1)
-      }
+    if (!merchantSetup.isSetupComplete) {
       toast({
-        title: homeTokenStatus === "verification_unavailable" ? "Verification Unavailable" : "Wallet Reconnect Required",
-        description: homeTokenStatus === "verification_unavailable"
-          ? "Pi verification could not be completed. Please retry."
-          : "Please reconnect your Pi Wallet before creating a new payment.",
+        title: "Wallet Not Connected",
+        description: "Please connect your Pi Wallet first to accept payments",
         variant: "destructive",
       })
       return
@@ -342,9 +291,6 @@ export default function HomePage() {
       const result = await authenticateMerchant()
 
       if (result.success) {
-        validatedHomeTokenRef.current = null
-        setHomeTokenStatus("pending")
-        setHomeValidationRequest((request) => request + 1)
         toast({
           title: "Wallet Connected",
           description: `Verified by Pi Network as @${result.username}`,
@@ -662,7 +608,7 @@ export default function HomePage() {
         </Alert>
       )}
 
-      {(!merchantSetup.isSetupComplete || homeTokenStatus === "reconnect_required") && sdkInitStatus !== "error" && (
+      {!merchantSetup.isSetupComplete && sdkInitStatus !== "error" && (
         <div className="bg-yellow-500/10 border-b border-yellow-500/20 px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 flex-1">
