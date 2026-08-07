@@ -37,6 +37,7 @@ export default function HomePage() {
   const [sdkInitStatus, setSdkInitStatus] = useState<"loading" | "ready" | "error">("loading")
   const [sdkError, setSdkError] = useState<string | null>(null)
   const [homeTokenStatus, setHomeTokenStatus] = useState<"pending" | "valid" | "reconnect_required" | "verification_unavailable">("pending")
+  const [homeValidationRequest, setHomeValidationRequest] = useState(0)
 
   const paymentStats = usePaymentStats()
 
@@ -141,18 +142,23 @@ export default function HomePage() {
       return
     }
 
-    validatedHomeTokenRef.current = merchantSetup.accessToken
     setHomeTokenStatus("pending")
+    const token = merchantSetup.accessToken
 
-    verifyMerchantTokenForHome(merchantSetup.accessToken, merchantSetup.uid, merchantSetup.piUsername).then((result) => {
+    verifyMerchantTokenForHome(token, merchantSetup.uid, merchantSetup.piUsername).then((result) => {
       setHomeTokenStatus(result.status)
       if (result.status === "valid") {
+        validatedHomeTokenRef.current = token
         unifiedStore.updateMerchantState({ verifiedUid: result.uid })
+      } else if (result.status === "verification_unavailable") {
+        validatedHomeTokenRef.current = null
+        console.warn("[v0][Home] Merchant token validation:", result.status, result.reason)
       } else {
+        validatedHomeTokenRef.current = null
         console.warn("[v0][Home] Merchant token validation:", result.status, result.reason)
       }
     })
-  }, [redirecting, routeResolved, isCustomerView, merchantSetup.isSetupComplete, merchantSetup.accessToken, merchantSetup.uid, merchantSetup.piUsername])
+  }, [redirecting, routeResolved, isCustomerView, merchantSetup.isSetupComplete, merchantSetup.accessToken, merchantSetup.uid, merchantSetup.piUsername, homeValidationRequest])
 
   // Manual authentication - user controls when to authenticate
   const handleManualAuthenticate = async () => {
@@ -163,6 +169,9 @@ export default function HomePage() {
       const result = await authenticateMerchant()
       
       if (result.success) {
+        validatedHomeTokenRef.current = null
+        setHomeTokenStatus("pending")
+        setHomeValidationRequest((request) => request + 1)
         console.log("[v0] ✓ Merchant authenticated successfully")
         toast({
           title: "Connected",
@@ -272,6 +281,9 @@ export default function HomePage() {
     }
 
     if (!merchantSetup.isSetupComplete || homeTokenStatus !== "valid") {
+      if (homeTokenStatus === "verification_unavailable") {
+        setHomeValidationRequest((request) => request + 1)
+      }
       toast({
         title: homeTokenStatus === "verification_unavailable" ? "Verification Unavailable" : "Wallet Reconnect Required",
         description: homeTokenStatus === "verification_unavailable"
@@ -330,6 +342,9 @@ export default function HomePage() {
       const result = await authenticateMerchant()
 
       if (result.success) {
+        validatedHomeTokenRef.current = null
+        setHomeTokenStatus("pending")
+        setHomeValidationRequest((request) => request + 1)
         toast({
           title: "Wallet Connected",
           description: `Verified by Pi Network as @${result.username}`,
