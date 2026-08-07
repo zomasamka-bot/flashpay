@@ -126,6 +126,29 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 400, error: "Invalid payment record" }
     }
 
+    // Refund/hold/manual-review states are terminal safety states. No caller may start
+    // another A2U from them, even if it reaches this shared lock directly.
+    const safetyState = latestPayment.settlementFailureState
+    if (
+      latestPayment.status === "refund_pending" ||
+      latestPayment.status === "refunded" ||
+      safetyState === "held" ||
+      safetyState === "manual_review_required" ||
+      safetyState === "refund_pending" ||
+      safetyState === "refunded"
+    ) {
+      return { ok: false, status: 409, error: "Settlement is held for refund or manual review" }
+    }
+
+    if (
+      latestPayment.status === "paid_to_app" &&
+      safetyState === "retryable" &&
+      latestPayment.nextRetryAt &&
+      Date.parse(latestPayment.nextRetryAt) > Date.now()
+    ) {
+      return { ok: false, status: 409, error: "Settlement retry backoff is active" }
+    }
+
     // Inside lock: any valid a2uTxid or horizonSuccessFlag must permanently skip Stage 2
     if (latestPayment.a2uTxid || latestPayment.horizonSuccessFlag) {
       console.log("[A2U Locked Executor] Valid a2uTxid or horizonSuccessFlag exists - will skip Stage 2")
@@ -139,7 +162,9 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         payment: latestPayment,
         merchantUid: latestPayment.merchantUid,
         accessToken: latestPayment.accessToken,
-        customerAmount: latestPayment.amount,
+        customerAmount: typeof latestPayment.customerAmount === "number" && Number.isFinite(latestPayment.customerAmount)
+          ? latestPayment.customerAmount
+          : latestPayment.amount,
         piPaymentId: latestPayment.piPaymentId,
         isRecovery: params.isRecovery,
       })

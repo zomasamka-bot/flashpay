@@ -310,7 +310,40 @@ export async function executeA2URecovery(
     }
   }
 
-  // ===== STATE 5: SETTLEMENT FAILED - CHECK IRREVERSIBILITY =====
+  // ===== STATE 5: PAID-TO-APP RECOVERY =====
+  // A2U creation failures are retryable only after their backoff window.
+  if (payment.status === "paid_to_app" && payment.settlementFailureState === "retryable") {
+    if (payment.a2uTxid || payment.horizonSuccessFlag) {
+      return { status: "manual_review_required", state: "paid_to_app_has_transfer_evidence", paymentId, details: { a2uTxid: payment.a2uTxid, error: "Transfer evidence exists; recovery is blocked" } }
+    }
+    if (payment.nextRetryAt && Date.parse(payment.nextRetryAt) > Date.now()) {
+      return { status: "pending_pi_complete", state: "retry_backoff_active", paymentId, details: { error: "Retry backoff is active" } }
+    }
+    const result = await executeA2ULocked({ paymentId, isRecovery: true })
+    if (!result.ok) {
+      return { status: "manual_review_required", state: "paid_to_app_retry_failed", paymentId, details: { error: result.error } }
+    }
+    const response = await buildA2USuccessResponse(paymentId)
+    return response
+      ? { status: "success", state: "paid_to_app_recovered", paymentId, details: { u2aTxid: response.u2aTxid, a2uTxid: response.a2uTxid } }
+      : { status: "manual_review_required", state: "paid_to_app_response_failed", paymentId, details: { error: "Response building failed" } }
+  }
+
+  // ===== STATE 6: REFUND SAFETY GATE =====
+  // This code deliberately refuses to refund without verified payer eligibility and proof
+  // that neither Pi A2U nor Horizon contains merchant-transfer evidence.
+  if (payment.settlementFailureState === "held" || payment.settlementFailureState === "manual_review_required") {
+    const hasMerchantEvidence = Boolean(payment.a2uPaymentId || payment.a2uTxid || payment.horizonSuccessFlag)
+    if (hasMerchantEvidence) {
+      return { status: "manual_review_required", state: "refund_blocked_transfer_evidence", paymentId, details: { a2uTxid: payment.a2uTxid, error: "Refund blocked until transfer evidence is reconciled" } }
+    }
+    if (!payment.payerUid || payment.payerRefundEligible !== true || payment.refundPaymentId || payment.refundTxid) {
+      return { status: "manual_review_required", state: "manual_review_required", paymentId, details: { error: "Refund eligibility or payer scope cannot be proven" } }
+    }
+    return { status: "manual_review_required", state: "refund_implementation_guarded", paymentId, details: { error: "Refund requires a separately authorized payer A2U credential" } }
+  }
+
+  // ===== STATE 7: SETTLEMENT FAILED - CHECK IRREVERSIBILITY =====
   // If a2uTxid or horizonSuccessFlag exists: irreversible (Horizon was submitted)
   // Otherwise: safe to retry (no Horizon submission occurred)
   if (payment.status === "settlement_failed") {
@@ -366,6 +399,8 @@ export function isPaymentRecoverable(payment: Payment): boolean {
     "settled_to_merchant",
     "settlement_pending",
     "settlement_failed",
+    "paid_to_app",
+    "refund_pending",
   ]
 
   if (!recoverableStates.includes(payment.status)) {

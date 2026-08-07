@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getMerchantProfileSummary } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { redis, isRedisConfigured } from "@/lib/redis"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -60,7 +61,40 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    return NextResponse.json(profileSummary)
+    const operationalPayments: Array<Record<string, unknown>> = []
+    if (isRedisConfigured) {
+      const keys = await redis.keys("payment:*")
+      for (const key of keys || []) {
+        try {
+          const raw = await redis.get(key)
+          if (!raw) continue
+          const payment = typeof raw === "string" ? JSON.parse(raw) : raw
+          if (!payment || payment.merchantId !== verifiedMerchant.username) continue
+          if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(payment.status) || payment.settlementFailureState) {
+            operationalPayments.push({
+              paymentId: payment.id,
+              amount: payment.customerAmount ?? payment.amount,
+              status: payment.status,
+              settlementFailureState: payment.settlementFailureState || "none",
+              settlementFailureCode: payment.a2uErrorCode,
+              heldAt: payment.paidAt,
+              nextRetryAt: payment.nextRetryAt,
+              refundStatus: payment.refundStatus || "not_started",
+              refundPaymentId: payment.refundPaymentId,
+              refundTxid: payment.refundTxid,
+              u2aTxid: payment.u2aTxid,
+              a2uPaymentId: payment.a2uPaymentId,
+              a2uTxid: payment.a2uTxid,
+              updatedAt: payment.lastAttemptAt || payment.paidAt || payment.createdAt,
+            })
+          }
+        } catch (error) {
+          console.warn("[Profile API] Skipping malformed operational payment", key, error)
+        }
+      }
+    }
+
+    return NextResponse.json({ ...profileSummary, operationalPayments })
   } catch (error) {
     console.error("[Profile API] Error:", error)
     return NextResponse.json(

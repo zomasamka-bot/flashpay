@@ -30,7 +30,34 @@ export function DomainGuard({ children }: { children: React.ReactNode }) {
   }, [pathname])
 
   if (!canAccess) {
-    return null
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="max-w-md w-full">
+          <CardHeader className="text-center pb-4">
+            <div className="flex justify-center mb-4">
+              <div className="flex items-center justify-center w-16 h-16 rounded-full bg-muted">
+                <AlertTriangle className="h-8 w-8 text-muted-foreground" />
+              </div>
+            </div>
+            <CardTitle className="text-2xl">Service Disabled</CardTitle>
+            <CardDescription className="text-base">The {domain} domain is currently suspended</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-center text-muted-foreground">
+              This service has been disabled by the system administrator. Please contact support or try again later.
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1 bg-transparent" onClick={() => router.back()}>
+                Go Back
+              </Button>
+              <Button className="flex-1" onClick={() => router.push(ROUTES.HOME)}>
+                Go Home
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return <>{children}</>

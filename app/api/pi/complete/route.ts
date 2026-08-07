@@ -276,6 +276,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment in incompatible state" }, { status: 400 })
     }
 
+    // Persist payer UID only from the verified final Pi U2A response.
+    const verifiedPayerUid = typeof finalPiPayment.user_uid === "string"
+      ? finalPiPayment.user_uid
+      : typeof finalPiPayment.user?.uid === "string" ? finalPiPayment.user.uid : undefined
+    if (verifiedPayerUid) {
+      if (payment.payerUid && payment.payerUid !== verifiedPayerUid) {
+        return NextResponse.json({ error: "Payer identity conflict" }, { status: 400 })
+      }
+      payment.payerUid = verifiedPayerUid
+      payment.payerUidSource = "verified_u2a"
+      payment.payerUidCapturedAt = payment.payerUidCapturedAt || new Date().toISOString()
+    }
+
     // Persist canonical piPaymentId from Pi identifier
     payment.piPaymentId = piPaymentIdCanonical
 

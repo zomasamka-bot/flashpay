@@ -38,6 +38,8 @@ interface PiA2UPayment {
   from_address: string
   to_address: string
   amount: number
+  metadata?: Record<string, unknown>
+  user_uid?: string
   status?: {
     developer_approved?: boolean
     transaction_verified?: boolean
@@ -60,9 +62,9 @@ interface PiA2UPayment {
  * Each stage returns its specific data type on success.
  * All errors: { ok: false; error: string; userFacingStatus: string }
  */
-type Stage1Result = 
+type Stage1Result =
   | { ok: true; data: { a2uPaymentId: string; a2uPayment: PiA2UPayment } }
-  | { ok: false; error: string; userFacingStatus: string }
+  | { ok: false; error: string; userFacingStatus: string; retryable?: boolean; errorCode?: string; errorBody?: string }
 
 type Stage2Result = 
   | { ok: true; data: { txidFromHorizon: string; horizonFeeCharged: number } }
@@ -183,11 +185,31 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
   if (!a2uPaymentId) {
     console.log("[A2U Executor] STAGE 1: Creating new A2U payment")
+    const attemptAt = new Date().toISOString()
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+      lastAttemptAt: attemptAt,
+      retryCount: (ctx.payment.retryCount || 0) + 1,
+      settlementFailureState: "reconciling",
+    })
     const stageResult = await stage1CreateA2U(ctx)
     if (!stageResult.ok) {
+      const retryable = stageResult.retryable === true
+      const retryCount = ctx.payment.retryCount || 1
+      const nextRetryAt = retryable
+        ? new Date(Date.now() + Math.min(30 * 60_000, 5_000 * 2 ** Math.max(0, retryCount - 1))).toISOString()
+        : undefined
+      ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+        a2uErrorCode: stageResult.errorCode,
+        a2uErrorMessage: stageResult.error,
+        a2uErrorBody: stageResult.errorBody,
+        settlementFailureState: retryable ? "retryable" : "held",
+        refundStatus: retryable ? "not_started" : "manual_review_required",
+        nextRetryAt,
+        status: "paid_to_app",
+      })
       return {
         ok: false,
-        status: stageResult.userFacingStatus,
+        status: retryable ? "settlement_pending" : stageResult.userFacingStatus,
         error: stageResult.error,
       }
     }
@@ -203,6 +225,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         a2uToAddress: stageResult.data.a2uPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
+        settlementFailureState: "none",
       }
       // Replace ctx.payment with fully merged record returned from persist
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage1Updates)
@@ -491,6 +514,36 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
  * STAGE 1: Create or fetch A2U payment - TYPED DISCRIMINATED UNION
  * Parses response as unknown and validates with isPiA2UPayment guard - NO CASTS
  */
+function responseStatusRetryable(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500
+}
+
+function codeIsTooManyPayments(errorData: unknown, errorText: string): boolean {
+  const code = isRecord(errorData) && typeof errorData.code === "string" ? errorData.code : ""
+  return code === "too_many_payments" || /too_many_payments/i.test(errorText)
+}
+
+async function reconcileIncompleteA2U(paymentId: string, amount: number): Promise<{ id?: string; payment?: PiA2UPayment }> {
+  try {
+    const response = await fetch("https://api.minepi.com/v2/payments/incomplete_server_payments", {
+      headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" },
+    })
+    if (!response.ok) return {}
+    const body = await response.json()
+    const candidates = Array.isArray(body) ? body : Array.isArray(body?.payments) ? body.payments : []
+    const match = candidates.find((candidate: unknown) => {
+      if (!isRecord(candidate)) return false
+      const metadata = isRecord(candidate.metadata) ? candidate.metadata : {}
+      return metadata.paymentId === paymentId && Number(candidate.amount) === amount && typeof candidate.identifier === "string"
+    })
+    if (!match || !isPiA2UPayment(match)) return {}
+    return { id: match.identifier, payment: match }
+  } catch (error) {
+    console.warn("[A2U Stage1] Incomplete payment reconciliation failed:", error)
+    return {}
+  }
+}
+
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
   try {
     // Verify UID with Pi /v2/me
@@ -505,7 +558,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     if (!verifyResponse.ok) {
       const error = await verifyResponse.text()
       console.error("[A2U Stage1] UID verification failed:", error)
-      return { ok: false, error: "UID verification failed", userFacingStatus: "error" }
+      return { ok: false, error: "UID verification failed", userFacingStatus: "error", retryable: responseStatusRetryable(verifyResponse.status), errorCode: `uid_verification_${verifyResponse.status}`, errorBody: error.slice(0, 2000) }
     }
 
     const verifiedUser = await verifyResponse.json()
@@ -515,6 +568,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     }
 
     console.log("[A2U Stage1] ✓ UID verified")
+
+    // Reconcile Pi before every creation attempt so ambiguous prior responses cannot duplicate A2U.
+    const existing = await reconcileIncompleteA2U(ctx.paymentId, ctx.customerAmount)
+    if (existing.id && existing.payment) {
+      console.warn("[A2U Stage1] Reconciled existing incomplete A2U:", existing.id)
+      return { ok: true, data: { a2uPaymentId: existing.id, a2uPayment: existing.payment } }
+    }
 
     // Create A2U payment
     const requestBody = {
@@ -560,8 +620,29 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
         }
       }
 
+      // A failed POST is ambiguous: Pi may have created the A2U before the response was lost.
+      // Reconcile before exposing the failure or allowing a later retry. This is the only safe
+      // point to decide whether a new A2U may be created.
+      const code = typeof errorData.code === "string" ? errorData.code : undefined
+      const ambiguous = responseStatusRetryable(createResponse.status) || codeIsTooManyPayments(errorData, errorText)
+      if (ambiguous) {
+        const reconciled = await reconcileIncompleteA2U(ctx.paymentId, ctx.customerAmount)
+        if (reconciled.id && reconciled.payment) {
+          console.warn("[A2U Stage1] Reconciled A2U after ambiguous create failure:", reconciled.id)
+          return { ok: true, data: { a2uPaymentId: reconciled.id, a2uPayment: reconciled.payment } }
+        }
+      }
+
       console.error("[A2U Stage1] A2U creation failed:", errorData)
-      return { ok: false, error: "A2U creation failed", userFacingStatus: "error" }
+      const retryable = responseStatusRetryable(createResponse.status) || code === "too_many_payments"
+      return {
+        ok: false,
+        error: typeof errorData.message === "string" ? errorData.message : "A2U creation failed",
+        userFacingStatus: "error",
+        retryable,
+        errorCode: code,
+        errorBody: errorText.slice(0, 2000),
+      }
     }
 
     const responseData: unknown = await createResponse.json()
@@ -583,7 +664,12 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     }
   } catch (error) {
     console.error("[A2U Stage1] Exception:", error)
-    return { ok: false, error: String(error), userFacingStatus: "error" }
+    const reconciled = await reconcileIncompleteA2U(ctx.paymentId, ctx.customerAmount)
+    if (reconciled.id && reconciled.payment) {
+      console.warn("[A2U Stage1] Reconciled A2U after network failure:", reconciled.id)
+      return { ok: true, data: { a2uPaymentId: reconciled.id, a2uPayment: reconciled.payment } }
+    }
+    return { ok: false, error: "A2U creation network failure", userFacingStatus: "error", retryable: true, errorCode: "network_error", errorBody: String(error).slice(0, 2000) }
   }
 }
 
@@ -987,6 +1073,22 @@ async function persistCheckpointMerged(
     if (updates.a2uToAddress !== undefined) merged.a2uToAddress = updates.a2uToAddress
     if (updates.requiresDbReconciliation !== undefined) merged.requiresDbReconciliation = updates.requiresDbReconciliation
     if (updates.piCompletionPending !== undefined) merged.piCompletionPending = updates.piCompletionPending
+    if (updates.a2uErrorCode !== undefined) merged.a2uErrorCode = updates.a2uErrorCode
+    if (updates.a2uErrorMessage !== undefined) merged.a2uErrorMessage = updates.a2uErrorMessage
+    if (updates.a2uErrorBody !== undefined) merged.a2uErrorBody = updates.a2uErrorBody
+    if (updates.retryCount !== undefined) merged.retryCount = updates.retryCount
+    if (updates.lastAttemptAt !== undefined) merged.lastAttemptAt = updates.lastAttemptAt
+    if (updates.nextRetryAt !== undefined) merged.nextRetryAt = updates.nextRetryAt
+    if (updates.settlementFailureState !== undefined) merged.settlementFailureState = updates.settlementFailureState
+    if (updates.payerUid !== undefined) merged.payerUid = updates.payerUid
+    if (updates.payerUidSource !== undefined) merged.payerUidSource = updates.payerUidSource
+    if (updates.payerUidCapturedAt !== undefined) merged.payerUidCapturedAt = updates.payerUidCapturedAt
+    if (updates.payerRefundEligible !== undefined) merged.payerRefundEligible = updates.payerRefundEligible
+    if (updates.refundPaymentId !== undefined) merged.refundPaymentId = updates.refundPaymentId
+    if (updates.refundTxid !== undefined) merged.refundTxid = updates.refundTxid
+    if (updates.refundStatus !== undefined) merged.refundStatus = updates.refundStatus
+    if (updates.refundFailureCode !== undefined) merged.refundFailureCode = updates.refundFailureCode
+    if (updates.refundProof !== undefined) merged.refundProof = updates.refundProof
 
     // Persist merged record - if this fails, throw immediately to stop workflow
     console.log("[A2U Checkpoint] Persisting strictly monotonic checkpoint to Redis")

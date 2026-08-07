@@ -41,7 +41,25 @@ function mapSettlementStatus(status: SettlementStatus): string {
   return "Other"
 }
 
+interface OperationalPayment {
+  paymentId: string
+  amount: number
+  status: string
+  settlementFailureState: string
+  settlementFailureCode?: string
+  heldAt?: string
+  nextRetryAt?: string
+  refundStatus: string
+  refundPaymentId?: string
+  refundTxid?: string
+  u2aTxid?: string
+  a2uPaymentId?: string
+  a2uTxid?: string
+  updatedAt?: string
+}
+
 interface ProfileSummary {
+  operationalPayments?: OperationalPayment[]
   totalTransactions: number
   settledTransactions: number
   totalSettledAmount: number
@@ -380,6 +398,36 @@ function ProfileContent() {
                     </>
                   )}
                 </div>
+                {summary.operationalPayments && summary.operationalPayments.length > 0 && (
+                  <div className="pt-3 border-t space-y-3">
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground">Settlement safety status</p>
+                      <p className="text-sm text-muted-foreground">Operational payment state, separate from settled accounting.</p>
+                    </div>
+                    {summary.operationalPayments.map((item) => (
+                      <div key={item.paymentId} className="rounded-md border p-3 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-medium">{item.paymentId}</span>
+                          <span>{item.amount.toFixed(2)}π</span>
+                        </div>
+                        <p className="text-muted-foreground mt-1">
+                          {item.refundStatus === "completed" || item.status === "refunded"
+                            ? "Refunded"
+                            : item.settlementFailureState === "manual_review_required"
+                              ? "Manual review required"
+                              : item.settlementFailureState === "held"
+                                ? "Held for settlement safety"
+                                : item.refundStatus === "pending" || item.status === "refund_pending"
+                                  ? "Refund pending"
+                                  : "Settlement processing"}
+                        </p>
+                        {item.settlementFailureCode && <p className="text-xs text-muted-foreground">Reason: {item.settlementFailureCode}</p>}
+                        {item.nextRetryAt && <p className="text-xs text-muted-foreground">Next retry: {formatProfileDateTime(item.nextRetryAt)}</p>}
+                        {item.refundTxid && <p className="text-xs text-muted-foreground">Refund transaction: {item.refundTxid}</p>}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {summary.latestTransaction && (
                   <div className="pt-3 border-t">
                     <p className="text-xs font-medium text-muted-foreground mb-2">Latest Transaction</p>

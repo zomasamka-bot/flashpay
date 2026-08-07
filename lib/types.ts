@@ -1,4 +1,5 @@
-export type PaymentStatus = "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "failed" | "cancelled"
+export type PaymentStatus = "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "failed" | "cancelled" | "refund_pending" | "refunded"
+export type SettlementFailureState = "none" | "retryable" | "reconciling" | "held" | "manual_review_required" | "refund_pending" | "refunded"
 
 export interface Payment {
   id: string
@@ -39,6 +40,24 @@ export interface Payment {
   piCompletionPending?: boolean // True if Horizon succeeded but Pi /complete not yet called
   piCompleted?: boolean // True if Pi /complete succeeded
   dbRecorded?: boolean // True if transaction successfully recorded in database
+
+  // Settlement failure and refund safety (canonical operational checkpoint)
+  a2uErrorCode?: string
+  a2uErrorMessage?: string
+  a2uErrorBody?: string
+  retryCount?: number
+  lastAttemptAt?: string
+  nextRetryAt?: string
+  settlementFailureState?: SettlementFailureState
+  payerUid?: string
+  payerUidSource?: "verified_u2a" | "pi_payment" | "manual_review"
+  payerUidCapturedAt?: string
+  payerRefundEligible?: boolean
+  refundPaymentId?: string
+  refundTxid?: string
+  refundStatus?: "not_started" | "pending" | "submitted" | "completed" | "failed" | "manual_review_required"
+  refundFailureCode?: string
+  refundProof?: string
 }
 
 // Transaction types — permanent ledger of all movements
