@@ -27,6 +27,8 @@ export const VALID_STATUSES: PaymentStatus[] = [
   'settlement_pending',
   'settled_to_merchant',
   'settlement_failed',
+  'refund_pending',
+  'refunded',
 ]
 
 /**
@@ -133,6 +135,10 @@ export function getStatusLabel(status: PaymentStatus): string {
       return 'Failed'
     case 'cancelled':
       return 'Cancelled'
+    case 'refund_pending':
+      return 'Refund Pending'
+    case 'refunded':
+      return 'Refunded'
     default:
       const _exhaustive: never = status
       return _exhaustive
@@ -158,6 +164,10 @@ export function getStatusColor(status: PaymentStatus): 'default' | 'secondary' |
       return 'destructive'
     case 'cancelled':
       return 'outline'
+    case 'refund_pending':
+      return 'secondary'
+    case 'refunded':
+      return 'default'
     default:
       const _exhaustive: never = status
       return _exhaustive
@@ -196,6 +206,12 @@ export function getSettlementDisplay(status: PaymentStatus): string {
   }
   if (status === 'cancelled') {
     return 'Cancelled'
+  }
+  if (status === 'refund_pending') {
+    return 'Refund Pending'
+  }
+  if (status === 'refunded') {
+    return 'Refunded'
   }
   return 'Pending'
 }
