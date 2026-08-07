@@ -219,7 +219,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
     // Persist Stage 1: a2uPaymentId immediately after creation (crash-safe merge)
     if (stageResult.data.a2uPayment) {
-      const stage1Updates = {
+      const stage1Updates: Partial<Payment> = {
         a2uPaymentId: a2uPaymentId,
         a2uFromAddress: stageResult.data.a2uPayment.from_address,
         a2uToAddress: stageResult.data.a2uPayment.to_address,
@@ -530,7 +530,7 @@ async function reconcileIncompleteA2U(paymentId: string, amount: number): Promis
     })
     if (!response.ok) return {}
     const body = await response.json()
-    const candidates = Array.isArray(body) ? body : Array.isArray(body?.payments) ? body.payments : []
+    const candidates = Array.isArray(body) ? body : Array.isArray(body?.incomplete_server_payments) ? body.incomplete_server_payments : []
     const match = candidates.find((candidate: unknown) => {
       if (!isRecord(candidate)) return false
       const metadata = isRecord(candidate.metadata) ? candidate.metadata : {}
@@ -623,7 +623,16 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       // A failed POST is ambiguous: Pi may have created the A2U before the response was lost.
       // Reconcile before exposing the failure or allowing a later retry. This is the only safe
       // point to decide whether a new A2U may be created.
-      const code = typeof errorData.code === "string" ? errorData.code : undefined
+      const errorCode = typeof errorData.error === "string"
+        ? errorData.error
+        : typeof errorData.code === "string"
+          ? errorData.code
+          : undefined
+      const errorMessage = typeof errorData.error_message === "string"
+        ? errorData.error_message
+        : typeof errorData.message === "string"
+          ? errorData.message
+          : "A2U creation failed"
       const ambiguous = responseStatusRetryable(createResponse.status) || codeIsTooManyPayments(errorData, errorText)
       if (ambiguous) {
         const reconciled = await reconcileIncompleteA2U(ctx.paymentId, ctx.customerAmount)
@@ -634,13 +643,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       }
 
       console.error("[A2U Stage1] A2U creation failed:", errorData)
-      const retryable = responseStatusRetryable(createResponse.status) || code === "too_many_payments"
+      const retryable = responseStatusRetryable(createResponse.status) || errorCode === "too_many_payments"
       return {
         ok: false,
-        error: typeof errorData.message === "string" ? errorData.message : "A2U creation failed",
+        error: errorMessage,
         userFacingStatus: "error",
         retryable,
-        errorCode: code,
+        errorCode,
         errorBody: errorText.slice(0, 2000),
       }
     }
