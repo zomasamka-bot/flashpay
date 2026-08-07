@@ -18,7 +18,7 @@ import { ROUTES } from "@/lib/router"
 export function DomainGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  const [canAccess, setCanAccess] = useState(false)
+  const [canAccess, setCanAccess] = useState(true)
   const [domain, setDomain] = useState<string>("")
 
   useEffect(() => {

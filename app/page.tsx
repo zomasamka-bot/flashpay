@@ -496,7 +496,7 @@ export default function HomePage() {
         </div>
 
         {/* QR Payment View */}
-        <div className="flex-1 flex flex-col items-center justify-center px-4 py-8">
+        <div className="flex-1 flex flex-col items-center justify-center px-4 pt-8 pb-32 safe-area-inset-bottom">
           <div className="text-sm text-muted-foreground mb-4">Scan QR Code to Pay</div>
 
           <div className="bg-white p-8 rounded-3xl shadow-2xl mb-6">
