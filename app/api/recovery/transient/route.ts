@@ -64,6 +64,22 @@ function isEligible(payment: Payment, now: number): boolean {
   )
 }
 
+function isPostHorizonEligible(payment: Payment, now: number): boolean {
+  const nextRetryAt = payment.nextRetryAt ? Date.parse(payment.nextRetryAt) : NaN
+
+  return (
+    payment.status === "settlement_pending" &&
+    Boolean(payment.a2uPaymentId) &&
+    Boolean(payment.a2uTxid) &&
+    payment.horizonSuccessFlag === true &&
+    !hasExcludedState(payment) &&
+    Number.isFinite(nextRetryAt) &&
+    nextRetryAt <= now &&
+    ((payment.piCompletionPending === true && payment.piCompleted !== true) ||
+      (payment.piCompleted === true && payment.dbRecorded !== true))
+  )
+}
+
 function isTooManyPayments(payment: Payment): boolean {
   return payment.a2uErrorCode === "too_many_payments"
 }
@@ -78,16 +94,23 @@ export async function POST(request: NextRequest) {
   }
 
   const keys = await redis.keys("payment:*")
-  const eligibleIds: string[] = []
+  const postHorizonIds: string[] = []
+  const retryableIds: string[] = []
   const now = Date.now()
 
   for (const key of keys) {
-    if (eligibleIds.length >= MAX_ATTEMPTS) break
     const payment = parsePayment(await redis.get(key))
-    if (payment && isEligible(payment, now)) {
-      eligibleIds.push(key.slice("payment:".length))
+    if (!payment) continue
+
+    const paymentId = key.slice("payment:".length)
+    if (isPostHorizonEligible(payment, now)) {
+      postHorizonIds.push(paymentId)
+    } else if (isEligible(payment, now)) {
+      retryableIds.push(paymentId)
     }
   }
+
+  const eligibleIds = [...postHorizonIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
 
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
 
@@ -102,7 +125,12 @@ export async function POST(request: NextRequest) {
       error: result.details?.error,
     })
 
-    if (latest && latest.settlementFailureState === "retryable" && isTooManyPayments(latest)) {
+    if (
+      latest &&
+      latest.status === "paid_to_app" &&
+      latest.settlementFailureState === "retryable" &&
+      isTooManyPayments(latest)
+    ) {
       break
     }
   }
