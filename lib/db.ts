@@ -1,7 +1,14 @@
 'use server'
 
 import { randomUUID } from 'crypto'
-import type { SettlementRequest, TransactionRow, ReceiptRow, MerchantBalanceRow } from './types'
+import type {
+  SettlementRequest,
+  TransactionRow,
+  ReceiptRow,
+  MerchantBalanceRow,
+  RefundCheckpoint,
+  RefundAuditEvent,
+} from './types'
 
 // Database layer - handles PostgreSQL/Neon integration via postgres client
 // Note: Functions that use database client are server-only
@@ -336,6 +343,55 @@ export async function initializeSchema() {
         retry_count INTEGER DEFAULT 0,
         FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
       )
+    `)
+
+    // Create durable refund intent/checkpoint records.
+    // The unique payment and idempotency constraints prevent duplicate refunds.
+    await query(`
+      CREATE TABLE IF NOT EXISTS refund_checkpoints (
+        refund_id TEXT PRIMARY KEY,
+        payment_id TEXT NOT NULL UNIQUE,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        payer_uid TEXT NOT NULL,
+        payer_uid_verified_at TIMESTAMP NOT NULL,
+        amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
+        currency TEXT NOT NULL DEFAULT 'π',
+        source_payment_status TEXT NOT NULL,
+        source_settlement_state TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        refund_payment_id TEXT,
+        refund_txid TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        last_error_code TEXT,
+        last_error_message TEXT,
+        next_retry_at TIMESTAMP
+      )
+    `)
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS refund_audit_events (
+        event_id TEXT PRIMARY KEY,
+        refund_id TEXT NOT NULL REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
+        payment_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        actor_type TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        details JSONB NOT NULL DEFAULT '{}'::jsonb
+      )
+    `)
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_refund_checkpoints_status_retry
+      ON refund_checkpoints(status, next_retry_at)
+    `)
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_refund_audit_refund_created
+      ON refund_audit_events(refund_id, created_at ASC)
     `)
 
     // Create indexes for settlement requests

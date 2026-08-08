@@ -255,6 +255,92 @@ export interface MerchantBalanceRow {
 }
 
 // ============================================================================
+// REFUND SAFETY CONTRACTS
+// ============================================================================
+
+/**
+ * Refund lifecycle states. A refund may only move forward through this
+ * lifecycle; terminal states are completed, failed, or manual review.
+ */
+export type RefundStatus =
+  | "not_started"
+  | "pending"
+  | "submitted"
+  | "completed"
+  | "failed"
+  | "manual_review_required"
+
+export type RefundCheckpointStage =
+  | "eligibility_verified"
+  | "intent_created"
+  | "wallet_submission_started"
+  | "wallet_submission_confirmed"
+  | "payment_checkpoint_updated"
+  | "accounting_recorded"
+  | "audit_recorded"
+
+/** Durable, idempotent checkpoint for one refund attempt. */
+export interface RefundCheckpoint {
+  refundId: string
+  paymentId: string
+  idempotencyKey: string
+  status: RefundStatus
+  stage: RefundCheckpointStage
+  payerUid: string
+  payerUidVerifiedAt: string
+  amount: number
+  currency: "π"
+  sourcePaymentStatus: PaymentStatus
+  sourceSettlementState: SettlementFailureState
+  createdAt: string
+  updatedAt: string
+  refundPaymentId?: string
+  refundTxid?: string
+  attemptCount: number
+  lastErrorCode?: string
+  lastErrorMessage?: string
+  nextRetryAt?: string
+}
+
+/** Append-only audit event for refund decisions and external effects. */
+export interface RefundAuditEvent {
+  eventId: string
+  refundId: string
+  paymentId: string
+  eventType:
+    | "eligibility_verified"
+    | "refund_requested"
+    | "refund_submission_started"
+    | "refund_submission_confirmed"
+    | "refund_rejected"
+    | "refund_completed"
+    | "refund_manual_review"
+  actorType: "system" | "merchant" | "customer" | "operator"
+  idempotencyKey: string
+  createdAt: string
+  details: Record<string, string | number | boolean | null>
+}
+
+/**
+ * Phase 1 invariant guard. This is intentionally pure and has no side
+ * effects; execution paths will use it before any refund work is added.
+ */
+export function isRefundEligible(payment: Payment): boolean {
+  return (
+    payment.status === "settlement_failed" &&
+    payment.settlementFailureState === "refund_pending" &&
+    payment.payerRefundEligible === true &&
+    typeof payment.payerUid === "string" &&
+    payment.payerUid.length > 0 &&
+    typeof payment.customerAmount === "number" &&
+    Number.isFinite(payment.customerAmount) &&
+    payment.customerAmount > 0 &&
+    payment.refundStatus !== "completed" &&
+    payment.refundStatus !== "submitted"
+  )
+}
+
+// ============================================================================
 // RUNTIME VALIDATORS FOR REDIS DATA
 // ============================================================================
 
