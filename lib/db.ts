@@ -655,26 +655,25 @@ export async function getMerchantPaymentDashboardSummary(
  * Get merchant profile summary with transaction statistics
  * Read-only query: transactions LEFT JOIN receipts for settlement tracking
  */
-export async function getSettledPaymentIds(merchantId: string, paymentIds: string[]): Promise<Set<string>> {
-  if (!process.env.DATABASE_URL || paymentIds.length === 0) return new Set()
+export async function getSettledPaymentIds(merchantId: string, piPaymentIds: string[]): Promise<Set<string>> {
+  if (!process.env.DATABASE_URL || piPaymentIds.length === 0) return new Set()
 
   try {
     const result = await query(
-      `SELECT t.id::text AS transaction_id, t.reference
+      `SELECT t.payment_id
        FROM transactions t
-       LEFT JOIN receipts r ON r.transaction_id = t.id
+       JOIN receipts r ON r.transaction_id = t.id
        WHERE t.merchant_id = $1
          AND r.settlement_status = $2
-         AND (t.id::text = ANY($3::text[]) OR t.reference = ANY($3::text[]))`,
-      [merchantId, "settled_to_merchant", paymentIds],
+         AND t.payment_id = ANY($3::text[])`,
+      [merchantId, "settled_to_merchant", piPaymentIds],
     )
 
     const settledIds = new Set<string>()
     for (const row of result || []) {
       if (row && typeof row === "object") {
-        const record = row as Record<string, unknown>
-        if (typeof record.transaction_id === "string") settledIds.add(record.transaction_id)
-        if (typeof record.reference === "string") settledIds.add(record.reference)
+        const paymentId = (row as Record<string, unknown>).payment_id
+        if (typeof paymentId === "string") settledIds.add(paymentId)
       }
     }
     return settledIds

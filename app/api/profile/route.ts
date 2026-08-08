@@ -73,6 +73,7 @@ export async function GET(request: NextRequest) {
           if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(payment.status) || payment.settlementFailureState) {
             operationalPayments.push({
               paymentId: payment.id,
+              piPaymentId: payment.piPaymentId,
               amount: payment.customerAmount ?? payment.amount,
               status: payment.status,
               settlementFailureState: payment.settlementFailureState || "none",
@@ -96,10 +97,13 @@ export async function GET(request: NextRequest) {
 
     const settledPaymentIds = await getSettledPaymentIds(
       verifiedMerchant.username,
-      operationalPayments.map((payment) => String(payment.paymentId)),
+      operationalPayments
+        .map((payment) => payment.piPaymentId)
+        .filter((paymentId): paymentId is string => typeof paymentId === "string" && paymentId.length > 0),
     )
     const authoritativeOperationalPayments = operationalPayments.filter(
-      (payment) => !settledPaymentIds.has(String(payment.paymentId)),
+      (payment) =>
+        typeof payment.piPaymentId !== "string" || !settledPaymentIds.has(payment.piPaymentId),
     )
 
     return NextResponse.json({ ...profileSummary, operationalPayments: authoritativeOperationalPayments })
