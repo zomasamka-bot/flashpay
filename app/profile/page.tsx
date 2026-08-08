@@ -42,16 +42,26 @@ function mapSettlementStatus(status: SettlementStatus): string {
 }
 
 function merchantAttentionStatus(item: OperationalPayment): string {
-  if (item.settlementFailureState === "manual_review_required") return "Manual review required"
+  if (
+    item.settlementFailureState === "manual_review_required" ||
+    item.refundStatus === "manual_review_required"
+  ) return "Manual review required"
   if (item.settlementFailureState === "held") return "Held for settlement safety"
   if (
-    item.refundStatus === "pending" ||
-    item.refundStatus === "pending refund" ||
     item.status === "refund_pending" ||
-    item.status === "pending refund"
+    item.settlementFailureState === "refund_pending" ||
+    item.refundStatus === "pending" ||
+    item.refundStatus === "submitted"
   ) return "Refund pending"
+  if (item.refundStatus === "failed") return "Refund failed — review required"
   if (item.settlementFailureState === "retryable" || item.nextRetryAt) return "Automatic retry scheduled"
-  return "Settlement processing"
+  if (item.settlementFailureState === "settlement_failed") return "Settlement failed — review required"
+  if (
+    item.status === "paid_to_app" ||
+    item.status === "settlement_pending" ||
+    item.settlementFailureState === "reconciling"
+  ) return "Settlement processing"
+  return "Review required"
 }
 
 interface OperationalPayment {
@@ -413,7 +423,10 @@ function ProfileContent() {
                 </div>
                 {summary.operationalPayments &&
                   summary.operationalPayments.filter(
-                    (item) => item.status !== "refunded" && item.refundStatus !== "completed",
+                    (item) =>
+                      item.status !== "refunded" &&
+                      item.refundStatus !== "completed" &&
+                      item.settlementFailureState !== "refunded",
                   ).length > 0 && (
                     <div className="pt-3 border-t space-y-3">
                       <div>
@@ -421,7 +434,12 @@ function ProfileContent() {
                         <p className="text-sm text-muted-foreground">Payments still being settled or requiring action.</p>
                       </div>
                       {summary.operationalPayments
-                        .filter((item) => item.status !== "refunded" && item.refundStatus !== "completed")
+                        .filter(
+                          (item) =>
+                            item.status !== "refunded" &&
+                            item.refundStatus !== "completed" &&
+                            item.settlementFailureState !== "refunded",
+                        )
                         .map((item) => (
                           <div key={item.paymentId} className="rounded-md border p-3 text-sm">
                             <div className="flex items-center justify-between gap-3">
