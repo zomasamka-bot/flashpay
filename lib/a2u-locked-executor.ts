@@ -37,7 +37,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
   const { paymentId } = params
   
   const lockToken = crypto.randomUUID()
-  const lockKey = `a2u:lock:${paymentId}`
+  // Shared with refund intent creation: A2U and refund cannot overlap.
+  const lockKey = `flashpay:payment:operation:${paymentId}`
   const lockTtl = 600 // 10 minutes
 
   console.log("[A2U Locked Executor] Acquiring concurrency lock for paymentId:", paymentId)

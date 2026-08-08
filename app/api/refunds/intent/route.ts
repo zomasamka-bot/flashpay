@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { redis, isRedisConfigured } from '@/lib/redis'
-import { createRefundCheckpoint, getRefundCheckpointByIdempotency, appendRefundAuditEvent, verifyRefundTables, releaseRefundIdempotency } from '@/lib/refund-checkpoint-store'
+import { createRefundCheckpoint, claimRefundIdempotency, getRefundCheckpointByIdempotency, appendRefundAuditEvent, verifyRefundTables, releaseRefundIdempotency, acquirePaymentOperationLock, releasePaymentOperationLock } from '@/lib/refund-checkpoint-store'
 import type { Payment, RefundCheckpoint, RefundAuditEvent } from '@/lib/types'
 import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
@@ -146,8 +146,13 @@ export async function POST(request: NextRequest) {
     // 5. Claim idempotency only after eligibility is verified, then create the
     // durable checkpoint. The database unique constraints remain authoritative.
     const refundId = randomUUID()
+    const paymentLockAcquired = await acquirePaymentOperationLock(payment.id, refundId)
+    if (!paymentLockAcquired) {
+      return NextResponse.json({ error: 'Payment is already being processed' }, { status: 409, headers: corsHeaders })
+    }
     const idempotencyClaimed = await claimRefundIdempotency(idempotencyKey, refundId)
     if (!idempotencyClaimed) {
+      await releasePaymentOperationLock(payment.id, refundId)
       return NextResponse.json(
         { error: 'Idempotency key already in use' },
         { status: 409, headers: corsHeaders }
@@ -182,6 +187,7 @@ export async function POST(request: NextRequest) {
     const persistedCheckpoint = await createRefundCheckpoint(checkpoint)
     if (!persistedCheckpoint) {
       await releaseRefundIdempotency(idempotencyKey, refundId)
+      await releasePaymentOperationLock(payment.id, refundId)
       console.error('[refunds/intent] Failed to create checkpoint; idempotency claim released for safe retry')
       return NextResponse.json(
         { error: 'Refund intent creation failed - duplicate or database error' },

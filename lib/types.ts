@@ -325,6 +325,36 @@ export interface RefundAuditEvent {
  * Phase 1 invariant guard. This is intentionally pure and has no side
  * effects; execution paths will use it before any refund work is added.
  */
+/**
+ * The only trusted transition into refund eligibility. Callers must invoke
+ * this after verified U2A identity capture and a failed, non-successful A2U
+ * attempt; it never permits a Horizon-successful payment to become refundable.
+ */
+export function markRefundPendingAfterFailedSettlement(
+  payment: Payment,
+  failure: { code: string; message?: string; occurredAt: string },
+): Payment {
+  if (
+    payment.status !== "settlement_failed" ||
+    payment.payerUidSource !== "verified_u2a" ||
+    !payment.payerUid ||
+    !payment.payerUidCapturedAt ||
+    payment.a2uPaymentId ||
+    payment.a2uTxid ||
+    payment.horizonSuccessFlag === true
+  ) return payment
+  return {
+    ...payment,
+    status: "settlement_failed",
+    settlementFailureState: "refund_pending",
+    payerRefundEligible: true,
+    a2uErrorCode: failure.code,
+    a2uErrorMessage: failure.message,
+    lastAttemptAt: failure.occurredAt,
+    refundStatus: "pending",
+  }
+}
+
 export function isRefundEligible(payment: Payment): boolean {
   return (
     payment.status === "settlement_failed" &&
