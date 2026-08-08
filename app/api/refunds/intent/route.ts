@@ -4,11 +4,12 @@ import { createRefundCheckpoint, claimRefundIdempotency, getRefundCheckpointById
 import type { Payment, RefundCheckpoint, RefundAuditEvent } from '@/lib/types'
 import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
+import { serverConfig } from '@/lib/server-config'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-const INTERNAL_SECRET = process.env.REFUND_INTERNAL_SECRET
+const INTERNAL_SECRET = serverConfig.refundInternalSecret
 
 function hasInternalAuthorization(request: NextRequest): boolean {
   if (!INTERNAL_SECRET) return false

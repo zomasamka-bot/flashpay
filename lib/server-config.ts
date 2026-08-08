@@ -36,6 +36,9 @@ export const serverConfig = {
   // Must be set in environment; no fallback - fail closed if missing
   a2uInternalSecret: requireSecret("A2U_INTERNAL_SECRET", process.env.A2U_INTERNAL_SECRET),
 
+  // Refund intent creation is server-to-server only and fails closed when absent.
+  refundInternalSecret: process.env.REFUND_INTERNAL_SECRET || "",
+
   // Upstash Redis
   redisUrl: process.env.UPSTASH_REDIS_REST_URL || "",
   redisToken: process.env.UPSTASH_REDIS_REST_TOKEN || "",

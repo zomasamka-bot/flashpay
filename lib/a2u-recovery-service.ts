@@ -2,6 +2,7 @@ import { redis } from "@/lib/redis"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
+import { reconcilePiPayment } from "@/lib/pi-reconciliation"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -342,6 +343,11 @@ export async function executeA2URecovery(
       return { status: "manual_review_required", state: "refund_already_has_transfer_evidence", paymentId, details: { error: "Refund transfer evidence exists" } }
     }
 
+    const reconciliation = await reconcilePiPayment(payment.piPaymentId)
+    if (reconciliation.outcome !== "CONFIRMED_NONE") {
+      return { status: "manual_review_required", state: `pi_reconciliation_${reconciliation.outcome.toLowerCase()}`, paymentId, details: { error: reconciliation.reason } }
+    }
+
     // Convert only a proven no-transfer, verified-U2A failure into the
     // refund_pending state. This is the exact fail-closed transition point.
     const refundPending = markRefundPendingAfterFailedSettlement(
@@ -377,6 +383,11 @@ export async function executeA2URecovery(
           a2uTxid: payment.a2uTxid,
         },
       }
+    }
+
+    const reconciliation = await reconcilePiPayment(payment.piPaymentId)
+    if (reconciliation.outcome !== "CONFIRMED_NONE") {
+      return { status: "manual_review_required", state: `pi_reconciliation_${reconciliation.outcome.toLowerCase()}`, paymentId, details: { error: reconciliation.reason } }
     }
 
     // No Horizon identifiers and verified U2A payer identity: this is the

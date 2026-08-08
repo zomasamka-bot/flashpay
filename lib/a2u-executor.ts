@@ -28,6 +28,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
  */
 
 import type { Payment } from "@/lib/types"
+import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 
 /**
  * Pi A2U Payment API Response - Strict type definition
@@ -654,12 +655,25 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       }
     }
 
-    const responseData: unknown = await createResponse.json()
+    let responseData: unknown
+    try {
+      responseData = await createResponse.json()
+    } catch {
+      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount)
+      return { ok: false, error: 'A2U response could not be parsed; reconciliation did not produce a usable DTO', userFacingStatus: 'error', retryable: false, errorCode: reconciliation.outcome === 'CONFIRMED_NONE' ? 'unparseable_confirmed_none' : 'unparseable_indeterminate' }
+    }
     
     // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
       console.error("[A2U Stage1] A2U response validation failed:", responseData)
-      return { ok: false, error: "A2U response validation failed - missing required fields", userFacingStatus: "error" }
+      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount)
+      if (reconciliation.outcome === "FOUND") {
+        return { ok: false, error: "A2U response invalid; Pi found an existing incomplete transfer", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_transfer_found" }
+      }
+      if (reconciliation.outcome === "INDETERMINATE") {
+        return { ok: false, error: "A2U response invalid and Pi reconciliation is indeterminate", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_reconciliation_indeterminate" }
+      }
+      return { ok: false, error: "A2U response invalid; Pi confirmed no incomplete transfer", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_confirmed_none" }
     }
     
     console.log("[A2U Stage1] ✓ A2U payment created:", responseData.identifier)
