@@ -54,8 +54,8 @@ function merchantAttentionStatus(item: OperationalPayment): string {
     item.refundStatus === "submitted"
   ) return "Refund pending"
   if (item.refundStatus === "failed") return "Refund failed — review required"
+  if (item.status === "settlement_failed") return "Settlement failed — review required"
   if (item.settlementFailureState === "retryable" || item.nextRetryAt) return "Automatic retry scheduled"
-  if (item.settlementFailureState === "settlement_failed") return "Settlement failed — review required"
   if (
     item.status === "paid_to_app" ||
     item.status === "settlement_pending" ||
