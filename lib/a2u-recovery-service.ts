@@ -1,6 +1,7 @@
 import { redis } from "@/lib/redis"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked } from "@/lib/a2u-locked-executor"
+import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -337,10 +338,25 @@ export async function executeA2URecovery(
     if (hasMerchantEvidence) {
       return { status: "manual_review_required", state: "refund_blocked_transfer_evidence", paymentId, details: { a2uTxid: payment.a2uTxid, error: "Refund blocked until transfer evidence is reconciled" } }
     }
-    if (!payment.payerUid || payment.payerRefundEligible !== true || payment.refundPaymentId || payment.refundTxid) {
-      return { status: "manual_review_required", state: "manual_review_required", paymentId, details: { error: "Refund eligibility or payer scope cannot be proven" } }
+    if (payment.refundPaymentId || payment.refundTxid) {
+      return { status: "manual_review_required", state: "refund_already_has_transfer_evidence", paymentId, details: { error: "Refund transfer evidence exists" } }
     }
-    return { status: "manual_review_required", state: "refund_implementation_guarded", paymentId, details: { error: "Refund requires a separately authorized payer A2U credential" } }
+
+    // Convert only a proven no-transfer, verified-U2A failure into the
+    // refund_pending state. This is the exact fail-closed transition point.
+    const refundPending = markRefundPendingAfterFailedSettlement(
+      { ...payment, status: "settlement_failed" },
+      {
+        code: payment.a2uErrorCode || "a2u_non_retryable_no_transfer",
+        message: "A2U failed before any merchant transfer evidence existed",
+        occurredAt: new Date().toISOString(),
+      },
+    )
+    if (refundPending.refundStatus === "pending" && refundPending.settlementFailureState === "refund_pending") {
+      await redis.set(paymentKey, JSON.stringify(refundPending))
+      return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "Refund intent may now be created" } }
+    }
+    return { status: "manual_review_required", state: "refund_implementation_guarded", paymentId, details: { error: "Refund eligibility or verified payer scope cannot be proven" } }
   }
 
   // ===== STATE 7: SETTLEMENT FAILED - CHECK IRREVERSIBILITY =====
@@ -363,15 +379,35 @@ export async function executeA2URecovery(
       }
     }
 
-    // No Horizon identifiers = safe to retry in future
+    // No Horizon identifiers and verified U2A payer identity: this is the
+    // sole recovery point allowed to create a refund-eligible state. Never
+    // broaden this transition to payments with any transfer evidence.
+    const refundPending = markRefundPendingAfterFailedSettlement(
+      payment,
+      {
+        code: payment.a2uErrorCode || "a2u_non_retryable_no_transfer",
+        message: "A2U failed before any merchant transfer evidence existed",
+        occurredAt: new Date().toISOString(),
+      },
+    )
+    if (refundPending.refundStatus === "pending" && refundPending.settlementFailureState === "refund_pending") {
+      await redis.set(paymentKey, JSON.stringify(refundPending))
+      return {
+        status: "manual_review_required",
+        state: "refund_pending_eligible",
+        paymentId,
+        details: { error: "No merchant transfer evidence; refund intent may be created" },
+      }
+    }
+
     console.log(
-      "[A2U Recovery] 🔄 STATE 5: Safe to retry (no Horizon submission occurred yet)"
+      "[A2U Recovery] Safe failure remains non-refundable: verified payer/failure proof incomplete"
     )
     return {
       status: "manual_review_required",
       state: "failure_safe_to_retry_later",
       paymentId,
-      details: { error: "Settlement failed but safe to retry later" },
+      details: { error: "Settlement failed but trusted refund eligibility was not proven" },
     }
   }
 
