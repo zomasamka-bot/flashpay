@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getMerchantProfileSummary } from "@/lib/db"
+import { getMerchantProfileSummary, getSettledPaymentIds } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { redis, isRedisConfigured } from "@/lib/redis"
 
@@ -94,7 +94,15 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ...profileSummary, operationalPayments })
+    const settledPaymentIds = await getSettledPaymentIds(
+      verifiedMerchant.username,
+      operationalPayments.map((payment) => String(payment.paymentId)),
+    )
+    const authoritativeOperationalPayments = operationalPayments.filter(
+      (payment) => !settledPaymentIds.has(String(payment.paymentId)),
+    )
+
+    return NextResponse.json({ ...profileSummary, operationalPayments: authoritativeOperationalPayments })
   } catch (error) {
     console.error("[Profile API] Error:", error)
     return NextResponse.json(
