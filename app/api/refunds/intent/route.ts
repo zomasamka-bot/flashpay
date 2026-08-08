@@ -1,14 +1,20 @@
-'use server'
-
 import { type NextRequest, NextResponse } from 'next/server'
-import { query } from '@/lib/db'
-import { createRefundCheckpoint, claimRefundIdempotency, appendRefundAuditEvent } from '@/lib/refund-checkpoint-store'
+import { redis, isRedisConfigured } from '@/lib/redis'
+import { createRefundCheckpoint, getRefundCheckpointByIdempotency, appendRefundAuditEvent, verifyRefundTables, releaseRefundIdempotency } from '@/lib/refund-checkpoint-store'
 import type { Payment, RefundCheckpoint, RefundAuditEvent } from '@/lib/types'
 import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
+
+const INTERNAL_SECRET = process.env.REFUND_INTERNAL_SECRET
+
+function hasInternalAuthorization(request: NextRequest): boolean {
+  if (!INTERNAL_SECRET) return false
+  const supplied = request.headers.get('x-refund-internal-secret')
+  return supplied === INTERNAL_SECRET
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -40,6 +46,16 @@ const corsHeaders = {
  */
 export async function POST(request: NextRequest) {
   try {
+    if (!hasInternalAuthorization(request)) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: corsHeaders })
+    }
+    if (!isRedisConfigured) {
+      return NextResponse.json({ error: 'Refund store unavailable' }, { status: 503, headers: corsHeaders })
+    }
+    const tablesReady = await verifyRefundTables()
+    if (!tablesReady) {
+      return NextResponse.json({ error: 'Refund tables unavailable' }, { status: 503, headers: corsHeaders })
+    }
     const body = await request.json()
     const { paymentId, idempotencyKey } = body
 
@@ -60,33 +76,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 2. Fetch payment record from the authoritative database before claiming
-    // idempotency. Invalid requests must not consume a retry key.
-    // 3. Fetch payment record from database
-    if (!process.env.DATABASE_URL) {
-      return NextResponse.json(
-        { error: 'Database not configured' },
-        { status: 500, headers: corsHeaders }
-      )
+    // Redis is the canonical payment source in this application.
+    const stored = await redis.get(`payment:${paymentId}`)
+    if (!stored) {
+      return NextResponse.json({ error: 'Payment not found' }, { status: 404, headers: corsHeaders })
     }
-
-    let paymentRecord: any = null
-    try {
-      const result = await query('SELECT * FROM payments WHERE id = $1', [paymentId])
-      if (!Array.isArray(result) || result.length === 0) {
-        return NextResponse.json(
-          { error: 'Payment not found' },
-          { status: 404, headers: corsHeaders }
-        )
-      }
-      paymentRecord = result[0]
-    } catch (err) {
-      console.error('[refunds/intent] Database query failed:', err)
-      return NextResponse.json(
-        { error: 'Failed to fetch payment' },
-        { status: 500, headers: corsHeaders }
-      )
-    }
+    const paymentRecord: any = typeof stored === 'string' ? JSON.parse(stored) : stored
 
     // Normalize snake_case to camelCase for type checking
     const payment: Payment = {
@@ -100,9 +95,13 @@ export async function POST(request: NextRequest) {
       note: paymentRecord.note,
       status: paymentRecord.status,
       settlementFailureState: paymentRecord.settlement_failure_state || paymentRecord.settlementFailureState,
-      payerUid: paymentRecord.payer_uid || paymentRecord.payerUid,
-      payerUidCapturedAt: paymentRecord.payer_uid_captured_at || paymentRecord.payerUidCapturedAt,
-      payerRefundEligible: paymentRecord.payer_refund_eligible || paymentRecord.payerRefundEligible,
+      payerUid: paymentRecord.payerUid,
+      payerUidSource: paymentRecord.payerUidSource,
+      payerUidCapturedAt: paymentRecord.payerUidCapturedAt,
+      payerRefundEligible: paymentRecord.payerRefundEligible === true,
+      a2uPaymentId: paymentRecord.a2uPaymentId,
+      a2uTxid: paymentRecord.a2uTxid,
+      horizonSuccessFlag: paymentRecord.horizonSuccessFlag === true,
       refundStatus: paymentRecord.refund_status || paymentRecord.refundStatus,
       createdAt: paymentRecord.created_at || paymentRecord.createdAt,
     }
@@ -129,6 +128,19 @@ export async function POST(request: NextRequest) {
         { error: 'Payment is not eligible for refund' },
         { status: 422, headers: corsHeaders }
       )
+    }
+
+    // Resume an existing durable intent before creating anything new. This
+    // prevents partial checkpoint/audit failures from burning a retry key.
+    const existing = await getRefundCheckpointByIdempotency(idempotencyKey)
+    if (existing) {
+      const auditRecorded = await appendRefundAuditEvent({
+        eventId: randomUUID(), refundId: existing.refundId, paymentId: existing.paymentId,
+        eventType: 'eligibility_verified', actorType: 'system', idempotencyKey,
+        createdAt: new Date().toISOString(), details: { resumed: true, stage: existing.stage },
+      })
+      if (!auditRecorded) return NextResponse.json({ error: 'Refund intent exists but audit is unavailable', refundId: existing.refundId }, { status: 503, headers: corsHeaders })
+      return NextResponse.json({ success: true, refund: existing }, { status: 200, headers: corsHeaders })
     }
 
     // 5. Claim idempotency only after eligibility is verified, then create the
@@ -169,7 +181,8 @@ export async function POST(request: NextRequest) {
 
     const persistedCheckpoint = await createRefundCheckpoint(checkpoint)
     if (!persistedCheckpoint) {
-      console.error('[refunds/intent] Failed to create checkpoint (may be duplicate payment)')
+      await releaseRefundIdempotency(idempotencyKey, refundId)
+      console.error('[refunds/intent] Failed to create checkpoint; idempotency claim released for safe retry')
       return NextResponse.json(
         { error: 'Refund intent creation failed - duplicate or database error' },
         { status: 409, headers: corsHeaders }

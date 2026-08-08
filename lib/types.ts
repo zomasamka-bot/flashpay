@@ -330,8 +330,14 @@ export function isRefundEligible(payment: Payment): boolean {
     payment.status === "settlement_failed" &&
     payment.settlementFailureState === "refund_pending" &&
     payment.payerRefundEligible === true &&
+    payment.payerUidSource === "verified_u2a" &&
+    typeof payment.payerUidCapturedAt === "string" &&
+    payment.payerUidCapturedAt.length > 0 &&
     typeof payment.payerUid === "string" &&
     payment.payerUid.length > 0 &&
+    !payment.a2uPaymentId &&
+    !payment.a2uTxid &&
+    payment.horizonSuccessFlag !== true &&
     typeof payment.customerAmount === "number" &&
     Number.isFinite(payment.customerAmount) &&
     payment.customerAmount > 0 &&

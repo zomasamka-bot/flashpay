@@ -390,6 +390,11 @@ export async function initializeSchema() {
     `)
 
     await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_refund_audit_refund_event
+      ON refund_audit_events(refund_id, event_type)
+    `)
+
+    await query(`
       CREATE INDEX IF NOT EXISTS idx_refund_audit_refund_created
       ON refund_audit_events(refund_id, created_at ASC)
     `)
