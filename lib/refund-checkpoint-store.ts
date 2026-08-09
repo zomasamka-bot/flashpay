@@ -281,7 +281,6 @@ export async function transitionRefundCheckpointWithAudit(
       INSERT INTO refund_audit_events
         (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $12, refund_id, payment_id, $13, $14, idempotency_key, $15, $16::jsonb FROM transitioned
-      ON CONFLICT (event_id) DO NOTHING
       RETURNING refund_id
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
     [refundId, toStage, status, patch.refundPaymentId ?? null, patch.refundTxid ?? null,
