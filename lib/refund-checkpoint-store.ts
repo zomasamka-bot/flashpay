@@ -44,23 +44,31 @@ export async function getRefundSchemaDiagnostics(): Promise<RefundSchemaDiagnost
     'refund_checkpoints', 'refund_audit_events', 'idx_refund_checkpoints_status_retry',
     'idx_refund_checkpoints_payment', 'idx_refund_audit_payment_created', 'idx_refund_audit_refund_created',
   ] as const
-  let result: unknown[] = []
+  let rawResult: unknown
   try {
-    result = await query(`
+    rawResult = await query(`
       SELECT name, EXISTS (
         SELECT 1 FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relname = name AND c.relkind IN ('r','i') AND n.nspname = current_schema()
+        WHERE n.nspname = 'public'
+          AND c.relname = name
+          AND c.relkind = CASE
+            WHEN name IN ('refund_checkpoints', 'refund_audit_events') THEN 'r'
+            ELSE 'i'
+          END
       ) AS present
       FROM unnest($1::text[]) AS names(name)
     `, [names])
   } catch {
-    result = []
+    rawResult = null
   }
   const diagnostics = Object.fromEntries(names.map((name) => [name, false])) as RefundSchemaDiagnostics
-  if (Array.isArray(result)) {
-    for (const row of result) {
-      if (typeof row?.name === 'string' && row.name in diagnostics) diagnostics[row.name as keyof RefundSchemaDiagnostics] = row.present === true
+  if (Array.isArray(rawResult)) {
+    for (const row of rawResult) {
+      if (typeof row !== 'object' || row === null || Array.isArray(row)) continue
+      const record: Record<string, unknown> = row
+      if (typeof record.name !== 'string' || !(record.name in diagnostics)) continue
+      diagnostics[record.name as keyof RefundSchemaDiagnostics] = record.present === true
     }
   }
   return diagnostics
