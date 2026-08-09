@@ -2,6 +2,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2U } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
+import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import crypto from "crypto"
 
 /**
@@ -102,7 +103,20 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 404, error: "Payment not found" }
     }
 
-    const latestPayment: Payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
+    let latestPayment: Payment
+    try {
+      latestPayment = (typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData) as Payment
+    } catch {
+      return { ok: false, status: 409, error: "Payment state could not be verified" }
+    }
+    if (!latestPayment || typeof latestPayment !== "object") {
+      return { ok: false, status: 409, error: "Payment state could not be verified" }
+    }
+
+    const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
+    if (refundLookup.state !== 'absent') {
+      return { ok: false, status: 409, error: refundLookup.state === 'present' ? "Refund operation owns this payment" : "Refund state could not be verified" }
+    }
 
     console.log("[A2U Locked Executor] Latest payment status:", latestPayment.status)
 
@@ -129,6 +143,12 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
 
     // Refund/hold/manual-review states are terminal safety states. No caller may start
     // another A2U from them, even if it reaches this shared lock directly.
+    if (latestPayment.refundPaymentId || latestPayment.refundTxid ||
+      latestPayment.refundStatus === "pending" || latestPayment.refundStatus === "submitted" || latestPayment.refundStatus === "completed" ||
+      latestPayment.settlementFailureState === "refund_pending" || latestPayment.settlementFailureState === "held" || latestPayment.settlementFailureState === "manual_review_required") {
+      return { ok: false, status: 409, error: "Refund operation owns this payment" }
+    }
+
     const safetyState = latestPayment.settlementFailureState
     if (
       latestPayment.status === "refund_pending" ||

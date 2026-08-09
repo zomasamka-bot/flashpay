@@ -307,6 +307,26 @@ export function refundPreflight(
     payment.horizonSuccessFlag !== true && !payment.refundPaymentId && !payment.refundTxid
 }
 
+export type PaymentRefundCheckpointLookup =
+  | { state: 'absent' }
+  | { state: 'present'; checkpoint: RefundCheckpoint }
+  | { state: 'uncertain' }
+
+export async function findRefundCheckpointByPaymentId(paymentId: string): Promise<PaymentRefundCheckpointLookup> {
+  if (!process.env.DATABASE_URL || typeof paymentId !== 'string' || paymentId.trim() === '') return { state: 'uncertain' }
+  try {
+    const result = await query('SELECT * FROM refund_checkpoints WHERE payment_id = $1 LIMIT 1', [paymentId])
+    if (!Array.isArray(result)) return { state: 'uncertain' }
+    if (result.length === 0) return { state: 'absent' }
+    const row = result[0]
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) return { state: 'uncertain' }
+    const checkpoint = normalizeCheckpoint(row as Record<string, unknown>)
+    return checkpoint ? { state: 'present', checkpoint } : { state: 'uncertain' }
+  } catch {
+    return { state: 'uncertain' }
+  }
+}
+
 export async function getRefundCheckpointAuthoritative(refundId: string): Promise<RefundCheckpoint | null> {
   if (!process.env.DATABASE_URL) return null
   const result = await query('SELECT * FROM refund_checkpoints WHERE refund_id = $1', [refundId])

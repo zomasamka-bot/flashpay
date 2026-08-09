@@ -48,7 +48,7 @@ export async function prepareRefundExecution(refundId: string): Promise<RefundEx
     return { outcome: 'blocked', reason: 'stale' }
   }
   const finalPayment = paymentFromRedis(await redis.get(`payment:${reloaded.paymentId}`))
-  const merchantEvidence = finalPayment?.a2uTxid || finalPayment?.horizonSuccessFlag === true || finalPayment?.status === 'settled_to_merchant' || finalPayment?.settlementStage === 'settled'
+  const merchantEvidence = finalPayment?.a2uTxid || finalPayment?.horizonSuccessFlag === true || finalPayment?.status === 'settled_to_merchant'
   const refundEvidence = finalPayment?.refundTxid || finalPayment?.refundStatus === 'completed'
   if (!finalPayment || merchantEvidence || refundEvidence || !isRefundEligible(finalPayment) || !refundPreflight(reloaded, finalPayment, {
     paymentId: reloaded.paymentId,
