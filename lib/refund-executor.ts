@@ -1,12 +1,10 @@
-import { randomUUID } from 'node:crypto'
 import { redis, isRedisConfigured } from './redis'
 import {
-  beginRefundSubmissionAttempt,
   ensurePaymentOperationLock,
   getRefundCheckpointAuthoritative,
   refundPreflight,
 } from './refund-checkpoint-store'
-import { isRefundEligible, type Payment, type RefundAuditEvent } from './types'
+import { isRefundEligible, type Payment } from './types'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission'; refundId: string; paymentId: string; amount: number }
@@ -55,12 +53,5 @@ export async function prepareRefundExecution(refundId: string): Promise<RefundEx
     payerUid: reloaded.payerUid,
     amount: reloaded.amount,
   })) return { outcome: 'blocked', reason: 'ineligible' }
-  const event: RefundAuditEvent = {
-    eventId: randomUUID(), refundId: reloaded.refundId, paymentId: reloaded.paymentId,
-    eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: reloaded.idempotencyKey,
-    createdAt: new Date().toISOString(), details: { phase: 'pre_submission_safety_gate' },
-  }
-  const claimed = await beginRefundSubmissionAttempt(reloaded.refundId, event)
-  if (!claimed) return { outcome: 'blocked', reason: 'checkpoint_conflict' }
-  return { outcome: 'ready_for_submission', refundId: claimed.refundId, paymentId: claimed.paymentId, amount: claimed.amount }
+  return { outcome: 'ready_for_submission', refundId: reloaded.refundId, paymentId: reloaded.paymentId, amount: reloaded.amount }
 }
