@@ -28,7 +28,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
  */
 
 import type { Payment } from "@/lib/types"
-import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
+import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 
 /**
