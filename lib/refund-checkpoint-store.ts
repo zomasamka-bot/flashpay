@@ -30,6 +30,42 @@ export async function releasePaymentOperationLock(paymentId: string, owner: stri
   )
 }
 
+export type RefundSchemaDiagnostics = {
+  refund_checkpoints: boolean
+  refund_audit_events: boolean
+  idx_refund_checkpoints_status_retry: boolean
+  idx_refund_checkpoints_payment: boolean
+  idx_refund_audit_payment_created: boolean
+  idx_refund_audit_refund_created: boolean
+}
+
+export async function getRefundSchemaDiagnostics(): Promise<RefundSchemaDiagnostics> {
+  const names = [
+    'refund_checkpoints', 'refund_audit_events', 'idx_refund_checkpoints_status_retry',
+    'idx_refund_checkpoints_payment', 'idx_refund_audit_payment_created', 'idx_refund_audit_refund_created',
+  ] as const
+  let result: unknown[] = []
+  try {
+    result = await query(`
+      SELECT name, EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = name AND c.relkind IN ('r','i') AND n.nspname = current_schema()
+      ) AS present
+      FROM unnest($1::text[]) AS names(name)
+    `, [names])
+  } catch {
+    result = []
+  }
+  const diagnostics = Object.fromEntries(names.map((name) => [name, false])) as RefundSchemaDiagnostics
+  if (Array.isArray(result)) {
+    for (const row of result) {
+      if (typeof row?.name === 'string' && row.name in diagnostics) diagnostics[row.name as keyof RefundSchemaDiagnostics] = row.present === true
+    }
+  }
+  return diagnostics
+}
+
 export async function verifyRefundTables(): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
   try {

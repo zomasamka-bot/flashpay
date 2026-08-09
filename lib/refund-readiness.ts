@@ -1,7 +1,7 @@
 import "server-only"
 
 import { Keypair } from "@stellar/stellar-sdk"
-import { verifyRefundTables } from "@/lib/refund-checkpoint-store"
+import { getRefundSchemaDiagnostics, verifyRefundTables } from "@/lib/refund-checkpoint-store"
 import { isRedisConfigured, redis } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 
@@ -15,6 +15,12 @@ export type RefundReadiness = {
     redis_configured: boolean
     redis_read: boolean
     refund_schema: boolean
+    refund_checkpoints: boolean
+    refund_audit_events: boolean
+    idx_refund_checkpoints_status_retry: boolean
+    idx_refund_checkpoints_payment: boolean
+    idx_refund_audit_payment_created: boolean
+    idx_refund_audit_refund_created: boolean
     pi_server_api_read: boolean
     testnet_horizon_read: boolean
   }
@@ -58,6 +64,12 @@ export async function getRefundReadiness(): Promise<RefundReadiness> {
     redis_configured: isRedisConfigured,
     redis_read: false,
     refund_schema: false,
+    refund_checkpoints: false,
+    refund_audit_events: false,
+    idx_refund_checkpoints_status_retry: false,
+    idx_refund_checkpoints_payment: false,
+    idx_refund_audit_payment_created: false,
+    idx_refund_audit_refund_created: false,
     pi_server_api_read: false,
     testnet_horizon_read: false,
   }
@@ -71,7 +83,9 @@ export async function getRefundReadiness(): Promise<RefundReadiness> {
     try { await redis.get("flashpay:refund:readiness:probe"); checks.redis_read = true } catch { checks.redis_read = false }
   }
 
-  checks.refund_schema = await verifyRefundTables()
+  const schema = await getRefundSchemaDiagnostics()
+  Object.assign(checks, schema)
+  checks.refund_schema = Object.values(schema).every(Boolean) && await verifyRefundTables()
   checks.pi_server_api_read = await checkPiServerApi()
   checks.testnet_horizon_read = await checkHorizon(seed)
 
