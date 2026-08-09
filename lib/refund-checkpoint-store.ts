@@ -182,7 +182,7 @@ export async function beginRefundSubmissionAttempt(refundId: string, event: Refu
   if (!(await verifyRefundTables())) return null
   const result = await query(`
     WITH transitioned AS (
-      UPDATE refund_checkpoints SET stage='wallet_submission_started', status='submitted', attempt_count=attempt_count+1, updated_at=NOW()
+      UPDATE refund_checkpoints SET stage='wallet_submission_started', status='pending', attempt_count=attempt_count+1, updated_at=NOW()
       WHERE refund_id=$1 AND stage='intent_created' AND status='pending' RETURNING *
     ), audited AS (
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
@@ -228,8 +228,10 @@ export function refundPreflight(
   input: { paymentId: string; payerUid: string; amount: number },
 ): boolean {
   return checkpoint.status === 'pending' && checkpoint.stage === 'intent_created' &&
+    checkpoint.sourcePaymentStatus === 'settlement_failed' && checkpoint.sourceSettlementState === 'refund_pending' &&
     checkpoint.paymentId === input.paymentId && checkpoint.payerUid === input.payerUid && checkpoint.amount === input.amount &&
     payment.id === input.paymentId && payment.status === 'settlement_failed' && payment.settlementFailureState === 'refund_pending' &&
+    payment.refundStatus === 'pending' && typeof payment.payerUidCapturedAt === 'string' && payment.payerUidCapturedAt.trim().length > 0 &&
     payment.payerUidSource === 'verified_u2a' && payment.payerRefundEligible === true && payment.payerUid === input.payerUid &&
     payment.customerAmount === input.amount && !payment.a2uPaymentId && !payment.a2uTxid &&
     payment.horizonSuccessFlag !== true && !payment.refundPaymentId && !payment.refundTxid
