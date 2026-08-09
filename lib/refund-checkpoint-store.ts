@@ -223,17 +223,71 @@ const STAGE_ORDER: RefundCheckpoint['stage'][] = [
 ]
 
 export async function beginRefundSubmissionAttempt(refundId: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
-  if (!(await verifyRefundTables())) return null
+  if (!(await verifyRefundTables()) || event.refundId !== refundId) return null
+  const existing = await query(`
+    SELECT c.*, a.event_id AS submission_audit_id
+    FROM refund_checkpoints c
+    LEFT JOIN refund_audit_events a
+      ON a.refund_id = c.refund_id AND a.payment_id = c.payment_id
+     AND a.idempotency_key = c.idempotency_key AND a.event_type = 'refund_submission_started'
+    WHERE c.refund_id = $1 AND c.payment_id = $2 AND c.idempotency_key = $3
+    ORDER BY a.created_at DESC LIMIT 1`, [refundId, event.paymentId, event.idempotencyKey])
+  if (Array.isArray(existing) && existing.length > 0) {
+    const current = normalizeCheckpoint(existing[0])
+    if (current && current.stage === 'wallet_submission_started' && current.status === 'pending' &&
+      typeof existing[0].submission_audit_id === 'string') {
+      if (isRedisConfigured) await redis.set(redisKey(refundId), current)
+      return current
+    }
+  }
   const result = await query(`
     WITH transitioned AS (
       UPDATE refund_checkpoints SET stage='wallet_submission_started', status='pending', attempt_count=attempt_count+1, updated_at=NOW()
-      WHERE refund_id=$1 AND stage='intent_created' AND status='pending' RETURNING *
+      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND stage='intent_created' AND status='pending' RETURNING *
     ), audited AS (
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
-      SELECT $2, refund_id, payment_id, 'refund_submission_started', $3, idempotency_key, $4, $5::jsonb FROM transitioned
+      SELECT $4, refund_id, payment_id, 'refund_submission_started', $5, idempotency_key, $6, $7::jsonb FROM transitioned
       RETURNING refund_id
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
-    [refundId, event.eventId, event.actorType, event.createdAt, JSON.stringify(event.details)],
+    [refundId, event.paymentId, event.idempotencyKey, event.eventId, event.actorType, event.createdAt, JSON.stringify(event.details)],
+  )
+  if (!Array.isArray(result) || result.length === 0) return null
+  const checkpoint = normalizeCheckpoint(result[0])
+  if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
+  return checkpoint
+}
+
+export async function transitionRefundCheckpointWithAudit(
+  refundId: string,
+  fromStage: RefundCheckpoint['stage'],
+  toStage: RefundCheckpoint['stage'],
+  status: RefundCheckpoint['status'],
+  event: RefundAuditEvent,
+  patch: { refundPaymentId?: string; refundTxid?: string; lastErrorCode?: string; lastErrorMessage?: string; nextRetryAt?: string } = {},
+): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables()) || event.refundId !== refundId || event.paymentId === '' || event.idempotencyKey === '') return null
+  const fromIndex = STAGE_ORDER.indexOf(fromStage)
+  const toIndex = STAGE_ORDER.indexOf(toStage)
+  if (fromIndex < 0 || toIndex !== fromIndex + 1) return null
+  const result = await query(`
+    WITH transitioned AS (
+      UPDATE refund_checkpoints SET stage=$2, status=$3, updated_at=NOW(),
+        refund_payment_id=COALESCE($4, refund_payment_id), refund_txid=COALESCE($5, refund_txid),
+        last_error_code=COALESCE($6, last_error_code), last_error_message=COALESCE($7, last_error_message),
+        next_retry_at=COALESCE($8, next_retry_at)
+      WHERE refund_id=$1 AND payment_id=$9 AND idempotency_key=$10 AND stage=$11 AND status NOT IN ('failed','completed','manual_review_required')
+      RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events
+        (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $12, refund_id, payment_id, $13, $14, idempotency_key, $15, $16::jsonb FROM transitioned
+      ON CONFLICT (event_id) DO NOTHING
+      RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
+    [refundId, toStage, status, patch.refundPaymentId ?? null, patch.refundTxid ?? null,
+      patch.lastErrorCode ?? null, patch.lastErrorMessage ?? null, patch.nextRetryAt ?? null,
+      event.paymentId, event.idempotencyKey, fromStage, event.eventId, event.eventType,
+      event.actorType, event.createdAt, JSON.stringify(event.details)],
   )
   if (!Array.isArray(result) || result.length === 0) return null
   const checkpoint = normalizeCheckpoint(result[0])
