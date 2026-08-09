@@ -203,9 +203,12 @@ export async function beginRefundSubmissionAttempt(refundId: string, event: Refu
     WHERE c.refund_id = $1 AND c.payment_id = $2 AND c.idempotency_key = $3
     ORDER BY a.created_at DESC LIMIT 1`, [refundId, event.paymentId, event.idempotencyKey])
   if (Array.isArray(existing) && existing.length > 0) {
-    const current = normalizeCheckpoint(existing[0])
+    const row = existing[0]
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) return null
+    const record = row as Record<string, unknown>
+    const current = normalizeCheckpoint(record)
     if (current && current.stage === 'wallet_submission_started' && current.status === 'pending' &&
-      typeof existing[0].submission_audit_id === 'string') {
+      typeof record.submission_audit_id === 'string') {
       if (isRedisConfigured) await redis.set(redisKey(refundId), current)
       return current
     }
