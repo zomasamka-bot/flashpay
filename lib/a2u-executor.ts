@@ -29,6 +29,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
 
 import type { Payment } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
+import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 
 /**
  * Pi A2U Payment API Response - Strict type definition
@@ -195,18 +196,32 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     const stageResult = await stage1CreateA2U(ctx)
     if (!stageResult.ok) {
       const retryable = stageResult.retryable === true
+      let failedPayment = ctx.payment
+      if (!retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0) {
+        const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+        if (reconciliation.outcome === "FOUND" && reconciliation.dto) {
+          const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
+          failedPayment = { ...failedPayment, a2uPaymentId: reconciliation.dto.identifier, ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}) }
+        } else if (reconciliation.outcome === "CONFIRMED_NONE") {
+          failedPayment = markRefundPendingAfterFailedSettlement(
+            { ...failedPayment, status: "settlement_failed" },
+            { code: stageResult.errorCode || "a2u_non_retryable_no_transfer", message: stageResult.error, occurredAt: new Date().toISOString() },
+          )
+        }
+      }
       const retryCount = ctx.payment.retryCount || 1
       const nextRetryAt = retryable
         ? new Date(Date.now() + Math.min(30 * 60_000, 5_000 * 2 ** Math.max(0, retryCount - 1))).toISOString()
         : undefined
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+        ...failedPayment,
         a2uErrorCode: stageResult.errorCode,
         a2uErrorMessage: stageResult.error,
         a2uErrorBody: stageResult.errorBody,
-        settlementFailureState: retryable ? "retryable" : "held",
-        refundStatus: retryable ? "not_started" : "manual_review_required",
+        settlementFailureState: retryable ? "retryable" : failedPayment.settlementFailureState || "held",
+        refundStatus: retryable ? "not_started" : failedPayment.refundStatus || "manual_review_required",
         nextRetryAt,
-        status: "paid_to_app",
+        status: retryable ? "paid_to_app" : failedPayment.status || "paid_to_app",
       })
       return {
         ok: false,
@@ -659,7 +674,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     try {
       responseData = await createResponse.json()
     } catch {
-      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount)
+      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
       if (reconciliation.outcome === "FOUND" && reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
         return { ok: true, data: { a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto } }
       }
@@ -669,7 +684,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
       console.error("[A2U Stage1] A2U response validation failed:", responseData)
-      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount)
+      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
       if (reconciliation.outcome === "FOUND" && reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
         return { ok: true, data: { a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto } }
       }

@@ -29,10 +29,17 @@ function isPaymentDto(value: unknown): value is Record<string, unknown> {
   for (const key of ["completed", "cancelled", "approved", "rejected"] as const) {
     if (key in dto && typeof dto[key] !== "boolean") return false
   }
+  if ("status" in dto && dto.status !== null) {
+    if (!isRecord(dto.status)) return false
+    for (const key of ["developer_approved", "transaction_verified", "developer_completed", "cancelled", "user_cancelled"] as const) {
+      if (key in dto.status && typeof dto.status[key] !== "boolean") return false
+    }
+  }
   if ("transaction" in dto && dto.transaction !== null) {
     if (!isRecord(dto.transaction)) return false
     if ("txid" in dto.transaction && typeof dto.transaction.txid !== "string") return false
     if ("verified" in dto.transaction && typeof dto.transaction.verified !== "boolean") return false
+    if ("_link" in dto.transaction && typeof dto.transaction._link !== "string") return false
   }
   if ("txid" in dto && typeof dto.txid !== "string") return false
   if ("transaction_id" in dto && typeof dto.transaction_id !== "string") return false
@@ -85,7 +92,7 @@ export async function reconcilePiPayment(paymentId: string): Promise<PiReconcili
   }
 }
 
-export async function reconcileIncompleteA2UPayment(paymentId: string, amount: number): Promise<PiReconciliationResult> {
+export async function reconcileIncompleteA2UPayment(paymentId: string, amount: number, merchantUid: string): Promise<PiReconciliationResult> {
   if (!serverConfig.isPiApiKeyConfigured) return { outcome: "INDETERMINATE", paymentId, reason: "Pi API key is not configured" }
   try {
     const response = await fetch("https://api.minepi.com/v2/payments/incomplete_server_payments", {
@@ -99,16 +106,23 @@ export async function reconcileIncompleteA2UPayment(paymentId: string, amount: n
         ? payload.incomplete_server_payments
         : null
     if (!candidates) return { outcome: "INDETERMINATE", paymentId, reason: "Pi returned invalid incomplete-payments payload" }
-    const match = candidates.find((candidate) => {
-      if (!isPaymentDto(candidate)) return false
-      const dto = candidate as Record<string, unknown>
-      const metadata = isRecord(dto.metadata) ? dto.metadata : {}
-      return metadata.paymentId === paymentId &&
-        metadata.type === "a2u_settlement" &&
-        typeof dto.amount === "number" && dto.amount === amount
-    })
-    if (match && isPaymentDto(match)) return { outcome: "FOUND", paymentId, reason: "Pi found an incomplete A2U payment", dto: match }
-    return { outcome: "CONFIRMED_NONE", paymentId, reason: "Pi confirmed no incomplete A2U payment" }
+    let matchingCandidate = false
+    for (const candidate of candidates) {
+      if (!isRecord(candidate)) continue
+      const metadata = isRecord(candidate.metadata) ? candidate.metadata : null
+      if (metadata?.paymentId !== paymentId || metadata.type !== "a2u_settlement") continue
+      matchingCandidate = true
+      if (!isPaymentDto(candidate)) return { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U metadata has an invalid DTO" }
+      if (candidate.amount !== amount) return { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U metadata has an amount mismatch" }
+      if (candidate.direction !== "app_to_user" || candidate.user_uid !== merchantUid ||
+        typeof candidate.from_address !== "string" || typeof candidate.to_address !== "string") {
+        return { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U DTO has invalid direction or user scope" }
+      }
+      return { outcome: "FOUND", paymentId, reason: "Pi found an incomplete A2U payment", dto: candidate }
+    }
+    return matchingCandidate
+      ? { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U payment could not be validated" }
+      : { outcome: "CONFIRMED_NONE", paymentId, reason: "Pi confirmed no matching A2U settlement" }
   } catch (error) {
     return { outcome: "INDETERMINATE", paymentId, reason: error instanceof Error ? error.message : "Pi reconciliation failed" }
   }

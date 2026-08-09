@@ -92,7 +92,11 @@ export async function POST(request: NextRequest) {
       merchantAddress: paymentRecord.merchant_address || paymentRecord.merchantAddress,
       accessToken: paymentRecord.access_token || paymentRecord.accessToken,
       amount: Number(paymentRecord.amount),
-      customerAmount: paymentRecord.customer_amount ? Number(paymentRecord.customer_amount) : undefined,
+      customerAmount: paymentRecord.customer_amount !== undefined && paymentRecord.customer_amount !== null
+        ? Number(paymentRecord.customer_amount)
+        : paymentRecord.customerAmount !== undefined && paymentRecord.customerAmount !== null
+          ? Number(paymentRecord.customerAmount)
+          : undefined,
       note: paymentRecord.note,
       status: paymentRecord.status,
       settlementFailureState: paymentRecord.settlement_failure_state || paymentRecord.settlementFailureState,
@@ -115,6 +119,10 @@ export async function POST(request: NextRequest) {
       refundStatus: payment.refundStatus,
     })
 
+    if (typeof payment.customerAmount !== 'number' || !Number.isFinite(payment.customerAmount) || payment.customerAmount <= 0) {
+      return NextResponse.json({ error: 'Verified customerAmount is required' }, { status: 422, headers: corsHeaders })
+    }
+
     // 4. Verify eligibility using the pure guard function
     if (!checkEligibility(payment)) {
       console.warn('[refunds/intent] Payment ineligible for refund:', {
@@ -135,6 +143,9 @@ export async function POST(request: NextRequest) {
     // prevents partial checkpoint/audit failures from burning a retry key.
     const existing = await getRefundCheckpointByIdempotency(idempotencyKey)
     if (existing) {
+      if (existing.paymentId !== payment.id || existing.payerUid !== payment.payerUid || existing.amount !== payment.customerAmount) {
+        return NextResponse.json({ error: 'Idempotency key is bound to different refund inputs' }, { status: 409, headers: corsHeaders })
+      }
       const auditRecorded = await appendRefundAuditEvent({
         eventId: randomUUID(), refundId: existing.refundId, paymentId: existing.paymentId,
         eventType: 'eligibility_verified', actorType: 'system', idempotencyKey,
@@ -169,7 +180,7 @@ export async function POST(request: NextRequest) {
       stage: 'eligibility_verified',
       payerUid: payment.payerUid!,
       payerUidVerifiedAt: payment.payerUidCapturedAt || now,
-      amount: payment.customerAmount || payment.amount,
+      amount: payment.customerAmount,
       currency: 'π',
       sourcePaymentStatus: payment.status,
       sourceSettlementState: payment.settlementFailureState!,

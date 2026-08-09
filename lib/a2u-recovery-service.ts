@@ -346,7 +346,7 @@ export async function executeA2URecovery(
     if (typeof payment.customerAmount !== "number" || !Number.isFinite(payment.customerAmount) || payment.customerAmount <= 0) {
       return { status: "manual_review_required", state: "a2u_reconciliation_amount_missing", paymentId, details: { error: "Verified settlement amount is required for A2U reconciliation" } }
     }
-    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount)
+    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount, payment.merchantUid)
     if (reconciliation.outcome === "FOUND") {
       if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
         const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
@@ -404,7 +404,7 @@ export async function executeA2URecovery(
     if (typeof payment.customerAmount !== "number" || !Number.isFinite(payment.customerAmount) || payment.customerAmount <= 0) {
       return { status: "manual_review_required", state: "a2u_reconciliation_amount_missing", paymentId, details: { error: "Verified settlement amount is required for A2U reconciliation" } }
     }
-    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount)
+    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount, payment.merchantUid)
     if (reconciliation.outcome === "FOUND") {
       if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
         const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
