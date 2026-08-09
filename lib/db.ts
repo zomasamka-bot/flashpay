@@ -91,6 +91,12 @@ async function getPostgresClient() {
 /**
  * Execute a raw SQL query using postgres client (server-side only)
  */
+export async function runPostgresTransaction<T>(callback: (tx: { unsafe: (text: string, values?: unknown[]) => Promise<unknown[]> }) => Promise<T>): Promise<T | null> {
+  const client = await getPostgresClient()
+  if (!client) return null
+  return client.begin(async (tx: { unsafe: (text: string, values?: unknown[]) => Promise<unknown[]> }) => callback(tx))
+}
+
 export async function query(text: string, values?: unknown[]) {
   // Check if PostgreSQL is configured
   if (!process.env.DATABASE_URL) {
