@@ -20,7 +20,7 @@ export type RefundReadiness = {
   }
 }
 
-const HORIZON_TESTNET = "https://horizon-testnet.stellar.org"
+const HORIZON_TESTNET = "https://api.testnet.minepi.com"
 
 async function checkPiServerApi(): Promise<boolean> {
   if (!serverConfig.piApiKey) return false
