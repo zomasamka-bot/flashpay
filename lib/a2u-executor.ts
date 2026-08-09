@@ -660,15 +660,21 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       responseData = await createResponse.json()
     } catch {
       const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount)
-      return { ok: false, error: 'A2U response could not be parsed; reconciliation did not produce a usable DTO', userFacingStatus: 'error', retryable: false, errorCode: reconciliation.outcome === 'CONFIRMED_NONE' ? 'unparseable_confirmed_none' : 'unparseable_indeterminate' }
+      if (reconciliation.outcome === "FOUND" && reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
+        return { ok: true, data: { a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto } }
+      }
+      return { ok: false, error: 'A2U response could not be parsed; reconciliation did not produce a usable DTO', userFacingStatus: 'error', retryable: false, errorCode: reconciliation.outcome === 'CONFIRMED_NONE' ? 'unparseable_confirmed_none' : reconciliation.outcome === 'FOUND' ? 'unparseable_found_invalid' : 'unparseable_indeterminate' }
     }
     
     // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
       console.error("[A2U Stage1] A2U response validation failed:", responseData)
       const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount)
+      if (reconciliation.outcome === "FOUND" && reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
+        return { ok: true, data: { a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto } }
+      }
       if (reconciliation.outcome === "FOUND") {
-        return { ok: false, error: "A2U response invalid; Pi found an existing incomplete transfer", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_transfer_found" }
+        return { ok: false, error: "A2U response invalid; Pi found an existing transfer with an invalid DTO", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_transfer_invalid" }
       }
       if (reconciliation.outcome === "INDETERMINATE") {
         return { ok: false, error: "A2U response invalid and Pi reconciliation is indeterminate", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_reconciliation_indeterminate" }

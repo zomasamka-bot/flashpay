@@ -11,6 +11,14 @@ export interface PiReconciliationResult {
   dto?: Record<string, unknown>
 }
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+export function isPiA2UPayment(value: unknown): value is Record<string, unknown> {
+  return isPaymentDto(value)
+}
+
 function isPaymentDto(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const dto = value as Record<string, unknown>

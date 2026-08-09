@@ -2,7 +2,7 @@ import { redis } from "@/lib/redis"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
-import { reconcilePiPayment } from "@/lib/pi-reconciliation"
+import { reconcileIncompleteA2UPayment, isPiA2UPayment } from "@/lib/pi-reconciliation"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -343,9 +343,17 @@ export async function executeA2URecovery(
       return { status: "manual_review_required", state: "refund_already_has_transfer_evidence", paymentId, details: { error: "Refund transfer evidence exists" } }
     }
 
-    const reconciliation = await reconcilePiPayment(payment.piPaymentId)
-    if (reconciliation.outcome !== "CONFIRMED_NONE") {
-      return { status: "manual_review_required", state: `pi_reconciliation_${reconciliation.outcome.toLowerCase()}`, paymentId, details: { error: reconciliation.reason } }
+    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount)
+    if (reconciliation.outcome === "FOUND") {
+      if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
+        const reconciledPayment = { ...payment, a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto }
+        await redis.set(paymentKey, JSON.stringify(reconciledPayment))
+        return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
+      }
+      return { status: "manual_review_required", state: "a2u_found_invalid_dto", paymentId, details: { error: "Pi found an A2U payment but its DTO failed validation" } }
+    }
+    if (reconciliation.outcome === "INDETERMINATE") {
+      return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: reconciliation.reason } }
     }
 
     // Convert only a proven no-transfer, verified-U2A failure into the
@@ -385,9 +393,17 @@ export async function executeA2URecovery(
       }
     }
 
-    const reconciliation = await reconcilePiPayment(payment.piPaymentId)
-    if (reconciliation.outcome !== "CONFIRMED_NONE") {
-      return { status: "manual_review_required", state: `pi_reconciliation_${reconciliation.outcome.toLowerCase()}`, paymentId, details: { error: reconciliation.reason } }
+    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount)
+    if (reconciliation.outcome === "FOUND") {
+      if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
+        const reconciledPayment = { ...payment, a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto }
+        await redis.set(paymentKey, JSON.stringify(reconciledPayment))
+        return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
+      }
+      return { status: "manual_review_required", state: "a2u_found_invalid_dto", paymentId, details: { error: "Pi found an A2U payment but its DTO failed validation" } }
+    }
+    if (reconciliation.outcome === "INDETERMINATE") {
+      return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: reconciliation.reason } }
     }
 
     // No Horizon identifiers and verified U2A payer identity: this is the
