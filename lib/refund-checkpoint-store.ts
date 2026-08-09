@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from './redis'
 import { query } from './db'
-import type { RefundAuditEvent, RefundCheckpoint } from './types'
+import type { Payment, RefundAuditEvent, RefundCheckpoint } from './types'
 
 const redisKey = (refundId: string) => `flashpay:refund:checkpoint:${refundId}`
 const redisLockKey = (idempotencyKey: string) => `flashpay:refund:idempotency:${idempotencyKey}`
@@ -10,6 +10,15 @@ export async function acquirePaymentOperationLock(paymentId: string, owner: stri
   if (!isRedisConfigured) return false
   const result = await redis.set(paymentOperationLockKey(paymentId), owner, { nx: true, ex: 60 * 60 * 24 * 30 })
   return result === 'OK'
+}
+
+export async function ensurePaymentOperationLock(paymentId: string, refundId: string): Promise<boolean> {
+  if (!isRedisConfigured) return false
+  const result = await redis.eval(
+    'local v=redis.call("get",KEYS[1]); if not v then local ok=redis.call("set",KEYS[1],ARGV[1],"NX","EX",ARGV[2]); return ok=="OK" and 1 or 0 end; if v==ARGV[1] then redis.call("expire",KEYS[1],ARGV[2]); return 1 end; return 0',
+    [paymentOperationLockKey(paymentId)], [refundId, String(60 * 60 * 24 * 30)],
+  )
+  return Number(result) === 1
 }
 
 export async function releasePaymentOperationLock(paymentId: string, owner: string): Promise<void> {
@@ -169,6 +178,25 @@ const STAGE_ORDER: RefundCheckpoint['stage'][] = [
   'wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded',
 ]
 
+export async function beginRefundSubmissionAttempt(refundId: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables())) return null
+  const result = await query(`
+    WITH transitioned AS (
+      UPDATE refund_checkpoints SET stage='wallet_submission_started', status='submitted', attempt_count=attempt_count+1, updated_at=NOW()
+      WHERE refund_id=$1 AND stage='intent_created' AND status='pending' RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $2, refund_id, payment_id, 'refund_submission_started', $3, idempotency_key, $4, $5::jsonb FROM transitioned
+      RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
+    [refundId, event.eventId, event.actorType, event.createdAt, JSON.stringify(event.details)],
+  )
+  if (!Array.isArray(result) || result.length === 0) return null
+  const checkpoint = normalizeCheckpoint(result[0])
+  if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
+  return checkpoint
+}
+
 export async function transitionRefundCheckpoint(
   refundId: string,
   fromStage: RefundCheckpoint['stage'],
@@ -192,6 +220,28 @@ export async function transitionRefundCheckpoint(
   const transitioned = normalizeCheckpoint(result[0])
   if (transitioned && isRedisConfigured) await redis.set(redisKey(refundId), transitioned)
   return transitioned
+}
+
+export function refundPreflight(
+  checkpoint: RefundCheckpoint,
+  payment: Payment,
+  input: { paymentId: string; payerUid: string; amount: number },
+): boolean {
+  return checkpoint.status === 'pending' && checkpoint.stage === 'intent_created' &&
+    checkpoint.paymentId === input.paymentId && checkpoint.payerUid === input.payerUid && checkpoint.amount === input.amount &&
+    payment.id === input.paymentId && payment.status === 'settlement_failed' && payment.settlementFailureState === 'refund_pending' &&
+    payment.payerUidSource === 'verified_u2a' && payment.payerRefundEligible === true && payment.payerUid === input.payerUid &&
+    payment.customerAmount === input.amount && !payment.a2uPaymentId && !payment.a2uTxid &&
+    payment.horizonSuccessFlag !== true && !payment.refundPaymentId && !payment.refundTxid
+}
+
+export async function getRefundCheckpointAuthoritative(refundId: string): Promise<RefundCheckpoint | null> {
+  if (!process.env.DATABASE_URL) return null
+  const result = await query('SELECT * FROM refund_checkpoints WHERE refund_id = $1', [refundId])
+  if (!Array.isArray(result) || result.length === 0) return null
+  const checkpoint = normalizeCheckpoint(result[0])
+  if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
+  return checkpoint
 }
 
 export async function getRefundCheckpoint(refundId: string): Promise<RefundCheckpoint | null> {
