@@ -716,6 +716,10 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
  */
 async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> {
   try {
+    // A completed or in-flight refund is the opposite financial outcome; fail closed.
+    if (ctx.payment.refundTxid || ctx.payment.refundPaymentId || ctx.payment.refundStatus === 'completed' || ctx.payment.refundStatus === 'submitted' || ctx.payment.settlementFailureState === 'refund_pending') {
+      return { ok: false, error: 'Refund operation owns this payment', userFacingStatus: 'manual_review_required' }
+    }
     // CRITICAL: Use ONLY Payment fields (never undefined a2uPayment object parameter)
     const toAddress = ctx.payment.a2uToAddress
     const amount = ctx.payment.merchantAmount
