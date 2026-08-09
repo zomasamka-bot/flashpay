@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { redis, isRedisConfigured } from '@/lib/redis'
-import { createRefundCheckpoint, claimRefundIdempotency, getRefundCheckpointByIdempotency, appendRefundAuditEvent, verifyRefundTables, releaseRefundIdempotency, acquirePaymentOperationLock, releasePaymentOperationLock, transitionRefundCheckpoint } from '@/lib/refund-checkpoint-store'
+import { createRefundCheckpointWithAudit, claimRefundIdempotency, getRefundCheckpointByIdempotency, verifyRefundTables, releaseRefundIdempotency, acquirePaymentOperationLock, releasePaymentOperationLock, transitionRefundCheckpointWithAudit } from '@/lib/refund-checkpoint-store'
 import type { Payment, RefundCheckpoint, RefundAuditEvent } from '@/lib/types'
 import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
@@ -163,14 +163,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Idempotency key is bound to different refund inputs' }, { status: 409, headers: corsHeaders })
       }
       if (existing.stage === 'eligibility_verified') {
-        const transitioned = await transitionRefundCheckpoint(existing.refundId, 'eligibility_verified', 'intent_created', 'pending')
-        if (!transitioned) return NextResponse.json({ error: 'Refund intent transition conflict' }, { status: 409, headers: corsHeaders })
-        const requested = await appendRefundAuditEvent({
+        const transitioned = await transitionRefundCheckpointWithAudit(existing.refundId, 'eligibility_verified', 'intent_created', 'pending', {
           eventId: randomUUID(), refundId: existing.refundId, paymentId: existing.paymentId,
           eventType: 'refund_requested', actorType: 'system', idempotencyKey,
           createdAt: new Date().toISOString(), details: { resumed: true },
         })
-        if (!requested) return NextResponse.json({ error: 'Refund request audit unavailable', refundId: existing.refundId }, { status: 503, headers: corsHeaders })
+        if (!transitioned) return NextResponse.json({ error: 'Refund intent transition conflict' }, { status: 409, headers: corsHeaders })
         return NextResponse.json({ success: true, refund: transitioned }, { status: 200, headers: corsHeaders })
       }
       return NextResponse.json({ success: true, refund: existing }, { status: 200, headers: corsHeaders })
@@ -217,17 +215,6 @@ export async function POST(request: NextRequest) {
       stage: checkpoint.stage,
     })
 
-    const persistedCheckpoint = await createRefundCheckpoint(checkpoint)
-    if (!persistedCheckpoint) {
-      await releaseRefundIdempotency(idempotencyKey, refundId)
-      await releasePaymentOperationLock(payment.id, refundId)
-      console.error('[refunds/intent] Failed to create checkpoint; idempotency claim released for safe retry')
-      return NextResponse.json(
-        { error: 'Refund intent creation failed - duplicate or database error' },
-        { status: 409, headers: corsHeaders }
-      )
-    }
-
     // 6. Record the successful eligibility verification audit event
     const auditEventId = randomUUID()
     const auditEvent: RefundAuditEvent = {
@@ -245,22 +232,18 @@ export async function POST(request: NextRequest) {
       },
     }
 
-    const auditRecorded = await appendRefundAuditEvent(auditEvent)
-    if (!auditRecorded) {
-      console.error('[refunds/intent] Audit durability failed; intent remains checkpointed')
-      return NextResponse.json(
-        { error: 'Refund intent checkpointed but audit recording failed', refundId },
-        { status: 503, headers: corsHeaders }
-      )
+    const persistedCheckpoint = await createRefundCheckpointWithAudit(checkpoint, auditEvent)
+    if (!persistedCheckpoint) {
+      await releaseRefundIdempotency(idempotencyKey, refundId)
+      await releasePaymentOperationLock(payment.id, refundId)
+      return NextResponse.json({ error: 'Refund intent creation failed - checkpoint and audit were not persisted' }, { status: 409, headers: corsHeaders })
     }
 
-    const transitioned = await transitionRefundCheckpoint(refundId, 'eligibility_verified', 'intent_created', 'pending')
-    if (!transitioned) return NextResponse.json({ error: 'Refund intent transition conflict', refundId }, { status: 409, headers: corsHeaders })
-    const requested = await appendRefundAuditEvent({
+    const transitioned = await transitionRefundCheckpointWithAudit(refundId, 'eligibility_verified', 'intent_created', 'pending', {
       eventId: randomUUID(), refundId, paymentId: payment.id, eventType: 'refund_requested',
       actorType: 'system', idempotencyKey, createdAt: now, details: { stage: 'intent_created' },
     })
-    if (!requested) return NextResponse.json({ error: 'Refund request audit unavailable', refundId }, { status: 503, headers: corsHeaders })
+    if (!transitioned) return NextResponse.json({ error: 'Refund intent transition conflict', refundId }, { status: 409, headers: corsHeaders })
 
     console.log('[refunds/intent] Refund intent created successfully:', refundId)
 
@@ -270,11 +253,11 @@ export async function POST(request: NextRequest) {
         refund: {
           id: refundId,
           paymentId: payment.id,
-          status: persistedCheckpoint.status,
-          stage: persistedCheckpoint.stage,
-          amount: persistedCheckpoint.amount,
-          currency: persistedCheckpoint.currency,
-          createdAt: persistedCheckpoint.createdAt,
+          status: transitioned.status,
+          stage: transitioned.stage,
+          amount: transitioned.amount,
+          currency: transitioned.currency,
+          createdAt: transitioned.createdAt,
         },
       },
       { status: 201, headers: corsHeaders }

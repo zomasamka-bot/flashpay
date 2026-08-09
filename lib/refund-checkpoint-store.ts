@@ -43,6 +43,64 @@ export async function verifyRefundTables(): Promise<boolean> {
  * Phase 2 persistence boundary. Database is authoritative; Redis is a fast
  * recovery mirror and idempotency claim. No wallet operation belongs here.
  */
+export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoint, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
+  if (!process.env.DATABASE_URL) return null
+  const result = await query(`
+    WITH inserted AS (
+      INSERT INTO refund_checkpoints
+        (refund_id, payment_id, idempotency_key, status, stage, payer_uid,
+         payer_uid_verified_at, amount, currency, source_payment_status,
+         source_settlement_state, created_at, updated_at, attempt_count)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      ON CONFLICT (payment_id) DO NOTHING
+      RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events
+        (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $15, refund_id, payment_id, $16, $17, idempotency_key, $18, $19::jsonb FROM inserted
+      RETURNING refund_id
+    ) SELECT inserted.* FROM inserted JOIN audited USING (refund_id)`, [
+      checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.status, checkpoint.stage,
+      checkpoint.payerUid, checkpoint.payerUidVerifiedAt, checkpoint.amount, checkpoint.currency,
+      checkpoint.sourcePaymentStatus, checkpoint.sourceSettlementState, checkpoint.createdAt, checkpoint.updatedAt,
+      checkpoint.attemptCount, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details),
+    ])
+  if (!Array.isArray(result) || result.length === 0) return null
+  const persisted = normalizeCheckpoint(result[0])
+  if (persisted && isRedisConfigured) await redis.set(redisKey(persisted.refundId), persisted)
+  return persisted
+}
+
+export async function transitionRefundCheckpointWithAudit(
+  refundId: string, fromStage: RefundCheckpoint['stage'], toStage: RefundCheckpoint['stage'], status: RefundCheckpoint['status'],
+  event: RefundAuditEvent, patch: { refundPaymentId?: string; refundTxid?: string; lastErrorCode?: string; lastErrorMessage?: string; nextRetryAt?: string } = {},
+): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables())) return null
+  const fromIndex = STAGE_ORDER.indexOf(fromStage), toIndex = STAGE_ORDER.indexOf(toStage)
+  if (fromIndex < 0 || toIndex !== fromIndex + 1) return null
+  const result = await query(`
+    WITH transitioned AS (
+      UPDATE refund_checkpoints SET stage=$2, status=$3, updated_at=NOW(),
+        refund_payment_id=COALESCE($4, refund_payment_id), refund_txid=COALESCE($5, refund_txid),
+        last_error_code=COALESCE($6, last_error_code), last_error_message=COALESCE($7, last_error_message),
+        next_retry_at=COALESCE($8, next_retry_at)
+      WHERE refund_id=$1 AND stage=$9 AND status NOT IN ('failed','completed','manual_review_required') RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events
+        (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $10, refund_id, payment_id, $11, $12, idempotency_key, $13, $14::jsonb FROM transitioned
+      RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`, [
+      refundId, toStage, status, patch.refundPaymentId ?? null, patch.refundTxid ?? null,
+      patch.lastErrorCode ?? null, patch.lastErrorMessage ?? null, patch.nextRetryAt ?? null, fromStage,
+      event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details),
+    ])
+  if (!Array.isArray(result) || result.length === 0) return null
+  const transitioned = normalizeCheckpoint(result[0])
+  if (transitioned && isRedisConfigured) await redis.set(redisKey(refundId), transitioned)
+  return transitioned
+}
+
 export async function createRefundCheckpoint(checkpoint: RefundCheckpoint): Promise<RefundCheckpoint | null> {
   if (!process.env.DATABASE_URL) return null
 
