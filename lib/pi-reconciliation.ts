@@ -20,11 +20,23 @@ export function isPiA2UPayment(value: unknown): value is Record<string, unknown>
 }
 
 function isPaymentDto(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false
-  const dto = value as Record<string, unknown>
-  return typeof dto.identifier === "string" &&
-    typeof dto.amount === "number" && Number.isFinite(dto.amount) &&
-    (typeof dto.status === "object" || typeof dto.status === "string" || dto.transaction === undefined || typeof dto.transaction === "object")
+  if (!isRecord(value)) return false
+  const dto = value
+  if (typeof dto.identifier !== "string" || dto.identifier.length === 0) return false
+  if (typeof dto.from_address !== "string" || dto.from_address.length === 0) return false
+  if (typeof dto.to_address !== "string" || dto.to_address.length === 0) return false
+  if (typeof dto.amount !== "number" || !Number.isFinite(dto.amount) || dto.amount <= 0) return false
+  for (const key of ["completed", "cancelled", "approved", "rejected"] as const) {
+    if (key in dto && typeof dto[key] !== "boolean") return false
+  }
+  if ("transaction" in dto && dto.transaction !== null) {
+    if (!isRecord(dto.transaction)) return false
+    if ("txid" in dto.transaction && typeof dto.transaction.txid !== "string") return false
+    if ("verified" in dto.transaction && typeof dto.transaction.verified !== "boolean") return false
+  }
+  if ("txid" in dto && typeof dto.txid !== "string") return false
+  if ("transaction_id" in dto && typeof dto.transaction_id !== "string") return false
+  return true
 }
 
 /**
@@ -57,8 +69,8 @@ export async function reconcilePiPayment(paymentId: string): Promise<PiReconcili
     const dto = payload as Record<string, unknown>
     const transaction = dto.transaction
     const hasTransferEvidence = Boolean(
-      (isRecord(transaction) && (transaction.txid || transaction.verified === true)) ||
-      dto.transaction_id || dto.txid || dto.completed === true ||
+      (isRecord(transaction) && (typeof transaction.txid === "string" || transaction.verified === true)) ||
+      typeof dto.transaction_id === "string" || typeof dto.txid === "string" || dto.completed === true ||
       dto.status === "completed" || dto.status === "approved"
     )
     return hasTransferEvidence
@@ -91,7 +103,9 @@ export async function reconcileIncompleteA2UPayment(paymentId: string, amount: n
       if (!isPaymentDto(candidate)) return false
       const dto = candidate as Record<string, unknown>
       const metadata = isRecord(dto.metadata) ? dto.metadata : {}
-      return metadata.paymentId === paymentId && Number(dto.amount) === amount
+      return metadata.paymentId === paymentId &&
+        metadata.type === "a2u_settlement" &&
+        typeof dto.amount === "number" && dto.amount === amount
     })
     if (match && isPaymentDto(match)) return { outcome: "FOUND", paymentId, reason: "Pi found an incomplete A2U payment", dto: match }
     return { outcome: "CONFIRMED_NONE", paymentId, reason: "Pi confirmed no incomplete A2U payment" }

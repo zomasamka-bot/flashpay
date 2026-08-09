@@ -2,7 +2,7 @@ import { redis } from "@/lib/redis"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
-import { reconcileIncompleteA2UPayment, isPiA2UPayment } from "@/lib/pi-reconciliation"
+import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -343,10 +343,18 @@ export async function executeA2URecovery(
       return { status: "manual_review_required", state: "refund_already_has_transfer_evidence", paymentId, details: { error: "Refund transfer evidence exists" } }
     }
 
+    if (typeof payment.customerAmount !== "number" || !Number.isFinite(payment.customerAmount) || payment.customerAmount <= 0) {
+      return { status: "manual_review_required", state: "a2u_reconciliation_amount_missing", paymentId, details: { error: "Verified settlement amount is required for A2U reconciliation" } }
+    }
     const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount)
     if (reconciliation.outcome === "FOUND") {
       if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
-        const reconciledPayment = { ...payment, a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto }
+        const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
+        const reconciledPayment = {
+          ...payment,
+          a2uPaymentId: reconciliation.dto.identifier,
+          ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}),
+        }
         await redis.set(paymentKey, JSON.stringify(reconciledPayment))
         return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
       }
@@ -393,10 +401,18 @@ export async function executeA2URecovery(
       }
     }
 
+    if (typeof payment.customerAmount !== "number" || !Number.isFinite(payment.customerAmount) || payment.customerAmount <= 0) {
+      return { status: "manual_review_required", state: "a2u_reconciliation_amount_missing", paymentId, details: { error: "Verified settlement amount is required for A2U reconciliation" } }
+    }
     const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount)
     if (reconciliation.outcome === "FOUND") {
       if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
-        const reconciledPayment = { ...payment, a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto }
+        const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
+        const reconciledPayment = {
+          ...payment,
+          a2uPaymentId: reconciliation.dto.identifier,
+          ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}),
+        }
         await redis.set(paymentKey, JSON.stringify(reconciledPayment))
         return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
       }
