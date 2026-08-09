@@ -28,7 +28,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
  */
 
 import type { Payment } from "@/lib/types"
-import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
+import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 
 /**
@@ -197,11 +197,16 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!stageResult.ok) {
       const retryable = stageResult.retryable === true
       let failedPayment = ctx.payment
-      if (!retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0) {
+      if (!retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
+        typeof ctx.merchantUid === "string" && ctx.merchantUid.trim().length > 0) {
         const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
         if (reconciliation.outcome === "FOUND" && reconciliation.dto) {
+          if (!isPiA2UPayment(reconciliation.dto)) {
+            failedPayment = { ...failedPayment, settlementFailureState: "held", refundStatus: "manual_review_required", status: "paid_to_app" }
+          } else {
           const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
           failedPayment = { ...failedPayment, a2uPaymentId: reconciliation.dto.identifier, ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}) }
+          }
         } else if (reconciliation.outcome === "CONFIRMED_NONE") {
           failedPayment = markRefundPendingAfterFailedSettlement(
             { ...failedPayment, status: "settlement_failed" },

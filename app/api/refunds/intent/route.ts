@@ -92,10 +92,10 @@ export async function POST(request: NextRequest) {
       merchantAddress: paymentRecord.merchant_address || paymentRecord.merchantAddress,
       accessToken: paymentRecord.access_token || paymentRecord.accessToken,
       amount: Number(paymentRecord.amount),
-      customerAmount: paymentRecord.customer_amount !== undefined && paymentRecord.customer_amount !== null
-        ? Number(paymentRecord.customer_amount)
-        : paymentRecord.customerAmount !== undefined && paymentRecord.customerAmount !== null
-          ? Number(paymentRecord.customerAmount)
+      customerAmount: paymentRecord.customerAmount !== undefined && paymentRecord.customerAmount !== null
+        ? Number(paymentRecord.customerAmount)
+        : paymentRecord.customer_amount !== undefined && paymentRecord.customer_amount !== null
+          ? Number(paymentRecord.customer_amount)
           : undefined,
       note: paymentRecord.note,
       status: paymentRecord.status,
@@ -109,6 +109,13 @@ export async function POST(request: NextRequest) {
       horizonSuccessFlag: paymentRecord.horizonSuccessFlag === true,
       refundStatus: paymentRecord.refund_status || paymentRecord.refundStatus,
       createdAt: paymentRecord.created_at || paymentRecord.createdAt,
+    }
+
+    const canonicalAmount = paymentRecord.customerAmount
+    const legacyAmount = paymentRecord.customer_amount
+    if (canonicalAmount !== undefined && canonicalAmount !== null && legacyAmount !== undefined && legacyAmount !== null &&
+      (!Number.isFinite(Number(canonicalAmount)) || !Number.isFinite(Number(legacyAmount)) || Number(canonicalAmount) !== Number(legacyAmount))) {
+      return NextResponse.json({ error: 'Conflicting customerAmount values' }, { status: 422, headers: corsHeaders })
     }
 
     console.log('[refunds/intent] Payment loaded:', {
