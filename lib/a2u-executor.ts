@@ -197,6 +197,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!stageResult.ok) {
       const retryable = stageResult.retryable === true
       let failedPayment = ctx.payment
+      let refundPendingFromConfirmedNone = false
       if (!retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
         typeof ctx.merchantUid === "string" && ctx.merchantUid.trim().length > 0) {
         const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
@@ -212,6 +213,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
             { ...failedPayment, status: "settlement_failed" },
             { code: stageResult.errorCode || "a2u_non_retryable_no_transfer", message: stageResult.error, occurredAt: new Date().toISOString() },
           )
+          refundPendingFromConfirmedNone = failedPayment.refundStatus === "pending" && failedPayment.settlementFailureState === "refund_pending"
         }
       }
       const retryCount = ctx.payment.retryCount || 1
@@ -223,10 +225,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         a2uErrorCode: stageResult.errorCode,
         a2uErrorMessage: stageResult.error,
         a2uErrorBody: stageResult.errorBody,
-        settlementFailureState: retryable ? "retryable" : failedPayment.settlementFailureState || "held",
-        refundStatus: retryable ? "not_started" : failedPayment.refundStatus || "manual_review_required",
+        settlementFailureState: retryable ? "retryable" : refundPendingFromConfirmedNone ? "refund_pending" : "held",
+        refundStatus: retryable ? "not_started" : refundPendingFromConfirmedNone ? "pending" : "manual_review_required",
         nextRetryAt,
-        status: retryable ? "paid_to_app" : failedPayment.status || "paid_to_app",
+        status: retryable ? "paid_to_app" : refundPendingFromConfirmedNone ? "settlement_failed" : "paid_to_app",
       })
       return {
         ok: false,
@@ -544,27 +546,6 @@ function codeIsTooManyPayments(errorData: unknown, errorText: string): boolean {
   return code === "too_many_payments" || /too_many_payments/i.test(errorText)
 }
 
-async function reconcileIncompleteA2U(paymentId: string, amount: number): Promise<{ id?: string; payment?: PiA2UPayment }> {
-  try {
-    const response = await fetch("https://api.minepi.com/v2/payments/incomplete_server_payments", {
-      headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" },
-    })
-    if (!response.ok) return {}
-    const body = await response.json()
-    const candidates = Array.isArray(body) ? body : Array.isArray(body?.incomplete_server_payments) ? body.incomplete_server_payments : []
-    const match = candidates.find((candidate: unknown) => {
-      if (!isRecord(candidate)) return false
-      const metadata = isRecord(candidate.metadata) ? candidate.metadata : {}
-      return metadata.paymentId === paymentId && Number(candidate.amount) === amount && typeof candidate.identifier === "string"
-    })
-    if (!match || !isPiA2UPayment(match)) return {}
-    return { id: match.identifier, payment: match }
-  } catch (error) {
-    console.warn("[A2U Stage1] Incomplete payment reconciliation failed:", error)
-    return {}
-  }
-}
-
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
   try {
     // Verify UID with Pi /v2/me
@@ -590,11 +571,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
 
     console.log("[A2U Stage1] ✓ UID verified")
 
-    // Reconcile Pi before every creation attempt so ambiguous prior responses cannot duplicate A2U.
-    const existing = await reconcileIncompleteA2U(ctx.paymentId, ctx.customerAmount)
-    if (existing.id && existing.payment) {
-      console.warn("[A2U Stage1] Reconciled existing incomplete A2U:", existing.id)
-      return { ok: true, data: { a2uPaymentId: existing.id, a2uPayment: existing.payment } }
+    // Reconcile before creation. Only CONFIRMED_NONE permits POST /v2/payments.
+    const existing = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+    if (existing.outcome === "FOUND" && existing.dto && isPiA2UPayment(existing.dto)) {
+      return { ok: true, data: { a2uPaymentId: existing.dto.identifier, a2uPayment: existing.dto } }
+    }
+    if (existing.outcome === "INDETERMINATE") {
+      return { ok: false, error: existing.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_reconciliation_indeterminate" }
     }
 
     // Create A2U payment
@@ -632,11 +615,11 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       // Handle ongoing_payment_found
       if (errorData.code === "ongoing_payment_found" || errorText.includes("ongoing_payment")) {
         const ongoingPaymentId = errorData.payment?.identifier || errorData.identifier || errorData.payment_id
-        if (ongoingPaymentId) {
-          console.warn("[A2U Stage1] Ongoing payment found - reusing:", ongoingPaymentId)
+        if (typeof ongoingPaymentId === "string") {
           const fetchResult = await fetchA2UPayment(ongoingPaymentId)
-          if (fetchResult) {
-            return { ok: true, data: { a2uPaymentId: ongoingPaymentId, a2uPayment: fetchResult } }
+          const metadata = fetchResult && isRecord(fetchResult.metadata) ? fetchResult.metadata : null
+          if (fetchResult && isPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === ctx.customerAmount && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid) {
+            return { ok: true, data: { a2uPaymentId: fetchResult.identifier, a2uPayment: fetchResult } }
           }
         }
       }
@@ -656,10 +639,12 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
           : "A2U creation failed"
       const ambiguous = responseStatusRetryable(createResponse.status) || codeIsTooManyPayments(errorData, errorText)
       if (ambiguous) {
-        const reconciled = await reconcileIncompleteA2U(ctx.paymentId, ctx.customerAmount)
-        if (reconciled.id && reconciled.payment) {
-          console.warn("[A2U Stage1] Reconciled A2U after ambiguous create failure:", reconciled.id)
-          return { ok: true, data: { a2uPaymentId: reconciled.id, a2uPayment: reconciled.payment } }
+        const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+        if (reconciled.outcome === "FOUND" && reconciled.dto && isPiA2UPayment(reconciled.dto)) {
+          return { ok: true, data: { a2uPaymentId: reconciled.dto.identifier, a2uPayment: reconciled.dto } }
+        }
+        if (reconciled.outcome === "INDETERMINATE") {
+          return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_ambiguous_reconciliation_indeterminate" }
         }
       }
 
