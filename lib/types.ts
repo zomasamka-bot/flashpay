@@ -367,6 +367,8 @@ export function isRefundEligible(payment: Payment): boolean {
     payment.payerUid.length > 0 &&
     !payment.a2uPaymentId &&
     !payment.a2uTxid &&
+    !payment.refundPaymentId &&
+    !payment.refundTxid &&
     payment.horizonSuccessFlag !== true &&
     typeof payment.customerAmount === "number" &&
     Number.isFinite(payment.customerAmount) &&

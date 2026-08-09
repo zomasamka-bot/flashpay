@@ -130,7 +130,7 @@ export async function transitionRefundCheckpoint(
     WHERE refund_id = $1 AND stage = $9 AND status NOT IN ('failed', 'completed', 'manual_review_required')
     RETURNING *`, [refundId, toStage, status, patch.refundPaymentId ?? null, patch.refundTxid ?? null,
       patch.lastErrorCode ?? null, patch.lastErrorMessage ?? null, patch.nextRetryAt ?? null, fromStage])
-  if (!Array.isArray(result) || result.length === 0) return getRefundCheckpoint(refundId)
+  if (!Array.isArray(result) || result.length === 0) return null
   const transitioned = normalizeCheckpoint(result[0])
   if (transitioned && isRedisConfigured) await redis.set(redisKey(refundId), transitioned)
   return transitioned
@@ -185,11 +185,11 @@ function normalizeCheckpoint(value: unknown): RefundCheckpoint | null {
     sourceSettlementState: String(row.sourceSettlementState ?? row.source_settlement_state) as RefundCheckpoint['sourceSettlementState'],
     createdAt: String(row.createdAt ?? row.created_at),
     updatedAt: String(row.updatedAt ?? row.updated_at),
-    refundPaymentId: typeof row.refundPaymentId === 'string' ? row.refundPaymentId : undefined,
-    refundTxid: typeof row.refundTxid === 'string' ? row.refundTxid : undefined,
+    refundPaymentId: typeof (row.refundPaymentId ?? row.refund_payment_id) === 'string' ? (row.refundPaymentId ?? row.refund_payment_id) as string : undefined,
+    refundTxid: typeof (row.refundTxid ?? row.refund_txid) === 'string' ? (row.refundTxid ?? row.refund_txid) as string : undefined,
     attemptCount: Number(row.attemptCount ?? row.attempt_count ?? 0),
-    lastErrorCode: typeof row.lastErrorCode === 'string' ? row.lastErrorCode : undefined,
-    lastErrorMessage: typeof row.lastErrorMessage === 'string' ? row.lastErrorMessage : undefined,
-    nextRetryAt: typeof row.nextRetryAt === 'string' ? row.nextRetryAt : undefined,
+    lastErrorCode: typeof (row.lastErrorCode ?? row.last_error_code) === 'string' ? (row.lastErrorCode ?? row.last_error_code) as string : undefined,
+    lastErrorMessage: typeof (row.lastErrorMessage ?? row.last_error_message) === 'string' ? (row.lastErrorMessage ?? row.last_error_message) as string : undefined,
+    nextRetryAt: typeof (row.nextRetryAt ?? row.next_retry_at) === 'string' ? (row.nextRetryAt ?? row.next_retry_at) as string : undefined,
   }
 }

@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { redis, isRedisConfigured } from '@/lib/redis'
-import { createRefundCheckpoint, claimRefundIdempotency, getRefundCheckpointByIdempotency, appendRefundAuditEvent, verifyRefundTables, releaseRefundIdempotency, acquirePaymentOperationLock, releasePaymentOperationLock } from '@/lib/refund-checkpoint-store'
+import { createRefundCheckpoint, claimRefundIdempotency, getRefundCheckpointByIdempotency, appendRefundAuditEvent, verifyRefundTables, releaseRefundIdempotency, acquirePaymentOperationLock, releasePaymentOperationLock, transitionRefundCheckpoint } from '@/lib/refund-checkpoint-store'
 import type { Payment, RefundCheckpoint, RefundAuditEvent } from '@/lib/types'
 import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
@@ -108,7 +108,16 @@ export async function POST(request: NextRequest) {
       a2uTxid: paymentRecord.a2uTxid,
       horizonSuccessFlag: paymentRecord.horizonSuccessFlag === true,
       refundStatus: paymentRecord.refund_status || paymentRecord.refundStatus,
+      refundPaymentId: paymentRecord.refund_payment_id || paymentRecord.refundPaymentId,
+      refundTxid: paymentRecord.refund_txid || paymentRecord.refundTxid,
       createdAt: paymentRecord.created_at || paymentRecord.createdAt,
+    }
+
+    if (payment.id !== paymentId || !payment.id) {
+      return NextResponse.json({ error: 'Payment ID mismatch' }, { status: 422, headers: corsHeaders })
+    }
+    if (payment.refundPaymentId || payment.refundTxid) {
+      return NextResponse.json({ error: 'Refund transfer evidence already exists' }, { status: 422, headers: corsHeaders })
     }
 
     const canonicalAmount = paymentRecord.customerAmount
@@ -153,12 +162,17 @@ export async function POST(request: NextRequest) {
       if (existing.paymentId !== payment.id || existing.payerUid !== payment.payerUid || existing.amount !== payment.customerAmount) {
         return NextResponse.json({ error: 'Idempotency key is bound to different refund inputs' }, { status: 409, headers: corsHeaders })
       }
-      const auditRecorded = await appendRefundAuditEvent({
-        eventId: randomUUID(), refundId: existing.refundId, paymentId: existing.paymentId,
-        eventType: 'eligibility_verified', actorType: 'system', idempotencyKey,
-        createdAt: new Date().toISOString(), details: { resumed: true, stage: existing.stage },
-      })
-      if (!auditRecorded) return NextResponse.json({ error: 'Refund intent exists but audit is unavailable', refundId: existing.refundId }, { status: 503, headers: corsHeaders })
+      if (existing.stage === 'eligibility_verified') {
+        const transitioned = await transitionRefundCheckpoint(existing.refundId, 'eligibility_verified', 'intent_created', 'pending')
+        if (!transitioned) return NextResponse.json({ error: 'Refund intent transition conflict' }, { status: 409, headers: corsHeaders })
+        const requested = await appendRefundAuditEvent({
+          eventId: randomUUID(), refundId: existing.refundId, paymentId: existing.paymentId,
+          eventType: 'refund_requested', actorType: 'system', idempotencyKey,
+          createdAt: new Date().toISOString(), details: { resumed: true },
+        })
+        if (!requested) return NextResponse.json({ error: 'Refund request audit unavailable', refundId: existing.refundId }, { status: 503, headers: corsHeaders })
+        return NextResponse.json({ success: true, refund: transitioned }, { status: 200, headers: corsHeaders })
+      }
       return NextResponse.json({ success: true, refund: existing }, { status: 200, headers: corsHeaders })
     }
 
@@ -239,6 +253,14 @@ export async function POST(request: NextRequest) {
         { status: 503, headers: corsHeaders }
       )
     }
+
+    const transitioned = await transitionRefundCheckpoint(refundId, 'eligibility_verified', 'intent_created', 'pending')
+    if (!transitioned) return NextResponse.json({ error: 'Refund intent transition conflict', refundId }, { status: 409, headers: corsHeaders })
+    const requested = await appendRefundAuditEvent({
+      eventId: randomUUID(), refundId, paymentId: payment.id, eventType: 'refund_requested',
+      actorType: 'system', idempotencyKey, createdAt: now, details: { stage: 'intent_created' },
+    })
+    if (!requested) return NextResponse.json({ error: 'Refund request audit unavailable', refundId }, { status: 503, headers: corsHeaders })
 
     console.log('[refunds/intent] Refund intent created successfully:', refundId)
 
