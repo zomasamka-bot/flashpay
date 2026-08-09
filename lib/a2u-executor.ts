@@ -40,6 +40,7 @@ interface PiA2UPayment {
   from_address: string
   to_address: string
   amount: number
+  direction?: "app_to_user" | "user_to_app"
   metadata?: Record<string, unknown>
   user_uid?: string
   status?: {
@@ -698,10 +699,12 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     }
   } catch (error) {
     console.error("[A2U Stage1] Exception:", error)
-    const reconciled = await reconcileIncompleteA2U(ctx.paymentId, ctx.customerAmount)
-    if (reconciled.id && reconciled.payment) {
-      console.warn("[A2U Stage1] Reconciled A2U after network failure:", reconciled.id)
-      return { ok: true, data: { a2uPaymentId: reconciled.id, a2uPayment: reconciled.payment } }
+    const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+    if (reconciled.outcome === "FOUND" && reconciled.dto && isPiA2UPayment(reconciled.dto)) {
+      return { ok: true, data: { a2uPaymentId: reconciled.dto.identifier, a2uPayment: reconciled.dto } }
+    }
+    if (reconciled.outcome === "INDETERMINATE") {
+      return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_network_reconciliation_indeterminate", errorBody: String(error).slice(0, 2000) }
     }
     return { ok: false, error: "A2U creation network failure", userFacingStatus: "error", retryable: true, errorCode: "network_error", errorBody: String(error).slice(0, 2000) }
   }
