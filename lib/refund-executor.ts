@@ -34,22 +34,34 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
   let checkpoint = await getRefundCheckpointAuthoritative(refundId)
   if (!checkpoint) return { outcome: 'blocked', reason: 'not_found' }
   const firstPayment = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
-  if (!firstPayment || !guarded(checkpoint, firstPayment)) return { outcome: 'blocked', reason: 'preflight_failed' }
+  if (!firstPayment || (checkpoint.stage === 'intent_created' && !guarded(checkpoint, firstPayment))) return { outcome: 'blocked', reason: 'preflight_failed' }
+  if (checkpoint.stage !== 'intent_created' && checkpoint.stage !== 'wallet_submission_started') return { outcome: 'blocked', reason: 'invalid_stage' }
   if (!await ensurePaymentOperationLock(checkpoint.paymentId, checkpoint.refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
   checkpoint = await getRefundCheckpointAuthoritative(refundId) as typeof checkpoint
   const payment = paymentFromRedis(await redis.get(`payment:${checkpoint?.paymentId}`))
-  if (!checkpoint || !payment || !guarded(checkpoint, payment)) return { outcome: 'blocked', reason: 'preflight_failed' }
+  if (!checkpoint || !payment) return { outcome: 'blocked', reason: 'preflight_failed' }
+  const merchantEvidence = payment.a2uTxid || payment.horizonSuccessFlag === true || payment.status === 'settled_to_merchant'
+  const refundEvidence = payment.refundTxid || payment.refundStatus === 'completed'
+  if (checkpoint.stage === 'intent_created' && (!guarded(checkpoint, payment) || merchantEvidence || refundEvidence)) return { outcome: 'blocked', reason: 'preflight_failed' }
+  if (checkpoint.stage === 'wallet_submission_started' && (checkpoint.status !== 'pending' || checkpoint.paymentId !== payment.id || checkpoint.payerUid !== payment.payerUid || checkpoint.amount !== payment.customerAmount || merchantEvidence || refundEvidence)) return { outcome: 'blocked', reason: 'preflight_failed' }
   const reconciliation = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
   if (reconciliation.outcome === 'INDETERMINATE') return { outcome: 'blocked', reason: 'reconciliation_uncertain' }
   if (reconciliation.outcome === 'FOUND' && reconciliation.payment) {
+    if (reconciliation.payment.status.cancelled || reconciliation.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'refund_cancelled' }
     if (checkpoint.refundPaymentId && checkpoint.refundPaymentId !== reconciliation.payment.identifier) return { outcome: 'blocked', reason: 'refund_id_conflict' }
+    if (checkpoint.stage === 'intent_created') {
+      const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'recovered_before_create' } }
+      const attempt = await beginRefundSubmissionAttempt(refundId, event)
+      if (!attempt) return { outcome: 'blocked', reason: 'attempt_conflict' }
+      checkpoint = attempt.checkpoint
+    }
     if (!checkpoint.refundPaymentId) {
       const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, reconciliation.payment.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: reconciliation.payment.identifier, recovered: true } })
       if (!persisted) return { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
     }
     return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: reconciliation.payment.identifier }
   }
-  if (checkpoint.stage === 'wallet_submission_started') return { outcome: 'blocked', reason: 'submission_outcome_uncertain' }
+  if (checkpoint.stage === 'wallet_submission_started') return { outcome: 'blocked', reason: reconciliation.outcome === 'INDETERMINATE' ? 'reconciliation_uncertain' : 'submission_outcome_uncertain' }
   if (checkpoint.stage !== 'intent_created') return { outcome: 'blocked', reason: 'invalid_stage' }
   if (checkpoint.stage === 'intent_created') {
     const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'refund_create' } }
