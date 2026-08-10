@@ -331,7 +331,7 @@ export async function persistRefundBlockchainTxWithAudit(
   refundTxid: string,
   event: RefundAuditEvent,
 ): Promise<RefundCheckpoint | null> {
-  if (!(await verifyRefundTables()) || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || event.eventType !== 'refund_submission_confirmed' || !refundTxid) return null
+  if (!(await verifyRefundTables()) || !event.eventId || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || event.eventType !== 'refund_submission_confirmed' || !refundTxid || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details) || (event.details as Record<string, unknown>).refundPaymentId !== refundPaymentId || (event.details as Record<string, unknown>).refundTxid !== refundTxid) return null
   const result = await query(`
     WITH transitioned AS (
       UPDATE refund_checkpoints SET refund_txid=$5, stage='wallet_submission_confirmed', updated_at=NOW()
@@ -366,7 +366,7 @@ export async function persistRefundBlockchainTxWithAudit(
   const row = replayResult[0]
   if (typeof row !== 'object' || row === null || Array.isArray(row)) return null
   const record = row as Record<string, unknown>
-  if (record.audit_event_id !== event.eventId || record.audit_event_type !== 'refund_submission_confirmed' ||
+  if (typeof record.audit_event_id !== 'string' || record.audit_event_id.length === 0 || record.audit_event_type !== 'refund_submission_confirmed' ||
     record.audit_refund_id !== refundId || record.audit_payment_id !== paymentId ||
     record.audit_idempotency_key !== idempotencyKey || record.audit_actor_type !== event.actorType) return null
   if (typeof record.audit_details !== 'object' || record.audit_details === null || Array.isArray(record.audit_details)) return null
