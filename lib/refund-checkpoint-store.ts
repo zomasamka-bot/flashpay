@@ -348,11 +348,31 @@ export async function persistRefundBlockchainTxWithAudit(
     if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
     return checkpoint
   }
-  const replayResult = await query(`SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4 AND stage='wallet_submission_confirmed' AND status='pending' AND refund_txid=$5 LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
+  const replayResult = await query(`
+    SELECT c.*, a.event_id AS audit_event_id, a.event_type AS audit_event_type,
+      a.refund_id AS audit_refund_id, a.payment_id AS audit_payment_id,
+      a.idempotency_key AS audit_idempotency_key, a.actor_type AS audit_actor_type,
+      a.details AS audit_details
+    FROM refund_checkpoints c
+    JOIN refund_audit_events a
+      ON a.refund_id=c.refund_id AND a.payment_id=c.payment_id
+      AND a.idempotency_key=c.idempotency_key
+      AND a.event_type='refund_submission_confirmed'
+    WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3
+      AND c.refund_payment_id=$4 AND c.stage='wallet_submission_confirmed'
+      AND c.status='pending' AND c.refund_txid=$5
+    LIMIT 2`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
   if (!Array.isArray(replayResult) || replayResult.length !== 1) return null
   const row = replayResult[0]
   if (typeof row !== 'object' || row === null || Array.isArray(row)) return null
-  const checkpoint = normalizeCheckpoint(row as Record<string, unknown>)
+  const record = row as Record<string, unknown>
+  if (record.audit_event_id !== event.eventId || record.audit_event_type !== 'refund_submission_confirmed' ||
+    record.audit_refund_id !== refundId || record.audit_payment_id !== paymentId ||
+    record.audit_idempotency_key !== idempotencyKey || record.audit_actor_type !== event.actorType) return null
+  if (typeof record.audit_details !== 'object' || record.audit_details === null || Array.isArray(record.audit_details)) return null
+  const details = record.audit_details as Record<string, unknown>
+  if (details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid) return null
+  const checkpoint = normalizeCheckpoint(record)
   return checkpoint ?? null
 }
 
