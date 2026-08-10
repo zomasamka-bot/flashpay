@@ -323,6 +323,39 @@ export async function persistRefundPaymentIdWithAudit(refundId: string, paymentI
   return replay
 }
 
+export async function persistRefundBlockchainTxWithAudit(
+  refundId: string,
+  paymentId: string,
+  idempotencyKey: string,
+  refundPaymentId: string,
+  refundTxid: string,
+  event: RefundAuditEvent,
+): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables()) || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || event.eventType !== 'refund_submission_confirmed' || !refundTxid) return null
+  const result = await query(`
+    WITH transitioned AS (
+      UPDATE refund_checkpoints SET refund_txid=$5, stage='wallet_submission_confirmed', updated_at=NOW()
+      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4
+        AND stage='wallet_submission_started' AND status='pending' AND refund_txid IS NULL RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $6, refund_id, payment_id, $7, $8, idempotency_key, $9, $10::jsonb FROM transitioned RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
+    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+  )
+  if (Array.isArray(result) && result.length > 0) {
+    const checkpoint = normalizeCheckpoint(result[0])
+    if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
+    return checkpoint
+  }
+  const replayResult = await query(`SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4 AND stage='wallet_submission_confirmed' AND status='pending' AND refund_txid=$5 LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
+  if (!Array.isArray(replayResult) || replayResult.length !== 1) return null
+  const row = replayResult[0]
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return null
+  const checkpoint = normalizeCheckpoint(row as Record<string, unknown>)
+  return checkpoint ?? null
+}
+
 export async function transitionRefundCheckpointWithAudit(
   refundId: string,
   fromStage: RefundCheckpoint['stage'],
