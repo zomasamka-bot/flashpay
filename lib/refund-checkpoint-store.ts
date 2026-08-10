@@ -376,6 +376,26 @@ export async function persistRefundBlockchainTxWithAudit(
   return checkpoint ?? null
 }
 
+export async function advanceRefundPaymentCheckpointWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, refundTxid: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables()) || !event.eventId || event.eventType !== 'refund_payment_checkpoint_updated' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !refundPaymentId || !refundTxid) return null
+  const result = await query(`
+    WITH transitioned AS (
+      UPDATE refund_checkpoints SET stage='payment_checkpoint_updated', updated_at=NOW()
+      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4 AND refund_txid=$5
+        AND stage='wallet_submission_confirmed' AND status='pending' RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $6, refund_id, payment_id, $7, $8, idempotency_key, $9, $10::jsonb FROM transitioned RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
+    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+  )
+  if (Array.isArray(result) && result.length > 0) return normalizeCheckpoint(result[0])
+  const replay = await query(`SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4 AND refund_txid=$5 AND stage='payment_checkpoint_updated' AND status='pending' LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
+  if (!Array.isArray(replay) || replay.length !== 1) return null
+  const checkpoint = normalizeCheckpoint(replay[0])
+  return checkpoint ?? null
+}
+
 export async function transitionRefundCheckpointWithAudit(
   refundId: string,
   fromStage: RefundCheckpoint['stage'],

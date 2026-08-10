@@ -7,9 +7,11 @@ import {
   beginRefundSubmissionAttempt,
   beginRefundBlockchainSubmissionClaim,
   persistRefundBlockchainTxWithAudit,
+  advanceRefundPaymentCheckpointWithAudit,
 } from './refund-checkpoint-store'
 import { isRefundEligible, type Payment, type RefundAuditEvent, type RefundCheckpoint } from './types'
 import { reconcileRefundWithPi } from './refund-pi-reconciliation'
+import { verifyRefundBlockchainEvidence } from './refund-blockchain-evidence'
 import { serverConfig } from './server-config'
 
 export type RefundExecutionResult =
@@ -130,6 +132,38 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
   if (submission.outcome !== 'CONFIRMED_TX') return { outcome: 'blocked', reason: submission.code }
   const persisted = await persistRefundBlockchainTxWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, submission.txid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_confirmed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: submission.txid } })
   return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'tx_persistence_conflict' }
+}
+
+export async function executeRefundCompletion(refundId: string): Promise<RefundExecutionResult> {
+  if (!isRedisConfigured || !serverConfig.piApiKey) return { outcome: 'blocked', reason: 'unavailable' }
+  let checkpoint = await getRefundCheckpointAuthoritative(refundId)
+  if (!checkpoint || (checkpoint.stage !== 'wallet_submission_confirmed' && checkpoint.stage !== 'payment_checkpoint_updated') || checkpoint.status !== 'pending' || !checkpoint.refundPaymentId || !checkpoint.refundTxid) return { outcome: 'blocked', reason: 'invalid_stage' }
+  if (!await ensurePaymentOperationLock(checkpoint.paymentId, checkpoint.refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+  checkpoint = await getRefundCheckpointAuthoritative(refundId)
+  const payment = checkpoint ? paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`)) : null
+  if (checkpoint?.stage === 'payment_checkpoint_updated') {
+    if (!payment || checkpoint.status !== 'pending' || checkpoint.paymentId !== payment.id || checkpoint.refundPaymentId !== payment.refundPaymentId || checkpoint.refundTxid !== payment.refundTxid || payment.status !== 'refund_pending' || payment.refundStatus !== 'submitted') return { outcome: 'blocked', reason: 'checkpoint_conflict' }
+    return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId }
+  }
+  const merchant = payment?.a2uPaymentId || payment?.a2uTxid || payment?.horizonSuccessFlag === true || payment?.status === 'settled_to_merchant'
+  if (!checkpoint || !payment || checkpoint.stage !== 'wallet_submission_confirmed' || checkpoint.status !== 'pending' || checkpoint.paymentId !== payment.id || checkpoint.payerUid !== payment.payerUid || checkpoint.amount !== payment.customerAmount || payment.refundPaymentId && payment.refundPaymentId !== checkpoint.refundPaymentId || payment.refundTxid && payment.refundTxid !== checkpoint.refundTxid || merchant || payment.refundStatus === 'completed') return { outcome: 'blocked', reason: 'preflight_failed' }
+  const reconciliation = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
+  if (reconciliation.outcome !== 'FOUND' || !reconciliation.payment || reconciliation.payment.status.cancelled || reconciliation.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'pi_evidence_uncertain' }
+  const blockchainEvidence = await verifyRefundBlockchainEvidence({ checkpoint, payment: reconciliation.payment })
+  if (blockchainEvidence.outcome !== 'VERIFIED_TX' || blockchainEvidence.txid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'blockchain_evidence_uncertain' }
+  if (reconciliation.payment.transaction === null || reconciliation.payment.transaction.txid !== checkpoint.refundTxid || !reconciliation.payment.transaction.verified || !reconciliation.payment.status.transaction_verified || !reconciliation.payment.status.developer_completed) return { outcome: 'blocked', reason: 'pi_evidence_uncertain' }
+  const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(checkpoint.refundPaymentId)}/complete`, { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ txid: checkpoint.refundTxid }) }).catch(() => null)
+  let completed = false
+  if (response?.ok) {
+    const body: unknown = await response.json().catch(() => null)
+    if (isRecord(body) && body.identifier === checkpoint.refundPaymentId) completed = true
+  }
+  const confirmed = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
+  if (confirmed.outcome !== 'FOUND' || !confirmed.payment || confirmed.payment.identifier !== checkpoint.refundPaymentId || confirmed.payment.transaction === null || confirmed.payment.transaction.txid !== checkpoint.refundTxid || !confirmed.payment.transaction.verified || !confirmed.payment.status.transaction_verified || !confirmed.payment.status.developer_completed || confirmed.payment.status.cancelled || confirmed.payment.status.user_cancelled) return { outcome: 'blocked', reason: completed ? 'completion_unverified' : 'completion_uncertain' }
+  const updatedPayment: Payment = { ...payment, status: 'refund_pending', refundStatus: 'submitted', refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, settlementFailureState: 'refund_pending' } as Payment
+  await redis.set(`payment:${payment.id}`, updatedPayment)
+  const advanced = await advanceRefundPaymentCheckpointWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_checkpoint_updated', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid } })
+  return advanced ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'checkpoint_conflict' }
 }
 
 export async function prepareRefundExecution(refundId: string): Promise<RefundExecutionResult> {
