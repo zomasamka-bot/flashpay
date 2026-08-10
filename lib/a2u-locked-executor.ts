@@ -141,24 +141,16 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 400, error: "Invalid payment record" }
     }
 
-    // Refund/hold/manual-review states are terminal safety states. No caller may start
-    // another A2U from them, even if it reaches this shared lock directly.
-    if (latestPayment.refundPaymentId || latestPayment.refundTxid ||
-      latestPayment.refundStatus === "pending" || latestPayment.refundStatus === "submitted" || latestPayment.refundStatus === "completed" ||
-      latestPayment.settlementFailureState === "refund_pending" || latestPayment.settlementFailureState === "held" || latestPayment.settlementFailureState === "manual_review_required") {
-      return { ok: false, status: 409, error: "Refund operation owns this payment" }
-    }
-
     const safetyState = latestPayment.settlementFailureState
     if (
-      latestPayment.status === "refund_pending" ||
-      latestPayment.status === "refunded" ||
-      safetyState === "held" ||
-      safetyState === "manual_review_required" ||
-      safetyState === "refund_pending" ||
-      safetyState === "refunded"
+      latestPayment.refundPaymentId || latestPayment.refundTxid ||
+      latestPayment.refundStatus === "pending" || latestPayment.refundStatus === "submitted" ||
+      latestPayment.refundStatus === "completed" || latestPayment.refundStatus === "manual_review_required" ||
+      latestPayment.status === "refund_pending" || latestPayment.status === "refunded" ||
+      safetyState === "held" || safetyState === "manual_review_required" ||
+      safetyState === "refund_pending" || safetyState === "refunded"
     ) {
-      return { ok: false, status: 409, error: "Settlement is held for refund or manual review" }
+      return { ok: false, status: 409, error: "Refund operation owns this payment" }
     }
 
     if (
