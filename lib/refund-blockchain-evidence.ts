@@ -29,15 +29,25 @@ async function getJson(path: string): Promise<{ ok: true; body: unknown } | { ok
   }
 }
 
-function exactAmount(value: unknown, amount: number): boolean {
-  return typeof value === "string" && value === String(amount)
+function stroops(value: number): number | null {
+  if (!Number.isFinite(value) || value <= 0) return null
+  const scaled = value * 10_000_000
+  return Number.isSafeInteger(scaled) ? scaled : null
+}
+
+function parseStroops(value: unknown): number | null {
+  if (typeof value !== "string" || !/^\d+(?:\.\d{1,7})?$/.test(value) || /^0+(?:\.0{1,7})?$/.test(value)) return null
+  const [whole, fraction = ""] = value.split(".")
+  const normalized = `${whole}${fraction.padEnd(7, "0")}`
+  const parsed = Number(normalized)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
 export async function verifyRefundBlockchainEvidence(input: Input): Promise<RefundBlockchainEvidenceResult> {
   const { checkpoint, payment } = input
   if (checkpoint.stage !== "wallet_submission_started" || checkpoint.status !== "pending" ||
-    !checkpoint.refundPaymentId || checkpoint.paymentId !== payment.metadata.paymentId ||
-    checkpoint.payerUid !== payment.user_uid || checkpoint.amount !== payment.amount ||
+    !checkpoint.refundPaymentId || checkpoint.refundPaymentId !== payment.identifier || checkpoint.paymentId !== payment.metadata.paymentId ||
+    checkpoint.payerUid !== payment.user_uid || checkpoint.amount !== payment.amount || stroops(checkpoint.amount) === null || stroops(payment.amount) === null ||
     payment.network !== "Pi Testnet" || payment.direction !== "app_to_user" ||
     payment.status.cancelled || payment.status.user_cancelled) return { outcome: "INDETERMINATE" }
 
@@ -58,7 +68,12 @@ export async function verifyRefundBlockchainEvidence(input: Input): Promise<Refu
   const operation = records.records[0]
   if (!isRecord(operation) || operation.type !== "payment" || operation.asset_type !== "native" ||
     operation.source_account !== payment.from_address || operation.from !== payment.from_address ||
-    operation.to !== payment.to_address || !exactAmount(operation.amount, checkpoint.amount)) return { outcome: "INDETERMINATE" }
+    operation.to !== payment.to_address) return { outcome: "INDETERMINATE" }
+  const checkpointStroops = stroops(checkpoint.amount)
+  const paymentStroops = stroops(payment.amount)
+  const operationStroops = parseStroops(operation.amount)
+  if (checkpointStroops === null || paymentStroops === null || operationStroops === null ||
+    checkpointStroops !== paymentStroops || paymentStroops !== operationStroops) return { outcome: "INDETERMINATE" }
 
   return { outcome: "VERIFIED_TX", txid: transaction.txid }
 }
