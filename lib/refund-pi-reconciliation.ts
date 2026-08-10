@@ -33,6 +33,8 @@ export type RefundPiPayment = {
     developer_approved: boolean
     transaction_verified: boolean
     developer_completed: boolean
+    cancelled: boolean
+    user_cancelled: boolean
   }
   transaction: { txid: string; verified: boolean; _link: string } | null
 }
@@ -59,7 +61,8 @@ function validatePayment(value: unknown, input: RefundPiReconciliationInput): Re
     typeof value.user_uid !== "string" || typeof value.amount !== "number" || !Number.isFinite(value.amount) || value.amount !== input.amount ||
     typeof value.memo !== "string" || typeof value.from_address !== "string" || typeof value.to_address !== "string" ||
     typeof value.created_at !== "string" || value.direction !== "app_to_user" || value.network !== "Pi Testnet" || value.user_uid !== input.payerUid ||
-    !isRecord(value.status) || typeof value.status.developer_approved !== "boolean" || typeof value.status.transaction_verified !== "boolean" || typeof value.status.developer_completed !== "boolean") return null
+    !isRecord(value.status) || typeof value.status.developer_approved !== "boolean" || typeof value.status.transaction_verified !== "boolean" || typeof value.status.developer_completed !== "boolean" ||
+    typeof value.status.cancelled !== "boolean" || typeof value.status.user_cancelled !== "boolean") return null
   const metadata = exactMetadata(value.metadata, input)
   if (!metadata) return null
   let transaction: RefundPiPayment["transaction"] = null
@@ -74,6 +77,8 @@ function validatePayment(value: unknown, input: RefundPiReconciliationInput): Re
       developer_approved: value.status.developer_approved,
       transaction_verified: value.status.transaction_verified,
       developer_completed: value.status.developer_completed,
+      cancelled: value.status.cancelled,
+      user_cancelled: value.status.user_cancelled,
     }, transaction,
   }
 }
@@ -118,21 +123,10 @@ export async function reconcileRefundWithPi(input: RefundPiReconciliationInput):
   const response = await getPi("/incomplete_server_payments")
   if (response.kind !== "ok" || !isRecord(response.body)) return { outcome: "INDETERMINATE" }
   const raw = response.body.incomplete_server_payments
-  if (!Array.isArray(raw)) return { outcome: "INDETERMINATE" }
-
-  let found: RefundPiPayment | undefined
-  for (const candidate of raw) {
-    if (!isRecord(candidate)) return { outcome: "INDETERMINATE" }
-    const metadata = isRecord(candidate.metadata) ? candidate.metadata : null
-    const isRelated = metadata?.type === "refund" &&
-      (metadata.paymentId === input.paymentId || metadata.refundId === input.refundId || metadata.idempotencyKey === input.idempotencyKey)
-    if (isRelated) {
-      const payment = validatePayment(candidate, input)
-      if (!payment || found) return { outcome: "INDETERMINATE" }
-      found = payment
-    } else if (metadata?.paymentId === input.paymentId || metadata?.refundId === input.refundId || metadata?.idempotencyKey === input.idempotencyKey) {
-      return { outcome: "INDETERMINATE" }
-    }
-  }
-  return found ? { outcome: "FOUND", payment: found } : { outcome: "CONFIRMED_NONE" }
+  if (!Array.isArray(raw) || raw.length > 1) return { outcome: "INDETERMINATE" }
+  if (raw.length === 0) return { outcome: "CONFIRMED_NONE" }
+  const candidate = raw[0]
+  if (!isRecord(candidate)) return { outcome: "INDETERMINATE" }
+  const payment = validatePayment(candidate, input)
+  return payment ? { outcome: "FOUND", payment } : { outcome: "INDETERMINATE" }
 }
