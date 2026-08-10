@@ -312,6 +312,7 @@ export interface RefundAuditEvent {
     | "refund_requested"
     | "refund_submission_started"
     | "refund_payment_identified"
+    | "refund_blockchain_submission_started"
     | "refund_submission_confirmed"
     | "refund_rejected"
     | "refund_completed"
