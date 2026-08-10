@@ -264,8 +264,10 @@ export async function beginRefundBlockchainSubmissionClaim(
     return checkpoint ? { checkpoint, startedNow: true } : null
   }
   const replay = await query(`
-    SELECT c.*, a.event_id AS blockchain_audit_id, a.refund_id AS audit_refund_id,
-      a.payment_id AS audit_payment_id, a.idempotency_key AS audit_idempotency_key
+    SELECT c.*, a.event_id AS blockchain_audit_id, a.event_type AS blockchain_audit_event_type,
+      a.refund_id AS audit_refund_id, a.payment_id AS audit_payment_id,
+      a.idempotency_key AS audit_idempotency_key, a.actor_type AS audit_actor_type,
+      a.details AS blockchain_audit_details
     FROM refund_checkpoints c JOIN refund_audit_events a
       ON a.event_id=$1 AND a.event_type='refund_blockchain_submission_started'
     WHERE c.refund_id=$2 AND c.payment_id=$3 AND c.idempotency_key=$4
@@ -275,7 +277,12 @@ export async function beginRefundBlockchainSubmissionClaim(
   const replayRow = replay[0]
   if (typeof replayRow !== 'object' || replayRow === null || Array.isArray(replayRow)) return null
   const record = replayRow as Record<string, unknown>
-  if (record.blockchain_audit_id !== eventId || record.audit_refund_id !== refundId || record.audit_payment_id !== paymentId || record.audit_idempotency_key !== idempotencyKey) return null
+  if (record.blockchain_audit_id !== eventId || record.blockchain_audit_event_type !== 'refund_blockchain_submission_started' ||
+    record.audit_refund_id !== refundId || record.audit_payment_id !== paymentId ||
+    record.audit_idempotency_key !== idempotencyKey || record.audit_actor_type !== actorType) return null
+  if (typeof record.blockchain_audit_details !== 'object' || record.blockchain_audit_details === null || Array.isArray(record.blockchain_audit_details)) return null
+  const auditDetails = record.blockchain_audit_details as Record<string, unknown>
+  if (Object.keys(auditDetails).length !== 2 || auditDetails.refundPaymentId !== refundPaymentId || auditDetails.phase !== 'blockchain_submission') return null
   const checkpoint = normalizeCheckpoint(record)
   return checkpoint ? { checkpoint, startedNow: false } : null
 }
