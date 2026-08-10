@@ -96,6 +96,7 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
   if (!isRecord(body) || typeof body.identifier !== 'string') return reconcileAfterUncertainty()
   const verified = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: body.identifier })
   if (verified.outcome !== 'FOUND' || !verified.payment || verified.payment.identifier !== body.identifier) return { outcome: 'blocked', reason: 'refund_create_uncertain' }
+  if (verified.payment.status.cancelled || verified.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'refund_cancelled' }
   const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, body.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: body.identifier } })
   if (!persisted) return { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
   return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: body.identifier }
