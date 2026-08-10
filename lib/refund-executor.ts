@@ -52,7 +52,8 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
     if (checkpoint.stage === 'intent_created') {
       const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'recovered_before_create' } }
       const attempt = await beginRefundSubmissionAttempt(refundId, event)
-      if (!attempt || !attempt.startedNow) {
+      if (!attempt) return { outcome: 'blocked', reason: 'attempt_conflict' }
+      if (!attempt.startedNow) {
         const latest = await getRefundCheckpointAuthoritative(refundId)
         if (!latest || latest.stage !== 'wallet_submission_started' || latest.status !== 'pending') return { outcome: 'blocked', reason: 'attempt_conflict' }
         const recoveryPayment = paymentFromRedis(await redis.get(`payment:${latest.paymentId}`))
@@ -72,7 +73,7 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
     }
     return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: reconciliation.payment.identifier }
   }
-  if (checkpoint.stage === 'wallet_submission_started') return { outcome: 'blocked', reason: reconciliation.outcome === 'INDETERMINATE' ? 'reconciliation_uncertain' : 'submission_outcome_uncertain' }
+  if (checkpoint.stage === 'wallet_submission_started') return { outcome: 'blocked', reason: 'submission_outcome_uncertain' }
   if (checkpoint.stage !== 'intent_created') return { outcome: 'blocked', reason: 'invalid_stage' }
   if (checkpoint.stage === 'intent_created') {
     const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'refund_create' } }
