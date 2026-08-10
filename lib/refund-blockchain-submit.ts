@@ -5,7 +5,6 @@ import {
   Horizon,
   Memo,
   Keypair,
-  Networks,
   Operation,
   TransactionBuilder,
 } from "@stellar/stellar-sdk"
@@ -60,7 +59,7 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
     const timebounds = await server.fetchTimebounds(180)
     const transaction = new TransactionBuilder(source, {
       fee: baseFee.toString(),
-      networkPassphrase: input.payment.network === "Pi Testnet" ? Networks.TESTNET : input.payment.network,
+      networkPassphrase: input.payment.network,
     })
       .addOperation(Operation.payment({ destination: input.payment.to_address, asset: Asset.native(), amount: input.payment.amount.toFixed(7) }))
       .addMemo(Memo.text(input.payment.identifier))
@@ -68,11 +67,9 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
       .build()
     transaction.sign(keypair)
     const result = await server.submitTransaction(transaction)
-    if (!result.successful || typeof result.hash !== "string" || result.hash.length === 0) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
-    return { outcome: "CONFIRMED_TX", txid: result.hash }
+    if (!result.successful || typeof result.id !== "string" || result.id.length === 0 || (result.hash !== undefined && result.hash !== result.id)) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+    return { outcome: "CONFIRMED_TX", txid: result.id }
   } catch (error) {
     return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
   }
 }
-
-export const REFUND_TESTNET_PASSPHRASE = Networks.TESTNET
