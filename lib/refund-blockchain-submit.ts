@@ -67,8 +67,8 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
       .build()
     transaction.sign(keypair)
     const result = await server.submitTransaction(transaction)
-    if (!result.successful || typeof result.id !== "string" || result.id.length === 0 || (result.hash !== undefined && result.hash !== result.id)) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
-    return { outcome: "CONFIRMED_TX", txid: result.id }
+    if (result.successful !== true || typeof result.hash !== "string" || result.hash.length === 0) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+    return { outcome: "CONFIRMED_TX", txid: result.hash }
   } catch (error) {
     return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
   }
