@@ -15,17 +15,26 @@ export type RefundPiReconciliationInput = {
 
 export type RefundPiPayment = {
   identifier: string
-  amount: number
-  direction: "app_to_user"
-  network: "Pi Testnet"
   user_uid: string
+  amount: number
+  memo: string
   metadata: {
     type: "refund"
     paymentId: string
     refundId: string
     idempotencyKey: string
   }
-  transaction: unknown | null
+  from_address: string
+  to_address: string
+  direction: "app_to_user"
+  created_at: string
+  network: "Pi Testnet"
+  status: {
+    developer_approved: boolean
+    transaction_verified: boolean
+    developer_completed: boolean
+  }
+  transaction: { txid: string; verified: boolean; _link: string } | null
 }
 
 export type RefundPiReconciliationResult = {
@@ -47,19 +56,25 @@ function exactMetadata(value: unknown, input: RefundPiReconciliationInput): Refu
 
 function validatePayment(value: unknown, input: RefundPiReconciliationInput): RefundPiPayment | null {
   if (!isRecord(value) || typeof value.identifier !== "string" || value.identifier.length === 0 ||
-    typeof value.amount !== "number" || !Number.isFinite(value.amount) || value.amount !== input.amount ||
-    value.direction !== "app_to_user" || value.network !== "Pi Testnet" || value.user_uid !== input.payerUid ||
-    !(value.transaction === null || isRecord(value.transaction))) return null
+    typeof value.user_uid !== "string" || typeof value.amount !== "number" || !Number.isFinite(value.amount) || value.amount !== input.amount ||
+    typeof value.memo !== "string" || typeof value.from_address !== "string" || typeof value.to_address !== "string" ||
+    typeof value.created_at !== "string" || value.direction !== "app_to_user" || value.network !== "Pi Testnet" || value.user_uid !== input.payerUid ||
+    !isRecord(value.status) || typeof value.status.developer_approved !== "boolean" || typeof value.status.transaction_verified !== "boolean" || typeof value.status.developer_completed !== "boolean") return null
   const metadata = exactMetadata(value.metadata, input)
   if (!metadata) return null
+  let transaction: RefundPiPayment["transaction"] = null
+  if (value.transaction !== null) {
+    if (!isRecord(value.transaction) || typeof value.transaction.txid !== "string" || typeof value.transaction.verified !== "boolean" || typeof value.transaction._link !== "string") return null
+    transaction = { txid: value.transaction.txid, verified: value.transaction.verified, _link: value.transaction._link }
+  }
   return {
-    identifier: value.identifier,
-    amount: value.amount,
-    direction: "app_to_user",
-    network: "Pi Testnet",
-    user_uid: input.payerUid,
-    metadata,
-    transaction: value.transaction,
+    identifier: value.identifier, user_uid: input.payerUid, amount: value.amount, memo: value.memo,
+    metadata, from_address: value.from_address, to_address: value.to_address, direction: "app_to_user",
+    created_at: value.created_at, network: "Pi Testnet", status: {
+      developer_approved: value.status.developer_approved,
+      transaction_verified: value.status.transaction_verified,
+      developer_completed: value.status.developer_completed,
+    }, transaction,
   }
 }
 
@@ -95,7 +110,7 @@ export async function reconcileRefundWithPi(input: RefundPiReconciliationInput):
 
   if (input.refundPaymentId) {
     const response = await getPi(`/${encodeURIComponent(input.refundPaymentId)}`)
-    if (response.kind !== "ok") return { outcome: "INDETERMINATE" }
+    if (response.kind !== "ok" || !isRecord(response.body) || response.body.identifier !== input.refundPaymentId) return { outcome: "INDETERMINATE" }
     const payment = validatePayment(response.body, input)
     return payment ? { outcome: "FOUND", payment } : { outcome: "INDETERMINATE" }
   }
