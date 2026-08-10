@@ -233,6 +233,14 @@ export async function beginRefundSubmissionAttempt(refundId: string, event: Refu
 
 export async function persistRefundPaymentIdWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
   if (!(await verifyRefundTables()) || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !refundPaymentId) return null
+  const currentResult = await query(`SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND stage='wallet_submission_started' AND status='pending' LIMIT 1`, [refundId, paymentId, idempotencyKey])
+  if (!Array.isArray(currentResult) || currentResult.length === 0) return null
+  const currentRow = currentResult[0]
+  if (typeof currentRow !== 'object' || currentRow === null || Array.isArray(currentRow)) return null
+  const current = normalizeCheckpoint(currentRow as Record<string, unknown>)
+  if (!current) return null
+  if (current.refundPaymentId === refundPaymentId) return current
+  if (current.refundPaymentId) return null
   const result = await query(`
     WITH updated AS (
       UPDATE refund_checkpoints SET refund_payment_id=$4, updated_at=NOW()

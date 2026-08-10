@@ -52,7 +52,18 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
     if (checkpoint.stage === 'intent_created') {
       const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'recovered_before_create' } }
       const attempt = await beginRefundSubmissionAttempt(refundId, event)
-      if (!attempt) return { outcome: 'blocked', reason: 'attempt_conflict' }
+      if (!attempt || !attempt.startedNow) {
+        const latest = await getRefundCheckpointAuthoritative(refundId)
+        if (!latest || latest.stage !== 'wallet_submission_started' || latest.status !== 'pending') return { outcome: 'blocked', reason: 'attempt_conflict' }
+        const recoveryPayment = paymentFromRedis(await redis.get(`payment:${latest.paymentId}`))
+        if (!recoveryPayment || latest.paymentId !== recoveryPayment.id || latest.payerUid !== recoveryPayment.payerUid || latest.amount !== recoveryPayment.customerAmount) return { outcome: 'blocked', reason: 'attempt_conflict' }
+        const recovery = await reconcileRefundWithPi({ paymentId: latest.paymentId, refundId, idempotencyKey: latest.idempotencyKey, payerUid: latest.payerUid, amount: latest.amount, refundPaymentId: latest.refundPaymentId })
+        if (recovery.outcome !== 'FOUND' || !recovery.payment) return { outcome: 'blocked', reason: 'attempt_conflict' }
+        checkpoint = latest
+        if (checkpoint.refundPaymentId && checkpoint.refundPaymentId !== recovery.payment.identifier) return { outcome: 'blocked', reason: 'refund_id_conflict' }
+        const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, recovery.payment.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: recovery.payment.identifier, recovered: true } })
+        return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: recovery.payment.identifier } : { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
+      }
       checkpoint = attempt.checkpoint
     }
     if (!checkpoint.refundPaymentId) {
