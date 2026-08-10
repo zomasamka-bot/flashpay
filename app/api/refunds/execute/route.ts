@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid refundId' }, { status: 400 })
     }
     const result = await executeRefundCreation(body.refundId)
-    return NextResponse.json(result, { status: result.outcome === 'ready_for_submission' ? 200 : 409 })
+    return NextResponse.json(result, { status: result.outcome === 'ready_for_submission' || result.outcome === 'found' ? 200 : 409 })
   } catch {
     return NextResponse.json({ outcome: 'blocked', reason: 'unavailable' }, { status: 503 })
   }

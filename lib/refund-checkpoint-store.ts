@@ -192,7 +192,7 @@ const STAGE_ORDER: RefundCheckpoint['stage'][] = [
   'wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded',
 ]
 
-export async function beginRefundSubmissionAttempt(refundId: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
+export async function beginRefundSubmissionAttempt(refundId: string, event: RefundAuditEvent): Promise<{ checkpoint: RefundCheckpoint; startedNow: boolean } | null> {
   if (!(await verifyRefundTables()) || event.refundId !== refundId) return null
   const existing = await query(`
     SELECT c.*, a.event_id AS submission_audit_id
@@ -210,7 +210,7 @@ export async function beginRefundSubmissionAttempt(refundId: string, event: Refu
     if (current && current.stage === 'wallet_submission_started' && current.status === 'pending' &&
       typeof record.submission_audit_id === 'string') {
       if (isRedisConfigured) await redis.set(redisKey(refundId), current)
-      return current
+      return { checkpoint: current, startedNow: false }
     }
   }
   const result = await query(`
@@ -226,8 +226,9 @@ export async function beginRefundSubmissionAttempt(refundId: string, event: Refu
   )
   if (!Array.isArray(result) || result.length === 0) return null
   const checkpoint = normalizeCheckpoint(result[0])
-  if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
-  return checkpoint
+  if (!checkpoint) return null
+  if (isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
+  return { checkpoint, startedNow: true }
 }
 
 export async function persistRefundPaymentIdWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {

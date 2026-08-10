@@ -53,13 +53,21 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
   if (checkpoint.stage !== 'intent_created') return { outcome: 'blocked', reason: 'invalid_stage' }
   if (checkpoint.stage === 'intent_created') {
     const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'refund_create' } }
-    checkpoint = await beginRefundSubmissionAttempt(refundId, event)
-    if (!checkpoint) return { outcome: 'blocked', reason: 'attempt_conflict' }
+    const attempt = await beginRefundSubmissionAttempt(refundId, event)
+    if (!attempt || !attempt.startedNow) return { outcome: 'blocked', reason: 'attempt_conflict' }
+    checkpoint = attempt.checkpoint
   }
-  const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': checkpoint.idempotencyKey }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
-  if (!response || !response.ok) return { outcome: 'blocked', reason: 'refund_create_uncertain' }
+  const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
+  const reconcileAfterUncertainty = async (): Promise<RefundExecutionResult> => {
+    const recovered = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
+    if (recovered.outcome !== 'FOUND' || !recovered.payment) return { outcome: 'blocked', reason: 'refund_create_uncertain' }
+    if (checkpoint.refundPaymentId && checkpoint.refundPaymentId !== recovered.payment.identifier) return { outcome: 'blocked', reason: 'refund_id_conflict' }
+    const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, recovered.payment.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: recovered.payment.identifier, recovered: true } })
+    return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: recovered.payment.identifier } : { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
+  }
+  if (!response || !response.ok) return reconcileAfterUncertainty()
   const body: unknown = await response.json().catch(() => null)
-  if (!isRecord(body) || typeof body.identifier !== 'string') return { outcome: 'blocked', reason: 'refund_create_uncertain' }
+  if (!isRecord(body) || typeof body.identifier !== 'string') return reconcileAfterUncertainty()
   const verified = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: body.identifier })
   if (verified.outcome !== 'FOUND' || !verified.payment || verified.payment.identifier !== body.identifier) return { outcome: 'blocked', reason: 'refund_create_uncertain' }
   const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, body.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: body.identifier } })
