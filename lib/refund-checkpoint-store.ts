@@ -230,6 +230,26 @@ export async function beginRefundSubmissionAttempt(refundId: string, event: Refu
   return checkpoint
 }
 
+export async function persistRefundPaymentIdWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables()) || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !refundPaymentId) return null
+  const result = await query(`
+    WITH updated AS (
+      UPDATE refund_checkpoints SET refund_payment_id=$4, updated_at=NOW()
+      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND stage='wallet_submission_started' AND status='pending'
+        AND (refund_payment_id IS NULL OR refund_payment_id=$4) RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $5, refund_id, payment_id, $6, $7, idempotency_key, $8, $9::jsonb FROM updated
+      RETURNING refund_id
+    ) SELECT updated.* FROM updated JOIN audited USING (refund_id)`,
+    [refundId, paymentId, idempotencyKey, refundPaymentId, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+  )
+  if (!Array.isArray(result) || result.length === 0) return null
+  const checkpoint = normalizeCheckpoint(result[0])
+  if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
+  return checkpoint
+}
+
 export async function transitionRefundCheckpointWithAudit(
   refundId: string,
   fromStage: RefundCheckpoint['stage'],
