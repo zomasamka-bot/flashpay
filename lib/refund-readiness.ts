@@ -1,7 +1,7 @@
 import "server-only"
 
 import { Keypair } from "@stellar/stellar-sdk"
-import { getRefundSchemaDiagnostics, verifyRefundTables } from "@/lib/refund-checkpoint-store"
+import { getRefundSchemaDiagnostics, verifyRefundAccountingSchema, verifyRefundTables } from "@/lib/refund-checkpoint-store"
 import { isRedisConfigured, redis } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 
@@ -17,6 +17,7 @@ export type RefundReadiness = {
     refund_schema: boolean
     refund_checkpoints: boolean
     refund_audit_events: boolean
+    refund_accounting_schema: boolean
     idx_refund_checkpoints_status_retry: boolean
     idx_refund_checkpoints_payment: boolean
     idx_refund_audit_payment_created: boolean
@@ -66,6 +67,7 @@ export async function getRefundReadiness(): Promise<RefundReadiness> {
     refund_schema: false,
     refund_checkpoints: false,
     refund_audit_events: false,
+    refund_accounting_schema: false,
     idx_refund_checkpoints_status_retry: false,
     idx_refund_checkpoints_payment: false,
     idx_refund_audit_payment_created: false,
@@ -86,6 +88,7 @@ export async function getRefundReadiness(): Promise<RefundReadiness> {
   const schema = await getRefundSchemaDiagnostics()
   Object.assign(checks, schema)
   checks.refund_schema = Object.values(schema).every(Boolean) && await verifyRefundTables()
+  checks.refund_accounting_schema = await verifyRefundAccountingSchema()
   checks.pi_server_api_read = await checkPiServerApi()
   checks.testnet_horizon_read = await checkHorizon(seed)
 
