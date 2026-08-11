@@ -9,6 +9,7 @@ import {
   persistRefundBlockchainTxWithAudit,
   advanceRefundPaymentCheckpointWithAudit,
   advanceRefundAccountingWithAudit,
+  advanceRefundAuditWithAudit,
 } from './refund-checkpoint-store'
 import { isRefundEligible, type Payment, type RefundAuditEvent, type RefundCheckpoint } from './types'
 import { reconcileRefundWithPi } from './refund-pi-reconciliation'
@@ -168,6 +169,22 @@ export async function executeRefundAccounting(refundId: string): Promise<RefundE
   if (!Number.isSafeInteger(fee) || fee < 0) return { outcome: 'blocked', reason: 'accounting_uncertain' }
   const advanced = await advanceRefundAccountingWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, refundTxid, checkpoint.payerUid, checkpoint.amount, fee, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_accounting_recorded', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid, horizonFeeStroops: fee } })
   return advanced ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId } : { outcome: 'blocked', reason: 'accounting_checkpoint_conflict' }
+}
+
+export async function executeRefundAudit(refundId: string): Promise<RefundExecutionResult> {
+  const initial = await getRefundCheckpointAuthoritative(refundId)
+  if (!initial || (initial.stage !== 'accounting_recorded' && initial.stage !== 'audit_recorded') || initial.status !== 'pending' || typeof initial.refundPaymentId !== 'string' || initial.refundPaymentId.length === 0 || typeof initial.refundTxid !== 'string' || initial.refundTxid.length === 0) return { outcome: 'blocked', reason: 'invalid_stage' }
+  if (!await ensurePaymentOperationLock(initial.paymentId, initial.refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+  const checkpoint = await getRefundCheckpointAuthoritative(refundId)
+  if (!checkpoint || checkpoint.paymentId !== initial.paymentId || checkpoint.idempotencyKey !== initial.idempotencyKey || checkpoint.payerUid !== initial.payerUid || checkpoint.amount !== initial.amount || checkpoint.refundPaymentId !== initial.refundPaymentId || checkpoint.refundTxid !== initial.refundTxid || (checkpoint.stage !== 'accounting_recorded' && checkpoint.stage !== 'audit_recorded') || checkpoint.status !== 'pending') return { outcome: 'blocked', reason: 'invalid_stage' }
+  const rows = await query(`SELECT refund_id,payment_id,refund_payment_id,refund_txid,payer_uid,currency,amount=$5::numeric AS exact_amount,horizon_fee_stroops::text AS fee_text FROM refund_accounting_records WHERE refund_id=$1 OR payment_id=$2 OR refund_payment_id=$3 OR refund_txid=$4`, [refundId, checkpoint.paymentId, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.amount])
+  if (!Array.isArray(rows) || rows.length !== 1) return { outcome: 'blocked', reason: 'audit_uncertain' }
+  const row = isRecord(rows[0]) ? rows[0] : null
+  if (!row || row.refund_id !== refundId || row.payment_id !== checkpoint.paymentId || row.refund_payment_id !== checkpoint.refundPaymentId || row.refund_txid !== checkpoint.refundTxid || row.payer_uid !== checkpoint.payerUid || row.currency !== 'π' || row.exact_amount !== true || typeof row.fee_text !== 'string' || !/^\\d+$/.test(row.fee_text)) return { outcome: 'blocked', reason: 'audit_uncertain' }
+  const fee = Number(row.fee_text)
+  if (!Number.isSafeInteger(fee) || fee < 0) return { outcome: 'blocked', reason: 'audit_uncertain' }
+  const sealed = await advanceRefundAuditWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount, fee, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_audit_recorded', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, horizonFeeStroops: fee } })
+  return sealed ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'audit_checkpoint_conflict' }
 }
 
 export async function executeRefundCompletion(refundId: string): Promise<RefundExecutionResult> {
