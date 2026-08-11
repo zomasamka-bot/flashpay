@@ -117,8 +117,8 @@ export async function verifyRefundAccountingSchema(): Promise<boolean> {
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='created_at' AND data_type='timestamp without time zone' AND is_nullable='NO') AS created_column,
         (SELECT expression='''π'''::text FROM defaults WHERE attname='currency') AS currency_default,
         (SELECT regexp_replace(lower(expression),'\\s+','','g') LIKE 'now()%' FROM defaults WHERE attname='created_at') AS created_default,
-        (SELECT count(*)=1 FROM checks WHERE normalized LIKE '%amount>0%') AS amount_check,
-        (SELECT count(*)=1 FROM checks WHERE normalized LIKE '%horizon_fee_stroops>=0%') AS fee_check
+        (SELECT count(*) FROM checks WHERE normalized='amount>0')=1 AS amount_check,
+        (SELECT count(*) FROM checks WHERE normalized='horizon_fee_stroops>=0')=1 AS fee_check
     `)
     const row = Array.isArray(result) && result.length===1 ? result[0] as Record<string, unknown> : null
     return Boolean(row?.table_exists && row.exact_pk && row.exact_fk && row.exact_uniques && row.constraint_set && row.text_columns && row.amount_column && row.fee_column && row.currency_column && row.created_column && row.currency_default && row.created_default && row.amount_check && row.fee_check)
