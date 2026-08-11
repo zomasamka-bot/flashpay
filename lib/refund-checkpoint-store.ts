@@ -101,12 +101,15 @@ export async function verifyRefundAccountingSchema(): Promise<boolean> {
       SELECT
         EXISTS (SELECT 1 FROM target) AS table_exists,
         (SELECT count(*)=1 FROM constraints WHERE contype='p' AND conkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=(SELECT oid FROM target) AND attname='refund_id')::smallint]) AS exact_pk,
-        (SELECT count(*)=1 FROM constraints con JOIN pg_constraint parent ON parent.oid=con.confrelid
+        (SELECT count(*) FROM constraints con
           WHERE con.contype='f' AND con.conkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=con.conrelid AND attname='refund_id')::smallint]
-          AND con.confkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=parent.conrelid AND attname='refund_id')::smallint]
-          AND con.confrelid='public.refund_checkpoints'::regclass AND con.confdeltype='r') AS exact_fk,
-        (SELECT count(*)=3 FROM key_columns WHERE contype='u' AND names IN (ARRAY['payment_id'], ARRAY['refund_payment_id'], ARRAY['refund_txid'])) AS exact_uniques,
-        (SELECT count(*)=1 FROM constraints WHERE contype='p')=1 AND (SELECT count(*)=1 FROM constraints WHERE contype='f')=1 AND (SELECT count(*)=3 FROM constraints WHERE contype='u')=3 AND (SELECT count(*)=2 FROM constraints WHERE contype='c')=2 AS constraint_set,
+          AND con.confkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=con.confrelid AND attname='refund_id')::smallint]
+          AND con.confrelid='public.refund_checkpoints'::regclass AND con.confdeltype='r')=1 AS exact_fk,
+        (SELECT count(*) FROM key_columns WHERE contype='u' AND names=ARRAY['payment_id'])=1 AND
+        (SELECT count(*) FROM key_columns WHERE contype='u' AND names=ARRAY['refund_payment_id'])=1 AND
+        (SELECT count(*) FROM key_columns WHERE contype='u' AND names=ARRAY['refund_txid'])=1 AS exact_uniques,
+        (SELECT count(*) FROM constraints WHERE contype='p')=1 AND (SELECT count(*) FROM constraints WHERE contype='f')=1 AND
+        (SELECT count(*) FROM constraints WHERE contype='u')=3 AND (SELECT count(*) FROM constraints WHERE contype='c')=2 AS constraint_set,
         (SELECT count(*)=5 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name IN ('refund_id','payment_id','refund_payment_id','refund_txid','payer_uid') AND data_type='text' AND is_nullable='NO') AS text_columns,
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='amount' AND data_type='numeric' AND is_nullable='NO' AND numeric_precision=18 AND numeric_scale=8) AS amount_column,
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='horizon_fee_stroops' AND data_type='bigint' AND is_nullable='NO') AS fee_column,
