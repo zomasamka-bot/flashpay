@@ -27,7 +27,7 @@ export async function recordRefundAccounting(refundId: string): Promise<Accounti
   const initial = await getRefundCheckpointAuthoritative(refundId)
   if (!initial || !await ensurePaymentOperationLock(initial.paymentId, refundId)) return { outcome: "INDETERMINATE" }
   const checkpoint = await getRefundCheckpointAuthoritative(refundId)
-  if (!checkpoint || checkpoint.stage !== "payment_checkpoint_updated" || checkpoint.status !== "pending" ||
+  if (!checkpoint || checkpoint.paymentId !== initial.paymentId || checkpoint.stage !== "payment_checkpoint_updated" || checkpoint.status !== "pending" ||
     typeof checkpoint.refundPaymentId !== "string" || checkpoint.refundPaymentId.length === 0 ||
     typeof checkpoint.refundTxid !== "string" || checkpoint.refundTxid.length === 0) return { outcome: "INDETERMINATE" }
   const payment = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
@@ -49,15 +49,17 @@ export async function recordRefundAccounting(refundId: string): Promise<Accounti
       RETURNING refund_id`, [fee.horizonFeeStroops, refundId, checkpoint.paymentId, checkpoint.refundPaymentId, checkpoint.refundTxid])
     if (Array.isArray(inserted) && inserted.length === 1) return { outcome: "RECORDED" }
     const rows = await query(`
-      SELECT * FROM refund_accounting_records
+      SELECT refund_id, payment_id, refund_payment_id, refund_txid, payer_uid, currency,
+        (amount = $5::numeric AND horizon_fee_stroops = $6::bigint) AS exact_numeric_match
+      FROM refund_accounting_records
       WHERE refund_id=$1 OR payment_id=$2 OR refund_payment_id=$3 OR refund_txid=$4`,
-      [refundId, checkpoint.paymentId, checkpoint.refundPaymentId, checkpoint.refundTxid])
+      [refundId, checkpoint.paymentId, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.amount, fee.horizonFeeStroops])
+    if (rows === null) return { outcome: "INDETERMINATE" }
     if (!Array.isArray(rows) || rows.length !== 1) return { outcome: "CONFLICT" }
     const row = record(rows[0])
     if (!row || row.refund_id !== refundId || row.payment_id !== checkpoint.paymentId ||
       row.refund_payment_id !== checkpoint.refundPaymentId || row.refund_txid !== checkpoint.refundTxid ||
-      row.payer_uid !== checkpoint.payerUid || row.amount !== checkpoint.amount ||
-      row.horizon_fee_stroops !== fee.horizonFeeStroops || row.currency !== "π") return { outcome: "CONFLICT" }
+      row.payer_uid !== checkpoint.payerUid || row.currency !== "π" || row.exact_numeric_match !== true) return { outcome: "CONFLICT" }
     return { outcome: "REPLAYED" }
   } catch {
     return { outcome: "INDETERMINATE" }
