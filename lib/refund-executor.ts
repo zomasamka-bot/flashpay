@@ -38,6 +38,23 @@ function guarded(checkpoint: RefundCheckpoint, payment: Payment): boolean {
   return !merchant && !refund && isRefundEligible(payment) && refundPreflight(checkpoint, payment, { paymentId: checkpoint.paymentId, payerUid: checkpoint.payerUid, amount: checkpoint.amount })
 }
 
+export async function executeRefundNextStep(refundId: string): Promise<RefundExecutionResult> {
+  const checkpoint = await getRefundCheckpointAuthoritative(refundId)
+  if (!checkpoint || checkpoint.status !== 'pending' && !(checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed')) return { outcome: 'blocked', reason: 'invalid_stage' }
+  const ids = ['wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded'].includes(checkpoint.stage)
+    ? typeof checkpoint.refundPaymentId === 'string' && checkpoint.refundPaymentId.length > 0 && typeof checkpoint.refundTxid === 'string' && checkpoint.refundTxid.length > 0
+    : true
+  if (!ids) return { outcome: 'blocked', reason: 'invalid_stage' }
+  if (checkpoint.stage === 'intent_created' && checkpoint.status === 'pending' && !checkpoint.refundPaymentId && !checkpoint.refundTxid) return executeRefundCreation(refundId)
+  if (checkpoint.stage === 'wallet_submission_started' && checkpoint.status === 'pending' && !checkpoint.refundTxid) return checkpoint.refundPaymentId ? executeRefundBlockchain(refundId) : executeRefundCreation(refundId)
+  if (checkpoint.stage === 'wallet_submission_confirmed' && checkpoint.status === 'pending') return executeRefundCompletion(refundId)
+  if (checkpoint.stage === 'payment_checkpoint_updated' && checkpoint.status === 'pending') return executeRefundAccounting(refundId)
+  if (checkpoint.stage === 'accounting_recorded' && checkpoint.status === 'pending') return executeRefundAudit(refundId)
+  if (checkpoint.stage === 'audit_recorded' && checkpoint.status === 'pending') return executeRefundCheckpointCompletion(refundId)
+  if (checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed') return executeRefundFinalProjection(refundId)
+  return { outcome: 'blocked', reason: 'invalid_stage' }
+}
+
 export async function executeRefundCreation(refundId: string): Promise<RefundExecutionResult> {
   if (!isRedisConfigured || !serverConfig.piApiKey) return { outcome: 'blocked', reason: 'unavailable' }
   let checkpoint = await getRefundCheckpointAuthoritative(refundId)
