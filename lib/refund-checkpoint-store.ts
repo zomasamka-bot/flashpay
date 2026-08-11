@@ -39,6 +39,23 @@ export type RefundSchemaDiagnostics = {
   idx_refund_audit_refund_created: boolean
 }
 
+export type RefundCheckpointReadOnly =
+  | { state: 'present'; checkpoint: RefundCheckpoint }
+  | { state: 'absent' }
+  | { state: 'uncertain' }
+
+export async function getRefundCheckpointReadOnly(refundId: string): Promise<RefundCheckpointReadOnly> {
+  if (typeof refundId !== 'string' || refundId.trim().length === 0) return { state: 'uncertain' }
+  try {
+    const rows = await query('SELECT * FROM refund_checkpoints WHERE refund_id=$1 LIMIT 2', [refundId])
+    if (!Array.isArray(rows)) return { state: 'uncertain' }
+    if (rows.length === 0) return { state: 'absent' }
+    if (rows.length !== 1 || typeof rows[0] !== 'object' || rows[0] === null || Array.isArray(rows[0])) return { state: 'uncertain' }
+    const checkpoint = normalizeCheckpoint(rows[0])
+    return checkpoint ? { state: 'present', checkpoint } : { state: 'uncertain' }
+  } catch { return { state: 'uncertain' } }
+}
+
 export async function getRefundSchemaDiagnostics(): Promise<RefundSchemaDiagnostics> {
   const names = [
     'refund_checkpoints', 'refund_audit_events', 'idx_refund_checkpoints_status_retry',
