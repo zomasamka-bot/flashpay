@@ -581,8 +581,8 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       return { ok: false, error: existing.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_reconciliation_indeterminate" }
     }
 
-    if (ctx.payment.status === "paid_to_app" && ctx.payment.merchantId === "hazemaboria" && ctx.payment.note === "__REFUND_TEST_A2U_FAIL_20260812__" && ctx.customerAmount === 0.1) {
-      return { ok:false, error:"Intentional Testnet A2U failure for refund validation", userFacingStatus:"error", retryable:false, errorCode:"refund_test_forced_a2u_failure" }
+    if (ctx.payment.status === "paid_to_app" && ctx.payment.merchantId === "hazemaboria" && ctx.payment.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.1) {
+      return { ok:false, error:"Intentional Testnet A2U failure for repeated refund validation", userFacingStatus:"error", retryable:false, errorCode:"refund_test_forced_hazem_01_a2u_failure" }
     }
 
     // Create A2U payment
