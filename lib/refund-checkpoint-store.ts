@@ -79,51 +79,47 @@ export async function verifyRefundAccountingSchema(): Promise<boolean> {
   try {
     const result = await query(`
       WITH target AS (
-        SELECT c.oid, c.relname, n.oid AS namespace_oid
-        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND c.relname = 'refund_accounting_records' AND c.relkind = 'r'
-      ), columns AS (
-        SELECT column_name, data_type, udt_name, is_nullable, numeric_precision, numeric_scale, column_default
-        FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'refund_accounting_records'
+        SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname='refund_accounting_records' AND c.relkind='r'
       ), constraints AS (
-        SELECT con.*, t.namespace_oid
-        FROM pg_constraint con JOIN target t ON t.oid = con.conrelid
-      ), uniques AS (
-        SELECT con.contype, array_agg(att.attname ORDER BY key.ordinality) AS columns
-        FROM constraints con
-        JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS key(attnum, ordinality) ON true
-        JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = key.attnum
-        WHERE con.contype = 'u'
+        SELECT con.*, pg_get_expr(con.conbin, con.conrelid) AS expression
+        FROM pg_constraint con JOIN target t ON t.oid=con.conrelid
+      ), key_columns AS (
+        SELECT con.oid, con.contype, array_agg(att.attname ORDER BY k.ordinality) AS names
+        FROM constraints con JOIN LATERAL unnest(con.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
+        JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attnum=k.attnum
         GROUP BY con.oid, con.contype
+      ), defaults AS (
+        SELECT a.attname, pg_get_expr(d.adbin, d.adrelid) AS expression
+        FROM pg_attribute a JOIN target t ON t.oid=a.attrelid
+        LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+        WHERE a.attnum>0 AND NOT a.attisdropped
+      ), checks AS (
+        SELECT regexp_replace(regexp_replace(lower(expression), '\\s+', '', 'g'), '[()]|::[a-z0-9_\\." ]+', '', 'g') AS normalized
+        FROM constraints WHERE contype='c'
       )
       SELECT
         EXISTS (SELECT 1 FROM target) AS table_exists,
-        EXISTS (SELECT 1 FROM constraints WHERE contype = 'p' AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = (SELECT oid FROM target) AND attname = 'refund_id')::smallint]) AS exact_pk,
-        EXISTS (
-          SELECT 1 FROM constraints con
-          JOIN pg_constraint parent ON parent.oid = con.confrelid
-          WHERE con.contype = 'f' AND con.conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=(SELECT oid FROM target) AND attname='refund_id')::smallint]
-            AND con.confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=parent.conrelid AND attname='refund_id')::smallint]
-            AND parent.conrelid = 'public.refund_checkpoints'::regclass AND con.confdeltype = 'r'
-        ) AS exact_fk,
-        (SELECT count(*) = 3 FROM uniques WHERE columns IN (ARRAY['payment_id'], ARRAY['refund_payment_id'], ARRAY['refund_txid'])) AS exact_uniques,
-        EXISTS (SELECT 1 FROM columns WHERE column_name='refund_id' AND data_type='text' AND is_nullable='NO') AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='payment_id' AND data_type='text' AND is_nullable='NO') AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='refund_payment_id' AND data_type='text' AND is_nullable='NO') AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='refund_txid' AND data_type='text' AND is_nullable='NO') AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='payer_uid' AND data_type='text' AND is_nullable='NO') AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='amount' AND data_type='numeric' AND is_nullable='NO' AND numeric_precision=18 AND numeric_scale=8) AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='horizon_fee_stroops' AND data_type='bigint' AND is_nullable='NO') AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='currency' AND data_type='text' AND is_nullable='NO' AND lower(column_default) IN ('''π'''::text, '''π'''::character varying)) AND
-        EXISTS (SELECT 1 FROM columns WHERE column_name='created_at' AND data_type='timestamp without time zone' AND is_nullable='NO' AND lower(column_default) LIKE 'now()%') AS exact_columns,
-        (SELECT count(*) = 2 FROM constraints WHERE contype='c' AND pg_get_constraintdef(oid, true) IN ('CHECK ((amount > (0)::numeric))', 'CHECK ((horizon_fee_stroops >= 0))')) AS exact_checks
+        (SELECT count(*)=1 FROM constraints WHERE contype='p' AND conkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=(SELECT oid FROM target) AND attname='refund_id')::smallint]) AS exact_pk,
+        (SELECT count(*)=1 FROM constraints con JOIN pg_constraint parent ON parent.oid=con.confrelid
+          WHERE con.contype='f' AND con.conkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=con.conrelid AND attname='refund_id')::smallint]
+          AND con.confkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=parent.conrelid AND attname='refund_id')::smallint]
+          AND con.confrelid='public.refund_checkpoints'::regclass AND con.confdeltype='r') AS exact_fk,
+        (SELECT count(*)=3 FROM key_columns WHERE contype='u' AND names IN (ARRAY['payment_id'], ARRAY['refund_payment_id'], ARRAY['refund_txid'])) AS exact_uniques,
+        (SELECT count(*)=1 FROM constraints WHERE contype='p')=1 AND (SELECT count(*)=1 FROM constraints WHERE contype='f')=1 AND (SELECT count(*)=3 FROM constraints WHERE contype='u')=3 AND (SELECT count(*)=2 FROM constraints WHERE contype='c')=2 AS constraint_set,
+        (SELECT count(*)=5 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name IN ('refund_id','payment_id','refund_payment_id','refund_txid','payer_uid') AND data_type='text' AND is_nullable='NO') AS text_columns,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='amount' AND data_type='numeric' AND is_nullable='NO' AND numeric_precision=18 AND numeric_scale=8) AS amount_column,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='horizon_fee_stroops' AND data_type='bigint' AND is_nullable='NO') AS fee_column,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='currency' AND data_type='text' AND is_nullable='NO') AS currency_column,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='created_at' AND data_type='timestamp without time zone' AND is_nullable='NO') AS created_column,
+        (SELECT expression='''π'''::text FROM defaults WHERE attname='currency') AS currency_default,
+        (SELECT regexp_replace(lower(expression),'\\s+','','g') LIKE 'now()%' FROM defaults WHERE attname='created_at') AS created_default,
+        (SELECT count(*)=1 FROM checks WHERE normalized LIKE '%amount>0%') AS amount_check,
+        (SELECT count(*)=1 FROM checks WHERE normalized LIKE '%horizon_fee_stroops>=0%') AS fee_check
     `)
-    const row = Array.isArray(result) && result.length === 1 ? result[0] as Record<string, unknown> : null
-    return Boolean(row?.table_exists && row.exact_pk && row.exact_fk && row.exact_uniques && row.exact_columns && row.exact_checks)
-  } catch {
-    return false
-  }
+    const row = Array.isArray(result) && result.length===1 ? result[0] as Record<string, unknown> : null
+    return Boolean(row?.table_exists && row.exact_pk && row.exact_fk && row.exact_uniques && row.constraint_set && row.text_columns && row.amount_column && row.fee_column && row.currency_column && row.created_column && row.currency_default && row.created_default && row.amount_check && row.fee_check)
+  } catch { return false }
 }
 
 export async function verifyRefundTables(): Promise<boolean> {
