@@ -472,6 +472,56 @@ export async function advanceRefundPaymentCheckpointWithAudit(refundId: string, 
   return checkpoint ?? null
 }
 
+export async function advanceRefundAccountingWithAudit(
+  refundId: string,
+  paymentId: string,
+  idempotencyKey: string,
+  refundPaymentId: string,
+  refundTxid: string,
+  payerUid: string,
+  amount: number,
+  horizonFeeStroops: number,
+  event: RefundAuditEvent,
+): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables()) || !(await verifyRefundAccountingSchema()) || !event.eventId || event.eventType !== 'refund_accounting_recorded' || event.actorType !== 'system' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || typeof horizonFeeStroops !== 'number' || !Number.isSafeInteger(horizonFeeStroops) || horizonFeeStroops < 0 || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details)) return null
+  const details = event.details as Record<string, unknown>
+  if (Object.keys(details).length !== 3 || details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.horizonFeeStroops !== horizonFeeStroops) return null
+  const result = await query(`
+    WITH matching AS (
+      SELECT c.refund_id FROM refund_checkpoints c
+      JOIN refund_accounting_records a ON a.refund_id=c.refund_id
+      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.refund_payment_id=$3 AND c.refund_txid=$4
+        AND c.payer_uid=$5 AND c.amount=$6::numeric AND c.stage='payment_checkpoint_updated' AND c.status='pending'
+        AND a.payment_id=c.payment_id AND a.refund_payment_id=c.refund_payment_id AND a.refund_txid=c.refund_txid
+        AND a.payer_uid=c.payer_uid AND a.amount=c.amount AND a.horizon_fee_stroops=$7::bigint AND a.currency='π'
+    ), transitioned AS (
+      UPDATE refund_checkpoints SET stage='accounting_recorded', updated_at=NOW()
+      WHERE refund_id IN (SELECT refund_id FROM matching) RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $8, refund_id, payment_id, $9, $10, idempotency_key, $11, $12::jsonb FROM transitioned RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
+    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+  )
+  if (Array.isArray(result) && result.length > 0) return normalizeCheckpoint(result[0])
+  const replay = await query(`
+    SELECT c.*, a.event_id AS audit_event_id, a.event_type AS audit_event_type, a.actor_type AS audit_actor_type, a.details AS audit_details
+    FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
+    JOIN refund_audit_events a ON a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_type='refund_accounting_recorded'
+    WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.refund_payment_id=$3 AND c.refund_txid=$4 AND c.payer_uid=$5 AND c.amount=$6::numeric
+      AND c.stage='accounting_recorded' AND c.status='pending' AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid AND r.amount=c.amount AND r.horizon_fee_stroops=$7::bigint AND r.currency='π' LIMIT 2`,
+    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops],
+  )
+  if (!Array.isArray(replay) || replay.length !== 1) return null
+  const row = replay[0]
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return null
+  const record = row as Record<string, unknown>
+  if (typeof record.audit_event_id !== 'string' || record.audit_event_id.length === 0 || record.audit_event_type !== 'refund_accounting_recorded' || record.audit_actor_type !== 'system' || typeof record.audit_details !== 'object' || record.audit_details === null || Array.isArray(record.audit_details)) return null
+  const auditDetails = record.audit_details as Record<string, unknown>
+  if (Object.keys(auditDetails).length !== 3 || auditDetails.refundPaymentId !== refundPaymentId || auditDetails.refundTxid !== refundTxid || auditDetails.horizonFeeStroops !== horizonFeeStroops) return null
+  return normalizeCheckpoint(record)
+}
+
 export async function transitionRefundCheckpointWithAudit(
   refundId: string,
   fromStage: RefundCheckpoint['stage'],

@@ -315,6 +315,7 @@ export interface RefundAuditEvent {
     | "refund_blockchain_submission_started"
     | "refund_submission_confirmed"
     | "refund_payment_checkpoint_updated"
+    | "refund_accounting_recorded"
     | "refund_rejected"
     | "refund_completed"
     | "refund_manual_review"
