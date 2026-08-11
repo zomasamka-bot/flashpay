@@ -490,7 +490,7 @@ export async function advanceRefundAccountingWithAudit(
     WITH matching AS (
       SELECT c.refund_id FROM refund_checkpoints c
       JOIN refund_accounting_records a ON a.refund_id=c.refund_id
-      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.refund_payment_id=$3 AND c.refund_txid=$4
+      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$8 AND c.refund_payment_id=$3 AND c.refund_txid=$4
         AND c.payer_uid=$5 AND c.amount=$6::numeric AND c.stage='payment_checkpoint_updated' AND c.status='pending'
         AND a.payment_id=c.payment_id AND a.refund_payment_id=c.refund_payment_id AND a.refund_txid=c.refund_txid
         AND a.payer_uid=c.payer_uid AND a.amount=c.amount AND a.horizon_fee_stroops=$7::bigint AND a.currency='π'
@@ -503,14 +503,15 @@ export async function advanceRefundAccountingWithAudit(
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
     [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
   )
-  if (Array.isArray(result) && result.length > 0) return normalizeCheckpoint(result[0])
+  if (Array.isArray(result) && result.length > 1) return null
+  if (Array.isArray(result) && result.length === 1) return normalizeCheckpoint(result[0])
   const replay = await query(`
     SELECT c.*, a.event_id AS audit_event_id, a.event_type AS audit_event_type, a.actor_type AS audit_actor_type, a.details AS audit_details
     FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
     JOIN refund_audit_events a ON a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_type='refund_accounting_recorded'
-    WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.refund_payment_id=$3 AND c.refund_txid=$4 AND c.payer_uid=$5 AND c.amount=$6::numeric
+    WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$8 AND c.refund_payment_id=$3 AND c.refund_txid=$4 AND c.payer_uid=$5 AND c.amount=$6::numeric
       AND c.stage='accounting_recorded' AND c.status='pending' AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid AND r.amount=c.amount AND r.horizon_fee_stroops=$7::bigint AND r.currency='π' LIMIT 2`,
-    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops],
+    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, idempotencyKey],
   )
   if (!Array.isArray(replay) || replay.length !== 1) return null
   const row = replay[0]
