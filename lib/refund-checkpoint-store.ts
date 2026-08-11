@@ -490,7 +490,7 @@ export async function advanceRefundAccountingWithAudit(
     WITH matching AS (
       SELECT c.refund_id FROM refund_checkpoints c
       JOIN refund_accounting_records a ON a.refund_id=c.refund_id
-      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$8 AND c.refund_payment_id=$3 AND c.refund_txid=$4
+      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$13 AND c.refund_payment_id=$3 AND c.refund_txid=$4
         AND c.payer_uid=$5 AND c.amount=$6::numeric AND c.stage='payment_checkpoint_updated' AND c.status='pending'
         AND a.payment_id=c.payment_id AND a.refund_payment_id=c.refund_payment_id AND a.refund_txid=c.refund_txid
         AND a.payer_uid=c.payer_uid AND a.amount=c.amount AND a.horizon_fee_stroops=$7::bigint AND a.currency='π'
@@ -501,7 +501,7 @@ export async function advanceRefundAccountingWithAudit(
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $8, refund_id, payment_id, $9, $10, idempotency_key, $11, $12::jsonb FROM transitioned RETURNING refund_id
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
-    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details), idempotencyKey],
   )
   if (Array.isArray(result) && result.length > 1) return null
   if (Array.isArray(result) && result.length === 1) return normalizeCheckpoint(result[0])
