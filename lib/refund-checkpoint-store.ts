@@ -523,6 +523,51 @@ export async function advanceRefundAccountingWithAudit(
   return normalizeCheckpoint(record)
 }
 
+export async function advanceRefundAuditWithAudit(
+  refundId: string,
+  paymentId: string,
+  idempotencyKey: string,
+  refundPaymentId: string,
+  refundTxid: string,
+  payerUid: string,
+  amount: number,
+  horizonFeeStroops: number,
+  event: RefundAuditEvent,
+): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables()) || !(await verifyRefundAccountingSchema()) || !event.eventId || event.eventType !== 'refund_audit_recorded' || event.actorType !== 'system' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || typeof horizonFeeStroops !== 'number' || !Number.isSafeInteger(horizonFeeStroops) || horizonFeeStroops < 0 || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details)) return null
+  const details = event.details as Record<string, unknown>
+  if (Object.keys(details).length !== 3 || details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.horizonFeeStroops !== horizonFeeStroops) return null
+  const params = [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)]
+  const result = await query(`
+    WITH eligible AS (
+      SELECT c.refund_id FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
+      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3 AND c.refund_payment_id=$4 AND c.refund_txid=$5
+        AND c.payer_uid=$6 AND c.amount=$7::numeric AND c.stage='accounting_recorded' AND c.status='pending'
+        AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid AND r.amount=c.amount AND r.horizon_fee_stroops=$8::bigint AND r.currency='π'
+        AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.event_type='refund_submission_confirmed' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5)=1
+        AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.event_type='refund_payment_checkpoint_updated' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5)=1
+        AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.event_type='refund_accounting_recorded' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=$8::text)=1
+    ), transitioned AS (
+      UPDATE refund_checkpoints SET stage='audit_recorded', updated_at=NOW() WHERE refund_id IN (SELECT refund_id FROM eligible) RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $9, refund_id, payment_id, $10, $11, idempotency_key, $12, $13::jsonb FROM transitioned RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`, params)
+  if (Array.isArray(result) && result.length > 1) return null
+  if (Array.isArray(result) && result.length === 1) return normalizeCheckpoint(result[0])
+  const replay = await query(`
+    SELECT c.* FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
+    WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3 AND c.refund_payment_id=$4 AND c.refund_txid=$5 AND c.payer_uid=$6 AND c.amount=$7::numeric AND c.stage='audit_recorded' AND c.status='pending'
+      AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid AND r.amount=c.amount AND r.horizon_fee_stroops=$8::bigint AND r.currency='π'
+      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.event_type='refund_submission_confirmed' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5)=1
+      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.event_type='refund_payment_checkpoint_updated' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5)=1
+      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.event_type='refund_accounting_recorded' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=$8::text)=1
+      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.event_type='refund_audit_recorded' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=$8::text)=1 LIMIT 2`, params)
+  if (!Array.isArray(replay) || replay.length !== 1) return null
+  const checkpoint = normalizeCheckpoint(replay[0])
+  return checkpoint ?? null
+}
+
 export async function transitionRefundCheckpointWithAudit(
   refundId: string,
   fromStage: RefundCheckpoint['stage'],
