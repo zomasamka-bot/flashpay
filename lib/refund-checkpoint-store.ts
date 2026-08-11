@@ -74,6 +74,50 @@ export async function getRefundSchemaDiagnostics(): Promise<RefundSchemaDiagnost
   return diagnostics
 }
 
+export async function verifyRefundAccountingSchema(): Promise<boolean> {
+  if (!process.env.DATABASE_URL) return false
+  try {
+    const result = await query(`
+      SELECT to_regclass('public.refund_accounting_records') AS records,
+        EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname='public' AND t.relname='refund_accounting_records'
+            AND c.contype='p' AND c.conname IS NOT NULL
+        ) AS has_primary_key,
+        EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname='public' AND t.relname='refund_accounting_records'
+            AND c.contype='u'
+            AND pg_get_constraintdef(c.oid) LIKE '%payment_id%'
+        ) AS has_payment_unique,
+        EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname='public' AND t.relname='refund_accounting_records'
+            AND c.contype='u'
+            AND pg_get_constraintdef(c.oid) LIKE '%refund_payment_id%'
+        ) AS has_refund_payment_unique,
+        EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname='public' AND t.relname='refund_accounting_records'
+            AND c.contype='u'
+            AND pg_get_constraintdef(c.oid) LIKE '%refund_txid%'
+        ) AS has_refund_tx_unique
+    `)
+    const row = Array.isArray(result) && result.length === 1 ? result[0] as Record<string, unknown> : null
+    return Boolean(row?.records && row.has_primary_key && row.has_payment_unique && row.has_refund_payment_unique && row.has_refund_tx_unique)
+  } catch {
+    return false
+  }
+}
+
 export async function verifyRefundTables(): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
   try {

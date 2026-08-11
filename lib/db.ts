@@ -369,6 +369,20 @@ export async function initializeSchema() {
     `)
 
     await query(`
+      CREATE TABLE IF NOT EXISTS refund_accounting_records (
+        refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
+        payment_id TEXT NOT NULL UNIQUE,
+        refund_payment_id TEXT NOT NULL UNIQUE,
+        refund_txid TEXT NOT NULL UNIQUE,
+        payer_uid TEXT NOT NULL,
+        amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
+        horizon_fee_stroops BIGINT NOT NULL CHECK (horizon_fee_stroops >= 0),
+        currency TEXT NOT NULL DEFAULT 'π',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `)
+
+    await query(`
       CREATE TABLE IF NOT EXISTS refund_audit_events (
         event_id TEXT PRIMARY KEY,
         refund_id TEXT NOT NULL REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
