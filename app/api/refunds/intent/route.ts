@@ -5,6 +5,7 @@ import type { Payment, RefundCheckpoint, RefundAuditEvent } from '@/lib/types'
 import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
 import { serverConfig } from '@/lib/server-config'
+import { getRefundReadiness } from '@/lib/refund-readiness'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -75,6 +76,11 @@ export async function POST(request: NextRequest) {
         { error: 'Missing or invalid idempotencyKey' },
         { status: 400, headers: corsHeaders }
       )
+    }
+
+    const readiness = await getRefundReadiness()
+    if (readiness.ready !== true) {
+      return NextResponse.json({ error: 'Refund system unavailable' }, { status: 503, headers: corsHeaders })
     }
 
     // Redis is the canonical payment source in this application.
