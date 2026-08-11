@@ -166,9 +166,7 @@ export async function executeRefundAccounting(refundId: string): Promise<RefundE
   if (!row || row.refund_id !== refundId || row.payment_id !== checkpoint.paymentId || row.refund_payment_id !== refundPaymentId || row.refund_txid !== refundTxid || row.payer_uid !== checkpoint.payerUid || row.currency !== 'π' || row.exact_amount !== true || typeof row.fee_text !== 'string' || !/^\\d+$/.test(row.fee_text)) return { outcome: 'blocked', reason: 'accounting_uncertain' }
   const fee = Number(row.fee_text)
   if (!Number.isSafeInteger(fee) || fee < 0) return { outcome: 'blocked', reason: 'accounting_uncertain' }
-  if (checkpoint.stage === 'accounting_recorded') return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId }
   const advanced = await advanceRefundAccountingWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, refundTxid, checkpoint.payerUid, checkpoint.amount, fee, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_accounting_recorded', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid, horizonFeeStroops: fee } })
-  if (checkpoint.stage === 'accounting_recorded' && !advanced) return { outcome: 'blocked', reason: 'accounting_checkpoint_conflict' }
   return advanced ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId } : { outcome: 'blocked', reason: 'accounting_checkpoint_conflict' }
 }
 
