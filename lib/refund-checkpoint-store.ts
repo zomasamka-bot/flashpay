@@ -377,7 +377,9 @@ export async function persistRefundBlockchainTxWithAudit(
 }
 
 export async function advanceRefundPaymentCheckpointWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, refundTxid: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
-  if (!(await verifyRefundTables()) || !event.eventId || event.eventType !== 'refund_payment_checkpoint_updated' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !refundPaymentId || !refundTxid) return null
+  if (!(await verifyRefundTables()) || !event.eventId || event.eventType !== 'refund_payment_checkpoint_updated' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !refundPaymentId || !refundTxid || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details)) return null
+  const eventDetails = event.details as Record<string, unknown>
+  if (Object.keys(eventDetails).length !== 2 || eventDetails.refundPaymentId !== refundPaymentId || eventDetails.refundTxid !== refundTxid) return null
   const result = await query(`
     WITH transitioned AS (
       UPDATE refund_checkpoints SET stage='payment_checkpoint_updated', updated_at=NOW()
@@ -390,9 +392,32 @@ export async function advanceRefundPaymentCheckpointWithAudit(refundId: string, 
     [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
   )
   if (Array.isArray(result) && result.length > 0) return normalizeCheckpoint(result[0])
-  const replay = await query(`SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4 AND refund_txid=$5 AND stage='payment_checkpoint_updated' AND status='pending' LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
+  const replay = await query(`
+    SELECT c.*, a.event_id AS audit_event_id, a.event_type AS audit_event_type,
+      a.refund_id AS audit_refund_id, a.payment_id AS audit_payment_id,
+      a.idempotency_key AS audit_idempotency_key, a.actor_type AS audit_actor_type,
+      a.details AS audit_details
+    FROM refund_checkpoints c
+    JOIN refund_audit_events a
+      ON a.refund_id=c.refund_id AND a.payment_id=c.payment_id
+      AND a.idempotency_key=c.idempotency_key
+      AND a.event_type='refund_payment_checkpoint_updated'
+    WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3
+      AND c.refund_payment_id=$4 AND c.refund_txid=$5
+      AND c.stage='payment_checkpoint_updated' AND c.status='pending'
+    LIMIT 2`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
   if (!Array.isArray(replay) || replay.length !== 1) return null
-  const checkpoint = normalizeCheckpoint(replay[0])
+  const record = replay[0]
+  if (typeof record !== 'object' || record === null || Array.isArray(record)) return null
+  const replayRecord = record as Record<string, unknown>
+  if (typeof replayRecord.audit_event_id !== 'string' || replayRecord.audit_event_id.length === 0 ||
+    replayRecord.audit_event_type !== 'refund_payment_checkpoint_updated' ||
+    replayRecord.audit_refund_id !== refundId || replayRecord.audit_payment_id !== paymentId ||
+    replayRecord.audit_idempotency_key !== idempotencyKey || replayRecord.audit_actor_type !== event.actorType) return null
+  if (typeof replayRecord.audit_details !== 'object' || replayRecord.audit_details === null || Array.isArray(replayRecord.audit_details)) return null
+  const replayDetails = replayRecord.audit_details as Record<string, unknown>
+  if (Object.keys(replayDetails).length !== 2 || replayDetails.refundPaymentId !== refundPaymentId || replayDetails.refundTxid !== refundTxid) return null
+  const checkpoint = normalizeCheckpoint(replayRecord)
   return checkpoint ?? null
 }
 
