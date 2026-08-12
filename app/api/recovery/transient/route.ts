@@ -3,6 +3,8 @@ import { type NextRequest, NextResponse } from "next/server"
 
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
+import { ensureAutomaticRefundIntent } from "@/lib/refund-auto-orchestrator"
+import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -96,6 +98,7 @@ export async function POST(request: NextRequest) {
   const keys = await redis.keys("payment:*")
   const postHorizonIds: string[] = []
   const retryableIds: string[] = []
+  const refundCandidateIds: string[] = []
   const now = Date.now()
 
   for (const key of keys) {
@@ -103,6 +106,9 @@ export async function POST(request: NextRequest) {
     if (!payment) continue
 
     const paymentId = key.slice("payment:".length)
+    if (payment.id === paymentId && checkRefundEligibility(payment)) {
+      refundCandidateIds.push(paymentId)
+    }
     if (isPostHorizonEligible(payment, now)) {
       postHorizonIds.push(paymentId)
     } else if (isEligible(payment, now)) {
@@ -135,5 +141,10 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ processed: results.length, results })
+  const refundResults = []
+  for (const paymentId of refundCandidateIds.slice(0, MAX_ATTEMPTS)) {
+    refundResults.push(await ensureAutomaticRefundIntent(paymentId))
+  }
+
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults } })
 }
