@@ -44,6 +44,33 @@ export type RefundCheckpointReadOnly =
   | { state: 'absent' }
   | { state: 'uncertain' }
 
+const STAGE_ORDER = ['intent_created', 'wallet_submission_started', 'wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded'] as const
+
+export type AutomaticRefundCheckpointResult =
+  | { state: 'ok'; checkpoints: RefundCheckpoint[] }
+  | { state: 'uncertain' }
+
+export async function listAutomaticRefundCheckpoints(limit: number): Promise<AutomaticRefundCheckpointResult> {
+  if (!Number.isInteger(limit) || limit <= 0) return { state: 'uncertain' }
+  try {
+    const rows = await query(`
+      SELECT * FROM refund_checkpoints
+      WHERE (status='pending' OR (stage='audit_recorded' AND status='completed'))
+        AND (next_retry_at IS NULL OR next_retry_at<=NOW())
+      ORDER BY updated_at ASC, refund_id ASC
+      LIMIT $1`, [Math.min(limit, 20)])
+    if (!Array.isArray(rows)) return { state: 'uncertain' }
+    const checkpoints: RefundCheckpoint[] = []
+    for (const row of rows) {
+      if (typeof row !== 'object' || row === null || Array.isArray(row)) return { state: 'uncertain' }
+      const checkpoint = normalizeCheckpoint(row)
+      if (!checkpoint || (checkpoint.status === 'pending' && !STAGE_ORDER.includes(checkpoint.stage as typeof STAGE_ORDER[number])) || !(checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed') || !Number.isSafeInteger(checkpoint.attemptCount) || checkpoint.attemptCount < 0) return { state: 'uncertain' }
+      checkpoints.push(checkpoint)
+    }
+    return { state: 'ok', checkpoints }
+  } catch { return { state: 'uncertain' } }
+}
+
 export async function getRefundCheckpointReadOnly(refundId: string): Promise<RefundCheckpointReadOnly> {
   if (typeof refundId !== 'string' || refundId.trim().length === 0) return { state: 'uncertain' }
   try {
