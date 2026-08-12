@@ -44,7 +44,7 @@ export type RefundCheckpointReadOnly =
   | { state: 'absent' }
   | { state: 'uncertain' }
 
-const STAGE_ORDER = ['intent_created', 'wallet_submission_started', 'wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded'] as const
+const STAGE_ORDER: RefundCheckpoint['stage'][] = ['eligibility_verified', 'intent_created', 'wallet_submission_started', 'wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded']
 
 export type AutomaticRefundCheckpointResult =
   | { state: 'ok'; checkpoints: RefundCheckpoint[] }
@@ -64,7 +64,9 @@ export async function listAutomaticRefundCheckpoints(limit: number): Promise<Aut
     for (const row of rows) {
       if (typeof row !== 'object' || row === null || Array.isArray(row)) return { state: 'uncertain' }
       const checkpoint = normalizeCheckpoint(row)
-      if (!checkpoint || (checkpoint.status === 'pending' && !STAGE_ORDER.includes(checkpoint.stage as typeof STAGE_ORDER[number])) || !(checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed') || !Number.isSafeInteger(checkpoint.attemptCount) || checkpoint.attemptCount < 0) return { state: 'uncertain' }
+      if (!checkpoint) return { state: 'uncertain' }
+      const validLifecycle = (checkpoint.status === 'pending' && STAGE_ORDER.includes(checkpoint.stage)) || (checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed')
+      if (!validLifecycle || !Number.isSafeInteger(checkpoint.attemptCount) || checkpoint.attemptCount < 0) return { state: 'uncertain' }
       checkpoints.push(checkpoint)
     }
     return { state: 'ok', checkpoints }
