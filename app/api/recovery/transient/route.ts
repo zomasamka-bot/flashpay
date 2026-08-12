@@ -141,11 +141,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS)
+  let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
+  try {
+    refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS)
+  } catch {
+    refundPass = { state: "blocked" }
+  }
 
   const refundResults = []
   for (const paymentId of refundCandidateIds.slice(0, MAX_ATTEMPTS)) {
-    refundResults.push(await ensureAutomaticRefundIntent(paymentId))
+    try {
+      refundResults.push(await ensureAutomaticRefundIntent(paymentId))
+    } catch {
+      refundResults.push({ outcome: "blocked", paymentId, reason: "intake_exception" })
+    }
   }
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass })
