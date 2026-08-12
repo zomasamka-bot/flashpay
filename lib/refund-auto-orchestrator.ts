@@ -12,7 +12,7 @@ import type { RefundCheckpoint } from "@/lib/types"
 
 export type AutomaticRefundPassResult =
   | { state: "blocked" }
-  | { state: "ok"; processed: number }
+  | { state: "ok"; processed: number; results: Array<{ refundId: string; paymentId: string; action: "intent" | "execute"; outcome: "success" | "deferred" | "blocked"; reason?: string }> }
 
 const SHORT_RETRY_REASONS = new Set([
   "unavailable",
@@ -21,6 +21,8 @@ const SHORT_RETRY_REASONS = new Set([
   "blockchain_claim_conflict",
   "submit_failed",
   "completion_unverified",
+  "intent_409",
+  "intent_503",
 ])
 
 function isIntentSuccess(result: unknown): boolean {
@@ -48,11 +50,11 @@ function retryDelayMs(reason: string, thrown: boolean): number {
   return 15 * 60_000
 }
 
-async function deferAfterFailure(checkpoint: RefundCheckpoint, reason: string, thrown: boolean): Promise<void> {
+async function deferAfterFailure(checkpoint: RefundCheckpoint, reason: string, thrown: boolean): Promise<boolean> {
   const current = await getRefundCheckpointReadOnly(checkpoint.refundId)
-  if (current.state !== "present") return
+  if (current.state !== "present") return false
   const delay = retryDelayMs(reason, thrown)
-  await deferAutomaticRefund(
+  const deferred = await deferAutomaticRefund(
     current.checkpoint.refundId,
     current.checkpoint.stage,
     current.checkpoint.status,
@@ -60,6 +62,7 @@ async function deferAfterFailure(checkpoint: RefundCheckpoint, reason: string, t
     reason,
     new Date(Date.now() + delay).toISOString(),
   )
+  return deferred !== null
 }
 
 export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRefundPassResult> {
@@ -68,6 +71,7 @@ export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRe
   if (queued.state !== "ok") return { state: "blocked" }
 
   let processed = 0
+  const results: Array<{ refundId: string; paymentId: string; action: "intent" | "execute"; outcome: "success" | "deferred" | "blocked"; reason?: string }> = []
   for (const checkpoint of queued.checkpoints) {
     let successful = false
     let reason = "uncertain"
@@ -87,12 +91,16 @@ export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRe
       reason = error instanceof Error && error.message ? error.message : "automatic refund exception"
     }
 
+    const action = checkpoint.stage === "eligibility_verified" && checkpoint.status === "pending" ? "intent" : "execute"
     if (successful) {
       await clearAutomaticRefundDeferral(checkpoint.refundId)
+      results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "success" })
     } else {
-      await deferAfterFailure(checkpoint, reason, thrown)
+      const deferred = await deferAfterFailure(checkpoint, reason, thrown)
+      results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: deferred ? "deferred" : "blocked", ...(deferred ? {} : { reason }) })
     }
     processed += 1
   }
-  return { state: "ok", processed }
+  if (processed !== results.length) return { state: "blocked" }
+  return { state: "ok", processed, results }
 }
