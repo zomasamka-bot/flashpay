@@ -10,6 +10,22 @@ import { getRefundReadiness } from '@/lib/refund-readiness'
 export type RefundIntentInternalResult = { status: number; body: unknown }
 
 export async function createRefundIntentInternal(paymentId: string, idempotencyKey: string): Promise<RefundIntentInternalResult> {
+  if (typeof paymentId !== 'string' || paymentId.length === 0) return { status: 400, body: { error: 'Missing or invalid paymentId' } }
+  if (typeof idempotencyKey !== 'string' || idempotencyKey.length === 0) return { status: 400, body: { error: 'Missing or invalid idempotencyKey' } }
+
+  const existingBeforeReadiness = await getRefundCheckpointByIdempotency(idempotencyKey)
+  if (existingBeforeReadiness) {
+    if (existingBeforeReadiness.paymentId !== paymentId) return { status: 409, body: { error: 'Idempotency key is bound to different refund inputs' } }
+    if (existingBeforeReadiness.stage === 'eligibility_verified' && existingBeforeReadiness.status === 'pending') {
+      const transitioned = await transitionRefundCheckpointWithAudit(existingBeforeReadiness.refundId, 'eligibility_verified', 'intent_created', 'pending', { eventId: randomUUID(), refundId: existingBeforeReadiness.refundId, paymentId, eventType: 'refund_requested', actorType: 'system', idempotencyKey, createdAt: new Date().toISOString(), details: { resumed: true } })
+      if (transitioned) return { status: 200, body: { success: true, refund: transitioned } }
+      const reread = await getRefundCheckpointByIdempotency(idempotencyKey)
+      if (reread && reread.paymentId === paymentId && reread.stage !== 'eligibility_verified') return { status: 200, body: { success: true, refund: reread } }
+      return { status: 409, body: { error: 'Refund intent transition conflict' } }
+    }
+    return { status: 200, body: { success: true, refund: existingBeforeReadiness } }
+  }
+
   const readiness = await getRefundReadiness()
   if (readiness.ready !== true) return { status: 503, body: { error: 'Refund system unavailable' } }
 
@@ -53,10 +69,12 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
   const existing = await getRefundCheckpointByIdempotency(idempotencyKey)
   if (existing) {
     if (existing.paymentId !== payment.id || existing.payerUid !== payment.payerUid || existing.amount !== payment.customerAmount) return { status: 409, body: { error: 'Idempotency key is bound to different refund inputs' } }
-    if (existing.stage === 'eligibility_verified') {
+    if (existing.stage === 'eligibility_verified' && existing.status === 'pending') {
       const transitioned = await transitionRefundCheckpointWithAudit(existing.refundId, 'eligibility_verified', 'intent_created', 'pending', { eventId: randomUUID(), refundId: existing.refundId, paymentId: existing.paymentId, eventType: 'refund_requested', actorType: 'system', idempotencyKey, createdAt: new Date().toISOString(), details: { resumed: true } })
-      if (!transitioned) return { status: 409, body: { error: 'Refund intent transition conflict' } }
-      return { status: 200, body: { success: true, refund: transitioned } }
+      if (transitioned) return { status: 200, body: { success: true, refund: transitioned } }
+      const reread = await getRefundCheckpointByIdempotency(idempotencyKey)
+      if (reread && reread.paymentId === payment.id && reread.stage !== 'eligibility_verified') return { status: 200, body: { success: true, refund: reread } }
+      return { status: 409, body: { error: 'Refund intent transition conflict' } }
     }
     return { status: 200, body: { success: true, refund: existing } }
   }
