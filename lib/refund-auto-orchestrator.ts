@@ -70,7 +70,7 @@ export type AutomaticRefundIntentResult =
   | { outcome: "created" | "existing" | "blocked"; paymentId: string; refundId?: string; reason?: string }
 
 export async function ensureAutomaticRefundIntent(paymentId: string): Promise<AutomaticRefundIntentResult> {
-  if (typeof paymentId !== "string" || paymentId.length === 0) return { outcome: "blocked", paymentId, reason: "invalid_payment_id" }
+  if (typeof paymentId !== "string" || paymentId.trim().length === 0) return { outcome: "blocked", paymentId, reason: "invalid_payment_id" }
   const first = await findRefundCheckpointByPaymentId(paymentId)
   if (first.state === "uncertain") return { outcome: "blocked", paymentId, reason: "checkpoint_uncertain" }
   if (first.state === "present") return { outcome: "existing", paymentId, refundId: first.checkpoint.refundId }
