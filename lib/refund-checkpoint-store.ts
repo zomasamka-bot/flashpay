@@ -85,6 +85,44 @@ export async function getRefundCheckpointReadOnly(refundId: string): Promise<Ref
   } catch { return { state: 'uncertain' } }
 }
 
+export async function deferAutomaticRefund(
+  refundId: string,
+  expectedStage: RefundCheckpoint['stage'],
+  expectedStatus: RefundCheckpoint['status'],
+  errorCode: string,
+  errorMessage: string,
+  nextRetryAt: string,
+): Promise<RefundCheckpoint | null> {
+  if (typeof refundId !== 'string' || refundId.length === 0 || typeof expectedStage !== 'string' || expectedStage.length === 0 || typeof expectedStatus !== 'string' || expectedStatus.length === 0 || typeof errorCode !== 'string' || errorCode.length === 0 || typeof errorMessage !== 'string' || errorMessage.length === 0 || typeof nextRetryAt !== 'string' || nextRetryAt.length === 0 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(nextRetryAt)) return null
+  const retryAt = new Date(nextRetryAt)
+  if (Number.isNaN(retryAt.getTime()) || retryAt.getTime() <= Date.now()) return null
+  try {
+    const rows = await query(`
+      UPDATE refund_checkpoints
+      SET last_error_code=$3, last_error_message=$4, next_retry_at=$5::timestamptz, updated_at=NOW()
+      WHERE refund_id=$1 AND stage=$2 AND status=$6
+        AND (next_retry_at IS NULL OR next_retry_at<=NOW())
+      RETURNING *`, [refundId, expectedStage, errorCode, errorMessage, nextRetryAt, expectedStatus])
+    if (!Array.isArray(rows) || rows.length !== 1) return null
+    const checkpoint = normalizeCheckpoint(rows[0])
+    return checkpoint && checkpoint.refundId === refundId && checkpoint.stage === expectedStage && checkpoint.status === expectedStatus ? checkpoint : null
+  } catch { return null }
+}
+
+export async function clearAutomaticRefundDeferral(refundId: string): Promise<RefundCheckpoint | null> {
+  if (typeof refundId !== 'string' || refundId.length === 0) return null
+  try {
+    const rows = await query(`
+      UPDATE refund_checkpoints
+      SET last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, updated_at=NOW()
+      WHERE refund_id=$1 AND (next_retry_at IS NULL OR next_retry_at<=NOW())
+      RETURNING *`, [refundId])
+    if (!Array.isArray(rows) || rows.length !== 1) return null
+    const checkpoint = normalizeCheckpoint(rows[0])
+    return checkpoint && checkpoint.refundId === refundId ? checkpoint : null
+  } catch { return null }
+}
+
 export async function getRefundSchemaDiagnostics(): Promise<RefundSchemaDiagnostics> {
   const names = [
     'refund_checkpoints', 'refund_audit_events', 'idx_refund_checkpoints_status_retry',
