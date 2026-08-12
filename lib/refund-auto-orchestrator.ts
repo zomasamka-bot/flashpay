@@ -97,7 +97,7 @@ export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRe
       results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "success" })
     } else {
       const deferred = await deferAfterFailure(checkpoint, reason, thrown)
-      results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: deferred ? "deferred" : "blocked", ...(deferred ? {} : { reason }) })
+      results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: deferred ? "deferred" : "blocked", reason })
     }
     processed += 1
   }
