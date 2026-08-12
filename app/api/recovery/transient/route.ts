@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from "next/server"
 
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
-import { ensureAutomaticRefundIntent } from "@/lib/refund-auto-orchestrator"
+import { ensureAutomaticRefundIntent, runAutomaticRefundPass } from "@/lib/refund-auto-orchestrator"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import type { Payment } from "@/lib/types"
 
@@ -141,10 +141,12 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS)
+
   const refundResults = []
   for (const paymentId of refundCandidateIds.slice(0, MAX_ATTEMPTS)) {
     refundResults.push(await ensureAutomaticRefundIntent(paymentId))
   }
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults } })
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass })
 }
