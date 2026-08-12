@@ -284,11 +284,6 @@ export async function getRefundCheckpointByIdempotency(idempotencyKey: string): 
   return normalizeCheckpoint(result[0])
 }
 
-const STAGE_ORDER: RefundCheckpoint['stage'][] = [
-  'eligibility_verified', 'intent_created', 'wallet_submission_started',
-  'wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded',
-]
-
 export async function beginRefundSubmissionAttempt(refundId: string, event: RefundAuditEvent): Promise<{ checkpoint: RefundCheckpoint; startedNow: boolean } | null> {
   if (!(await verifyRefundTables()) || event.refundId !== refundId) return null
   const existing = await query(`
