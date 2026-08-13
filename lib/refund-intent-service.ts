@@ -27,7 +27,7 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
   }
 
   const readiness = await getRefundReadiness()
-  if (readiness.ready !== true) return { status: 503, body: { error: 'Refund system unavailable' } }
+  if (readiness.ready !== true) { console.warn("[refunds/intent] Readiness blocked:", readiness.checks); return { status: 503, body: { error: 'Refund system unavailable' } } }
 
   const stored = await redis.get(`payment:${paymentId}`)
   if (!stored) return { status: 404, body: { error: 'Payment not found' } }
