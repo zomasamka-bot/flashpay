@@ -205,6 +205,7 @@ export async function verifyRefundAccountingSchema(): Promise<boolean> {
         (SELECT count(*) FROM checks WHERE normalized='horizon_fee_stroops>=0')=1 AS fee_check
     `)
     const row = Array.isArray(result) && result.length===1 ? result[0] as Record<string, unknown> : null
+    console.warn("[refunds/accounting-schema] Checks:", row)
     return Boolean(row?.table_exists && row.exact_pk && row.exact_fk && row.exact_uniques && row.constraint_set && row.text_columns && row.amount_column && row.fee_column && row.currency_column && row.created_column && row.currency_default && row.created_default && row.amount_check && row.fee_check)
   } catch { return false }
 }
