@@ -169,7 +169,7 @@ export async function verifyRefundAccountingSchema(): Promise<boolean> {
         SELECT con.*, pg_get_expr(con.conbin, con.conrelid) AS expression
         FROM pg_constraint con JOIN target t ON t.oid=con.conrelid
       ), key_columns AS (
-        SELECT con.oid, con.contype, array_agg(att.attname ORDER BY k.ordinality) AS names
+        SELECT con.oid, con.contype, array_agg(att.attname::text ORDER BY k.ordinality) AS names
         FROM constraints con JOIN LATERAL unnest(con.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
         JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attnum=k.attnum
         GROUP BY con.oid, con.contype
