@@ -199,7 +199,7 @@ export async function verifyRefundAccountingSchema(): Promise<boolean> {
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='horizon_fee_stroops' AND data_type='bigint' AND is_nullable='NO') AS fee_column,
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='currency' AND data_type='text' AND is_nullable='NO') AS currency_column,
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='refund_accounting_records' AND column_name='created_at' AND data_type='timestamp without time zone' AND is_nullable='NO') AS created_column,
-        (SELECT expression='''π'''::text FROM defaults WHERE attname='currency') AS currency_default,
+        (SELECT regexp_replace(expression, '::text$', '') = '''π''' FROM defaults WHERE attname='currency') AS currency_default,
         (SELECT regexp_replace(lower(expression),'\\s+','','g') LIKE 'now()%' FROM defaults WHERE attname='created_at') AS created_default,
         (SELECT count(*) FROM checks WHERE normalized='amount>0')=1 AS amount_check,
         (SELECT count(*) FROM checks WHERE normalized='horizon_fee_stroops>=0')=1 AS fee_check
