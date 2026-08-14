@@ -101,8 +101,8 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
     }
     return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: reconciliation.payment.identifier }
   }
-  if (checkpoint.stage === 'wallet_submission_started') return { outcome: 'blocked', reason: 'submission_outcome_uncertain' }
-  if (checkpoint.stage !== 'intent_created') return { outcome: 'blocked', reason: 'invalid_stage' }
+  if (checkpoint.stage === 'wallet_submission_started' && (checkpoint.refundPaymentId || checkpoint.refundTxid)) return { outcome: 'blocked', reason: 'submission_outcome_uncertain' }
+  if (checkpoint.stage !== 'wallet_submission_started' && checkpoint.stage !== 'intent_created') return { outcome: 'blocked', reason: 'invalid_stage' }
   if (checkpoint.stage === 'intent_created') {
     const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'refund_create' } }
     const attempt = await beginRefundSubmissionAttempt(refundId, event)
