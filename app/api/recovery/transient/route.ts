@@ -4,6 +4,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { ensureAutomaticRefundIntent, runAutomaticRefundPass } from "@/lib/refund-auto-orchestrator"
+import { ensureRefundAccountingTable } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import type { Payment } from "@/lib/types"
 
@@ -141,20 +142,25 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const refundAccountingReady = await ensureRefundAccountingTable()
   let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
-  try {
-    refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS)
-  } catch {
-    refundPass = { state: "blocked" }
-  }
-
   const refundResults = []
-  for (const paymentId of refundCandidateIds.slice(0, MAX_ATTEMPTS)) {
+  if (refundAccountingReady) {
     try {
-      refundResults.push(await ensureAutomaticRefundIntent(paymentId))
+      refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS)
     } catch {
-      refundResults.push({ outcome: "blocked", paymentId, reason: "intake_exception" })
+      refundPass = { state: "blocked" }
     }
+
+    for (const paymentId of refundCandidateIds.slice(0, MAX_ATTEMPTS)) {
+      try {
+        refundResults.push(await ensureAutomaticRefundIntent(paymentId))
+      } catch {
+        refundResults.push({ outcome: "blocked", paymentId, reason: "intake_exception" })
+      }
+    }
+  } else {
+    refundPass = { state: "blocked" }
   }
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass })
