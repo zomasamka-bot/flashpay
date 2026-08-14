@@ -125,6 +125,24 @@ export async function query(text: string, values?: unknown[]) {
 /**
  * Initialize database schema on first run
  */
+export async function ensureRefundAccountingTable(): Promise<boolean> {
+  if (!process.env.DATABASE_URL) return false
+  const result = await query(`
+      CREATE TABLE IF NOT EXISTS refund_accounting_records (
+        refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
+        payment_id TEXT NOT NULL UNIQUE,
+        refund_payment_id TEXT NOT NULL UNIQUE,
+        refund_txid TEXT NOT NULL UNIQUE,
+        payer_uid TEXT NOT NULL,
+        amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
+        horizon_fee_stroops BIGINT NOT NULL CHECK (horizon_fee_stroops >= 0),
+        currency TEXT NOT NULL DEFAULT 'π',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `)
+  return result !== null
+}
+
 export async function initializeSchema() {
   if (!process.env.DATABASE_URL) {
     console.log('[DB] PostgreSQL not configured, skipping schema initialization')
@@ -368,19 +386,7 @@ export async function initializeSchema() {
       )
     `)
 
-    await query(`
-      CREATE TABLE IF NOT EXISTS refund_accounting_records (
-        refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
-        payment_id TEXT NOT NULL UNIQUE,
-        refund_payment_id TEXT NOT NULL UNIQUE,
-        refund_txid TEXT NOT NULL UNIQUE,
-        payer_uid TEXT NOT NULL,
-        amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
-        horizon_fee_stroops BIGINT NOT NULL CHECK (horizon_fee_stroops >= 0),
-        currency TEXT NOT NULL DEFAULT 'π',
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )
-    `)
+    await ensureRefundAccountingTable()
 
     await query(`
       CREATE TABLE IF NOT EXISTS refund_audit_events (
