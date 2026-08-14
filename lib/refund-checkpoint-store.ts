@@ -97,7 +97,7 @@ export async function deferAutomaticRefund(
   const retryAt = new Date(nextRetryAt)
   if (Number.isNaN(retryAt.getTime()) || retryAt.getTime() <= Date.now()) return null
   try {
-    console.warn('[refunds/auto-deferral] Write:', { refundId, status: expectedStatus, stage: expectedStage, errorCode, executorStep: expectedStage })
+    console.warn('[refunds/auto-deferral] Write:', { refundId, status: expectedStatus, stage: expectedStage, errorCode, reason: errorMessage, executorStep: expectedStage })
     const rows = await query(`
       UPDATE refund_checkpoints
       SET last_error_code=$3, last_error_message=$4, next_retry_at=$5::timestamptz, updated_at=NOW()
