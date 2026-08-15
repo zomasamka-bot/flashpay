@@ -648,16 +648,28 @@ export async function advanceRefundAuditWithAudit(
   console.warn('[refunds/audit-advance] Event diagnostics:', Object.fromEntries(eventDiagnosticRows.map(event => [event.event_type, { paymentIdMatch: event.paymentIdMatch, idempotencyKeyMatch: event.idempotencyKeyMatch, eventIdNonEmpty: event.eventIdNonEmpty, actorSystem: event.actorSystem, refundPaymentIdMatch: event.refundPaymentIdMatch, refundTxidMatch: event.refundTxidMatch, ...(event.event_type === 'refund_accounting_recorded' ? { feeMatch: event.feeMatch } : {}) }])))
   const detailsDiagnostics = await query(`SELECT event_type, jsonb_typeof(details) AS details_type, CASE WHEN jsonb_typeof(details)='object' THEN ARRAY(SELECT key FROM jsonb_object_keys(details) key ORDER BY key) ELSE ARRAY[]::text[] END AS detail_keys FROM refund_audit_events WHERE refund_id=$1 AND event_type IN ('refund_submission_confirmed','refund_payment_checkpoint_updated','refund_accounting_recorded')`, [refundId])
   console.warn('[refunds/audit-advance] Details diagnostics:', Array.isArray(detailsDiagnostics) ? detailsDiagnostics : [])
+  let legacyCount = 0
+  let submissionConfirmed = false
+  let paymentCheckpointUpdated = false
+  let accountingRecorded = false
+  let legacyMatches = true
   const legacyDetailsRows = await query(`SELECT event_type, details FROM refund_audit_events WHERE refund_id=$1 AND event_type IN ('refund_submission_confirmed','refund_payment_checkpoint_updated','refund_accounting_recorded')`, [refundId])
   if (Array.isArray(legacyDetailsRows)) for (const row of legacyDetailsRows) {
-    if (row === null || typeof row !== 'object' || Array.isArray(row) || !('event_type' in row) || !('details' in row) || typeof row.event_type !== 'string' || typeof row.details !== 'string') continue
+    if (row === null || typeof row !== 'object' || Array.isArray(row) || !('event_type' in row) || !('details' in row) || typeof row.event_type !== 'string' || typeof row.details !== 'string') { legacyMatches = false; continue }
     try {
       const parsed: unknown = JSON.parse(row.details)
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        console.warn('[refunds/audit-advance] Legacy details:', { eventType: row.event_type, parsedObject: true, refundPaymentIdMatch: 'refundPaymentId' in parsed && parsed.refundPaymentId === refundPaymentId, refundTxidMatch: 'refundTxid' in parsed && parsed.refundTxid === refundTxid, ...(row.event_type === 'refund_accounting_recorded' ? { horizonFeeStroopsMatch: 'horizonFeeStroops' in parsed && String(parsed.horizonFeeStroops) === String(horizonFeeStroops) } : {}) })
-      } else console.warn('[refunds/audit-advance] Legacy details:', { eventType: row.event_type, parsedObject: false, refundPaymentIdMatch: false, refundTxidMatch: false, ...(row.event_type === 'refund_accounting_recorded' ? { horizonFeeStroopsMatch: false } : {}) })
-    } catch { console.warn('[refunds/audit-advance] Legacy details:', { eventType: row.event_type, parsedObject: false, refundPaymentIdMatch: false, refundTxidMatch: false, ...(row.event_type === 'refund_accounting_recorded' ? { horizonFeeStroopsMatch: false } : {}) }) }
+      const parsedObject = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      const paymentIdMatch = parsedObject && 'refundPaymentId' in parsed && parsed.refundPaymentId === refundPaymentId
+      const refundTxidMatch = parsedObject && 'refundTxid' in parsed && parsed.refundTxid === refundTxid
+      const feeMatch = row.event_type === 'refund_accounting_recorded' && parsedObject && 'horizonFeeStroops' in parsed && String(parsed.horizonFeeStroops) === String(horizonFeeStroops)
+      legacyCount += 1
+      if (row.event_type === 'refund_submission_confirmed') submissionConfirmed = !submissionConfirmed
+      if (row.event_type === 'refund_payment_checkpoint_updated') paymentCheckpointUpdated = !paymentCheckpointUpdated
+      if (row.event_type === 'refund_accounting_recorded') accountingRecorded = !accountingRecorded
+      if (!parsedObject || !paymentIdMatch || !refundTxidMatch || (row.event_type === 'refund_accounting_recorded' && !feeMatch)) legacyMatches = false
+    } catch { legacyMatches = false }
   }
+  if (legacyCount === 3 && submissionConfirmed && paymentCheckpointUpdated && accountingRecorded && legacyMatches) await query(`WITH candidate AS (SELECT ctid, event_type, details FROM refund_audit_events WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND actor_type='system' AND event_id<>'' AND jsonb_typeof(details)='string' AND event_type IN ('refund_submission_confirmed','refund_payment_checkpoint_updated','refund_accounting_recorded')), eligible AS (SELECT count(*)=3 AND count(*) FILTER (WHERE event_type='refund_submission_confirmed')=1 AND count(*) FILTER (WHERE event_type='refund_payment_checkpoint_updated')=1 AND count(*) FILTER (WHERE event_type='refund_accounting_recorded')=1 AS ok FROM candidate) UPDATE refund_audit_events a SET details=(c.details #>> '{}')::jsonb FROM candidate c CROSS JOIN eligible e WHERE e.ok AND a.ctid=c.ctid`, [refundId, paymentId, idempotencyKey])
   const replay = await query(`
     SELECT c.* FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
     WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3 AND c.refund_payment_id=$4 AND c.refund_txid=$5 AND c.payer_uid=$6 AND c.amount=$7::numeric AND c.stage='audit_recorded' AND c.status='pending'
