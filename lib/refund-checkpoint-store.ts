@@ -354,7 +354,7 @@ export async function beginRefundSubmissionAttempt(refundId: string, event: Refu
       SELECT $4, refund_id, payment_id, 'refund_submission_started', $5, idempotency_key, $6, $7::jsonb FROM transitioned
       RETURNING refund_id
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
-    [refundId, event.paymentId, event.idempotencyKey, event.eventId, event.actorType, event.createdAt, JSON.stringify(event.details)],
+    [refundId, event.paymentId, event.idempotencyKey, event.eventId, event.actorType, event.createdAt, event.details],
   )
   if (!Array.isArray(result) || result.length === 0) return null
   const checkpoint = normalizeCheckpoint(result[0])
@@ -439,7 +439,7 @@ export async function persistRefundPaymentIdWithAudit(refundId: string, paymentI
       SELECT $5, refund_id, payment_id, $6, $7, idempotency_key, $8, $9::jsonb FROM updated
       RETURNING refund_id
     ) SELECT updated.* FROM updated JOIN audited USING (refund_id)`,
-    [refundId, paymentId, idempotencyKey, refundPaymentId, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+    [refundId, paymentId, idempotencyKey, refundPaymentId, event.eventId, event.eventType, event.actorType, event.createdAt, event.details],
   )
   if (Array.isArray(result) && result.length > 0) {
     const checkpoint = normalizeCheckpoint(result[0])
@@ -473,7 +473,7 @@ export async function persistRefundBlockchainTxWithAudit(
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $6, refund_id, payment_id, $7, $8, idempotency_key, $9, $10::jsonb FROM transitioned RETURNING refund_id
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
-    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, event.details],
   )
   if (Array.isArray(result) && result.length > 0) {
     const checkpoint = normalizeCheckpoint(result[0])
@@ -521,7 +521,7 @@ export async function advanceRefundPaymentCheckpointWithAudit(refundId: string, 
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $6, refund_id, payment_id, $7, $8, idempotency_key, $9, $10::jsonb FROM transitioned RETURNING refund_id
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
-    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)],
+    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, event.details],
   )
   if (Array.isArray(result) && result.length > 0) return normalizeCheckpoint(result[0])
   const replay = await query(`
@@ -618,7 +618,7 @@ export async function advanceRefundAuditWithAudit(
   if (!(await verifyRefundTables()) || !(await verifyRefundAccountingSchema()) || !event.eventId || event.eventType !== 'refund_audit_recorded' || event.actorType !== 'system' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || typeof horizonFeeStroops !== 'number' || !Number.isSafeInteger(horizonFeeStroops) || horizonFeeStroops < 0 || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details)) return null
   const details = event.details as Record<string, unknown>
   if (Object.keys(details).length !== 3 || details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.horizonFeeStroops !== horizonFeeStroops) return null
-  const params = [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)]
+  const params = [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, event.details]
   const result = await query(`
     WITH eligible AS (
       SELECT c.refund_id FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
@@ -679,7 +679,7 @@ export async function completeRefundCheckpointWithAudit(
   if (!(await verifyRefundTables()) || !(await verifyRefundAccountingSchema()) || !event.eventId || event.eventType !== 'refund_completed' || event.actorType !== 'system' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !Number.isSafeInteger(horizonFeeStroops) || horizonFeeStroops < 0 || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details)) return null
   const details = event.details as Record<string, unknown>
   if (Object.keys(details).length !== 3 || details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.horizonFeeStroops !== horizonFeeStroops) return null
-  const params = [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details)]
+  const params = [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, event.details]
   const auditIdentity = `(a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.actor_type='system' AND a.event_id <> '' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5)`
   const result = await query(`
     WITH eligible AS (
@@ -751,7 +751,7 @@ export async function transitionRefundCheckpointWithAudit(
     [refundId, toStage, status, patch.refundPaymentId ?? null, patch.refundTxid ?? null,
       patch.lastErrorCode ?? null, patch.lastErrorMessage ?? null, patch.nextRetryAt ?? null,
       event.paymentId, event.idempotencyKey, fromStage, event.eventId, event.eventType,
-      event.actorType, event.createdAt, JSON.stringify(event.details)],
+      event.actorType, event.createdAt, event.details],
   )
   if (!Array.isArray(result) || result.length === 0) return null
   const checkpoint = normalizeCheckpoint(result[0])
@@ -849,7 +849,7 @@ export async function appendRefundAuditEvent(event: RefundAuditEvent): Promise<b
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
      ON CONFLICT (event_id) DO NOTHING
      RETURNING event_id`,
-    [event.eventId, event.refundId, event.paymentId, event.eventType, event.actorType, event.idempotencyKey, event.createdAt, JSON.stringify(event.details)],
+    [event.eventId, event.refundId, event.paymentId, event.eventType, event.actorType, event.idempotencyKey, event.createdAt, event.details],
   )
   return Array.isArray(result) && result.length > 0
 }
