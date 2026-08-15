@@ -272,7 +272,6 @@ export async function executeRefundCompletion(refundId: string): Promise<RefundE
   if (reconciliation.outcome !== 'FOUND' || !reconciliation.payment || reconciliation.payment.identifier !== refundPaymentId || reconciliation.payment.status.cancelled || reconciliation.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'pi_evidence_uncertain' }
   const blockchainEvidence = await verifyRefundBlockchainEvidence({ checkpoint, payment: reconciliation.payment })
   if (blockchainEvidence.outcome !== 'VERIFIED_TX' || blockchainEvidence.txid !== refundTxid) return { outcome: 'blocked', reason: 'blockchain_evidence_uncertain' }
-  if (reconciliation.payment.transaction === null || reconciliation.payment.transaction.txid !== refundTxid || !reconciliation.payment.transaction.verified || !reconciliation.payment.status.transaction_verified) return { outcome: 'blocked', reason: 'pi_evidence_uncertain' }
   const needsCompletion = reconciliation.payment.status.developer_completed !== true
   if (needsCompletion) {
     const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(refundPaymentId)}/complete`, { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ txid: refundTxid }) }).catch(() => null)

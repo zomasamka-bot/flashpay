@@ -45,22 +45,23 @@ function parseStroops(value: unknown): number | null {
 
 export async function verifyRefundBlockchainEvidence(input: Input): Promise<RefundBlockchainEvidenceResult> {
   const { checkpoint, payment } = input
-  if (checkpoint.stage !== "wallet_submission_started" || checkpoint.status !== "pending" ||
-    !checkpoint.refundPaymentId || checkpoint.refundPaymentId !== payment.identifier || checkpoint.paymentId !== payment.metadata.paymentId ||
+  if ((checkpoint.stage !== "wallet_submission_started" && checkpoint.stage !== "wallet_submission_confirmed") || checkpoint.status !== "pending" ||
+    !checkpoint.refundPaymentId || !checkpoint.refundTxid || checkpoint.refundPaymentId !== payment.identifier || checkpoint.paymentId !== payment.metadata.paymentId ||
     checkpoint.payerUid !== payment.user_uid || checkpoint.amount !== payment.amount || stroops(checkpoint.amount) === null || stroops(payment.amount) === null ||
     payment.network !== "Pi Testnet" || payment.direction !== "app_to_user" ||
     payment.status.cancelled || payment.status.user_cancelled) return { outcome: "INDETERMINATE" }
 
   const transaction = payment.transaction
-  if (transaction === null || typeof transaction.txid !== "string" || transaction.txid.length === 0) return { outcome: "NO_TX" }
+  if (transaction !== null && (typeof transaction.txid !== "string" || transaction.txid.length === 0 || transaction.txid !== checkpoint.refundTxid)) return { outcome: "INDETERMINATE" }
+  const txid = checkpoint.refundTxid
 
-  const txResult = await getJson(`/transactions/${encodeURIComponent(transaction.txid)}`)
-  const operationsResult = await getJson(`/transactions/${encodeURIComponent(transaction.txid)}/operations`)
+  const txResult = await getJson(`/transactions/${encodeURIComponent(txid)}`)
+  const operationsResult = await getJson(`/transactions/${encodeURIComponent(txid)}/operations`)
   if (!txResult.ok || !operationsResult.ok || !isRecord(txResult.body) || !isRecord(operationsResult.body)) return { outcome: "INDETERMINATE" }
 
   const tx = txResult.body
-  if (tx.successful !== true || typeof tx.hash !== "string" || tx.hash !== transaction.txid ||
-    typeof tx.id !== "string" || tx.id !== transaction.txid || tx.source_account !== payment.from_address ||
+  if (tx.successful !== true || typeof tx.hash !== "string" || tx.hash !== txid ||
+    typeof tx.id !== "string" || tx.id !== txid || tx.source_account !== payment.from_address ||
     tx.memo !== payment.identifier) return { outcome: "INDETERMINATE" }
 
   const records = operationsResult.body._embedded
@@ -75,5 +76,5 @@ export async function verifyRefundBlockchainEvidence(input: Input): Promise<Refu
   if (checkpointStroops === null || paymentStroops === null || operationStroops === null ||
     checkpointStroops !== paymentStroops || paymentStroops !== operationStroops) return { outcome: "INDETERMINATE" }
 
-  return { outcome: "VERIFIED_TX", txid: transaction.txid }
+  return { outcome: "VERIFIED_TX", txid }
 }
