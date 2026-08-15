@@ -651,7 +651,7 @@ export async function advanceRefundAuditWithAudit(
       AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_accounting_recorded')=1
       AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_accounting_recorded' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=$8::text)=1
       AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_audit_recorded')=1
-      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_audit_recorded' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=$8::text)=1 LIMIT 2`, params)
+      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_audit_recorded' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=$8::text)=1 LIMIT 2`, params.slice(0, 8))
   if (!Array.isArray(replay) || replay.length !== 1) return null
   const checkpoint = normalizeCheckpoint(replay[0])
   return checkpoint ?? null
@@ -709,7 +709,7 @@ export async function completeRefundCheckpointWithAudit(
       AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_audit_recorded')=1
       AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_audit_recorded' AND ${auditIdentity} AND a.details->>'horizonFeeStroops'=$8::text)=1
       AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed')=1
-      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed' AND ${auditIdentity} AND a.details->>'horizonFeeStroops'=$8::text)=1 LIMIT 2`, params)
+      AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed' AND ${auditIdentity} AND a.details->>'horizonFeeStroops'=$8::text)=1 LIMIT 2`, params.slice(0, 8))
   if (!Array.isArray(replay) || replay.length !== 1) return null
   return normalizeCheckpoint(replay[0]) ?? null
 }
