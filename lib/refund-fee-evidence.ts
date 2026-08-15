@@ -15,7 +15,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function safeFee(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? value : null
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
+  }
+  return null
 }
 
 export async function readRefundHorizonFee(refundId: string): Promise<RefundFeeEvidenceResult> {
