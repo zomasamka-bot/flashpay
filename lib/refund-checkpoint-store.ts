@@ -253,7 +253,7 @@ export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoi
       checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.status, checkpoint.stage,
       checkpoint.payerUid, checkpoint.payerUidVerifiedAt, checkpoint.amount, checkpoint.currency,
       checkpoint.sourcePaymentStatus, checkpoint.sourceSettlementState, checkpoint.createdAt, checkpoint.updatedAt,
-      checkpoint.attemptCount, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details),
+      checkpoint.attemptCount, event.eventId, event.eventType, event.actorType, event.createdAt, event.details,
     ])
   if (!Array.isArray(result) || result.length === 0) return null
   const persisted = normalizeCheckpoint(result[0])
@@ -373,7 +373,7 @@ export async function beginRefundBlockchainSubmissionClaim(
   if (!(await verifyRefundTables()) || !refundId || !paymentId || !idempotencyKey || !refundPaymentId) return null
   const eventId = `refund:${refundId}:blockchain_submission_started`
   const createdAt = new Date().toISOString()
-  const details = JSON.stringify({ refundPaymentId, phase: 'blockchain_submission' })
+  const details = { refundPaymentId, phase: 'blockchain_submission' }
   const result = await query(`
     WITH audited AS (
       INSERT INTO refund_audit_events
@@ -582,7 +582,7 @@ export async function advanceRefundAccountingWithAudit(
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $8, refund_id, payment_id, $9, $10, idempotency_key, $11, $12::jsonb FROM transitioned RETURNING refund_id
     ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
-    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, JSON.stringify(event.details), idempotencyKey],
+    [refundId, paymentId, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, event.details, idempotencyKey],
   )
   if (Array.isArray(result) && result.length > 1) return null
   if (Array.isArray(result) && result.length === 1) return normalizeCheckpoint(result[0])
