@@ -309,10 +309,10 @@ export const authenticateCustomer = async (): Promise<{
   }
 
   try {
-    console.log("[CUSTOMER-AUTH] Requesting ['payments'] scope from Pi.authenticate()...")
-    CoreLogger.operation("Authenticating customer with Pi SDK (payments scope)")
+    console.log("[CUSTOMER-AUTH] Requesting ['payments','wallet_address'] scopes from Pi.authenticate()...")
+    CoreLogger.operation("Authenticating customer with Pi SDK (payments + wallet_address scopes)")
 
-    const authPromise = window.Pi.authenticate(["payments"], async (payment: any) => {
+    const authPromise = window.Pi.authenticate(["payments","wallet_address"], async (payment: any) => {
       // Handle incomplete payment from Pi Network
       console.log("[CUSTOMER-AUTH] Incomplete payment callback triggered")
       
