@@ -46,14 +46,18 @@ function parseStroops(value: unknown): number | null {
 export async function verifyRefundBlockchainEvidence(input: Input): Promise<RefundBlockchainEvidenceResult> {
   const { checkpoint, payment } = input
   if ((checkpoint.stage !== "wallet_submission_started" && checkpoint.stage !== "wallet_submission_confirmed") || checkpoint.status !== "pending" ||
-    !checkpoint.refundPaymentId || !checkpoint.refundTxid || checkpoint.refundPaymentId !== payment.identifier || checkpoint.paymentId !== payment.metadata.paymentId ||
+    !checkpoint.refundPaymentId || checkpoint.refundPaymentId !== payment.identifier || checkpoint.paymentId !== payment.metadata.paymentId ||
     checkpoint.payerUid !== payment.user_uid || checkpoint.amount !== payment.amount || stroops(checkpoint.amount) === null || stroops(payment.amount) === null ||
     payment.network !== "Pi Testnet" || payment.direction !== "app_to_user" ||
     payment.status.cancelled || payment.status.user_cancelled) return { outcome: "INDETERMINATE" }
 
   const transaction = payment.transaction
-  if (transaction !== null && (typeof transaction.txid !== "string" || transaction.txid.length === 0 || transaction.txid !== checkpoint.refundTxid)) return { outcome: "INDETERMINATE" }
-  const txid = checkpoint.refundTxid
+  if (checkpoint.stage === "wallet_submission_started") {
+    if (transaction === null || typeof transaction.txid !== "string" || transaction.txid.length === 0) return { outcome: "NO_TX" }
+  } else {
+    if (!checkpoint.refundTxid || (transaction !== null && (typeof transaction.txid !== "string" || transaction.txid.length === 0 || transaction.txid !== checkpoint.refundTxid))) return { outcome: "INDETERMINATE" }
+  }
+  const txid = checkpoint.stage === "wallet_submission_confirmed" ? checkpoint.refundTxid : transaction!.txid
 
   const txResult = await getJson(`/transactions/${encodeURIComponent(txid)}`)
   const operationsResult = await getJson(`/transactions/${encodeURIComponent(txid)}/operations`)
