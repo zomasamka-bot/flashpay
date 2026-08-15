@@ -11,6 +11,7 @@ import {
   advanceRefundAccountingWithAudit,
   advanceRefundAuditWithAudit,
   completeRefundCheckpointWithAudit,
+  finalizeRefundProjectionWithAudit,
 } from './refund-checkpoint-store'
 import { isRefundEligible, type Payment, type RefundAuditEvent, type RefundCheckpoint } from './types'
 import { reconcileRefundWithPi } from './refund-pi-reconciliation'
@@ -241,7 +242,10 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
   const payment = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
   if (!payment || payment.id !== checkpoint.paymentId || payment.payerUid !== checkpoint.payerUid || payment.customerAmount !== checkpoint.amount || payment.status === 'settled_to_merchant' || payment.a2uPaymentId || payment.a2uTxid || payment.horizonSuccessFlag === true) return { outcome: 'blocked', reason: 'projection_conflict' }
   const alreadyFinal = payment.status === 'refunded' && payment.refundStatus === 'completed' && payment.settlementFailureState === 'refunded' && payment.refundPaymentId === checkpoint.refundPaymentId && payment.refundTxid === checkpoint.refundTxid
-  if (alreadyFinal) return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId }
+  if (alreadyFinal) {
+    const finalized = await finalizeRefundProjectionWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount)
+    return finalized ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'projection_finality_uncertain' }
+  }
   if (payment.status !== 'refund_pending' || payment.refundStatus !== 'submitted' || payment.settlementFailureState !== 'refund_pending' || payment.refundPaymentId !== checkpoint.refundPaymentId || payment.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'projection_conflict' }
   const projected = { ...payment, status: 'refunded', refundStatus: 'completed', settlementFailureState: 'refunded' }
   try { await redis.set(`payment:${checkpoint.paymentId}`, projected) } catch {
@@ -250,7 +254,8 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
   }
   const readBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
   if (!readBack || readBack.status !== 'refunded' || readBack.refundStatus !== 'completed' || readBack.settlementFailureState !== 'refunded' || readBack.refundPaymentId !== checkpoint.refundPaymentId || readBack.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'projection_uncertain' }
-  return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId }
+  const finalized = await finalizeRefundProjectionWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount)
+  return finalized ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'projection_finality_uncertain' }
 }
 
 export async function executeRefundCompletion(refundId: string): Promise<RefundExecutionResult> {

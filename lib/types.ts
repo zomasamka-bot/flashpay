@@ -319,6 +319,7 @@ export interface RefundAuditEvent {
     | "refund_audit_recorded"
     | "refund_rejected"
     | "refund_completed"
+    | "refund_projection_finalized"
     | "refund_manual_review"
   actorType: "system" | "merchant" | "customer" | "operator"
   idempotencyKey: string
