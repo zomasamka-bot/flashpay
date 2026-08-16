@@ -24,6 +24,6 @@ export function deriveRefundPresentationState(
 
   if (finalComplete) return "completed"
   if (networkConfirmed) return "blockchain_confirmed"
-  if (input.refundStatus === "failed" || input.refundStage === "manual_review_required") return "attention_required"
+  if (input.refundStatus === "failed" || input.refundStatus === "manual_review_required") return "attention_required"
   return "pending"
 }
