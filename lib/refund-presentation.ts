@@ -27,3 +27,12 @@ export function deriveRefundPresentationState(
   if (input.refundStatus === "failed" || input.refundStatus === "manual_review_required") return "attention_required"
   return "pending"
 }
+
+export function deriveRefundAudienceStatuses(
+  state: RefundPresentation["state"],
+): Pick<RefundPresentation, "customerStatus" | "merchantStatus"> {
+  if (state === "pending") return { customerStatus: "refund_pending", merchantStatus: "refund_pending" }
+  if (state === "blockchain_confirmed") return { customerStatus: "refund_confirmed", merchantStatus: "refund_confirmed" }
+  if (state === "completed") return { customerStatus: "refund_completed", merchantStatus: "refund_completed" }
+  return { customerStatus: "refund_delayed", merchantStatus: "refund_attention_required" }
+}
