@@ -449,6 +449,41 @@ export async function persistRefundPaymentIdWithAudit(refundId: string, paymentI
     if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
     return checkpoint
   }
+  const replayResult = await query(`SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND stage='wallet_submission_started' AND status='pending' LIMIT 1`, [refundId, paymentId, idempotencyKey])
+  if (!Array.isArray(replayResult) || replayResult.length === 0) return null
+  const replayRow = replayResult[0]
+  if (typeof replayRow !== 'object' || replayRow === null || Array.isArray(replayRow)) return null
+  const replay = normalizeCheckpoint(replayRow as Record<string, unknown>)
+  if (!replay || replay.refundPaymentId !== refundPaymentId) return null
+  return replay
+}
+
+export async function persistRefundBlockchainTxWithAudit(
+  refundId: string,
+  paymentId: string,
+  idempotencyKey: string,
+  refundPaymentId: string,
+  refundTxid: string,
+  event: RefundAuditEvent,
+): Promise<RefundCheckpoint | null> {
+  if (!(await verifyRefundTables()) || !event.eventId || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || event.eventType !== 'refund_submission_confirmed' || !refundTxid || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details) || (event.details as Record<string, unknown>).refundPaymentId !== refundPaymentId || (event.details as Record<string, unknown>).refundTxid !== refundTxid) return null
+  const result = await query(`
+    WITH transitioned AS (
+      UPDATE refund_checkpoints SET refund_txid=$5, stage='wallet_submission_confirmed', updated_at=NOW()
+      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4
+        AND stage='wallet_submission_started' AND status='pending' AND refund_txid IS NULL RETURNING *
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $6, refund_id, payment_id, $7, $8, idempotency_key, $9, $10::jsonb FROM transitioned RETURNING refund_id
+    ) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`,
+    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, event.details],
+  )
+  if (Array.isArray(result) && result.length > 0) {
+    const checkpoint = normalizeCheckpoint(result[0])
+    if (checkpoint) console.log('REFUND_BLOCKCHAIN_CONFIRMED', { refundId, paymentId, amount: checkpoint.amount, refundPaymentId, refundTxid, recordedAt: event.createdAt })
+    if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
+    return checkpoint
+  }
   const replayResult = await query(`
     SELECT c.*, a.event_id AS audit_event_id, a.event_type AS audit_event_type,
       a.refund_id AS audit_refund_id, a.payment_id AS audit_payment_id,
@@ -475,22 +510,6 @@ export async function persistRefundPaymentIdWithAudit(refundId: string, paymentI
   if (details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid) return null
   const checkpoint = normalizeCheckpoint(record)
   return checkpoint ?? null
-}
-
-export async function persistRefundBlockchainTxWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, refundTxid: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
-  if (!(await verifyRefundTables()) || !event.eventId || event.eventType !== 'refund_submission_confirmed' || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !refundPaymentId || !refundTxid || typeof event.details !== 'object' || event.details === null || Array.isArray(event.details)) return null
-  const details = event.details as Record<string, unknown>
-  if (Object.keys(details).length !== 2 || details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid) return null
-  const result = await query(`WITH transitioned AS (UPDATE refund_checkpoints SET refund_txid=$5, stage='wallet_submission_confirmed', updated_at=NOW() WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND refund_payment_id=$4 AND stage='wallet_submission_started' AND status='pending' AND refund_txid IS NULL RETURNING *), audited AS (INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details) SELECT $6, refund_id, payment_id, $7, $8, idempotency_key, $9, $10::jsonb FROM transitioned RETURNING refund_id) SELECT transitioned.* FROM transitioned JOIN audited USING (refund_id)`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId, event.eventType, event.actorType, event.createdAt, event.details])
-  if (Array.isArray(result) && result.length > 0) {
-    const checkpoint = normalizeCheckpoint(result[0])
-    if (checkpoint) console.log('REFUND_BLOCKCHAIN_CONFIRMED', { refundId, paymentId, amount: checkpoint.amount, refundPaymentId, refundTxid, recordedAt: event.createdAt })
-    if (checkpoint && isRedisConfigured) await redis.set(redisKey(refundId), checkpoint)
-    return checkpoint
-  }
-  const replay = await query(`SELECT c.* FROM refund_checkpoints c JOIN refund_audit_events a ON a.refund_id=c.refund_id AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id=$6 AND a.event_type='refund_submission_confirmed' WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3 AND c.refund_payment_id=$4 AND c.refund_txid=$5 AND c.stage='wallet_submission_confirmed' AND c.status='pending' LIMIT 2`, [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, event.eventId])
-  if (!Array.isArray(replay) || replay.length !== 1) return null
-  return normalizeCheckpoint(replay[0])
 }
 
 export async function advanceRefundPaymentCheckpointWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, refundTxid: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
