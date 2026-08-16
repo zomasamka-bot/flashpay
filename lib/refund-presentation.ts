@@ -1,4 +1,4 @@
-import type { RefundPresentation } from "./types"
+import type { RefundCheckpoint, RefundPresentation } from "./types"
 
 export function deriveRefundPresentationState(
   input: Omit<RefundPresentation, "state" | "customerStatus" | "merchantStatus">,
@@ -43,4 +43,22 @@ export function buildRefundPresentation(
   const state = deriveRefundPresentationState(input)
   const statuses = deriveRefundAudienceStatuses(state)
   return { ...input, state, ...statuses }
+}
+
+export function buildRefundPresentationFromEvidence(
+  checkpoint: RefundCheckpoint,
+  evidence: Pick<RefundPresentation, "requestedAt" | "blockchain" | "finalization">,
+): RefundPresentation {
+  return buildRefundPresentation({
+    paymentId: checkpoint.paymentId,
+    refundId: checkpoint.refundId,
+    amount: checkpoint.amount,
+    currency: checkpoint.currency,
+    refundStatus: checkpoint.status,
+    refundStage: checkpoint.stage,
+    refundPaymentId: checkpoint.refundPaymentId,
+    refundTxid: checkpoint.refundTxid,
+    createdAt: checkpoint.createdAt,
+    ...evidence,
+  })
 }
