@@ -1,4 +1,4 @@
-import type { RefundCheckpoint, RefundPresentation, RefundPresentationPersistenceTimestamps } from "./types"
+import type { RefundCheckpoint, RefundPresentation, RefundPresentationPersistenceReadResult, RefundPresentationPersistenceTimestamps } from "./types"
 
 export function deriveRefundPresentationState(
   input: Omit<RefundPresentation, "state" | "customerStatus" | "merchantStatus">,
@@ -87,4 +87,14 @@ export function normalizeRefundPersistenceTimestamp(value: unknown): string | nu
         : null
   if (!date || !Number.isFinite(date.getTime())) return null
   return date.toISOString()
+}
+
+export function normalizeRefundPersistenceTimestamps(input: Record<keyof RefundPresentationPersistenceTimestamps, unknown>): RefundPresentationPersistenceReadResult {
+  const keys = ["requestedAt", "confirmationRecordedAt", "accountingRecordedAt", "auditRecordedAt", "completedAt", "finalizedAt"] as const
+  const values = Object.fromEntries(keys.map((key) => {
+    const raw = input[key]
+    return [key, raw === null ? null : normalizeRefundPersistenceTimestamp(raw) ?? undefined] as const
+  })) as Record<(typeof keys)[number], string | null | undefined>
+  if (Object.values(values).includes(undefined)) return { outcome: "INDETERMINATE" }
+  return { outcome: "FOUND", timestamps: values as RefundPresentationPersistenceTimestamps }
 }
