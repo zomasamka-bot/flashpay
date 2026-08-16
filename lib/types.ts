@@ -365,6 +365,12 @@ export interface RefundPresentation {
   merchantStatus: MerchantRefundStatus
 }
 
+/** Read-only fail-closed result. NOT_FOUND requires a successful authoritative zero-row lookup; any uncertainty is INDETERMINATE. */
+export type RefundPresentationReadResult =
+  | { outcome: "FOUND"; presentation: RefundPresentation }
+  | { outcome: "NOT_FOUND" }
+  | { outcome: "INDETERMINATE" }
+
 /**
  * Phase 1 invariant guard. This is intentionally pure and has no side
  * effects; execution paths will use it before any refund work is added.
