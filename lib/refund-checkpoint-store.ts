@@ -55,7 +55,10 @@ export async function listAutomaticRefundCheckpoints(limit: number): Promise<Aut
   try {
     const rows = await query(`
       SELECT * FROM refund_checkpoints
-      WHERE (status='pending' OR (stage='audit_recorded' AND status='completed'))
+      WHERE (status='pending' OR (stage='audit_recorded' AND status='completed' AND NOT (
+        (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized')=1
+        AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized' AND a.event_id='refund:'||refund_checkpoints.refund_id||':projection_finalized' AND a.payment_id=refund_checkpoints.payment_id AND a.idempotency_key=refund_checkpoints.idempotency_key AND a.actor_type='system' AND jsonb_typeof(a.details)='object' AND jsonb_object_length(a.details)=2 AND a.details->>'refundPaymentId'=refund_checkpoints.refund_payment_id AND a.details->>'refundTxid'=refund_checkpoints.refund_txid)=1
+      )))
         AND (next_retry_at IS NULL OR next_retry_at<=NOW())
       ORDER BY updated_at ASC, refund_id ASC
       LIMIT $1`, [Math.min(limit, 20)])
