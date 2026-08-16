@@ -371,6 +371,19 @@ export type RefundPresentationReadResult =
   | { outcome: "NOT_FOUND" }
   | { outcome: "INDETERMINATE" }
 
+/** Successful persistence read for a present checkpoint; null means unevidenced. DB/audit times only, never blockchain transactionAt. */
+export interface RefundPresentationPersistenceTimestamps {
+  requestedAt: string | null
+  confirmationRecordedAt: string | null
+  accountingRecordedAt: string | null
+  auditRecordedAt: string | null
+  completedAt: string | null
+  finalizedAt: string | null
+}
+export type RefundPresentationPersistenceReadResult =
+  | { outcome: "FOUND"; timestamps: RefundPresentationPersistenceTimestamps }
+  | { outcome: "INDETERMINATE" }
+
 /**
  * Phase 1 invariant guard. This is intentionally pure and has no side
  * effects; execution paths will use it before any refund work is added.
