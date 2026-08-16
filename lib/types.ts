@@ -339,6 +339,27 @@ export interface RefundPresentation {
   refundStage: RefundCheckpointStage
   refundPaymentId?: string
   refundTxid?: string
+  createdAt: string
+  requestedAt: string | null
+  blockchain: {
+    confirmed: boolean
+    network: "Pi Testnet" | null
+    confirmationRecordedAt: string | null
+    transactionAt: string | null
+    piTransactionVerified: boolean | null
+    piDeveloperCompleted: boolean | null
+    horizonSuccessful: boolean | null
+  }
+  finalization: {
+    accountingRecorded: boolean
+    accountingRecordedAt: string | null
+    auditRecorded: boolean
+    auditRecordedAt: string | null
+    completionAuditRecorded: boolean
+    completedAt: string | null
+    projectionFinalized: boolean
+    finalizedAt: string | null
+  }
   state: RefundPresentationState
   customerStatus: CustomerRefundStatus
   merchantStatus: MerchantRefundStatus
