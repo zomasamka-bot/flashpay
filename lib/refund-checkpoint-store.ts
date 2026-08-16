@@ -770,7 +770,7 @@ export async function finalizeRefundProjectionWithAudit(refundId: string, paymen
   const insertedNow = Number((result[0] as Record<string, unknown>).inserted_count) === 1
   if (insertedNow) console.log('REFUND_COMPLETED', refundId)
   if (insertedNow) return { insertedNow }
-  const replay = await query(`SELECT event_id FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized' AND ((SELECT count(*) FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized')=1) AND event_id=$1 AND event_id<>'' AND payment_id=$3 AND actor_type='system' AND idempotency_key=$4 AND jsonb_object_length(details)=2 AND details->>'refundPaymentId'=$5 AND details->>'refundTxid'=$6 LIMIT 2`, [eventId, refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
+  const replay = await query(`SELECT event_id FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized' AND ((SELECT count(*) FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized')=1) AND event_id=$1 AND event_id<>'' AND payment_id=$3 AND actor_type='system' AND idempotency_key=$4 AND details=jsonb_build_object('refundPaymentId',$5,'refundTxid',$6) LIMIT 2`, [eventId, refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
   return Array.isArray(replay) && replay.length === 1 ? { insertedNow: false } : null
 }
 
