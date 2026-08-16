@@ -753,7 +753,9 @@ export async function finalizeRefundProjectionWithAudit(refundId: string, paymen
       SELECT c.refund_id FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
       WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3 AND c.refund_payment_id=$4 AND c.refund_txid=$5 AND c.payer_uid=$6 AND c.amount=$7::numeric AND c.stage='audit_recorded' AND c.status='completed'
         AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid AND r.amount=c.amount AND r.currency='π' AND r.horizon_fee_stroops>=0
+        AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed')=1
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND jsonb_object_length(a.details)=3 AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=r.horizon_fee_stroops::text)=1
+        AND ((SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_projection_finalized')=0 OR ((SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_projection_finalized')=1 AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_id=$8 AND a.event_id<>'' AND a.event_type='refund_projection_finalized' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.actor_type='system' AND jsonb_object_length(a.details)=2 AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5)=1))
     ), inserted AS (
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $8, refund_id, payment_id, 'refund_projection_finalized', 'system', idempotency_key, NOW(), $9::jsonb FROM eligible
@@ -765,7 +767,7 @@ export async function finalizeRefundProjectionWithAudit(refundId: string, paymen
   const insertedNow = Number((result[0] as Record<string, unknown>).inserted_count) === 1
   if (insertedNow) console.log('REFUND_COMPLETED', refundId)
   if (insertedNow) return { insertedNow }
-  const replay = await query(`SELECT event_id FROM refund_audit_events WHERE event_id=$1 AND refund_id=$2 AND payment_id=$3 AND event_type='refund_projection_finalized' AND actor_type='system' AND idempotency_key=$4 AND jsonb_object_length(details)=2 AND details->>'refundPaymentId'=$5 AND details->>'refundTxid'=$6 LIMIT 2`, [eventId, refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
+  const replay = await query(`SELECT event_id FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized' AND ((SELECT count(*) FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized')=1) AND event_id=$1 AND event_id<>'' AND payment_id=$3 AND actor_type='system' AND idempotency_key=$4 AND jsonb_object_length(details)=2 AND details->>'refundPaymentId'=$5 AND details->>'refundTxid'=$6 LIMIT 2`, [eventId, refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
   return Array.isArray(replay) && replay.length === 1 ? { insertedNow: false } : null
 }
 
