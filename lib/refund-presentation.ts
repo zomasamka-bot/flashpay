@@ -36,3 +36,11 @@ export function deriveRefundAudienceStatuses(
   if (state === "completed") return { customerStatus: "refund_completed", merchantStatus: "refund_completed" }
   return { customerStatus: "refund_delayed", merchantStatus: "refund_attention_required" }
 }
+
+export function buildRefundPresentation(
+  input: Omit<RefundPresentation, "state" | "customerStatus" | "merchantStatus">,
+): RefundPresentation {
+  const state = deriveRefundPresentationState(input)
+  const statuses = deriveRefundAudienceStatuses(state)
+  return { ...input, state, ...statuses }
+}
