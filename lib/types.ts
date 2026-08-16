@@ -327,6 +327,23 @@ export interface RefundAuditEvent {
   details: Record<string, string | number | boolean | null>
 }
 
+export type RefundPresentationState = "pending" | "blockchain_confirmed" | "completed" | "attention_required"
+export type CustomerRefundStatus = "refund_pending" | "refund_confirmed" | "refund_completed" | "refund_delayed"
+export type MerchantRefundStatus = "refund_pending" | "refund_confirmed" | "refund_completed" | "refund_attention_required"
+export interface RefundPresentation {
+  paymentId: string
+  refundId: string
+  amount: number
+  currency: "π"
+  refundStatus: RefundStatus
+  refundStage: RefundCheckpointStage
+  refundPaymentId?: string
+  refundTxid?: string
+  state: RefundPresentationState
+  customerStatus: CustomerRefundStatus
+  merchantStatus: MerchantRefundStatus
+}
+
 /**
  * Phase 1 invariant guard. This is intentionally pure and has no side
  * effects; execution paths will use it before any refund work is added.
