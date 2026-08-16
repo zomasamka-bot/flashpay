@@ -748,13 +748,13 @@ export async function completeRefundCheckpointWithAudit(
   return normalizeCheckpoint(replay[0]) ?? null
 }
 
-export async function finalizeRefundProjectionWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, refundTxid: string, payerUid: string, amount: number): Promise<{ insertedNow: boolean } | null> {
+  export async function finalizeRefundProjectionWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, refundTxid: string, payerUid: string, amount: number): Promise<{ insertedNow: boolean } | null> {
   if (!(await verifyRefundTables()) || !(await verifyRefundAccountingSchema())) return null
   const eventId = `refund:${refundId}:projection_finalized`
   const details = { refundPaymentId, refundTxid }
   const result = await query(`
     WITH eligible AS (
-      SELECT c.refund_id FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
+      SELECT c.refund_id, c.payment_id, c.idempotency_key FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
       WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3 AND c.refund_payment_id=$4 AND c.refund_txid=$5 AND c.payer_uid=$6 AND c.amount=$7::numeric AND c.stage='audit_recorded' AND c.status='completed'
         AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid AND r.amount=c.amount AND r.currency='π' AND r.horizon_fee_stroops>=0
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed')=1
