@@ -1,4 +1,4 @@
-import type { RefundCheckpoint, RefundPresentation } from "./types"
+import type { RefundCheckpoint, RefundPresentation, RefundPresentationPersistenceTimestamps } from "./types"
 
 export function deriveRefundPresentationState(
   input: Omit<RefundPresentation, "state" | "customerStatus" | "merchantStatus">,
@@ -61,4 +61,19 @@ export function buildRefundPresentationFromEvidence(
     createdAt: checkpoint.createdAt,
     ...evidence,
   })
+}
+
+export function deriveRefundFinalizationFromPersistence(
+  t: RefundPresentationPersistenceTimestamps,
+): RefundPresentation["finalization"] {
+  return {
+    accountingRecorded: t.accountingRecordedAt !== null,
+    accountingRecordedAt: t.accountingRecordedAt,
+    auditRecorded: t.auditRecordedAt !== null,
+    auditRecordedAt: t.auditRecordedAt,
+    completionAuditRecorded: t.completedAt !== null,
+    completedAt: t.completedAt,
+    projectionFinalized: t.finalizedAt !== null,
+    finalizedAt: t.finalizedAt,
+  }
 }
