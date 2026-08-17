@@ -89,6 +89,12 @@ export function normalizeRefundPersistenceTimestamp(value: unknown): string | nu
   return date.toISOString()
 }
 
+export function normalizeRefundBlockchainTransactionAt(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return null
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null
+}
+
 export function normalizeRefundPersistenceTimestamps(input: Record<keyof RefundPresentationPersistenceTimestamps, unknown>): RefundPresentationPersistenceReadResult {
   const keys = ["requestedAt", "confirmationRecordedAt", "accountingRecordedAt", "auditRecordedAt", "completedAt", "finalizedAt"] as const
   const values = Object.fromEntries(keys.map((key) => {
