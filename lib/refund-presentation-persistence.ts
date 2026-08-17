@@ -111,7 +111,7 @@ export async function readRefundPresentationPersistence(
       (SELECT total FROM finalized_total) finalized_total,
       (SELECT exact FROM finalized_exact) finalized_exact,
       (SELECT created_at FROM finalized_exact) finalized_at`,
-    [checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount, checkpoint.currency],
+    [checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId ?? null, checkpoint.refundTxid ?? null, checkpoint.payerUid, checkpoint.amount, checkpoint.currency],
   )
 
   if (!Array.isArray(rows) || rows.length !== 1) return { outcome: 'INDETERMINATE' }
