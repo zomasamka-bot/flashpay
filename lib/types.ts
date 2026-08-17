@@ -384,6 +384,11 @@ export type RefundPresentationPersistenceReadResult =
   | { outcome: "FOUND"; timestamps: RefundPresentationPersistenceTimestamps }
   | { outcome: "INDETERMINATE" }
 
+export type RefundPresentationBlockchainReadResult =
+  | { outcome: "CONFIRMED"; transactionAt: string; network: "Pi Testnet"; piTransactionVerified: true; piDeveloperCompleted: boolean; horizonSuccessful: true }
+  | { outcome: "PENDING" }
+  | { outcome: "INDETERMINATE" }
+
 /**
  * Phase 1 invariant guard. This is intentionally pure and has no side
  * effects; execution paths will use it before any refund work is added.
