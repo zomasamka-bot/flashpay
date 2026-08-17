@@ -19,6 +19,7 @@ export async function GET(request: Request) {
   }
 
   const result = await readRefundPresentation(refundId)
+  console.info("REFUND_PRESENTATION_READ", { refundId, result })
   if (result.outcome === "NOT_FOUND") {
     return NextResponse.json({ error: "Not found" }, { status: 404, headers: { "Cache-Control": "no-store" } })
   }
