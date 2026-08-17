@@ -23,6 +23,33 @@ export async function readRefundPresentation(refundId: string): Promise<RefundPr
     if (blockchain.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
 
     const persisted = persistence.timestamps
+    if (
+      blockchain.outcome === "PENDING" &&
+      [
+        persisted.confirmationRecordedAt,
+        persisted.accountingRecordedAt,
+        persisted.auditRecordedAt,
+        persisted.completedAt,
+        persisted.finalizedAt,
+      ].some((v) => v !== null)
+    ) return { outcome: "INDETERMINATE" }
+    if (blockchain.outcome === "CONFIRMED" && persisted.confirmationRecordedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+    if (checkpoint.stage === "accounting_recorded" && persisted.accountingRecordedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+    if (
+      checkpoint.stage === "audit_recorded" &&
+      (persisted.accountingRecordedAt === null || persisted.auditRecordedAt === null)
+    ) return { outcome: "INDETERMINATE" }
+    if (checkpoint.status === "completed" && persisted.completedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+    if (persisted.finalizedAt !== null && persisted.completedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+
     const presentationBlockchain = blockchain.outcome === "PENDING"
       ? {
           confirmed: false,
