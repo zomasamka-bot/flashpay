@@ -1,7 +1,7 @@
 import "server-only"
 
 import { NextResponse } from "next/server"
-import { getRefundCheckpointReadOnly } from "@/lib/refund-checkpoint-store"
+import { readRefundPresentation } from "@/lib/refund-presentation-reader"
 import { serverConfig } from "@/lib/server-config"
 
 export const dynamic = "force-dynamic"
@@ -18,21 +18,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Invalid refundId" }, { status: 400, headers: { "Cache-Control": "no-store" } })
   }
 
-  const result = await getRefundCheckpointReadOnly(refundId)
-  if (result.state === "absent") return NextResponse.json({ error: "Not found" }, { status: 404, headers: { "Cache-Control": "no-store" } })
-  if (result.state === "uncertain") return NextResponse.json({ error: "Refund status unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } })
+  const result = await readRefundPresentation(refundId)
+  if (result.outcome === "NOT_FOUND") {
+    return NextResponse.json({ error: "Not found" }, { status: 404, headers: { "Cache-Control": "no-store" } })
+  }
+  if (result.outcome === "INDETERMINATE") {
+    return NextResponse.json({ error: "Refund status unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } })
+  }
 
-  const checkpoint = result.checkpoint
-  return NextResponse.json({
-    refundId,
-    paymentId: checkpoint.paymentId,
-    status: checkpoint.status,
-    stage: checkpoint.stage,
-    amount: checkpoint.amount,
-    currency: checkpoint.currency,
-    ...(checkpoint.refundPaymentId ? { refundPaymentId: checkpoint.refundPaymentId } : {}),
-    ...(checkpoint.refundTxid ? { refundTxid: checkpoint.refundTxid } : {}),
-    attemptCount: checkpoint.attemptCount,
-    updatedAt: checkpoint.updatedAt,
-  }, { status: 200, headers: { "Cache-Control": "no-store" } })
+  return NextResponse.json({ outcome: "FOUND", presentation: result.presentation }, {
+    status: 200,
+    headers: { "Cache-Control": "no-store" },
+  })
 }
