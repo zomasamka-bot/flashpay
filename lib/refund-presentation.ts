@@ -95,6 +95,13 @@ export function normalizeRefundBlockchainTransactionAt(value: unknown): string |
   return Number.isFinite(date.getTime()) ? date.toISOString() : null
 }
 
+export function extractRefundHorizonTransactionAt(value: unknown, expectedTxid: string): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || !/^[0-9a-f]{64}$/i.test(expectedTxid)) return null
+  const tx = value as Record<string, unknown>
+  if (tx.successful !== true || tx.id !== expectedTxid || tx.hash !== expectedTxid) return null
+  return normalizeRefundBlockchainTransactionAt(tx.created_at)
+}
+
 export function normalizeRefundPersistenceTimestamps(input: Record<keyof RefundPresentationPersistenceTimestamps, unknown>): RefundPresentationPersistenceReadResult {
   const keys = ["requestedAt", "confirmationRecordedAt", "accountingRecordedAt", "auditRecordedAt", "completedAt", "finalizedAt"] as const
   const values = Object.fromEntries(keys.map((key) => {
