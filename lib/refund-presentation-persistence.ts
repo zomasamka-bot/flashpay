@@ -42,6 +42,18 @@ export async function readRefundPresentationPersistence(
       FROM refund_accounting_records r
       WHERE r.refund_id=$1 AND r.payment_id=$2 AND r.refund_payment_id=$4
         AND r.refund_txid=$5 AND r.payer_uid=$6 AND r.amount=$7::numeric AND r.currency=$8
+    ), accounting_event_total AS (
+      SELECT count(*)::int AS total
+      FROM refund_audit_events a
+      WHERE a.refund_id=$1 AND a.event_type='refund_accounting_recorded'
+    ), accounting_event_exact AS (
+      SELECT count(*)::int AS exact, max(a.created_at AT TIME ZONE 'UTC') AS created_at
+      FROM refund_audit_events a
+      JOIN refund_accounting_records r ON r.refund_id=$1 AND r.payment_id=$2 AND r.refund_payment_id=$4
+        AND r.refund_txid=$5 AND r.payer_uid=$6 AND r.amount=$7::numeric AND r.currency=$8
+      WHERE a.refund_id=$1 AND a.payment_id=$2 AND a.idempotency_key=$3
+        AND a.event_type='refund_accounting_recorded' AND a.actor_type='system' AND a.event_id <> ''
+        AND a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'horizonFeeStroops',r.horizon_fee_stroops)
     ), audit_total AS (
       SELECT count(*)::int AS total
       FROM refund_audit_events a
@@ -49,9 +61,11 @@ export async function readRefundPresentationPersistence(
     ), audit_exact AS (
       SELECT count(*)::int AS exact, max(a.created_at AT TIME ZONE 'UTC') AS created_at
       FROM refund_audit_events a
+      JOIN refund_accounting_records r ON r.refund_id=$1 AND r.payment_id=$2 AND r.refund_payment_id=$4
+        AND r.refund_txid=$5 AND r.payer_uid=$6 AND r.amount=$7::numeric AND r.currency=$8
       WHERE a.refund_id=$1 AND a.payment_id=$2 AND a.idempotency_key=$3
         AND a.event_type='refund_audit_recorded' AND a.actor_type='system' AND a.event_id <> ''
-        AND a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'horizonFeeStroops',a.details->'horizonFeeStroops')
+        AND a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'horizonFeeStroops',r.horizon_fee_stroops)
     ), completed_total AS (
       SELECT count(*)::int AS total
       FROM refund_audit_events a
@@ -59,9 +73,11 @@ export async function readRefundPresentationPersistence(
     ), completed_exact AS (
       SELECT count(*)::int AS exact, max(a.created_at AT TIME ZONE 'UTC') AS created_at
       FROM refund_audit_events a
+      JOIN refund_accounting_records r ON r.refund_id=$1 AND r.payment_id=$2 AND r.refund_payment_id=$4
+        AND r.refund_txid=$5 AND r.payer_uid=$6 AND r.amount=$7::numeric AND r.currency=$8
       WHERE a.refund_id=$1 AND a.payment_id=$2 AND a.idempotency_key=$3
         AND a.event_type='refund_completed' AND a.actor_type='system' AND a.event_id <> ''
-        AND a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'horizonFeeStroops',a.details->'horizonFeeStroops')
+        AND a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'horizonFeeStroops',r.horizon_fee_stroops)
     ), finalized_total AS (
       SELECT count(*)::int AS total
       FROM refund_audit_events a
@@ -81,6 +97,8 @@ export async function readRefundPresentationPersistence(
       (SELECT total FROM confirmed_total) confirmed_total,
       (SELECT exact FROM confirmed_exact) confirmed_exact,
       (SELECT created_at FROM confirmed_exact) confirmation_recorded_at,
+      (SELECT total FROM accounting_event_total) accounting_event_total,
+      (SELECT exact FROM accounting_event_exact) accounting_event_exact,
       (SELECT total FROM accounting_total) accounting_total,
       (SELECT exact FROM accounting_exact) accounting_exact,
       (SELECT created_at FROM accounting_exact) accounting_recorded_at,
@@ -102,7 +120,7 @@ export async function readRefundPresentationPersistence(
   const record = row as Record<string, unknown>
   const sources = [
     ['requested_total', 'requested_exact'], ['confirmed_total', 'confirmed_exact'],
-    ['accounting_total', 'accounting_exact'], ['audit_total', 'audit_exact'],
+    ['accounting_event_total', 'accounting_event_exact'], ['accounting_total', 'accounting_exact'], ['audit_total', 'audit_exact'],
     ['completed_total', 'completed_exact'], ['finalized_total', 'finalized_exact'],
   ] as const
   if (!sources.every(([total, exact]) => Number.isInteger(record[total]) && Number.isInteger(record[exact]) && (record[total] as number) <= 1 && record[total] === record[exact])) return { outcome: 'INDETERMINATE' }
