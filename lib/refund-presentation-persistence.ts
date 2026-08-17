@@ -31,7 +31,7 @@ export async function readRefundPresentationPersistence(
       FROM refund_audit_events a
       WHERE a.refund_id=$1 AND a.payment_id=$2 AND a.idempotency_key=$3
         AND a.event_type='refund_submission_confirmed' AND a.actor_type='system' AND a.event_id <> ''
-        AND (a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5)
+        AND (a.details = jsonb_build_object('refundPaymentId',$4::text,'refundTxid',$5::text)
           OR a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'recovered',true))
     ), accounting_total AS (
       SELECT count(*)::int AS total
