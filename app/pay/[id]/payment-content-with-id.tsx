@@ -422,6 +422,12 @@ export default function PaymentContentWithId({
             console.log("[v0] Updated payment status:", updated.status)
             setPayment(updated)
             
+            if (["settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
+              setPayment(updated)
+              clearInterval(pollInterval)
+              return
+            }
+
             if (updated.status === "settled_to_merchant") {
               console.log("[v0] ✅ Payment confirmed and settled to merchant!")
               clearInterval(pollInterval)
@@ -441,7 +447,16 @@ export default function PaymentContentWithId({
           setIsPaying(false)
         }, 300000)
       },
-      (error) => {
+      async (error) => {
+        try {
+          const updated = await getPaymentFromServer(paymentId, true)
+          if (updated && ["settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
+            setPayment(updated)
+            return
+          }
+        } catch {
+          // Preserve the existing generic failure handling below.
+        }
         console.log("[v0] ========== PAYMENT ERROR CALLBACK ==========")
         console.log("[v0] Error:", error)
         toast({
