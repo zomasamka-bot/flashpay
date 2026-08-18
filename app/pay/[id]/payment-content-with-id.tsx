@@ -442,23 +442,27 @@ export default function PaymentContentWithId({
         
         // Start polling for payment status updates
         console.log("[v0] Starting status polling...")
+        let stopped = false
         const pollInterval = setInterval(async () => {
           console.log("[v0] Polling payment status...")
           const updated = await getPaymentFromServer(paymentId)
+          if (stopped) return
           
           if (updated) {
             console.log("[v0] Updated payment status:", updated.status)
-            setPayment(updated)
             
             if (["settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
               setPayment(updated)
+              stopped = true
               clearInterval(pollInterval)
               return
             }
 
             if (updated.status === "settled_to_merchant") {
-              console.log("[v0] ✅ Payment confirmed and settled to merchant!")
+              stopped = true
               clearInterval(pollInterval)
+              console.log("[v0] ✅ Payment confirmed and settled to merchant!")
+              setPayment(updated)
               setIsPaying(false)
               toast({
                 title: "Payment Successful",
@@ -470,8 +474,9 @@ export default function PaymentContentWithId({
         
         // Stop polling after 5 minutes
         setTimeout(() => {
-          console.log("[v0] Stopping status polling after 5 minutes")
+          stopped = true
           clearInterval(pollInterval)
+          console.log("[v0] Stopping status polling after 5 minutes")
           setIsPaying(false)
         }, 300000)
       },
