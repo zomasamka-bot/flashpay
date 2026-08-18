@@ -1,18 +1,20 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { ExternalLink, Copy } from "lucide-react"
-import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
+import { initializePiSDK, authenticateCustomer, authenticateCustomerForRefundRead } from "@/lib/pi-sdk"
+import { readCustomerRefundPresentationClient } from "@/lib/customer-refund-presentation-client"
+import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
 import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
 import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/operations"
 import { getPiNetUrl } from "@/lib/router"
 import { unifiedStore } from "@/lib/unified-store"
-import type { Payment } from "@/lib/types"
+import type { Payment, RefundPresentation } from "@/lib/types"
 
 // UI-only mapper for settlement status display
 function mapSettlementStatusForDisplay(status: string): string {
@@ -47,6 +49,11 @@ export default function PaymentContentWithId({
   const [diagnostics, setDiagnostics] = useState<string[]>([])
   const [entryMode, setEntryMode] = useState<"pi" | "share">(entry)
   const [authoritativeLoaded, setAuthoritativeLoaded] = useState(false)
+  const [refundPresentation, setRefundPresentation] = useState<RefundPresentation | undefined>()
+  const [refundViewStatus, setRefundViewStatus] = useState<"loading" | "ready" | "indeterminate">("loading")
+  const refundAccessTokenRef = useRef<string | null>(null)
+  const refundFlowActiveRef = useRef(false)
+  const refundAbortRef = useRef<AbortController | null>(null)
 
   const addDiagnostic = (message: string) => {
     const timestamp = new Date().toLocaleTimeString()
@@ -271,6 +278,83 @@ export default function PaymentContentWithId({
     }
   }, [paymentId, entryMode, toast])
 
+  useEffect(() => {
+    const refundStatuses = new Set(["settlement_failed", "refund_pending", "refunded"])
+    const isRefundFlow = entryMode === "pi" && authoritativeLoaded && payment !== null && refundStatuses.has(payment.status)
+
+    if (!isRefundFlow || !piSDKReady) {
+      if (!isRefundFlow) {
+        refundAbortRef.current?.abort()
+        refundAbortRef.current = null
+        refundAccessTokenRef.current = null
+        refundFlowActiveRef.current = false
+      }
+      return
+    }
+    if (refundFlowActiveRef.current) return
+
+    refundFlowActiveRef.current = true
+    refundAbortRef.current = new AbortController()
+    setRefundViewStatus("loading")
+
+    const loadRefundPresentation = async () => {
+      const authResult = await authenticateCustomerForRefundRead()
+      if (!authResult.success || !refundAbortRef.current) {
+        setRefundViewStatus("indeterminate")
+        refundAbortRef.current?.abort()
+        refundAbortRef.current = null
+        refundAccessTokenRef.current = null
+        refundFlowActiveRef.current = false
+        return
+      }
+
+      refundAccessTokenRef.current = authResult.accessToken
+      const signal = refundAbortRef.current.signal
+      const poll = async () => {
+        const token = refundAccessTokenRef.current
+        if (!token || signal.aborted) return
+        const result = await readCustomerRefundPresentationClient(paymentId, token, signal)
+        if (result.outcome === "FOUND") {
+          setRefundPresentation(result.presentation)
+          setRefundViewStatus("ready")
+          if (["refund_completed", "refund_delayed", "attention_required"].includes(result.presentation.customerStatus)) {
+            refundAbortRef.current?.abort()
+            refundAbortRef.current = null
+            refundAccessTokenRef.current = null
+            refundFlowActiveRef.current = false
+          }
+        } else if (result.outcome === "UNAUTHORIZED" || result.outcome === "FORBIDDEN") {
+          setRefundViewStatus("indeterminate")
+          refundAbortRef.current?.abort()
+          refundAbortRef.current = null
+          refundAccessTokenRef.current = null
+          refundFlowActiveRef.current = false
+        }
+      }
+
+      await poll()
+      if (!signal.aborted && refundFlowActiveRef.current) {
+        const interval = window.setInterval(poll, 10000)
+        signal.addEventListener("abort", () => window.clearInterval(interval), { once: true })
+      }
+    }
+
+    loadRefundPresentation().catch(() => {
+      setRefundViewStatus("indeterminate")
+      refundAbortRef.current?.abort()
+      refundAbortRef.current = null
+      refundAccessTokenRef.current = null
+      refundFlowActiveRef.current = false
+    })
+
+    return () => {
+      refundAbortRef.current?.abort()
+      refundAbortRef.current = null
+      refundAccessTokenRef.current = null
+      refundFlowActiveRef.current = false
+    }
+  }, [authoritativeLoaded, entryMode, payment, paymentId, piSDKReady])
+
   const handlePay = async () => {
     addDiagnostic("PAY BUTTON CLICKED")
     addDiagnostic(`Payment ID: ${paymentId}`)
@@ -457,7 +541,18 @@ export default function PaymentContentWithId({
   }
 
   const isPaid = payment.status === "settled_to_merchant"
+  const isRefundView = entryMode === "pi" && authoritativeLoaded && ["settlement_failed", "refund_pending", "refunded"].includes(payment.status)
   const paymentQR = getPiNetUrl(paymentId)
+
+  if (isRefundView) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4">
+        <div className="max-w-md mx-auto space-y-6">
+          <CustomerRefundStatusCard presentation={refundPresentation} status={refundViewStatus} />
+        </div>
+      </div>
+    )
+  }
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
