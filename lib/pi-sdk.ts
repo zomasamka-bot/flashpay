@@ -684,3 +684,31 @@ export const getSDKStatus = () => {
     currentDomain: hasWindow ? window.location.hostname : "N/A",
   }
 }
+
+export const authenticateCustomerForRefundRead = async (): Promise<
+  | { success: true; accessToken: string; uid: string }
+  | { success: false; error: string }
+> => {
+  if (typeof window === "undefined") return { success: false, error: "Not in browser environment" }
+  if (!window.Pi || typeof window.Pi.authenticate !== "function") {
+    return { success: false, error: "Pi authentication unavailable" }
+  }
+  if (!unifiedStore.getWalletStatus().isInitialized) {
+    return { success: false, error: "Pi SDK is not initialized" }
+  }
+
+  try {
+    const authResult = await window.Pi.authenticate([], () => {})
+    if (
+      typeof authResult?.accessToken !== "string" ||
+      authResult.accessToken.trim() === "" ||
+      typeof authResult?.user?.uid !== "string" ||
+      authResult.user.uid.trim() === ""
+    ) {
+      return { success: false, error: "Invalid Pi authentication response" }
+    }
+    return { success: true, accessToken: authResult.accessToken, uid: authResult.user.uid }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "Pi authentication failed" }
+  }
+}
