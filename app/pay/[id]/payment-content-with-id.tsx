@@ -489,27 +489,13 @@ export default function PaymentContentWithId({
 
     executePayment(
       paymentId,
-      async (txid) => {
-        console.log("[v0] ========== PAYMENT SUCCESS CALLBACK ==========")
-        console.log("[v0] Transaction ID:", txid)
+      (txid) => {
+        setPayment((current) => current ? { ...current, status: "settled_to_merchant" } : current)
+        setIsPaying(false)
         toast({
-          title: "Payment Submitted",
-          description: "Waiting for blockchain confirmation...",
+          title: "Payment Successful",
+          description: `Transaction ID: ${txid}`,
         })
-        
-        try {
-          const updated = await getPaymentFromServer(paymentId, true)
-          if (updated?.status === "settled_to_merchant") {
-            setPayment(updated)
-            setIsPaying(false)
-            toast({
-              title: "Payment Successful",
-              description: `Transaction ID: ${updated.u2aTxid || updated.a2uTxid || txid}`,
-            })
-          }
-        } catch {
-          // Preserve the existing success callback semantics.
-        }
       },
       async (error) => {
         try {
