@@ -111,7 +111,8 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
     checkpoint = attempt.checkpoint
   }
   const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
-  console.warn('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false, body: await response?.clone().json().catch(() => null) })
+  const responseBody: unknown = await response?.clone().json().catch(() => null)
+  console.warn('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false, body: responseBody })
   const reconcileAfterUncertainty = async (): Promise<RefundExecutionResult> => {
     const recovered = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
     console.warn('[refunds/executor] reconcileAfterUncertainty:', { outcome: recovered.outcome, payment: recovered.payment })
@@ -120,8 +121,9 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
     const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, recovered.payment.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: recovered.payment.identifier, recovered: true } })
     return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: recovered.payment.identifier } : { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
   }
+  if (response?.status === 401 && isRecord(responseBody) && responseBody.error === 'missing_scope') return { outcome: 'blocked', reason: 'wallet_scope_missing' }
   if (!response || !response.ok) return reconcileAfterUncertainty()
-  const body: unknown = await response.json().catch(() => null)
+  const body = responseBody
   if (!isRecord(body) || typeof body.identifier !== 'string') return reconcileAfterUncertainty()
   const verified = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: body.identifier })
   console.warn('[refunds/executor] verified reconciliation:', { outcome: verified.outcome, payment: verified.payment })

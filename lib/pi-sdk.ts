@@ -361,36 +361,31 @@ export const authenticateCustomer = async (): Promise<{
 
     const authResult = await Promise.race([authPromise, timeoutPromise])
 
-    console.log("[CUSTOMER-AUTH] Pi.authenticate() returned:")
-    console.log("[CUSTOMER-AUTH] Full response:", JSON.stringify(authResult, null, 2))
-    console.log("[CUSTOMER-AUTH] authResult.user:", authResult?.user)
-    console.log("[CUSTOMER-AUTH] authResult.user.scopes:", authResult?.user?.scopes)
-    console.log("[CUSTOMER-AUTH] authResult.accessToken:", authResult?.accessToken ? "EXISTS" : "MISSING")
-
     if (!authResult) {
       console.error("[CUSTOMER-AUTH] authResult is null/undefined")
       return { success: false, error: "Authentication failed - no response from Pi wallet" }
     }
 
-    if (!authResult.user) {
-      console.error("[CUSTOMER-AUTH] authResult.user is missing")
-      return { success: false, error: "Authentication failed - no user data from Pi wallet" }
+    if (!authResult.user || typeof authResult.accessToken !== "string" || authResult.accessToken.trim() === "") {
+      console.error("[CUSTOMER-AUTH] authResult.user or accessToken is missing")
+      return { success: false, error: "Authentication failed - incomplete Pi wallet credentials" }
+    }
+
+    const verificationResponse = await fetch("/api/pi/customer-auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessToken: authResult.accessToken }),
+      cache: "no-store",
+    })
+    if (!verificationResponse.ok) {
+      return { success: false, error: "Authentication failed - wallet permissions could not be verified" }
+    }
+    const verification = await verificationResponse.json()
+    if (verification?.verified !== true) {
+      return { success: false, error: "Authentication failed - required wallet permissions were not granted" }
     }
 
     console.log("[CUSTOMER-AUTH] ✅ Authentication response received successfully")
-    
-    // Check if scopes array exists and has payments scope
-    const hasExplicitScopes = authResult.user.scopes && Array.isArray(authResult.user.scopes)
-    const hasPaymentsScope = hasExplicitScopes ? authResult.user.scopes.includes("payments") : true // Assume granted if not explicitly listed
-    
-    if (hasExplicitScopes) {
-      console.log("[CUSTOMER-AUTH] scopes array present:", authResult.user.scopes)
-      if (!hasPaymentsScope) {
-        console.warn("[CUSTOMER-AUTH] 'payments' scope not in array, but proceeding anyway")
-      }
-    } else {
-      console.log("[CUSTOMER-AUTH] No scopes array in response - assuming 'payments' scope was granted")
-    }
 
     // Update wallet status
     unifiedStore.updateWalletStatus({
