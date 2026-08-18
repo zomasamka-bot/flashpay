@@ -30,6 +30,12 @@ export async function readCustomerRefundPresentation(
       typeof row.refund_id !== "string" ||
       typeof row.payment_id !== "string" ||
       typeof row.payer_uid !== "string" ||
+      row.refund_id.trim() === "" ||
+      row.payment_id.trim() === "" ||
+      row.payer_uid.trim() === "" ||
+      row.refund_id !== row.refund_id.trim() ||
+      row.payment_id !== row.payment_id.trim() ||
+      row.payer_uid !== row.payer_uid.trim() ||
       row.payment_id !== paymentId
     ) return { outcome: "INDETERMINATE" }
     if (row.payer_uid !== verifiedCallerUid) return { outcome: "FORBIDDEN" }
