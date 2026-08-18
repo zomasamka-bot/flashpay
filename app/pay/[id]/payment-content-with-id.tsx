@@ -284,74 +284,102 @@ export default function PaymentContentWithId({
 
     if (!isRefundFlow || !piSDKReady) {
       if (!isRefundFlow) {
-        refundAbortRef.current?.abort()
-        refundAbortRef.current = null
-        refundAccessTokenRef.current = null
-        refundFlowActiveRef.current = false
+        const controller = refundAbortRef.current
+        if (controller) {
+          controller.abort()
+          if (refundAbortRef.current === controller) {
+            refundAbortRef.current = null
+            refundAccessTokenRef.current = null
+            refundFlowActiveRef.current = false
+          }
+        }
       }
       return
     }
     if (refundFlowActiveRef.current) return
 
     refundFlowActiveRef.current = true
-    refundAbortRef.current = new AbortController()
+    const controller = new AbortController()
+    refundAbortRef.current = controller
     setRefundViewStatus("loading")
 
     const loadRefundPresentation = async () => {
       const authResult = await authenticateCustomerForRefundRead()
-      if (!authResult.success || !refundAbortRef.current) {
+      if (controller.signal.aborted || refundAbortRef.current !== controller) return
+      if (!authResult.success) {
+        if (controller.signal.aborted || refundAbortRef.current !== controller) return
         setRefundViewStatus("indeterminate")
-        refundAbortRef.current?.abort()
-        refundAbortRef.current = null
-        refundAccessTokenRef.current = null
-        refundFlowActiveRef.current = false
-        return
-      }
-
-      refundAccessTokenRef.current = authResult.accessToken
-      const signal = refundAbortRef.current.signal
-      const poll = async () => {
-        const token = refundAccessTokenRef.current
-        if (!token || signal.aborted) return
-        const result = await readCustomerRefundPresentationClient(paymentId, token, signal)
-        if (result.outcome === "FOUND") {
-          setRefundPresentation(result.presentation)
-          setRefundViewStatus("ready")
-          if (["refund_completed", "refund_delayed", "attention_required"].includes(result.presentation.customerStatus)) {
-            refundAbortRef.current?.abort()
-            refundAbortRef.current = null
-            refundAccessTokenRef.current = null
-            refundFlowActiveRef.current = false
-          }
-        } else if (result.outcome === "UNAUTHORIZED" || result.outcome === "FORBIDDEN") {
-          setRefundViewStatus("indeterminate")
-          refundAbortRef.current?.abort()
+        if (refundAbortRef.current === controller) {
+          controller.abort()
           refundAbortRef.current = null
           refundAccessTokenRef.current = null
           refundFlowActiveRef.current = false
         }
+        return
+      }
+
+      if (controller.signal.aborted || refundAbortRef.current !== controller) return
+      refundAccessTokenRef.current = authResult.accessToken
+      const signal = controller.signal
+      const poll = async () => {
+        if (controller.signal.aborted || refundAbortRef.current !== controller) return
+        const token = refundAccessTokenRef.current
+        if (!token) return
+        const result = await readCustomerRefundPresentationClient(paymentId, token, signal)
+        if (controller.signal.aborted || refundAbortRef.current !== controller) return
+        if (result.outcome === "FOUND") {
+          if (controller.signal.aborted || refundAbortRef.current !== controller) return
+          setRefundPresentation(result.presentation)
+          if (controller.signal.aborted || refundAbortRef.current !== controller) return
+          setRefundViewStatus("ready")
+          if (["refund_completed", "refund_delayed", "attention_required"].includes(result.presentation.customerStatus)) {
+            if (refundAbortRef.current === controller) {
+              controller.abort()
+              refundAbortRef.current = null
+              refundAccessTokenRef.current = null
+              refundFlowActiveRef.current = false
+            }
+          }
+        } else if (result.outcome === "UNAUTHORIZED" || result.outcome === "FORBIDDEN") {
+          if (controller.signal.aborted || refundAbortRef.current !== controller) return
+          setRefundViewStatus("indeterminate")
+          if (refundAbortRef.current === controller) {
+            controller.abort()
+            refundAbortRef.current = null
+            refundAccessTokenRef.current = null
+            refundFlowActiveRef.current = false
+          }
+        }
       }
 
       await poll()
-      if (!signal.aborted && refundFlowActiveRef.current) {
-        const interval = window.setInterval(poll, 10000)
-        signal.addEventListener("abort", () => window.clearInterval(interval), { once: true })
+      if (controller.signal.aborted || refundAbortRef.current !== controller) return
+      const interval = window.setInterval(poll, 10000)
+      if (controller.signal.aborted || refundAbortRef.current !== controller) {
+        window.clearInterval(interval)
+        return
       }
+      signal.addEventListener("abort", () => window.clearInterval(interval), { once: true })
     }
 
     loadRefundPresentation().catch(() => {
+      if (controller.signal.aborted || refundAbortRef.current !== controller) return
       setRefundViewStatus("indeterminate")
-      refundAbortRef.current?.abort()
-      refundAbortRef.current = null
-      refundAccessTokenRef.current = null
-      refundFlowActiveRef.current = false
+      if (refundAbortRef.current === controller) {
+        controller.abort()
+        refundAbortRef.current = null
+        refundAccessTokenRef.current = null
+        refundFlowActiveRef.current = false
+      }
     })
 
     return () => {
-      refundAbortRef.current?.abort()
-      refundAbortRef.current = null
-      refundAccessTokenRef.current = null
-      refundFlowActiveRef.current = false
+      if (refundAbortRef.current === controller) {
+        controller.abort()
+        refundAbortRef.current = null
+        refundAccessTokenRef.current = null
+        refundFlowActiveRef.current = false
+      }
     }
   }, [authoritativeLoaded, entryMode, payment, paymentId, piSDKReady])
 
