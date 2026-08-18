@@ -118,6 +118,7 @@ export const createPiPayment = async (
   merchantUid: string,
   onSuccess: (txid: string) => void,
   onError: (error: string, isCancelled?: boolean) => void,
+  onProcessing?: (status: "paid_to_app" | "settlement_pending") => void,
 ) => {
   if (typeof window === "undefined") {
     onError("Cannot create payment - not in browser", false)
@@ -244,6 +245,7 @@ export const createPiPayment = async (
               CoreLogger.info("Payment in processing state", { piPaymentId, txid, paymentId, status: completeData.status })
               // Processing states should be handled by polling or dedicated processing callback
               // Do NOT call onSuccess or onError - let client continue polling or use recovery flow
+              onProcessing?.(completeData.status)
               return
             }
 

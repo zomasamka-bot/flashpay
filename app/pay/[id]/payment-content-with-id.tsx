@@ -278,9 +278,11 @@ export default function PaymentContentWithId({
     }
   }, [paymentId, entryMode, toast])
 
+  const paymentStatus = payment?.status
+
   useEffect(() => {
     const refundStatuses = new Set(["settlement_failed", "refund_pending", "refunded"])
-    const isRefundFlow = entryMode === "pi" && authoritativeLoaded && payment !== null && refundStatuses.has(payment.status)
+    const isRefundFlow = entryMode === "pi" && authoritativeLoaded && paymentStatus !== undefined && refundStatuses.has(paymentStatus)
 
     if (!isRefundFlow || !piSDKReady) {
       if (!isRefundFlow) {
@@ -321,8 +323,11 @@ export default function PaymentContentWithId({
       if (controller.signal.aborted || refundAbortRef.current !== controller) return
       refundAccessTokenRef.current = authResult.accessToken
       const signal = controller.signal
+      let inFlight = false
       const poll = async () => {
-        if (controller.signal.aborted || refundAbortRef.current !== controller) return
+        if (controller.signal.aborted || refundAbortRef.current !== controller || inFlight) return
+        inFlight = true
+        try {
         const token = refundAccessTokenRef.current
         if (!token) return
         const result = await readCustomerRefundPresentationClient(paymentId, token, signal)
@@ -349,6 +354,9 @@ export default function PaymentContentWithId({
             refundAccessTokenRef.current = null
             refundFlowActiveRef.current = false
           }
+        }
+        } finally {
+          inFlight = false
         }
       }
 
@@ -381,7 +389,43 @@ export default function PaymentContentWithId({
         refundFlowActiveRef.current = false
       }
     }
-  }, [authoritativeLoaded, entryMode, payment, paymentId, piSDKReady])
+  }, [authoritativeLoaded, entryMode, paymentStatus, paymentId, piSDKReady])
+
+  const pollingStartedRef = useRef(false)
+  const startPostSubmitPolling = (txid: string) => {
+    if (pollingStartedRef.current) return
+    pollingStartedRef.current = true
+    console.log("[v0] Starting status polling...")
+    let stopped = false
+    const pollInterval = setInterval(async () => {
+      console.log("[v0] Polling payment status...")
+      const updated = await getPaymentFromServer(paymentId, true)
+      if (stopped) return
+      if (updated) {
+        console.log("[v0] Updated payment status:", updated.status)
+        if (["settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
+          setPayment(updated)
+          stopped = true
+          clearInterval(pollInterval)
+          return
+        }
+        if (updated.status === "settled_to_merchant") {
+          stopped = true
+          clearInterval(pollInterval)
+          console.log("[v0] ✅ Payment confirmed and settled to merchant!")
+          setPayment(updated)
+          setIsPaying(false)
+          toast({ title: "Payment Successful", description: `Transaction ID: ${updated.u2aTxid || updated.a2uTxid || txid}` })
+        }
+      }
+    }, 3000)
+    setTimeout(() => {
+      stopped = true
+      clearInterval(pollInterval)
+      console.log("[v0] Stopping status polling after 5 minutes")
+      setIsPaying(false)
+    }, 300000)
+  }
 
   const handlePay = async () => {
     addDiagnostic("PAY BUTTON CLICKED")
@@ -440,45 +484,7 @@ export default function PaymentContentWithId({
           description: "Waiting for blockchain confirmation...",
         })
         
-        // Start polling for payment status updates
-        console.log("[v0] Starting status polling...")
-        let stopped = false
-        const pollInterval = setInterval(async () => {
-          console.log("[v0] Polling payment status...")
-          const updated = await getPaymentFromServer(paymentId, true)
-          if (stopped) return
-          
-          if (updated) {
-            console.log("[v0] Updated payment status:", updated.status)
-            
-            if (["settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
-              setPayment(updated)
-              stopped = true
-              clearInterval(pollInterval)
-              return
-            }
-
-            if (updated.status === "settled_to_merchant") {
-              stopped = true
-              clearInterval(pollInterval)
-              console.log("[v0] ✅ Payment confirmed and settled to merchant!")
-              setPayment(updated)
-              setIsPaying(false)
-              toast({
-                title: "Payment Successful",
-                description: `Transaction ID: ${updated.u2aTxid || updated.a2uTxid || txid}`,
-              })
-            }
-          }
-        }, 3000) // Poll every 3 seconds
-        
-        // Stop polling after 5 minutes
-        setTimeout(() => {
-          stopped = true
-          clearInterval(pollInterval)
-          console.log("[v0] Stopping status polling after 5 minutes")
-          setIsPaying(false)
-        }, 300000)
+        startPostSubmitPolling(txid)
       },
       async (error) => {
         try {
@@ -499,6 +505,7 @@ export default function PaymentContentWithId({
         })
         setIsPaying(false)
       },
+      () => startPostSubmitPolling(""),
     )
     console.log("[v0] executePayment called, waiting for callbacks...")
   }
