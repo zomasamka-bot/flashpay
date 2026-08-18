@@ -392,12 +392,17 @@ export default function PaymentContentWithId({
   }, [authoritativeLoaded, entryMode, paymentStatus, paymentId, piSDKReady])
 
   const pollingStartedRef = useRef(false)
-  const startPostSubmitPolling = (txid: string) => {
+  const startPostSubmitPolling = (txid: string, processingStatus?: "paid_to_app" | "settlement_pending") => {
     if (pollingStartedRef.current) return
     pollingStartedRef.current = true
     console.log("[v0] Starting status polling...")
     let stopped = false
+    let lastProcessingStatus: "paid_to_app" | "settlement_pending" | null = processingStatus ?? null
+    let inFlight = false
     const pollInterval = setInterval(async () => {
+      if (stopped || inFlight) return
+      inFlight = true
+      try {
       console.log("[v0] Polling payment status...")
       const updated = await getPaymentFromServer(paymentId, true)
       if (stopped) return
@@ -409,6 +414,11 @@ export default function PaymentContentWithId({
           clearInterval(pollInterval)
           return
         }
+        if (updated.status === "paid_to_app" || updated.status === "settlement_pending") {
+          lastProcessingStatus = updated.status
+          setPayment(updated)
+          return
+        }
         if (updated.status === "settled_to_merchant") {
           stopped = true
           clearInterval(pollInterval)
@@ -418,12 +428,15 @@ export default function PaymentContentWithId({
           toast({ title: "Payment Successful", description: `Transaction ID: ${updated.u2aTxid || updated.a2uTxid || txid}` })
         }
       }
+      } finally {
+        inFlight = false
+      }
     }, 3000)
     setTimeout(() => {
       stopped = true
       clearInterval(pollInterval)
       console.log("[v0] Stopping status polling after 5 minutes")
-      setIsPaying(false)
+      if (lastProcessingStatus === null) setIsPaying(false)
     }, 300000)
   }
 
@@ -476,7 +489,7 @@ export default function PaymentContentWithId({
 
     executePayment(
       paymentId,
-      (txid) => {
+      async (txid) => {
         console.log("[v0] ========== PAYMENT SUCCESS CALLBACK ==========")
         console.log("[v0] Transaction ID:", txid)
         toast({
@@ -484,7 +497,19 @@ export default function PaymentContentWithId({
           description: "Waiting for blockchain confirmation...",
         })
         
-        startPostSubmitPolling(txid)
+        try {
+          const updated = await getPaymentFromServer(paymentId, true)
+          if (updated?.status === "settled_to_merchant") {
+            setPayment(updated)
+            setIsPaying(false)
+            toast({
+              title: "Payment Successful",
+              description: `Transaction ID: ${updated.u2aTxid || updated.a2uTxid || txid}`,
+            })
+          }
+        } catch {
+          // Preserve the existing success callback semantics.
+        }
       },
       async (error) => {
         try {
@@ -505,7 +530,10 @@ export default function PaymentContentWithId({
         })
         setIsPaying(false)
       },
-      () => startPostSubmitPolling(""),
+      (status) => {
+        setPayment((current) => current ? { ...current, status } : current)
+        startPostSubmitPolling("", status)
+      },
     )
     console.log("[v0] executePayment called, waiting for callbacks...")
   }
