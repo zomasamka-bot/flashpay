@@ -445,7 +445,7 @@ export default function PaymentContentWithId({
         let stopped = false
         const pollInterval = setInterval(async () => {
           console.log("[v0] Polling payment status...")
-          const updated = await getPaymentFromServer(paymentId)
+          const updated = await getPaymentFromServer(paymentId, true)
           if (stopped) return
           
           if (updated) {
