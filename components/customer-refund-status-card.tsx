@@ -35,7 +35,7 @@ export default function CustomerRefundStatusCard({ presentation, status }: Props
 
   const statusLabel = {
     refund_pending: "Refund in progress",
-    refund_confirmed: "Refund confirmed on Pi Testnet; final records pending",
+    refund_confirmed: "Your refund has been sent back through Pi. Open Pi Wallet to view the transaction; final records will continue automatically.",
     refund_completed: "Refund completed",
     refund_delayed: "Refund status cannot be verified yet.",
   }[presentation.customerStatus]
