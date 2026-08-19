@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getMerchantProfileSummary, getSettledPaymentIds } from "@/lib/db"
+import { getMerchantProfileSummary, getSettledPaymentIds, query } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { readRefundPresentation } from "@/lib/refund-presentation-reader"
 import { redis, isRedisConfigured } from "@/lib/redis"
 
 export const dynamic = "force-dynamic"
@@ -71,7 +72,7 @@ export async function GET(request: NextRequest) {
           const payment = typeof raw === "string" ? JSON.parse(raw) : raw
           if (!payment || payment.merchantId !== verifiedMerchant.username) continue
           if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(payment.status) || payment.settlementFailureState) {
-            operationalPayments.push({
+            const operationalPayment = {
               paymentId: payment.id,
               piPaymentId: payment.piPaymentId,
               amount: payment.customerAmount ?? payment.amount,
@@ -87,7 +88,31 @@ export async function GET(request: NextRequest) {
               a2uPaymentId: payment.a2uPaymentId,
               a2uTxid: payment.a2uTxid,
               updatedAt: payment.lastAttemptAt || payment.paidAt || payment.createdAt,
-            })
+            }
+
+            if (typeof payment.id === "string" && (payment.status === "settlement_failed" || payment.status === "refund_pending" || payment.status === "refunded" || payment.refundStatus)) {
+              const checkpointRows = await query(
+                "SELECT refund_id FROM refund_checkpoints WHERE payment_id=$1 LIMIT 2",
+                [payment.id],
+              )
+              if (Array.isArray(checkpointRows) && checkpointRows.length === 1) {
+                const refundId = (checkpointRows[0] as Record<string, unknown>).refund_id
+                if (typeof refundId === "string" && refundId.trim() === refundId && refundId.length > 0) {
+                  const refundPresentationResult = await readRefundPresentation(refundId)
+                  if (refundPresentationResult.outcome === "FOUND" && refundPresentationResult.presentation.paymentId === payment.id) {
+                    operationalPayments.push({ ...operationalPayment, refundPresentation: refundPresentationResult.presentation })
+                  } else {
+                    operationalPayments.push(operationalPayment)
+                  }
+                } else {
+                  operationalPayments.push(operationalPayment)
+                }
+              } else {
+                operationalPayments.push(operationalPayment)
+              }
+            } else {
+              operationalPayments.push(operationalPayment)
+            }
           }
         } catch (error) {
           console.warn("[Profile API] Skipping malformed operational payment", key, error)

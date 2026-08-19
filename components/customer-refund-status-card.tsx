@@ -22,7 +22,7 @@ function CopyButton({ value }: { value: string }) {
 function formatLocalDateTime(value?: string | number | null) {
   if (value === undefined || value === null || value === "") return value
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(undefined, { hour12: false })
 }
 
 function Detail({ label, value, copyable = false }: { label: string; value?: string | number | null; copyable?: boolean }) {

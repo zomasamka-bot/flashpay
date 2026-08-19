@@ -619,8 +619,10 @@ export default function PaymentContentWithId({
         <div className="max-w-md mx-auto space-y-6">
           <CustomerRefundStatusCard presentation={refundPresentation} status={refundViewStatus} />
           {payment.status === "settlement_failed" && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-center text-sm text-destructive">
-              Payment did not reach the recipient. Please wait a moment. Do not worry—your automatic refund is being initiated.
+            <div className={refundPresentation?.customerStatus === "refund_completed" ? "rounded-lg border border-green-300 bg-green-50 p-4 text-center text-sm text-green-800" : "rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-center text-sm text-destructive"}>
+              {refundPresentation?.customerStatus === "refund_completed"
+                ? "Refund completed successfully. Your refund has been returned to your Pi Wallet. Open Pi Wallet to view the transaction."
+                : "Payment did not reach the recipient. Please wait a moment. Do not worry—your automatic refund is being initiated."}
             </div>
           )}
         </div>
