@@ -618,6 +618,11 @@ export default function PaymentContentWithId({
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4">
         <div className="max-w-md mx-auto space-y-6">
           <CustomerRefundStatusCard presentation={refundPresentation} status={refundViewStatus} />
+          {payment.status === "settlement_failed" && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-center text-sm text-destructive">
+              Payment did not reach the recipient. Please wait a moment. Do not worry—your automatic refund is being initiated.
+            </div>
+          )}
         </div>
       </div>
     )
