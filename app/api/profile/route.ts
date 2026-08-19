@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
           const payment = typeof raw === "string" ? JSON.parse(raw) : raw
           if (!payment || payment.merchantId !== verifiedMerchant.username) continue
           if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(payment.status) || payment.settlementFailureState) {
-            const operationalPayment = {
+            const operationalPayment: Record<string, unknown> = {
               paymentId: payment.id,
               piPaymentId: payment.piPaymentId,
               amount: payment.customerAmount ?? payment.amount,
@@ -89,30 +89,29 @@ export async function GET(request: NextRequest) {
               a2uTxid: payment.a2uTxid,
               updatedAt: payment.lastAttemptAt || payment.paidAt || payment.createdAt,
             }
-
-            if (typeof payment.id === "string" && (payment.status === "settlement_failed" || payment.status === "refund_pending" || payment.status === "refunded" || payment.refundStatus)) {
+            const shouldReadRefund =
+              ["settlement_failed", "refund_pending", "refunded"].includes(payment.status) ||
+              ["refund_pending", "refunded"].includes(payment.settlementFailureState) ||
+              ["pending", "submitted", "completed", "failed", "manual_review_required"].includes(payment.refundStatus)
+            if (shouldReadRefund) {
               const checkpointRows = await query(
                 "SELECT refund_id FROM refund_checkpoints WHERE payment_id=$1 LIMIT 2",
                 [payment.id],
               )
-              if (Array.isArray(checkpointRows) && checkpointRows.length === 1) {
-                const refundId = (checkpointRows[0] as Record<string, unknown>).refund_id
-                if (typeof refundId === "string" && refundId.trim() === refundId && refundId.length > 0) {
-                  const refundPresentationResult = await readRefundPresentation(refundId)
-                  if (refundPresentationResult.outcome === "FOUND" && refundPresentationResult.presentation.paymentId === payment.id) {
-                    operationalPayments.push({ ...operationalPayment, refundPresentation: refundPresentationResult.presentation })
-                  } else {
-                    operationalPayments.push(operationalPayment)
-                  }
-                } else {
-                  operationalPayments.push(operationalPayment)
+              const checkpointRow = checkpointRows?.length === 1 ? checkpointRows[0] : null
+              const refundId =
+                typeof checkpointRow === "object" && checkpointRow !== null && !Array.isArray(checkpointRow) &&
+                typeof (checkpointRow as Record<string, unknown>).refund_id === "string"
+                  ? (checkpointRow as Record<string, unknown>).refund_id.trim()
+                  : ""
+              if (refundId) {
+                const refundPresentation = await readRefundPresentation(refundId)
+                if (refundPresentation.outcome === "FOUND" && refundPresentation.presentation.paymentId === payment.id) {
+                  operationalPayment.refundPresentation = refundPresentation.presentation
                 }
-              } else {
-                operationalPayments.push(operationalPayment)
               }
-            } else {
-              operationalPayments.push(operationalPayment)
             }
+            operationalPayments.push(operationalPayment)
           }
         } catch (error) {
           console.warn("[Profile API] Skipping malformed operational payment", key, error)
