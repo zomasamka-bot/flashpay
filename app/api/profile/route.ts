@@ -141,39 +141,66 @@ export async function GET(request: NextRequest) {
         typeof payment.piPaymentId !== "string" || !settledPaymentIds.has(payment.piPaymentId),
     )
 
-    const refundCompletedPaymentIds = new Set<string>()
-    let refundCompletedAmount = 0
-    const existingFailedPaymentIds = new Set(
-      authoritativeOperationalPayments
-        .filter((payment) => payment.status === "settlement_failed" || payment.settlementFailureState === "refund_pending" || payment.settlementFailureState === "refunded")
-        .map((payment) => payment.paymentId)
-        .filter((paymentId): paymentId is string => typeof paymentId === "string" && paymentId.length > 0),
-    )
+    // Read-only correction overlay: completed refund presentations classify their
+    // canonical transaction from exactly one settlement row, without changing the total.
+    const overlaidPiPaymentIds = new Set<string>()
     for (const payment of authoritativeOperationalPayments) {
-      const presentation = payment.refundPresentation
+      const presentationValue: unknown = payment.refundPresentation
       if (
-        presentation &&
-        typeof payment.paymentId === "string" &&
-        presentation.merchantStatus === "refund_completed" &&
-        !existingFailedPaymentIds.has(payment.paymentId) &&
-        !refundCompletedPaymentIds.has(payment.paymentId) &&
-        typeof presentation.amount === "number" &&
-        Number.isFinite(presentation.amount)
-      ) {
-        refundCompletedPaymentIds.add(payment.paymentId)
-        refundCompletedAmount += presentation.amount
-      }
-    }
-    const profileSummaryWithRefunds =
-      refundCompletedPaymentIds.size > 0 && profileSummary.failedTransactions === 0
-        ? {
-            ...profileSummary,
-            failedTransactions: profileSummary.failedTransactions + refundCompletedPaymentIds.size,
-            totalFailedAmount: profileSummary.totalFailedAmount + refundCompletedAmount,
-          }
-        : profileSummary
+        typeof presentationValue !== "object" ||
+        presentationValue === null ||
+        Array.isArray(presentationValue)
+      ) continue
+      const presentation = presentationValue as Record<string, unknown>
+      if (presentation.merchantStatus !== "refund_completed") continue
+      if (presentation.paymentId !== payment.paymentId) continue
+      if (typeof payment.piPaymentId !== "string" || payment.piPaymentId.length === 0) continue
+      if (overlaidPiPaymentIds.has(payment.piPaymentId)) continue
+      overlaidPiPaymentIds.add(payment.piPaymentId)
 
-    return NextResponse.json({ ...profileSummaryWithRefunds, operationalPayments: authoritativeOperationalPayments })
+      const transactionRows = await query(
+        `SELECT t.id, t.amount, r.settlement_status
+         FROM transactions t
+         LEFT JOIN receipts r ON r.transaction_id = t.id
+         WHERE t.merchant_id = $1 AND t.payment_id = $2
+         LIMIT 2`,
+        [verifiedMerchant.username, payment.piPaymentId],
+      )
+      if (!Array.isArray(transactionRows) || transactionRows.length !== 1) continue
+
+      const rowValue: unknown = transactionRows[0]
+      if (typeof rowValue !== "object" || rowValue === null || Array.isArray(rowValue)) continue
+      const row = rowValue as Record<string, unknown>
+      const settlementStatus: unknown = row.settlement_status
+      if (typeof settlementStatus !== "string") continue
+      if (settlementStatus === "failed" || settlementStatus === "settlement_failed") continue
+
+      const amountValue: unknown = row.amount
+      const amount = typeof amountValue === "number"
+        ? amountValue
+        : typeof amountValue === "string"
+          ? Number(amountValue)
+          : Number.NaN
+      if (!Number.isFinite(amount)) continue
+
+      if (["settlement_pending", "paid_to_app", "pending"].includes(settlementStatus)) {
+        profileSummary.pendingTransactions -= 1
+        profileSummary.totalAwaitingAmount -= amount
+      } else if (settlementStatus === "settled_to_merchant") {
+        profileSummary.settledTransactions -= 1
+        profileSummary.totalSettledAmount -= amount
+      } else if (settlementStatus === "completed") {
+        profileSummary.completedTransactions -= 1
+        profileSummary.totalCompletedAmount -= amount
+      } else {
+        continue
+      }
+
+      profileSummary.failedTransactions += 1
+      profileSummary.totalFailedAmount += amount
+    }
+
+    return NextResponse.json({ ...profileSummary, operationalPayments: authoritativeOperationalPayments })
   } catch (error) {
     console.error("[Profile API] Error:", error)
     return NextResponse.json(
