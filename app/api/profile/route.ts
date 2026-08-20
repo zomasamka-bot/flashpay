@@ -93,17 +93,28 @@ export async function GET(request: NextRequest) {
               ["settlement_failed", "refund_pending", "refunded"].includes(payment.status) ||
               ["refund_pending", "refunded"].includes(payment.settlementFailureState) ||
               ["pending", "submitted", "completed", "failed", "manual_review_required"].includes(payment.refundStatus)
-            if (shouldReadRefund) {
+            if (
+              shouldReadRefund &&
+              typeof payment.id === "string" &&
+              payment.id.length > 0 &&
+              payment.id === payment.id.trim()
+            ) {
               const checkpointRows = await query(
                 "SELECT refund_id FROM refund_checkpoints WHERE payment_id=$1 LIMIT 2",
                 [payment.id],
               )
               const checkpointRow = checkpointRows?.length === 1 ? checkpointRows[0] : null
-              const refundId =
-                typeof checkpointRow === "object" && checkpointRow !== null && !Array.isArray(checkpointRow) &&
-                typeof (checkpointRow as Record<string, unknown>).refund_id === "string"
-                  ? (checkpointRow as Record<string, unknown>).refund_id.trim()
-                  : ""
+              let refundId = ""
+              if (typeof checkpointRow === "object" && checkpointRow !== null && !Array.isArray(checkpointRow)) {
+                const refundIdValue: unknown = (checkpointRow as Record<string, unknown>).refund_id
+                if (
+                  typeof refundIdValue === "string" &&
+                  refundIdValue.length > 0 &&
+                  refundIdValue === refundIdValue.trim()
+                ) {
+                  refundId = refundIdValue
+                }
+              }
               if (refundId) {
                 const refundPresentation = await readRefundPresentation(refundId)
                 if (refundPresentation.outcome === "FOUND" && refundPresentation.presentation.paymentId === payment.id) {
