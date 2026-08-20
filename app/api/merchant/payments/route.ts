@@ -130,27 +130,6 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const canonicalPaymentIds = new Map<string, string | null>()
-    if (isRedisConfigured) {
-      const paymentKeys = await redis.keys("payment:*")
-      for (const key of paymentKeys || []) {
-        const raw = await redis.get(key)
-        const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
-        if (typeof value !== "object" || value === null || Array.isArray(value)) continue
-        const payment = value as Record<string, unknown>
-        const canonicalId = payment.id
-        const piPaymentId = payment.piPaymentId
-        if (payment.merchantId !== verifiedUsername) continue
-        if (typeof canonicalId !== "string" || canonicalId.trim() !== canonicalId || canonicalId.length === 0) continue
-        if (typeof piPaymentId !== "string" || piPaymentId.trim() !== piPaymentId || piPaymentId.length === 0) continue
-        if (canonicalPaymentIds.has(piPaymentId)) {
-          canonicalPaymentIds.set(piPaymentId, null)
-        } else {
-          canonicalPaymentIds.set(piPaymentId, canonicalId)
-        }
-      }
-    }
-
     // Transform and validate rows
     const payments: Record<string, unknown>[] = []
     for (const candidate of result) {
@@ -244,11 +223,10 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      const canonicalPaymentId = canonicalPaymentIds.get(paymentId)
       payments.push({
-        id: canonicalPaymentId || undefined,
+        id,
         transactionId: id,
-        paymentId: canonicalPaymentId || undefined,
+        paymentId,
         merchantId: merchantIdVal,
         amount,
         reference,
