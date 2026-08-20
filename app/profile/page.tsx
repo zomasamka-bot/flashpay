@@ -116,10 +116,26 @@ function ProfileContent() {
   const [summary, setSummary] = useState<ProfileSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [openRefundReceipts, setOpenRefundReceipts] = useState<Record<string, boolean>>({})
 
   // Owner UID verification — stores result separately from payment system
   const { uidData, verifyUid, clearUid } = useOwnerUid()
   const piUsername = uidData.username
+  const copyRefundReceipt = async (presentation: RefundPresentation) => {
+    const fields = [
+      ["Amount", `${presentation.amount}π`],
+      ["Payment ID", presentation.paymentId],
+      ["Refund ID", presentation.refundId],
+      ["Refund payment ID", presentation.refundPaymentId],
+      ["Refund transaction ID", presentation.refundTxid],
+      ["Network", presentation.blockchain.network],
+      ["Requested at", presentation.requestedAt ? formatProfileDateTime(presentation.requestedAt) : ""],
+      ["Blockchain transaction at", presentation.blockchain.transactionAt ? formatProfileDateTime(presentation.blockchain.transactionAt) : ""],
+      ["Completed at", presentation.finalization.completedAt ? formatProfileDateTime(presentation.finalization.completedAt) : ""],
+      ["Finalized at", presentation.finalization.finalizedAt ? formatProfileDateTime(presentation.finalization.finalizedAt) : ""],
+    ].filter(([, value]) => Boolean(value))
+    await navigator.clipboard.writeText(fields.map(([label, value]) => `${label}: ${value}`).join("\n"))
+  }
   
   // Canonical merchant state for continuity
   const merchantState = useMerchant()
@@ -451,6 +467,33 @@ function ProfileContent() {
                               <span>{item.amount.toFixed(2)}π</span>
                             </div>
                             <p className="text-muted-foreground mt-1">{merchantAttentionStatus(item)}</p>
+                            {item.refundPresentation?.merchantStatus === "refund_completed" && (
+                              <div className="mt-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setOpenRefundReceipts((current) => ({ ...current, [item.paymentId]: !current[item.paymentId] }))}
+                                >
+                                  {openRefundReceipts[item.paymentId] ? "Hide refund receipt" : "Tap to view refund receipt"}
+                                </Button>
+                                {openRefundReceipts[item.paymentId] && (
+                                  <div className="mt-2 rounded-md border bg-muted/30 p-2 text-xs space-y-1">
+                                    <p><span className="text-muted-foreground">Amount:</span> {item.refundPresentation.amount}π</p>
+                                    <p><span className="text-muted-foreground">Payment ID:</span> {item.refundPresentation.paymentId}</p>
+                                    <p><span className="text-muted-foreground">Refund ID:</span> {item.refundPresentation.refundId}</p>
+                                    {item.refundPresentation.refundPaymentId && <p><span className="text-muted-foreground">Refund payment ID:</span> {item.refundPresentation.refundPaymentId}</p>}
+                                    {item.refundPresentation.refundTxid && <p><span className="text-muted-foreground">Refund transaction ID:</span> {item.refundPresentation.refundTxid}</p>}
+                                    {item.refundPresentation.blockchain.network && <p><span className="text-muted-foreground">Network:</span> {item.refundPresentation.blockchain.network}</p>}
+                                    {item.refundPresentation.requestedAt && <p><span className="text-muted-foreground">Requested at:</span> {formatProfileDateTime(item.refundPresentation.requestedAt)}</p>}
+                                    {item.refundPresentation.blockchain.transactionAt && <p><span className="text-muted-foreground">Blockchain transaction at:</span> {formatProfileDateTime(item.refundPresentation.blockchain.transactionAt)}</p>}
+                                    {item.refundPresentation.finalization.completedAt && <p><span className="text-muted-foreground">Completed at:</span> {formatProfileDateTime(item.refundPresentation.finalization.completedAt)}</p>}
+                                    {item.refundPresentation.finalization.finalizedAt && <p><span className="text-muted-foreground">Finalized at:</span> {formatProfileDateTime(item.refundPresentation.finalization.finalizedAt)}</p>}
+                                    <Button type="button" variant="ghost" size="sm" onClick={() => void copyRefundReceipt(item.refundPresentation!)}>Copy receipt</Button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             {item.nextRetryAt && (
                               <p className="text-xs text-muted-foreground">Next retry: {formatProfileDateTime(item.nextRetryAt)}</p>
                             )}
