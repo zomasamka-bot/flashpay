@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getReceipt } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { redis, isRedisConfigured } from "@/lib/redis"
 import type { ReceiptRow } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -58,10 +59,31 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       )
     }
 
+    let canonicalPaymentId: string | undefined
+    if (isRedisConfigured && typeof receipt.u2a_identifier === "string" && receipt.u2a_identifier.length > 0) {
+      const matches: string[] = []
+      const paymentKeys = await redis.keys("payment:*")
+      for (const key of paymentKeys || []) {
+        const raw = await redis.get(key)
+        const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
+        if (typeof value !== "object" || value === null || Array.isArray(value)) continue
+        const payment = value as Record<string, unknown>
+        if (
+          payment.merchantId === receipt.merchant_id &&
+          payment.piPaymentId === receipt.u2a_identifier &&
+          typeof payment.id === "string" &&
+          payment.id.length > 0 &&
+          payment.id.trim() === payment.id
+        ) matches.push(payment.id)
+      }
+      if (matches.length === 1) canonicalPaymentId = matches[0]
+    }
+
     // Transform receipt to exact expected shape with nested data
     const transformedReceipt = {
       id: receipt.id,
       transactionId: receipt.transaction_id,
+      paymentId: canonicalPaymentId,
       reference: receipt.reference,
       amount: Number(receipt.amount),
       currency: receipt.currency || 'π',

@@ -53,6 +53,7 @@ export default function ReceiptPage() {
   const [isIOS, setIsIOS] = useState(false)
   const store = useUnifiedStore()
   const merchant = store.getMerchantState()
+  const canonicalPaymentId = (receipt as (Receipt & { paymentId?: string }) | null)?.paymentId
 
   // Detect iOS only on client-side to avoid SSR issues
   useEffect(() => {
@@ -203,6 +204,13 @@ export default function ReceiptPage() {
                 )}
               </div>
             </div>
+
+            {canonicalPaymentId && (
+              <div className="p-4 bg-muted rounded-lg print:bg-gray-100">
+                <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">FlashPay Payment ID</p>
+                <p className="font-mono text-sm break-all">{canonicalPaymentId}</p>
+              </div>
+            )}
 
             {/* Transaction ID */}
             <div className="p-4 bg-muted rounded-lg print:bg-gray-100">
