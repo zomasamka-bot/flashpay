@@ -442,10 +442,7 @@ function ProfileContent() {
                       {summary.operationalPayments
                         .filter(
                           (item) =>
-                            item.status !== "refunded" &&
-                            item.refundStatus !== "completed" &&
-                            item.settlementFailureState !== "refunded" &&
-                            item.refundPresentation?.merchantStatus !== "refund_completed",
+                            item.refundPresentation?.merchantStatus === "refund_completed" || (item.status !== "refunded" && item.refundStatus !== "completed" && item.settlementFailureState !== "refunded"),
                         )
                         .map((item) => (
                           <div key={item.paymentId} className="rounded-md border p-3 text-sm">
