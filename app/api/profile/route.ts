@@ -141,7 +141,39 @@ export async function GET(request: NextRequest) {
         typeof payment.piPaymentId !== "string" || !settledPaymentIds.has(payment.piPaymentId),
     )
 
-    return NextResponse.json({ ...profileSummary, operationalPayments: authoritativeOperationalPayments })
+    const refundCompletedPaymentIds = new Set<string>()
+    let refundCompletedAmount = 0
+    const existingFailedPaymentIds = new Set(
+      authoritativeOperationalPayments
+        .filter((payment) => payment.status === "settlement_failed" || payment.settlementFailureState === "refund_pending" || payment.settlementFailureState === "refunded")
+        .map((payment) => payment.paymentId)
+        .filter((paymentId): paymentId is string => typeof paymentId === "string" && paymentId.length > 0),
+    )
+    for (const payment of authoritativeOperationalPayments) {
+      const presentation = payment.refundPresentation
+      if (
+        presentation &&
+        typeof payment.paymentId === "string" &&
+        presentation.merchantStatus === "refund_completed" &&
+        !existingFailedPaymentIds.has(payment.paymentId) &&
+        !refundCompletedPaymentIds.has(payment.paymentId) &&
+        typeof presentation.amount === "number" &&
+        Number.isFinite(presentation.amount)
+      ) {
+        refundCompletedPaymentIds.add(payment.paymentId)
+        refundCompletedAmount += presentation.amount
+      }
+    }
+    const profileSummaryWithRefunds =
+      refundCompletedPaymentIds.size > 0 && profileSummary.failedTransactions === 0
+        ? {
+            ...profileSummary,
+            failedTransactions: profileSummary.failedTransactions + refundCompletedPaymentIds.size,
+            totalFailedAmount: profileSummary.totalFailedAmount + refundCompletedAmount,
+          }
+        : profileSummary
+
+    return NextResponse.json({ ...profileSummaryWithRefunds, operationalPayments: authoritativeOperationalPayments })
   } catch (error) {
     console.error("[Profile API] Error:", error)
     return NextResponse.json(
