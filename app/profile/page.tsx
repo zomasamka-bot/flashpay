@@ -11,6 +11,7 @@ import { config } from "@/lib/config"
 import { useToast } from "@/hooks/use-toast"
 import { useMerchant } from "@/lib/use-merchant"
 import { unifiedStore } from "@/lib/unified-store"
+import type { RefundPresentation } from "@/lib/types"
 import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet, Loader2 } from "lucide-react"
 
 type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
@@ -42,6 +43,9 @@ function mapSettlementStatus(status: SettlementStatus): string {
 }
 
 function merchantAttentionStatus(item: OperationalPayment): string {
+  if (item.refundPresentation?.merchantStatus === "refund_pending" || item.refundPresentation?.merchantStatus === "refund_confirmed") return "Failed — Refunding customer"
+  if (item.refundPresentation?.merchantStatus === "refund_completed") return "Failed — Refunded to customer"
+  if (item.refundPresentation?.merchantStatus === "refund_attention_required") return "Failed — Refund requires attention"
   if (
     item.settlementFailureState === "manual_review_required" ||
     item.refundStatus === "manual_review_required"
@@ -78,6 +82,7 @@ interface OperationalPayment {
   u2aTxid?: string
   a2uPaymentId?: string
   a2uTxid?: string
+  refundPresentation?: RefundPresentation
   updatedAt?: string
 }
 
@@ -426,7 +431,8 @@ function ProfileContent() {
                     (item) =>
                       item.status !== "refunded" &&
                       item.refundStatus !== "completed" &&
-                      item.settlementFailureState !== "refunded",
+                      item.settlementFailureState !== "refunded" &&
+                      item.refundPresentation?.merchantStatus !== "refund_completed",
                   ).length > 0 && (
                     <div className="pt-3 border-t space-y-3">
                       <div>
@@ -438,7 +444,8 @@ function ProfileContent() {
                           (item) =>
                             item.status !== "refunded" &&
                             item.refundStatus !== "completed" &&
-                            item.settlementFailureState !== "refunded",
+                            item.settlementFailureState !== "refunded" &&
+                            item.refundPresentation?.merchantStatus !== "refund_completed",
                         )
                         .map((item) => (
                           <div key={item.paymentId} className="rounded-md border p-3 text-sm">
