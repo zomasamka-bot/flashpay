@@ -429,10 +429,10 @@ function ProfileContent() {
                 {summary.operationalPayments &&
                   summary.operationalPayments.filter(
                     (item) =>
-                      item.status !== "refunded" &&
-                      item.refundStatus !== "completed" &&
-                      item.settlementFailureState !== "refunded" &&
-                      item.refundPresentation?.merchantStatus !== "refund_completed",
+                      item.refundPresentation?.merchantStatus === "refund_completed" ||
+                      (item.status !== "refunded" &&
+                        item.refundStatus !== "completed" &&
+                        item.settlementFailureState !== "refunded"),
                   ).length > 0 && (
                     <div className="pt-3 border-t space-y-3">
                       <div>
