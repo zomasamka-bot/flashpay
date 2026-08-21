@@ -8,7 +8,7 @@ import { BackButton } from "@/components/back-button"
 import { Spinner } from "@/components/ui/spinner"
 import { Badge } from "@/components/ui/badge"
 import { config } from "@/lib/config"
-import type { Receipt } from "@/lib/types"
+import type { MerchantReceiptResponse } from "@/lib/types"
 import { Download, Copy, Check } from "lucide-react"
 import { useUnifiedStore } from "@/lib/unified-store"
 
@@ -47,13 +47,13 @@ function mapSettlementStatus(status: SettlementStatus): string {
 export default function ReceiptPage() {
   const params = useParams()
   const receiptId = params.id as string
-  const [receipt, setReceipt] = useState<Receipt | null>(null)
+  const [receipt, setReceipt] = useState<MerchantReceiptResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [isIOS, setIsIOS] = useState(false)
   const store = useUnifiedStore()
   const merchant = store.getMerchantState()
-  const canonicalPaymentId = (receipt as (Receipt & { paymentId?: string }) | null)?.paymentId
+  const canonicalPaymentId = receipt?.paymentId
 
   // Detect iOS only on client-side to avoid SSR issues
   useEffect(() => {

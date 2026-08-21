@@ -3,7 +3,7 @@ import { getReceipt } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import type { ReceiptRow } from "@/lib/types"
+import type { MerchantReceiptResponse, ReceiptRow } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -123,7 +123,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     // Transform receipt to exact expected shape with nested data
-    const transformedReceipt = {
+    const transformedReceipt: MerchantReceiptResponse = {
       id: receipt.id,
       transactionId: receipt.transaction_id,
       paymentId: canonicalPaymentId,

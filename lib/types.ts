@@ -102,6 +102,35 @@ export interface Transaction {
   a2uTxid?: string
 }
 
+export interface MerchantReceiptResponse {
+  id: string | undefined
+  transactionId: string
+  paymentId?: string
+  reference: string
+  amount: number
+  currency: string
+  timestamp: string | undefined
+  txid?: string
+  status: "COMPLETED"
+  description: string
+  merchant: {
+    name: string
+    id: string
+  }
+  payer: {
+    username?: string
+    address?: string
+  }
+  settlementStatus?: PaymentStatus
+  u2aIdentifier?: string
+  u2aTxid?: string
+  piPaymentId?: string
+  a2uIdentifier?: string
+  a2uTxid?: string
+  a2uPaymentId?: string
+  createdAt: string | undefined
+}
+
 export interface Receipt {
   receiptId: string
   transactionId: string
