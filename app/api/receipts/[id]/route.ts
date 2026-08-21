@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { getReceipt } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { redis, isRedisConfigured } from "@/lib/redis"
+import { serverConfig } from "@/lib/server-config"
 import type { ReceiptRow } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -60,23 +61,47 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     let canonicalPaymentId: string | undefined
-    if (isRedisConfigured && typeof receipt.u2a_identifier === "string" && receipt.u2a_identifier.length > 0) {
-      const matches: string[] = []
-      const paymentKeys = await redis.keys("payment:*")
-      for (const key of paymentKeys || []) {
-        const raw = await redis.get(key)
-        const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
-        if (typeof value !== "object" || value === null || Array.isArray(value)) continue
-        const payment = value as Record<string, unknown>
-        if (
-          payment.merchantId === receipt.merchant_id &&
-          payment.piPaymentId === receipt.u2a_identifier &&
-          typeof payment.id === "string" &&
-          payment.id.length > 0 &&
-          payment.id.trim() === payment.id
-        ) matches.push(payment.id)
+    if (
+      isRedisConfigured &&
+      serverConfig.isPiApiKeyConfigured &&
+      typeof receipt.u2a_identifier === "string" &&
+      receipt.u2a_identifier.length > 0
+    ) {
+      try {
+        const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(receipt.u2a_identifier)}`, {
+          method: "GET",
+          headers: {
+            Authorization: `Key ${serverConfig.piApiKey}`,
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+        })
+        if (piResponse.ok) {
+          const piValue: unknown = await piResponse.json()
+          if (typeof piValue === "object" && piValue !== null && !Array.isArray(piValue)) {
+            const piPayment = piValue as Record<string, unknown>
+            const metadataValue: unknown = piPayment.metadata
+            if (typeof metadataValue === "object" && metadataValue !== null && !Array.isArray(metadataValue)) {
+              const metadata = metadataValue as Record<string, unknown>
+              const metadataPaymentId = metadata.paymentId
+              if (typeof metadataPaymentId === "string" && metadataPaymentId.length > 0) {
+                const raw = await redis.get(`payment:${metadataPaymentId}`)
+                const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
+                if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+                  const payment = value as Record<string, unknown>
+                  if (
+                    payment.id === metadataPaymentId &&
+                    payment.piPaymentId === receipt.u2a_identifier &&
+                    payment.merchantId === receipt.merchant_id
+                  ) canonicalPaymentId = metadataPaymentId
+                }
+              }
+            }
+          }
+        }
+      } catch (lookupError) {
+        console.warn("[Receipts API] Canonical payment lookup unavailable", lookupError)
       }
-      if (matches.length === 1) canonicalPaymentId = matches[0]
     }
 
     // Transform receipt to exact expected shape with nested data
