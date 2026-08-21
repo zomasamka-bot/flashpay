@@ -70,42 +70,44 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       try {
         const piLookupController = new AbortController()
         const piLookupTimeout = setTimeout(() => piLookupController.abort(), 5000)
-        const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(receipt.u2a_identifier)}`, {
-          method: "GET",
-          headers: {
-            Authorization: `Key ${serverConfig.piApiKey}`,
-            "Content-Type": "application/json",
-          },
-          cache: "no-store",
-          signal: piLookupController.signal,
-        })
-        if (piResponse.ok) {
-          const piValue: unknown = await piResponse.json()
-          if (typeof piValue === "object" && piValue !== null && !Array.isArray(piValue)) {
-            const piPayment = piValue as Record<string, unknown>
-            const metadataValue: unknown = piPayment.metadata
-            if (typeof metadataValue === "object" && metadataValue !== null && !Array.isArray(metadataValue)) {
-              const metadata = metadataValue as Record<string, unknown>
-              const metadataPaymentId = metadata.paymentId
-              if (typeof metadataPaymentId === "string" && metadataPaymentId.length > 0) {
-                const raw = await redis.get(`payment:${metadataPaymentId}`)
-                const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
-                if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-                  const payment = value as Record<string, unknown>
-                  if (
-                    payment.id === metadataPaymentId &&
-                    payment.piPaymentId === receipt.u2a_identifier &&
-                    payment.merchantId === receipt.merchant_id
-                  ) canonicalPaymentId = metadataPaymentId
+        try {
+          const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(receipt.u2a_identifier)}`, {
+            method: "GET",
+            headers: {
+              Authorization: `Key ${serverConfig.piApiKey}`,
+              "Content-Type": "application/json",
+            },
+            cache: "no-store",
+            signal: piLookupController.signal,
+          })
+          if (piResponse.ok) {
+            const piValue: unknown = await piResponse.json()
+            if (typeof piValue === "object" && piValue !== null && !Array.isArray(piValue)) {
+              const piPayment = piValue as Record<string, unknown>
+              const metadataValue: unknown = piPayment.metadata
+              if (typeof metadataValue === "object" && metadataValue !== null && !Array.isArray(metadataValue)) {
+                const metadata = metadataValue as Record<string, unknown>
+                const metadataPaymentId = metadata.paymentId
+                if (typeof metadataPaymentId === "string" && metadataPaymentId.length > 0) {
+                  const raw = await redis.get(`payment:${metadataPaymentId}`)
+                  const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
+                  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+                    const payment = value as Record<string, unknown>
+                    if (
+                      payment.id === metadataPaymentId &&
+                      payment.piPaymentId === receipt.u2a_identifier &&
+                      payment.merchantId === receipt.merchant_id
+                    ) canonicalPaymentId = metadataPaymentId
+                  }
                 }
               }
             }
           }
+        } finally {
+          clearTimeout(piLookupTimeout)
         }
       } catch (lookupError) {
         console.warn("[Receipts API] Canonical payment lookup unavailable", lookupError)
-      } finally {
-        clearTimeout(piLookupTimeout)
       }
     }
 
