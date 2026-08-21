@@ -79,7 +79,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           cache: "no-store",
           signal: piLookupController.signal,
         })
-        clearTimeout(piLookupTimeout)
         if (piResponse.ok) {
           const piValue: unknown = await piResponse.json()
           if (typeof piValue === "object" && piValue !== null && !Array.isArray(piValue)) {
@@ -105,6 +104,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         }
       } catch (lookupError) {
         console.warn("[Receipts API] Canonical payment lookup unavailable", lookupError)
+      } finally {
+        clearTimeout(piLookupTimeout)
       }
     }
 
