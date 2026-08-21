@@ -250,21 +250,21 @@ export interface ReceiptRow {
   merchant_id: string
   merchant_name?: string
   merchant_wallet_address?: string
-  payer_username?: string
+  payer_username?: string | null
   payer_address?: string
   amount: number
-  currency: string
-  description: string
+  currency: string | null
+  description: string | null
   reference: string
   timestamp?: string
   created_at?: string
-  txid?: string
-  pi_payment_id?: string
-  u2a_identifier?: string
-  u2a_txid?: string
-  a2u_identifier?: string
-  a2u_txid?: string
-  settlement_status?: PaymentStatus
+  txid?: string | null
+  pi_payment_id?: string | null
+  u2a_identifier?: string | null
+  u2a_txid?: string | null
+  a2u_identifier?: string | null
+  a2u_txid?: string | null
+  settlement_status?: PaymentStatus | null
 }
 
 export interface TransactionWithReceiptRow extends TransactionRow {
