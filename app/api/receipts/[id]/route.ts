@@ -89,15 +89,26 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
                 const metadata = metadataValue as Record<string, unknown>
                 const metadataPaymentId = metadata.paymentId
                 if (typeof metadataPaymentId === "string" && metadataPaymentId.length > 0) {
-                  const raw = await redis.get(`payment:${metadataPaymentId}`)
-                  const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
-                  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-                    const payment = value as Record<string, unknown>
-                    if (
-                      payment.id === metadataPaymentId &&
-                      payment.piPaymentId === receipt.u2a_identifier &&
-                      payment.merchantId === receipt.merchant_id
-                    ) canonicalPaymentId = metadataPaymentId
+                  let redisLookupReject: (reason?: unknown) => void = () => {}
+                  const redisLookupTimeout = setTimeout(() => redisLookupReject(new Error("Redis lookup timed out")), 2000)
+                  try {
+                    const raw = await Promise.race([
+                      redis.get(`payment:${metadataPaymentId}`),
+                      new Promise<never>((_, reject) => {
+                        redisLookupReject = reject
+                      }),
+                    ])
+                    const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
+                    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+                      const payment = value as Record<string, unknown>
+                      if (
+                        payment.id === metadataPaymentId &&
+                        payment.piPaymentId === receipt.u2a_identifier &&
+                        payment.merchantId === receipt.merchant_id
+                      ) canonicalPaymentId = metadataPaymentId
+                    }
+                  } finally {
+                    clearTimeout(redisLookupTimeout)
                   }
                 }
               }
