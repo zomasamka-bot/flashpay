@@ -12,20 +12,16 @@ import type { MerchantReceiptResponse } from "@/lib/types"
 import { Download, Copy, Check } from "lucide-react"
 import { useUnifiedStore } from "@/lib/unified-store"
 
-const receiptDateFormatter = new Intl.DateTimeFormat("en-GB", {
+const receiptDateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
   month: "short",
   year: "numeric",
-})
-
-const receiptTimeFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
-  hour12: true,
+  hourCycle: "h23",
+  numberingSystem: "latn",
 })
-
-type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
 function formatReceiptDateTime(timestamp?: string): string {
   if (!timestamp) return "Unavailable"
@@ -33,8 +29,11 @@ function formatReceiptDateTime(timestamp?: string): string {
   if (!Number.isFinite(date.getTime())) {
     return "Unavailable"
   }
-  return `${receiptDateFormatter.format(date)}, ${receiptTimeFormatter.format(date)}`
+  const parts = Object.fromEntries(receiptDateTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value]))
+  return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
 }
+
+type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
 function mapSettlementStatus(status: SettlementStatus): string {
   if (status === "settled_to_merchant") return "Settled"

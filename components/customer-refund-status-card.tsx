@@ -19,10 +19,23 @@ function CopyButton({ value }: { value: string }) {
   )
 }
 
-function formatLocalDateTime(value?: string | number | null) {
-  if (value === undefined || value === null || value === "") return value
+const refundDateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  numberingSystem: "latn",
+})
+
+function formatLocalDateTime(value?: string | number | null): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(undefined, { hour12: false })
+  if (Number.isNaN(date.getTime())) return "Unavailable"
+  const parts = Object.fromEntries(refundDateTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value]))
+  return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
 }
 
 function Detail({ label, value, copyable = false }: { label: string; value?: string | number | null; copyable?: boolean }) {
@@ -71,10 +84,10 @@ export default function CustomerRefundStatusCard({ presentation, status }: Props
     ["Refund payment ID", presentation.refundPaymentId],
     ["Refund transaction ID", presentation.refundTxid],
     ["Network", presentation.blockchain.network],
-    ["Requested at", presentation.requestedAt],
-    ["Blockchain transaction at", presentation.blockchain.transactionAt],
-    ["Completed at", presentation.finalization.completedAt],
-    ["Finalized at", presentation.finalization.finalizedAt],
+    ["Requested at", formatLocalDateTime(presentation.requestedAt)],
+    ["Blockchain transaction at", formatLocalDateTime(presentation.blockchain.transactionAt)],
+    ["Completed at", formatLocalDateTime(presentation.finalization.completedAt)],
+    ["Finalized at", formatLocalDateTime(presentation.finalization.finalizedAt)],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "")
 
   const copyReceipt = () =>
