@@ -17,6 +17,25 @@ import { unifiedStore } from "@/lib/unified-store"
 import type { Payment, RefundPresentation } from "@/lib/types"
 
 // UI-only mapper for settlement status display
+const paymentDateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+  numberingSystem: "latn",
+})
+
+function formatPaymentDateTime(timestamp?: string): string {
+  if (!timestamp) return "Unavailable"
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return "Unavailable"
+  const parts = Object.fromEntries(paymentDateTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value]))
+  return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
+}
+
 function mapSettlementStatusForDisplay(status: string): string {
   const lowerStatus = status.toLowerCase()
   if (lowerStatus === "settled_to_merchant") return "Settled"
@@ -489,13 +508,21 @@ export default function PaymentContentWithId({
 
     executePayment(
       paymentId,
-      (txid) => {
+      async (txid) => {
         setPayment((current) => current ? { ...current, status: "settled_to_merchant" } : current)
         setIsPaying(false)
         toast({
           title: "Payment Successful",
           description: `Transaction ID: ${txid}`,
         })
+        try {
+          const updated = await getPaymentFromServer(paymentId, true)
+          if (updated?.id === paymentId && updated.status === "settled_to_merchant" && updated.paidAt) {
+            setPayment((current) => current ? { ...current, paidAt: updated.paidAt } : current)
+          }
+        } catch {
+          // Keep the successful local status when the read-only refresh fails.
+        }
       },
       async (error) => {
         try {
@@ -647,7 +674,7 @@ export default function PaymentContentWithId({
   }
 
   const shareReceipt = async () => {
-    const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
+    const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nDate & Time: ${formatPaymentDateTime(payment.paidAt)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
     
     if (navigator.share) {
       try {
@@ -741,6 +768,10 @@ export default function PaymentContentWithId({
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium">Merchant</span>
                     <span className="text-sm font-mono">{payment.merchantId}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Date & Time</span>
+                    <span className="text-sm font-mono">{formatPaymentDateTime(payment.paidAt)}</span>
                   </div>
                 </div>
 
