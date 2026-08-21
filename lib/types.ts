@@ -110,24 +110,24 @@ export interface MerchantReceiptResponse {
   amount: number
   currency: string
   timestamp: string | undefined
-  txid?: string
+  txid?: string | null
   status: "COMPLETED"
-  description: string
+  description: string | null
   merchant: {
     name: string
     id: string
   }
   payer: {
-    username?: string
+    username?: string | null
     address?: string
   }
-  settlementStatus?: PaymentStatus
-  u2aIdentifier?: string
-  u2aTxid?: string
-  piPaymentId?: string
-  a2uIdentifier?: string
-  a2uTxid?: string
-  a2uPaymentId?: string
+  settlementStatus?: PaymentStatus | null
+  u2aIdentifier?: string | null
+  u2aTxid?: string | null
+  piPaymentId?: string | null
+  a2uIdentifier?: string | null
+  a2uTxid?: string | null
+  a2uPaymentId?: string | null
   createdAt: string | undefined
 }
 
