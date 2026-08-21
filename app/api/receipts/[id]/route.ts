@@ -68,6 +68,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       receipt.u2a_identifier.length > 0
     ) {
       try {
+        const piLookupController = new AbortController()
+        const piLookupTimeout = setTimeout(() => piLookupController.abort(), 5000)
         const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(receipt.u2a_identifier)}`, {
           method: "GET",
           headers: {
@@ -75,7 +77,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
             "Content-Type": "application/json",
           },
           cache: "no-store",
+          signal: piLookupController.signal,
         })
+        clearTimeout(piLookupTimeout)
         if (piResponse.ok) {
           const piValue: unknown = await piResponse.json()
           if (typeof piValue === "object" && piValue !== null && !Array.isArray(piValue)) {
