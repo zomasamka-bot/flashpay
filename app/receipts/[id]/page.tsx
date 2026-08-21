@@ -27,7 +27,8 @@ const receiptTimeFormatter = new Intl.DateTimeFormat("en-US", {
 
 type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
-function formatReceiptDateTime(timestamp: string): string {
+function formatReceiptDateTime(timestamp?: string): string {
+  if (!timestamp) return "Unavailable"
   const date = new Date(timestamp)
   if (!Number.isFinite(date.getTime())) {
     return "Unavailable"
