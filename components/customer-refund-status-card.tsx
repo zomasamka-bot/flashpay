@@ -5,6 +5,7 @@ import type { RefundPresentation } from "@/lib/types"
 type Props = {
   presentation?: RefundPresentation
   status: "loading" | "ready" | "indeterminate"
+  audience?: "customer" | "merchant"
 }
 
 function CopyButton({ value }: { value: string }) {
@@ -45,14 +46,14 @@ function Detail({ label, value, copyable = false }: { label: string; value?: str
     <div className="flex items-start justify-between gap-4 border-b border-slate-200 py-3 last:border-b-0">
       <dt className="text-sm text-slate-500">{label}</dt>
       <dd className="flex min-w-0 max-w-[65%] items-start text-right text-sm font-medium text-slate-900">
-        <span className="min-w-0 break-all">{text}</span>
+        <span className={copyable ? "min-w-0 break-all" : "min-w-0 break-words"}>{text}</span>
         {copyable && <CopyButton value={text} />}
       </dd>
     </div>
   )
 }
 
-export default function CustomerRefundStatusCard({ presentation, status }: Props) {
+export default function CustomerRefundStatusCard({ presentation, status, audience = "customer" }: Props) {
   if (status === "loading") {
     return (
       <section aria-live="polite" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -73,7 +74,10 @@ export default function CustomerRefundStatusCard({ presentation, status }: Props
   const statusLabel = {
     refund_pending: "Your refund is being processed back to your Pi Wallet and usually appears there within about 3 minutes. Processing continues automatically, so you may safely leave this page. If you need a finalized refund receipt, please allow up to 10 minutes for the final records to complete.",
     refund_confirmed: "Your refund has been sent back through Pi. Open Pi Wallet to view the transaction; final records will continue automatically.",
-    refund_completed: "Refund completed — Your refund has been returned to your Pi Wallet. Open Pi Wallet to view the transaction.",
+    refund_completed:
+      audience === "merchant"
+        ? "Refund completed — The refund has been returned to the customer's Pi Wallet."
+        : "Refund completed — Your refund has been returned to your Pi Wallet. Open Pi Wallet to view the transaction.",
     refund_delayed: "Refund status cannot be verified yet.",
   }[presentation.customerStatus]
 

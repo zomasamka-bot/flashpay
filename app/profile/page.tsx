@@ -464,7 +464,7 @@ function ProfileContent() {
                                   {openRefundReceipts[item.paymentId] ? "Hide refund receipt" : "Tap to view refund receipt"}
                                 </Button>
                                 {openRefundReceipts[item.paymentId] && (
-                                  <CustomerRefundStatusCard presentation={item.refundPresentation} status="ready" />
+                                  <CustomerRefundStatusCard presentation={item.refundPresentation} status="ready" audience="merchant" />
                                 )}
                               </div>
                             )}
