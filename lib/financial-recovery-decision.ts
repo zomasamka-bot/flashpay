@@ -15,9 +15,9 @@ export type FinancialRecoveryTargetKind = "NON_FINANCIAL" | "FINANCIAL_CREATE" |
 export type FinancialRecoveryOrder = 1 | 2 | 3 | 4 | 5 | 6 | 7
 
 export type FinancialRecoveryTargetRule = {
-  branch: FinancialRecoveryBranch
-  order: FinancialRecoveryOrder
-  kind: FinancialRecoveryTargetKind
+  readonly branch: FinancialRecoveryBranch
+  readonly order: FinancialRecoveryOrder
+  readonly kind: FinancialRecoveryTargetKind
 }
 
 export const FINANCIAL_RECOVERY_TARGET_RULES: Readonly<Record<EvidencedState, FinancialRecoveryTargetRule>> = {
@@ -40,23 +40,41 @@ export type FinancialRecoveryReconciliationOutcome =
   | "CONFIRMED_NONE"
   | "INDETERMINATE"
 
+export type FinancialRecoveryDecisionReason =
+  | "INVALID_INPUT"
+  | "INDETERMINATE_EVIDENCE"
+  | "MULTIPLE_CANDIDATES"
+  | "EVIDENCE_CONFLICT"
+  | "BRANCH_CONFLICT"
+  | "TARGET_ALREADY_REACHED"
+  | "EVIDENCE_UNRESOLVED"
+  | "RECONCILIATION_REQUIRED"
+  | "PREREQUISITES_UNCONFIRMED"
+  | "REFERENCE_REQUIRES_RECONCILIATION"
+  | "MONEY_MOVED_RESUME_ONLY"
+  | "EXISTING_PAYMENT_RESUME_ONLY"
+  | "SAFE_CREATE_RETRY"
+  | "SAFE_SUBMIT_RETRY"
+  | "NON_FINANCIAL_RESUME"
+  | "FAIL_CLOSED"
+
 export type FinancialRecoveryDecisionInput = {
-  paymentId: string
-  currentState: FinancialRecoveryState
-  targetState: EvidencedState
-  reconciliationOutcome: FinancialRecoveryReconciliationOutcome
-  prerequisitesConfirmed: boolean
-  targetPaymentIdPresent: boolean
-  targetTxidPresent: boolean
-  targetMoneyMoved: boolean
-  malformed: boolean
-  multipleCandidates: boolean
-  unknown: EvidenceFactSet
-  missing: EvidenceFactSet
-  conflicts: EvidenceFactSet
+  readonly paymentId: string
+  readonly currentState: FinancialRecoveryState
+  readonly targetState: EvidencedState
+  readonly reconciliationOutcome: FinancialRecoveryReconciliationOutcome
+  readonly prerequisitesConfirmed: boolean
+  readonly targetPaymentIdPresent: boolean
+  readonly targetTxidPresent: boolean
+  readonly targetMoneyMoved: boolean
+  readonly malformed: boolean
+  readonly multipleCandidates: boolean
+  readonly unknown: EvidenceFactSet
+  readonly missing: EvidenceFactSet
+  readonly conflicts: EvidenceFactSet
 }
 
 export type FinancialRecoveryDecisionResult = {
-  decision: FinancialRecoveryDecision
-  reason: string
+  readonly decision: FinancialRecoveryDecision
+  readonly reason: FinancialRecoveryDecisionReason
 }
