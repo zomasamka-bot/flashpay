@@ -74,7 +74,24 @@ export type FinancialRecoveryDecisionInput = {
   readonly conflicts: EvidenceFactSet
 }
 
-export type FinancialRecoveryDecisionResult = {
-  readonly decision: FinancialRecoveryDecision
-  readonly reason: FinancialRecoveryDecisionReason
-}
+export type FinancialRecoveryDecisionResult =
+  | {
+      readonly decision: "NO_ACTION"
+      readonly reason: "TARGET_ALREADY_REACHED"
+    }
+  | {
+      readonly decision: "RESUME_NON_FINANCIAL"
+      readonly reason: "MONEY_MOVED_RESUME_ONLY" | "EXISTING_PAYMENT_RESUME_ONLY" | "NON_FINANCIAL_RESUME"
+    }
+  | {
+      readonly decision: "SAFE_FINANCIAL_RETRY"
+      readonly reason: "SAFE_CREATE_RETRY" | "SAFE_SUBMIT_RETRY"
+    }
+  | {
+      readonly decision: "RECONCILE_FIRST"
+      readonly reason: "EVIDENCE_UNRESOLVED" | "RECONCILIATION_REQUIRED" | "PREREQUISITES_UNCONFIRMED" | "REFERENCE_REQUIRES_RECONCILIATION"
+    }
+  | {
+      readonly decision: "MANUAL_REVIEW"
+      readonly reason: "INVALID_INPUT" | "INDETERMINATE_EVIDENCE" | "MULTIPLE_CANDIDATES" | "EVIDENCE_CONFLICT" | "BRANCH_CONFLICT" | "FAIL_CLOSED"
+    }
