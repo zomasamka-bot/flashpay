@@ -102,6 +102,8 @@ export function deriveFinancialRecoveryState(input: unknown): {
     if (input[key] !== undefined && !nonemptyString(input[key])) return invalid(`identifier ${key} is invalid`)
   }
 
+  if (evidenceKeys.some((key) => input[key] === "unknown")) return invalid("evidence is unknown")
+
   const idConflicts: Partial<Record<(typeof idKeys)[number], readonly (keyof FinancialRecoverySnapshot)[]>> = {
     u2aTxid: ["u2a"],
     a2uPaymentId: ["settlementCreated"],
@@ -123,11 +125,17 @@ export function deriveFinancialRecoveryState(input: unknown): {
     return { state: "u2a_unverified", reason: "U2A evidence is absent" }
   }
 
-  const settlementConfirmed = stages.slice(1).some(([key]) => input[key] === "confirmed")
+  const settlementConfirmed = stages.slice(2).some(([key]) => input[key] === "confirmed")
   const refundConfirmed = refundStages.some(([key]) => input[key] === "confirmed")
   if (settlementConfirmed && refundConfirmed) return invalid("settlement and refund evidence overlap")
 
-  const branch = settlementConfirmed ? stages : refundConfirmed ? [["u2a", "u2a_verified"], ...refundStages] : stages
+  const refundChain: readonly (readonly [keyof FinancialRecoverySnapshot, FinancialRecoveryState])[] = [
+    ["u2a", "u2a_verified"],
+    ["appFunds", "app_funds_confirmed"],
+    ...refundStages,
+  ]
+  const branch: readonly (readonly [keyof FinancialRecoverySnapshot, FinancialRecoveryState])[] =
+    settlementConfirmed ? stages : refundConfirmed ? refundChain : stages
   let deepest: FinancialRecoveryState = "u2a_verified"
   for (let index = 0; index < branch.length; index += 1) {
     const [key, state] = branch[index]
