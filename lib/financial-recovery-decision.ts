@@ -10,12 +10,18 @@ export type FinancialRecoveryDecision =
 
 export type EvidenceFactSet = readonly EvidenceFact[]
 
+export type FinancialRecoveryReconciliationOutcome =
+  | "NOT_ATTEMPTED"
+  | "FOUND"
+  | "CONFIRMED_NONE"
+  | "INDETERMINATE"
+
 export type FinancialRecoveryDecisionInput = {
   paymentId: string
   currentState: FinancialRecoveryState
   targetState: EvidencedState
+  reconciliationOutcome: FinancialRecoveryReconciliationOutcome
   prerequisitesConfirmed: boolean
-  targetConfirmedAbsent: boolean
   targetPaymentIdPresent: boolean
   targetTxidPresent: boolean
   targetMoneyMoved: boolean
