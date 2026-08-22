@@ -108,6 +108,9 @@ export function decideFinancialRecovery(input: FinancialRecoveryDecisionInput): 
   if (input.conflicts.length > 0) return invalid("EVIDENCE_CONFLICT")
 
   const targetRule = FINANCIAL_RECOVERY_TARGET_RULES[input.targetState]
+  if (input.reconciliationOutcome === "CONFIRMED_NONE" && (input.targetTxidPresent || input.targetMoneyMoved || (targetRule.kind === "FINANCIAL_CREATE" && input.targetPaymentIdPresent))) {
+    return invalid("EVIDENCE_CONFLICT")
+  }
   const currentRule = input.currentState === "u2a_unverified"
     ? undefined
     : FINANCIAL_RECOVERY_TARGET_RULES[input.currentState]
@@ -120,5 +123,15 @@ export function decideFinancialRecovery(input: FinancialRecoveryDecisionInput): 
   if (currentRule && currentRule.order >= targetRule.order && (currentRule.branch === targetRule.branch || targetRule.branch === "COMMON")) {
     return { decision: "NO_ACTION", reason: "TARGET_ALREADY_REACHED" }
   }
+  if (input.targetMoneyMoved) return { decision: "RESUME_NON_FINANCIAL", reason: "MONEY_MOVED_RESUME_ONLY" }
+  if (input.targetTxidPresent) return { decision: "RECONCILE_FIRST", reason: "REFERENCE_REQUIRES_RECONCILIATION" }
+  if (input.reconciliationOutcome === "NOT_ATTEMPTED") return { decision: "RECONCILE_FIRST", reason: "RECONCILIATION_REQUIRED" }
+  if (targetRule.kind === "FINANCIAL_CREATE" && input.reconciliationOutcome === "FOUND" && input.targetPaymentIdPresent) {
+    return { decision: "RESUME_NON_FINANCIAL", reason: "EXISTING_PAYMENT_RESUME_ONLY" }
+  }
+  if (targetRule.kind === "FINANCIAL_SUBMIT" && input.reconciliationOutcome === "FOUND") {
+    return { decision: "RECONCILE_FIRST", reason: "REFERENCE_REQUIRES_RECONCILIATION" }
+  }
+  if (targetRule.kind === "NON_FINANCIAL") return { decision: "RESUME_NON_FINANCIAL", reason: "NON_FINANCIAL_RESUME" }
   return invalid("FAIL_CLOSED")
 }
