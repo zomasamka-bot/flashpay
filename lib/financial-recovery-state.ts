@@ -37,7 +37,7 @@ export type FinancialRecoverySnapshot = {
   refundTxid?: string
 }
 
-const stages: readonly [keyof FinancialRecoverySnapshot, FinancialRecoveryState][] = [
+const stages: readonly (readonly [keyof FinancialRecoverySnapshot, FinancialRecoveryState])[] = [
   ["u2a", "u2a_verified"],
   ["appFunds", "app_funds_confirmed"],
   ["settlementCreated", "settlement_created"],
@@ -46,7 +46,7 @@ const stages: readonly [keyof FinancialRecoverySnapshot, FinancialRecoveryState]
   ["settlementFinalized", "settlement_finalized"],
 ]
 
-const refundStages: readonly [keyof FinancialRecoverySnapshot, FinancialRecoveryState][] = [
+const refundStages: readonly (readonly [keyof FinancialRecoverySnapshot, FinancialRecoveryState])[] = [
   ["refundEligible", "refund_eligible"],
   ["refundCreated", "refund_created"],
   ["refundBlockchainConfirmed", "refund_blockchain_confirmed"],
@@ -102,56 +102,40 @@ export function deriveFinancialRecoveryState(input: unknown): {
     if (input[key] !== undefined && !nonemptyString(input[key])) return invalid(`identifier ${key} is invalid`)
   }
 
+  const idConflicts: Partial<Record<(typeof idKeys)[number], readonly (keyof FinancialRecoverySnapshot)[]>> = {
+    u2aTxid: ["u2a"],
+    a2uPaymentId: ["settlementCreated"],
+    a2uTxid: ["settlementCreated", "settlementBlockchainConfirmed"],
+    refundPaymentId: ["refundCreated"],
+    refundTxid: ["refundCreated", "refundBlockchainConfirmed"],
+  }
+
   for (const key of idKeys) {
     if (nonemptyString(input[key])) {
-      const relatedEvidence = key === "refundTxid"
-        ? input.refundBlockchainConfirmed
-        : key.startsWith("refund")
-          ? input.refundCreated
-          : key === "a2uPaymentId" || key === "a2uTxid"
-            ? input.settlementCreated
-            : input.u2a
-      if (relatedEvidence === "absent") return invalid(`${key} conflicts with absent evidence`)
+      for (const evidenceKey of idConflicts[key] ?? []) {
+        if (input[evidenceKey] === "absent") return invalid(`${key} conflicts with absent evidence`)
+      }
     }
   }
 
-  const settlementConfirmed = input.settlementCreated === "confirmed" ||
-    input.settlementBlockchainConfirmed === "confirmed" ||
-    input.settlementPiCompleted === "confirmed" ||
-    input.settlementFinalized === "confirmed"
-  const refundConfirmed = input.refundEligible === "confirmed" ||
-    input.refundCreated === "confirmed" ||
-    input.refundBlockchainConfirmed === "confirmed" ||
-    input.refundPiCompleted === "confirmed" ||
-    input.refundFinalized === "confirmed"
+  if (input.u2a === "absent") {
+    if (evidenceKeys.slice(1).some((key) => input[key] !== "absent")) return invalid("U2A absent conflicts with later evidence")
+    return { state: "u2a_unverified", reason: "U2A evidence is absent" }
+  }
 
+  const settlementConfirmed = stages.slice(1).some(([key]) => input[key] === "confirmed")
+  const refundConfirmed = refundStages.some(([key]) => input[key] === "confirmed")
   if (settlementConfirmed && refundConfirmed) return invalid("settlement and refund evidence overlap")
 
-  if (input.u2a === "absent") return { state: "u2a_unverified", reason: "U2A evidence is absent" }
-  if (input.u2a !== "confirmed") return invalid("U2A evidence is unknown")
-
-  const branch = settlementConfirmed ? stages : refundConfirmed ? refundStages : stages
+  const branch = settlementConfirmed ? stages : refundConfirmed ? [["u2a", "u2a_verified"], ...refundStages] : stages
   let deepest: FinancialRecoveryState = "u2a_verified"
-  let prerequisiteConfirmed = true
-
-  for (const [key, state] of branch) {
-    const evidence = input[key]
-    if (evidence === "confirmed" && prerequisiteConfirmed) {
-      deepest = state
-      continue
-    }
-    if (evidence === "absent") break
-    if (evidence === "unknown") return invalid(`evidence ${String(key)} is unknown`)
-    if (evidence === "confirmed" && !prerequisiteConfirmed) return invalid(`skipped prerequisite before ${String(key)}`)
-    prerequisiteConfirmed = false
-  }
-
-  for (const [key] of branch) {
+  for (let index = 0; index < branch.length; index += 1) {
+    const [key, state] = branch[index]
     if (input[key] === "confirmed") {
-      const index = branch.findIndex(([candidate]) => candidate === key)
-      if (branch.slice(0, index).some(([candidate]) => input[candidate] !== "confirmed")) {
-        return invalid(`skipped prerequisite before ${String(key)}`)
-      }
+      if (branch.slice(0, index).some(([candidate]) => input[candidate] !== "confirmed")) return invalid(`skipped prerequisite before ${String(key)}`)
+      deepest = state
+    } else if (input[key] !== "absent") {
+      return invalid(`evidence ${String(key)} is not confirmed or absent`)
     }
   }
 
