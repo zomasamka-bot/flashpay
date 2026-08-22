@@ -95,3 +95,30 @@ export type FinancialRecoveryDecisionResult =
       readonly decision: "MANUAL_REVIEW"
       readonly reason: "INVALID_INPUT" | "INDETERMINATE_EVIDENCE" | "MULTIPLE_CANDIDATES" | "EVIDENCE_CONFLICT" | "BRANCH_CONFLICT" | "FAIL_CLOSED"
     }
+
+export function decideFinancialRecovery(input: FinancialRecoveryDecisionInput): FinancialRecoveryDecisionResult {
+  const invalid = (reason: "INVALID_INPUT" | "INDETERMINATE_EVIDENCE" | "MULTIPLE_CANDIDATES" | "EVIDENCE_CONFLICT" | "BRANCH_CONFLICT" | "FAIL_CLOSED"): FinancialRecoveryDecisionResult => ({
+    decision: "MANUAL_REVIEW",
+    reason,
+  })
+
+  if (!input.paymentId.trim() || input.malformed) return invalid("INVALID_INPUT")
+  if (input.currentState === "indeterminate" || input.reconciliationOutcome === "INDETERMINATE") return invalid("INDETERMINATE_EVIDENCE")
+  if (input.multipleCandidates) return invalid("MULTIPLE_CANDIDATES")
+  if (input.conflicts.length > 0) return invalid("EVIDENCE_CONFLICT")
+
+  const targetRule = FINANCIAL_RECOVERY_TARGET_RULES[input.targetState]
+  const currentRule = input.currentState === "u2a_unverified"
+    ? undefined
+    : FINANCIAL_RECOVERY_TARGET_RULES[input.currentState]
+
+  if (currentRule && currentRule.branch !== "COMMON" && targetRule.branch !== "COMMON" && currentRule.branch !== targetRule.branch) {
+    return invalid("BRANCH_CONFLICT")
+  }
+  if (input.unknown.length > 0) return { decision: "RECONCILE_FIRST", reason: "EVIDENCE_UNRESOLVED" }
+  if (!input.prerequisitesConfirmed) return { decision: "RECONCILE_FIRST", reason: "PREREQUISITES_UNCONFIRMED" }
+  if (currentRule && currentRule.order >= targetRule.order && (currentRule.branch === targetRule.branch || targetRule.branch === "COMMON")) {
+    return { decision: "NO_ACTION", reason: "TARGET_ALREADY_REACHED" }
+  }
+  return invalid("FAIL_CLOSED")
+}
