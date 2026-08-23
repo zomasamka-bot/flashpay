@@ -32,7 +32,11 @@ export function evaluateFinancialRecoveryExactlyOnceGate(input: ExactlyOnceGateI
   if (input.oppositePaymentId === "PRESENT" || input.oppositeTxid === "PRESENT" || input.oppositeMoneyMovement === "PRESENT") {
     return { allow: false, reason: "OPPOSITE_BRANCH_EVIDENCE" }
   }
-  if (input.oppositePaymentId === "UNKNOWN" || input.oppositeTxid === "UNKNOWN" || input.oppositeMoneyMovement === "UNKNOWN") {
+  if (
+    input.oppositePaymentId !== "ABSENT" ||
+    input.oppositeTxid !== "ABSENT" ||
+    input.oppositeMoneyMovement !== "ABSENT"
+  ) {
     return { allow: false, reason: "OPPOSITE_BRANCH_UNCERTAIN" }
   }
   const targetStateByOperation: Record<ExactlyOnceOperation, FinancialRecoveryDecisionInput["targetState"]> = {
