@@ -9,6 +9,7 @@ export type FinancialRecoveryDecision =
   | "MANUAL_REVIEW"
 
 export type EvidenceFactSet = readonly EvidenceFact[]
+export type FinancialRecoveryMoneyMovementProof = Extract<EvidenceFact, "horizon_tx_exact" | "refund_horizon_tx_exact">
 
 export type FinancialRecoveryBranch = "COMMON" | "SETTLEMENT" | "REFUND"
 export type FinancialRecoveryTargetKind = "NON_FINANCIAL" | "FINANCIAL_CREATE" | "FINANCIAL_SUBMIT"
@@ -69,7 +70,7 @@ export type FinancialRecoveryDecisionInput = {
   readonly prerequisitesConfirmed: boolean
   readonly targetPaymentIdPresent: boolean
   readonly targetTxidPresent: boolean
-  readonly targetMoneyMoved: boolean
+  readonly targetMoneyMovementProof: FinancialRecoveryMoneyMovementProof | null
   readonly malformed: boolean
   readonly multipleCandidates: boolean
   readonly unknown: EvidenceFactSet
@@ -113,7 +114,11 @@ export function decideFinancialRecovery(input: FinancialRecoveryDecisionInput): 
   const targetRule = FINANCIAL_RECOVERY_TARGET_RULES[input.targetState]
   if (input.reconciliationOutcome === "NOT_ATTEMPTED" && input.reconciliationSource !== null) return invalid("EVIDENCE_CONFLICT")
   if ((input.reconciliationOutcome === "FOUND" || input.reconciliationOutcome === "CONFIRMED_NONE") && input.reconciliationSource !== targetRule.reconciliationSource) return invalid("EVIDENCE_CONFLICT")
-  if (input.reconciliationOutcome === "CONFIRMED_NONE" && (input.targetTxidPresent || input.targetMoneyMoved || (targetRule.kind === "FINANCIAL_CREATE" && input.targetPaymentIdPresent))) {
+  const expectedMoneyMovementProof: FinancialRecoveryMoneyMovementProof | null =
+    targetRule.branch === "SETTLEMENT" ? "horizon_tx_exact" : targetRule.branch === "REFUND" ? "refund_horizon_tx_exact" : null
+  if (input.targetMoneyMovementProof !== null && input.targetMoneyMovementProof !== expectedMoneyMovementProof) return invalid("EVIDENCE_CONFLICT")
+  const targetMoneyMoved = input.targetMoneyMovementProof !== null
+  if (input.reconciliationOutcome === "CONFIRMED_NONE" && (input.targetTxidPresent || targetMoneyMoved || (targetRule.kind === "FINANCIAL_CREATE" && input.targetPaymentIdPresent))) {
     return invalid("EVIDENCE_CONFLICT")
   }
   const currentRule = input.currentState === "u2a_unverified"
@@ -128,7 +133,7 @@ export function decideFinancialRecovery(input: FinancialRecoveryDecisionInput): 
   if (currentRule && currentRule.order >= targetRule.order && (currentRule.branch === targetRule.branch || targetRule.branch === "COMMON")) {
     return { decision: "NO_ACTION", reason: "TARGET_ALREADY_REACHED" }
   }
-  if (input.targetMoneyMoved) return { decision: "RESUME_NON_FINANCIAL", reason: "MONEY_MOVED_RESUME_ONLY" }
+  if (targetMoneyMoved) return { decision: "RESUME_NON_FINANCIAL", reason: "MONEY_MOVED_RESUME_ONLY" }
   if (input.targetTxidPresent) return { decision: "RECONCILE_FIRST", reason: "REFERENCE_REQUIRES_RECONCILIATION" }
   if (input.reconciliationOutcome === "NOT_ATTEMPTED") return { decision: "RECONCILE_FIRST", reason: "RECONCILIATION_REQUIRED" }
   if (targetRule.kind === "FINANCIAL_CREATE" && input.reconciliationOutcome === "FOUND" && input.targetPaymentIdPresent) {
