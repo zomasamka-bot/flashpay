@@ -19,6 +19,12 @@ export type FinancialRecoveryCrashWindow =
   | "refund_txid_checkpoint_before_pi_complete"
   | "refund_pi_complete_before_payment_projection"
   | "refund_payment_projection_before_checkpoint_advance"
+  | "refund_payment_checkpoint_updated_before_accounting_record"
+  | "refund_accounting_record_before_accounting_checkpoint"
+  | "refund_accounting_checkpoint_before_audit_checkpoint"
+  | "refund_audit_checkpoint_before_completion_checkpoint"
+  | "refund_completion_checkpoint_before_final_projection"
+  | "refund_final_projection_before_finality_audit"
 
 export type FinancialRecoveryCrashEffect =
   | "PI_STATE_CHANGED"
