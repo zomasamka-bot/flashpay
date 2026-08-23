@@ -61,11 +61,11 @@ export function evaluateFinancialRecoveryU2AProof(input: U2AInput): U2AResult {
     candidate.direction !== "user_to_app" ||
     candidate.amount !== amount ||
     transaction.txid !== u2aTxid ||
-    candidate.developer_approved !== true ||
+    status.developer_approved !== true ||
     status.transaction_verified !== true ||
     status.developer_completed !== true ||
-    (candidate.cancelled !== undefined && candidate.cancelled !== false) ||
-    (candidate.user_cancelled !== undefined && candidate.user_cancelled !== false)
+    (status.cancelled !== undefined && status.cancelled !== false) ||
+    (status.user_cancelled !== undefined && status.user_cancelled !== false)
   ) return invalid("MALFORMED_OR_MISMATCH")
 
   if (userUid !== undefined && (typeof userUid !== "string" || userUid !== payerUid)) {
