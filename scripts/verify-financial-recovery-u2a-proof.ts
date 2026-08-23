@@ -1,13 +1,13 @@
 import { strict as assert } from "node:assert"
-import { evaluateFinancialRecoveryU2AProof } from "../lib/financial-recovery-u2a-proof"
+import { evaluateFinancialRecoveryU2AProof, type U2AInput } from "../lib/financial-recovery-u2a-proof"
 
-const expected = {
+const expected: U2AInput["expected"] = {
   piPaymentId: "pi-payment-1",
   paymentId: "payment-1",
   u2aTxid: "tx-u2a-1",
   amount: 2.5,
   payerUid: "payer-1",
-} as const
+}
 
 function candidate(uid: "user_uid" | "user.uid" | "both" = "user_uid") {
   const base = {
@@ -29,17 +29,17 @@ function candidate(uid: "user_uid" | "user.uid" | "both" = "user_uid") {
   return { ...base, user_uid: expected.payerUid }
 }
 
-function input(candidateValue: unknown, expectedValue = expected, source: "PI_PAYMENT_GET" | null = "PI_PAYMENT_GET") {
+function input(candidateValue: unknown, expectedValue: U2AInput["expected"] = expected, source: "PI_PAYMENT_GET" | null = "PI_PAYMENT_GET"): U2AInput {
   return { source, candidate: candidateValue, expected: expectedValue }
 }
 
-function assertVerified(value: unknown) {
+function assertVerified(value: U2AInput) {
   const result = evaluateFinancialRecoveryU2AProof(value)
   assert.equal(result.authorizesFinancialAction, false)
   assert.equal(result.outcome, "VERIFIED")
 }
 
-function assertRejected(value: unknown, outcome: "INVALID_INPUT" | "NON_AUTHORITATIVE_SOURCE" | "MALFORMED_OR_MISMATCH") {
+function assertRejected(value: U2AInput, outcome: "INVALID_INPUT" | "NON_AUTHORITATIVE_SOURCE" | "MALFORMED_OR_MISMATCH") {
   const result = evaluateFinancialRecoveryU2AProof(value)
   assert.equal(result.authorizesFinancialAction, false)
   assert.equal(result.outcome, "INDETERMINATE")
