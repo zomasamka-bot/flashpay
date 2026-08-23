@@ -165,3 +165,8 @@ export const FINANCIAL_RECOVERY_REFUND_CRASH_POLICIES = {
   FinancialRecoveryCrashPolicyMatrix,
   Extract<FinancialRecoveryCrashWindow, `refund_${string}`>
 >
+
+export const FINANCIAL_RECOVERY_CRASH_POLICY_MATRIX = {
+  ...FINANCIAL_RECOVERY_PRE_REFUND_CRASH_POLICIES,
+  ...FINANCIAL_RECOVERY_REFUND_CRASH_POLICIES,
+} as const satisfies FinancialRecoveryCrashPolicyMatrix
