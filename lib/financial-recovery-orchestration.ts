@@ -1,14 +1,17 @@
-import type {
-  FinancialRecoveryDecisionInput,
-  FinancialRecoveryDecisionResult,
+import {
+  decideFinancialRecovery,
+  type FinancialRecoveryDecisionInput,
+  type FinancialRecoveryDecisionResult,
 } from "./financial-recovery-decision"
-import type {
-  ExactlyOnceOperation,
-  ExactlyOncePresenceState,
-  ExactlyOnceReason,
+import {
+  evaluateFinancialRecoveryExactlyOnceGate,
+  type ExactlyOnceOperation,
+  type ExactlyOncePresenceState,
+  type ExactlyOnceReason,
 } from "./financial-recovery-exactly-once-gate"
 
 export type FinancialRecoveryOrchestrationInput = Readonly<{
+  operation: ExactlyOnceOperation
   decisionInput: FinancialRecoveryDecisionInput
   oppositePaymentId: ExactlyOncePresenceState
   oppositeTxid: ExactlyOncePresenceState
@@ -30,3 +33,24 @@ export type FinancialRecoveryOrchestrationResult =
       operation: ExactlyOnceOperation
       reason: ExactlyOnceReason
     }>
+
+export function orchestrateFinancialRecovery(
+  input: FinancialRecoveryOrchestrationInput,
+): FinancialRecoveryOrchestrationResult {
+  const decision = decideFinancialRecovery(input.decisionInput)
+  if (decision.decision !== "SAFE_FINANCIAL_RETRY") {
+    return { outcome: "DECISION", decision }
+  }
+
+  const gate = evaluateFinancialRecoveryExactlyOnceGate({
+    operation: input.operation,
+    decisionInput: input.decisionInput,
+    oppositePaymentId: input.oppositePaymentId,
+    oppositeTxid: input.oppositeTxid,
+    oppositeMoneyMovement: input.oppositeMoneyMovement,
+  })
+  if (!gate.allow) {
+    return { outcome: "GATE_BLOCKED", operation: input.operation, reason: gate.reason }
+  }
+  return { outcome: "FINANCIAL_RETRY_ALLOWED", operation: input.operation, decision }
+}
