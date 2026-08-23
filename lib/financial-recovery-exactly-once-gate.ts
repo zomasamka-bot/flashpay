@@ -6,8 +6,11 @@ export type ExactlyOnceOperation =
   | "REFUND_CREATE"
   | "REFUND_SUBMIT"
 
+export type ExactlyOncePresenceState = "PRESENT" | "ABSENT" | "UNKNOWN"
+
 export type ExactlyOnceReason =
   | "OPPOSITE_BRANCH_EVIDENCE"
+  | "OPPOSITE_BRANCH_UNCERTAIN"
   | "TARGET_REFERENCE_CONFLICT"
   | "TARGET_PAYMENT_REQUIRED"
   | "DECISION_TARGET_MISMATCH"
@@ -16,9 +19,9 @@ export type ExactlyOnceReason =
 export type ExactlyOnceGateInput = Readonly<{
   operation: ExactlyOnceOperation
   decisionInput: FinancialRecoveryDecisionInput
-  oppositePaymentIdPresent: boolean
-  oppositeTxidPresent: boolean
-  oppositeMoneyMovementProven: boolean
+  oppositePaymentId: ExactlyOncePresenceState
+  oppositeTxid: ExactlyOncePresenceState
+  oppositeMoneyMovement: ExactlyOncePresenceState
 }>
 
 export type ExactlyOnceGateResult =
@@ -26,8 +29,11 @@ export type ExactlyOnceGateResult =
   | Readonly<{ allow: false; reason: ExactlyOnceReason }>
 
 export function evaluateFinancialRecoveryExactlyOnceGate(input: ExactlyOnceGateInput): ExactlyOnceGateResult {
-  if (input.oppositePaymentIdPresent || input.oppositeTxidPresent || input.oppositeMoneyMovementProven) {
+  if (input.oppositePaymentId === "PRESENT" || input.oppositeTxid === "PRESENT" || input.oppositeMoneyMovement === "PRESENT") {
     return { allow: false, reason: "OPPOSITE_BRANCH_EVIDENCE" }
+  }
+  if (input.oppositePaymentId === "UNKNOWN" || input.oppositeTxid === "UNKNOWN" || input.oppositeMoneyMovement === "UNKNOWN") {
+    return { allow: false, reason: "OPPOSITE_BRANCH_UNCERTAIN" }
   }
   const targetStateByOperation: Record<ExactlyOnceOperation, FinancialRecoveryDecisionInput["targetState"]> = {
     SETTLEMENT_CREATE: "settlement_created",
