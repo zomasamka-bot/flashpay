@@ -6,7 +6,7 @@ import type {
 } from "./financial-recovery-decision"
 
 export type FinancialRecoveryCrashPolicy = {
-  readonly effect: FinancialRecoveryCrashEffect
+  readonly precedingEffect: FinancialRecoveryCrashEffect
   readonly recoveryTargetState: EvidencedState
   readonly onTargetReached: "NO_ACTION"
   readonly onUncertainty: "MANUAL_REVIEW"
