@@ -1,6 +1,7 @@
 import "server-only"
 
 import { serverConfig } from "./server-config"
+import { evaluateFinancialRecoveryPiCandidates } from "./financial-recovery-pi-candidate-rules"
 
 export type RefundPiReconciliationOutcome = "FOUND" | "CONFIRMED_NONE" | "INDETERMINATE"
 
@@ -123,10 +124,21 @@ export async function reconcileRefundWithPi(input: RefundPiReconciliationInput):
   const response = await getPi("/incomplete_server_payments")
   if (response.kind !== "ok" || !isRecord(response.body)) return { outcome: "INDETERMINATE" }
   const raw = response.body.incomplete_server_payments
-  if (!Array.isArray(raw) || raw.length > 1) return { outcome: "INDETERMINATE" }
-  if (raw.length === 0) return { outcome: "CONFIRMED_NONE" }
-  const candidate = raw[0]
-  if (!isRecord(candidate)) return { outcome: "INDETERMINATE" }
-  const payment = validatePayment(candidate, input)
+  if (!Array.isArray(raw)) return { outcome: "INDETERMINATE" }
+  const evaluation = evaluateFinancialRecoveryPiCandidates({
+    source: "PI_INCOMPLETE_SERVER_PAYMENTS",
+    candidates: raw,
+    expected: {
+      branch: "REFUND",
+      paymentId: input.paymentId,
+      refundId: input.refundId,
+      idempotencyKey: input.idempotencyKey,
+      amount: input.amount,
+      payerUid: input.payerUid,
+    },
+  })
+  if (evaluation.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
+  if (evaluation.outcome === "CONFIRMED_NONE") return { outcome: "CONFIRMED_NONE" }
+  const payment = validatePayment(evaluation.candidate, input)
   return payment ? { outcome: "FOUND", payment } : { outcome: "INDETERMINATE" }
 }
