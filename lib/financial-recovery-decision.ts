@@ -13,25 +13,27 @@ export type EvidenceFactSet = readonly EvidenceFact[]
 export type FinancialRecoveryBranch = "COMMON" | "SETTLEMENT" | "REFUND"
 export type FinancialRecoveryTargetKind = "NON_FINANCIAL" | "FINANCIAL_CREATE" | "FINANCIAL_SUBMIT"
 export type FinancialRecoveryOrder = 1 | 2 | 3 | 4 | 5 | 6 | 7
+export type FinancialRecoveryReconciliationSource = "PI_PAYMENT" | "HORIZON" | "PERSISTENCE" | "COMPOSITE"
 
 export type FinancialRecoveryTargetRule = {
   readonly branch: FinancialRecoveryBranch
   readonly order: FinancialRecoveryOrder
   readonly kind: FinancialRecoveryTargetKind
+  readonly reconciliationSource: FinancialRecoveryReconciliationSource
 }
 
 export const FINANCIAL_RECOVERY_TARGET_RULES: Readonly<Record<EvidencedState, FinancialRecoveryTargetRule>> = {
-  u2a_verified: { branch: "COMMON", order: 1, kind: "NON_FINANCIAL" },
-  app_funds_confirmed: { branch: "COMMON", order: 2, kind: "NON_FINANCIAL" },
-  settlement_created: { branch: "SETTLEMENT", order: 3, kind: "FINANCIAL_CREATE" },
-  settlement_blockchain_confirmed: { branch: "SETTLEMENT", order: 4, kind: "FINANCIAL_SUBMIT" },
-  settlement_pi_completed: { branch: "SETTLEMENT", order: 5, kind: "NON_FINANCIAL" },
-  settlement_finalized: { branch: "SETTLEMENT", order: 6, kind: "NON_FINANCIAL" },
-  refund_eligible: { branch: "REFUND", order: 3, kind: "NON_FINANCIAL" },
-  refund_created: { branch: "REFUND", order: 4, kind: "FINANCIAL_CREATE" },
-  refund_blockchain_confirmed: { branch: "REFUND", order: 5, kind: "FINANCIAL_SUBMIT" },
-  refund_pi_completed: { branch: "REFUND", order: 6, kind: "NON_FINANCIAL" },
-  refund_finalized: { branch: "REFUND", order: 7, kind: "NON_FINANCIAL" },
+  u2a_verified: { branch: "COMMON", order: 1, kind: "NON_FINANCIAL", reconciliationSource: "PI_PAYMENT" },
+  app_funds_confirmed: { branch: "COMMON", order: 2, kind: "NON_FINANCIAL", reconciliationSource: "PI_PAYMENT" },
+  settlement_created: { branch: "SETTLEMENT", order: 3, kind: "FINANCIAL_CREATE", reconciliationSource: "PI_PAYMENT" },
+  settlement_blockchain_confirmed: { branch: "SETTLEMENT", order: 4, kind: "FINANCIAL_SUBMIT", reconciliationSource: "HORIZON" },
+  settlement_pi_completed: { branch: "SETTLEMENT", order: 5, kind: "NON_FINANCIAL", reconciliationSource: "PI_PAYMENT" },
+  settlement_finalized: { branch: "SETTLEMENT", order: 6, kind: "NON_FINANCIAL", reconciliationSource: "PERSISTENCE" },
+  refund_eligible: { branch: "REFUND", order: 3, kind: "NON_FINANCIAL", reconciliationSource: "COMPOSITE" },
+  refund_created: { branch: "REFUND", order: 4, kind: "FINANCIAL_CREATE", reconciliationSource: "PI_PAYMENT" },
+  refund_blockchain_confirmed: { branch: "REFUND", order: 5, kind: "FINANCIAL_SUBMIT", reconciliationSource: "HORIZON" },
+  refund_pi_completed: { branch: "REFUND", order: 6, kind: "NON_FINANCIAL", reconciliationSource: "PI_PAYMENT" },
+  refund_finalized: { branch: "REFUND", order: 7, kind: "NON_FINANCIAL", reconciliationSource: "COMPOSITE" },
 }
 
 export type FinancialRecoveryReconciliationOutcome =
@@ -63,6 +65,7 @@ export type FinancialRecoveryDecisionInput = {
   readonly currentState: FinancialRecoveryState
   readonly targetState: EvidencedState
   readonly reconciliationOutcome: FinancialRecoveryReconciliationOutcome
+  readonly reconciliationSource: FinancialRecoveryReconciliationSource | null
   readonly prerequisitesConfirmed: boolean
   readonly targetPaymentIdPresent: boolean
   readonly targetTxidPresent: boolean
@@ -108,6 +111,8 @@ export function decideFinancialRecovery(input: FinancialRecoveryDecisionInput): 
   if (input.conflicts.length > 0) return invalid("EVIDENCE_CONFLICT")
 
   const targetRule = FINANCIAL_RECOVERY_TARGET_RULES[input.targetState]
+  if (input.reconciliationOutcome === "NOT_ATTEMPTED" && input.reconciliationSource !== null) return invalid("EVIDENCE_CONFLICT")
+  if ((input.reconciliationOutcome === "FOUND" || input.reconciliationOutcome === "CONFIRMED_NONE") && input.reconciliationSource !== targetRule.reconciliationSource) return invalid("EVIDENCE_CONFLICT")
   if (input.reconciliationOutcome === "CONFIRMED_NONE" && (input.targetTxidPresent || input.targetMoneyMoved || (targetRule.kind === "FINANCIAL_CREATE" && input.targetPaymentIdPresent))) {
     return invalid("EVIDENCE_CONFLICT")
   }
