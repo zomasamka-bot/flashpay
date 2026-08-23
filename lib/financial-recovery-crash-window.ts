@@ -9,6 +9,16 @@ export type FinancialRecoveryCrashWindow =
   | "settlement_completion_checkpoint_before_accounting"
   | "settlement_accounting_checkpoint_before_db_commit"
   | "settlement_db_commit_before_final_checkpoint"
+  | "refund_eligibility_checkpoint_before_intent_transition"
+  | "refund_intent_checkpoint_before_submission_attempt"
+  | "refund_submission_attempt_before_pi_create"
+  | "refund_pi_create_verified_before_payment_id_checkpoint"
+  | "refund_payment_id_checkpoint_before_horizon_claim"
+  | "refund_horizon_claim_before_blockchain_submit"
+  | "refund_horizon_confirmed_before_txid_checkpoint"
+  | "refund_txid_checkpoint_before_pi_complete"
+  | "refund_pi_complete_before_payment_projection"
+  | "refund_payment_projection_before_checkpoint_advance"
 
 export type FinancialRecoveryCrashEffect =
   | "PI_STATE_CHANGED"
