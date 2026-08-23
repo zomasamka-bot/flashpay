@@ -93,8 +93,8 @@ const mismatch = orchestrateFinancialRecovery({
   operation: "SETTLEMENT_CREATE",
   decisionInput: {
     ...base,
-    currentState: "app_funds_confirmed",
-    targetState: "settlement_blockchain_confirmed",
+    currentState: "refund_eligible",
+    targetState: "refund_created",
   },
   oppositePaymentId: "ABSENT",
   oppositeTxid: "ABSENT",
