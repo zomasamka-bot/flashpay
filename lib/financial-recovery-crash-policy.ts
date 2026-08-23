@@ -42,7 +42,7 @@ export const FINANCIAL_RECOVERY_PRE_REFUND_CRASH_POLICIES = {
   },
   u2a_redis_checkpoint_before_a2u_dispatch: {
     precedingEffect: "LOCAL_ONLY",
-    recoveryTargetState: "app_funds_confirmed",
+    recoveryTargetState: "settlement_created",
     onTargetReached: "NO_ACTION",
     onUncertainty: "MANUAL_REVIEW",
     onConflict: "MANUAL_REVIEW",
