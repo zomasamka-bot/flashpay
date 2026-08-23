@@ -142,6 +142,24 @@ export function decideFinancialRecovery(input: FinancialRecoveryDecisionInput): 
   if (targetRule.kind === "FINANCIAL_SUBMIT" && input.reconciliationOutcome === "FOUND") {
     return { decision: "RECONCILE_FIRST", reason: "REFERENCE_REQUIRES_RECONCILIATION" }
   }
+  if (
+    targetRule.kind === "FINANCIAL_CREATE" &&
+    input.reconciliationOutcome === "CONFIRMED_NONE" &&
+    input.targetPaymentIdPresent === false &&
+    input.targetTxidPresent === false &&
+    targetMoneyMoved === false
+  ) {
+    return { decision: "SAFE_FINANCIAL_RETRY", reason: "SAFE_CREATE_RETRY" }
+  }
+  if (
+    targetRule.kind === "FINANCIAL_SUBMIT" &&
+    input.reconciliationOutcome === "CONFIRMED_NONE" &&
+    input.targetPaymentIdPresent &&
+    input.targetTxidPresent === false &&
+    targetMoneyMoved === false
+  ) {
+    return { decision: "SAFE_FINANCIAL_RETRY", reason: "SAFE_SUBMIT_RETRY" }
+  }
   if (targetRule.kind === "NON_FINANCIAL") return { decision: "RESUME_NON_FINANCIAL", reason: "NON_FINANCIAL_RESUME" }
   return invalid("FAIL_CLOSED")
 }
