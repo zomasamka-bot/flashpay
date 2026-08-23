@@ -124,7 +124,7 @@ export function evaluateFinancialRecoveryPiCandidates(input: FinancialRecoveryPi
     const identityMatches = expected.branch === "SETTLEMENT"
       ? meta.paymentId === expected.paymentId
       : meta.paymentId === expected.paymentId && meta.refundId === expected.refundId && meta.idempotencyKey === expected.idempotencyKey
-    const uid = record[rule.uidRole]
+    const uid = record.user_uid
     const identifier = record.identifier
     if (
       !identityMatches ||
