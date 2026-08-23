@@ -75,6 +75,9 @@ const mismatches = [
 ]
 for (const mismatch of mismatches) assertRejected(input({ ...candidate(), ...mismatch }), "MALFORMED_OR_MISMATCH")
 
+assertRejected(input({ ...candidate("user.uid"), user: { uid: "wrong" } }), "MALFORMED_OR_MISMATCH")
+assertRejected(input({ ...candidate("user.uid"), user: {} }), "MALFORMED_OR_MISMATCH")
+
 for (const malformed of [
   [],
   { ...candidate(), metadata: [] },
