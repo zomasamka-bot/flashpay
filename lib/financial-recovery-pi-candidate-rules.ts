@@ -1,5 +1,31 @@
 export type FinancialRecoveryPiCandidateBranch = "SETTLEMENT" | "REFUND"
 
+export type FinancialRecoveryPiExpectation = Readonly<
+  | { branch: "SETTLEMENT"; paymentId: string; amount: number; merchantUid: string }
+  | { branch: "REFUND"; paymentId: string; refundId: string; idempotencyKey: string; amount: number; payerUid: string }
+>
+
+export type FinancialRecoveryPiCandidateInput = Readonly<{
+  source: "PI_INCOMPLETE_SERVER_PAYMENTS" | null
+  candidates: unknown
+  expected: FinancialRecoveryPiExpectation
+}>
+
+export type FinancialRecoveryPiCandidateReason =
+  | "INVALID_INPUT"
+  | "NON_AUTHORITATIVE_LIST"
+  | "MALFORMED_OR_MISMATCH"
+  | "BRANCH_CONFLICT"
+  | "MULTIPLE_SCOPED"
+
+export type FinancialRecoveryPiCandidateResult = Readonly<
+  { authorizesFinancialAction: false } & (
+    | { outcome: "FOUND"; candidate: Readonly<Record<string, unknown>>; moneyMovementProven: false }
+    | { outcome: "CONFIRMED_NONE" }
+    | { outcome: "INDETERMINATE"; reason: FinancialRecoveryPiCandidateReason }
+  )
+>
+
 export type FinancialRecoveryPiCandidateRule = Readonly<{
   metadataType: "a2u_settlement" | "refund"
   identity: readonly ("paymentId" | "refundId" | "idempotencyKey")[]
