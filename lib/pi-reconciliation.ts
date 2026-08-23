@@ -1,6 +1,7 @@
 import "server-only"
 
 import { serverConfig } from "@/lib/server-config"
+import { evaluateFinancialRecoveryPiCandidates } from "@/lib/financial-recovery-pi-candidate-rules"
 
 export type PiReconciliationOutcome = "FOUND" | "CONFIRMED_NONE" | "INDETERMINATE"
 
@@ -106,23 +107,18 @@ export async function reconcileIncompleteA2UPayment(paymentId: string, amount: n
         ? payload.incomplete_server_payments
         : null
     if (!candidates) return { outcome: "INDETERMINATE", paymentId, reason: "Pi returned invalid incomplete-payments payload" }
-    let matchingCandidate = false
-    for (const candidate of candidates) {
-      if (!isRecord(candidate)) continue
-      const metadata = isRecord(candidate.metadata) ? candidate.metadata : null
-      if (metadata?.paymentId !== paymentId || metadata.type !== "a2u_settlement") continue
-      matchingCandidate = true
-      if (!isPaymentDto(candidate)) return { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U metadata has an invalid DTO" }
-      if (candidate.amount !== amount) return { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U metadata has an amount mismatch" }
-      if (candidate.direction !== "app_to_user" || candidate.user_uid !== merchantUid ||
-        typeof candidate.from_address !== "string" || typeof candidate.to_address !== "string") {
-        return { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U DTO has invalid direction or user scope" }
-      }
-      return { outcome: "FOUND", paymentId, reason: "Pi found an incomplete A2U payment", dto: candidate }
+    const evaluation = evaluateFinancialRecoveryPiCandidates({
+      source: "PI_INCOMPLETE_SERVER_PAYMENTS",
+      candidates,
+      expected: { branch: "SETTLEMENT", paymentId, amount, merchantUid },
+    })
+    if (evaluation.outcome === "FOUND") {
+      return { outcome: "FOUND", paymentId, reason: "Pi found an incomplete A2U payment", dto: evaluation.candidate }
     }
-    return matchingCandidate
-      ? { outcome: "INDETERMINATE", paymentId, reason: "Matching A2U payment could not be validated" }
-      : { outcome: "CONFIRMED_NONE", paymentId, reason: "Pi confirmed no matching A2U settlement" }
+    if (evaluation.outcome === "CONFIRMED_NONE") {
+      return { outcome: "CONFIRMED_NONE", paymentId, reason: "Pi confirmed no matching A2U settlement" }
+    }
+    return { outcome: "INDETERMINATE", paymentId, reason: `Pi incomplete A2U reconciliation: ${evaluation.reason}` }
   } catch (error) {
     return { outcome: "INDETERMINATE", paymentId, reason: error instanceof Error ? error.message : "Pi reconciliation failed" }
   }
