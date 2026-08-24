@@ -42,6 +42,7 @@ function assertVerified(value: HorizonProofInput): void {
   if (result.outcome === "VERIFIED") {
     assert.equal(result.proof, "horizon_tx_exact")
     assert.equal(result.moneyMovementProven, true)
+    assert.deepEqual(result.reference, value.expected)
   }
 }
 
