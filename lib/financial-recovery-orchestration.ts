@@ -9,6 +9,7 @@ import {
   type ExactlyOncePresenceState,
   type ExactlyOnceReason,
 } from "./financial-recovery-exactly-once-gate"
+import { evaluateFinancialRecoveryU2AProof, type U2AInput } from "./financial-recovery-u2a-proof"
 
 export type FinancialRecoveryOrchestrationInput = Readonly<{
   operation: ExactlyOnceOperation
@@ -53,4 +54,23 @@ export function orchestrateFinancialRecovery(
     return { outcome: "GATE_BLOCKED", operation: input.operation, reason: gate.reason }
   }
   return { outcome: "FINANCIAL_RETRY_ALLOWED", operation: input.operation, decision }
+}
+
+export type U2ABoundFinancialRecoveryInput = Readonly<{
+  orchestration: FinancialRecoveryOrchestrationInput
+  u2a: U2AInput
+}>
+
+export function orchestrateFinancialRecoveryWithU2AProof(
+  input: U2ABoundFinancialRecoveryInput,
+): FinancialRecoveryOrchestrationResult {
+  const proof = evaluateFinancialRecoveryU2AProof(input.u2a)
+  const d = input.orchestration.decisionInput
+  const bound = input.u2a.expected.paymentId === d.paymentId && proof.outcome === "VERIFIED"
+  const decisionInput: FinancialRecoveryDecisionInput = {
+    ...d,
+    prerequisitesConfirmed: d.prerequisitesConfirmed && bound,
+    malformed: d.malformed || !bound,
+  }
+  return orchestrateFinancialRecovery({ ...input.orchestration, decisionInput })
 }
