@@ -4,6 +4,7 @@ import type { FinancialRecoveryDecisionInput } from "../lib/financial-recovery-d
 import type { SettlementProofBindingResult } from "../lib/financial-recovery-settlement-proof-binding"
 
 const baseDecision: FinancialRecoveryDecisionInput = {
+  paymentId: "payment-1",
   currentState: "app_funds_confirmed",
   targetState: "settlement_created",
   reconciliationOutcome: "CONFIRMED_NONE",
@@ -53,6 +54,21 @@ if (bound.outcome === "BOUND") {
   })
 }
 
+const boundWithProof = bindSettlementProofToDecisionInput(
+  { ...baseDecision, targetMoneyMovementProof: "horizon_tx_exact" },
+  verified,
+)
+assert.equal(boundWithProof.authorizesFinancialAction, false)
+assert.equal(boundWithProof.outcome, "BOUND")
+if (boundWithProof.outcome === "BOUND") {
+  assert.deepEqual(boundWithProof.decisionInput, {
+    ...baseDecision,
+    targetMoneyMovementProof: "horizon_tx_exact",
+    targetPaymentIdPresent: true,
+    targetTxidPresent: true,
+  })
+}
+
 function assertBlocked(
   decision: FinancialRecoveryDecisionInput,
   proof: SettlementProofBindingResult,
@@ -65,6 +81,9 @@ function assertBlocked(
 }
 
 assertBlocked(baseDecision, unverified, "PROOF_UNVERIFIED")
+assertBlocked({ ...baseDecision, paymentId: "other" }, unverified, "PROOF_UNVERIFIED")
 assertBlocked(baseDecision, { ...verified, reference: { ...verified.reference, paymentId: "other" } }, "PAYMENT_ID_MISMATCH")
+assertBlocked({ ...baseDecision, paymentId: "other", targetState: "refund_created" }, verified, "PAYMENT_ID_MISMATCH")
 assertBlocked({ ...baseDecision, targetState: "refund_created" }, verified, "TARGET_NOT_SETTLEMENT")
+assertBlocked({ ...baseDecision, targetState: "refund_created", targetMoneyMovementProof: "refund_horizon_tx_exact" }, verified, "TARGET_NOT_SETTLEMENT")
 assertBlocked({ ...baseDecision, targetMoneyMovementProof: "refund_horizon_tx_exact" }, verified, "PROOF_CONFLICT")
