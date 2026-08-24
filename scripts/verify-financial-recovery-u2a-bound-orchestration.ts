@@ -62,18 +62,21 @@ function input(
 function assertAllowed(value: { orchestration: FinancialRecoveryOrchestrationInput; u2a: U2AInput }): void {
   const result = orchestrateFinancialRecoveryWithU2AProof(input(value.orchestration, value.u2a))
   assert.equal(result.outcome, "FINANCIAL_RETRY_ALLOWED")
-  if (result.outcome === "FINANCIAL_RETRY_ALLOWED") assert.equal(result.decision.reason, "SAFE_CREATE_RETRY")
+  if (result.outcome === "FINANCIAL_RETRY_ALLOWED") {
+    assert.equal(result.decision.decision, "SAFE_FINANCIAL_RETRY")
+    assert.equal(result.decision.reason, "SAFE_CREATE_RETRY")
+  }
 }
 
 function assertDecision(
   value: { orchestration: FinancialRecoveryOrchestrationInput; u2a: U2AInput },
-  reason: "PREREQUISITES_UNCONFIRMED" | "INVALID_INPUT",
+  expected: { decision: "RECONCILE_FIRST"; reason: "PREREQUISITES_UNCONFIRMED" } | { decision: "MANUAL_REVIEW"; reason: "INVALID_INPUT" },
 ): void {
   const result = orchestrateFinancialRecoveryWithU2AProof(input(value.orchestration, value.u2a))
   assert.equal(result.outcome, "DECISION")
   if (result.outcome === "DECISION") {
-    assert.equal(result.decision.decision, "RECONCILE_FIRST")
-    assert.equal(result.decision.reason, reason)
+    assert.equal(result.decision.decision, expected.decision)
+    assert.equal(result.decision.reason, expected.reason)
   }
 }
 
@@ -91,12 +94,15 @@ assertAllowed({ orchestration, u2a: validU2A })
 assertDecision({
   orchestration: { ...orchestration, decisionInput: { ...decisionInput, prerequisitesConfirmed: false } },
   u2a: validU2A,
-}, "PREREQUISITES_UNCONFIRMED")
+}, { decision: "RECONCILE_FIRST", reason: "PREREQUISITES_UNCONFIRMED" })
 
-const mismatchedExpected: U2AInput["expected"] = { ...expected, paymentId: "other-payment" }
-assertDecision({ orchestration, u2a: { source: "PI_PAYMENT_GET", candidate, expected: mismatchedExpected } }, "INVALID_INPUT")
-assertDecision({ orchestration, u2a: { source: null, candidate, expected } }, "INVALID_INPUT")
-assertDecision({ orchestration, u2a: { source: "PI_PAYMENT_GET", candidate: {}, expected } }, "INVALID_INPUT")
+const mismatchedCandidate: U2AInput["candidate"] = {
+  ...candidate,
+  metadata: { paymentId: "other-payment" },
+}
+assertDecision({ orchestration, u2a: { source: "PI_PAYMENT_GET", candidate: mismatchedCandidate, expected } }, { decision: "MANUAL_REVIEW", reason: "INVALID_INPUT" })
+assertDecision({ orchestration, u2a: { source: null, candidate, expected } }, { decision: "MANUAL_REVIEW", reason: "INVALID_INPUT" })
+assertDecision({ orchestration, u2a: { source: "PI_PAYMENT_GET", candidate: {}, expected } }, { decision: "MANUAL_REVIEW", reason: "INVALID_INPUT" })
 
 const oppositeFields: readonly ("oppositePaymentId" | "oppositeTxid" | "oppositeMoneyMovement")[] = [
   "oppositePaymentId",
