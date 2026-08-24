@@ -286,6 +286,19 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true) {
       return { ok: false, status: "error", error: "A2U payment was cancelled" }
     }
+
+    if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_SUBMIT") {
+      const metadata = isRecord(fetchedPayment.metadata) ? fetchedPayment.metadata : null
+      if (
+        metadata === null ||
+        metadata.type !== "a2u_settlement" ||
+        metadata.paymentId !== ctx.paymentId ||
+        fetchedPayment.direction !== "app_to_user" ||
+        fetchedPayment.user_uid !== ctx.merchantUid
+      ) {
+        return { ok: false, status: "settlement_pending", error: "A2U identity mismatch" }
+      }
+    }
     
     // Extract state from PaymentDTO
     const isDevCompleted = fetchedPayment.status?.developer_completed === true
