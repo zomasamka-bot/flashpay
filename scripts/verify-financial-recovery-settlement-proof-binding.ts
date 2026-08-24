@@ -6,6 +6,7 @@ import type { HorizonProofResult } from "../lib/financial-recovery-horizon-proof
 const a2uVerified: Extract<A2UProofResult, { outcome: "VERIFIED" }> = {
   authorizesFinancialAction: false,
   outcome: "VERIFIED",
+  moneyMovementProven: false,
   reference: {
     paymentId: "payment-1",
     merchantUid: "merchant-1",
