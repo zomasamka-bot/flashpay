@@ -69,9 +69,21 @@ function assertRejected(
 }
 
 assertVerified(input({ ...baseCandidate }), null)
+const candidateWithoutStatus: Readonly<Record<string, unknown>> = {
+  identifier: expected.a2uPaymentId,
+  metadata: baseMetadata,
+  direction: "app_to_user",
+  amount: expected.amount,
+  user_uid: expected.merchantUid,
+  from_address: expected.appAddress,
+  to_address: "user-address-1",
+}
+assertVerified(input(candidateWithoutStatus), null)
 assertVerified(input({ ...baseCandidate, status: null }), null)
+assertVerified(input({ ...baseCandidate, status: { ...baseStatus, cancelled: false, user_cancelled: false } }), null)
 assertVerified(input({ ...baseCandidate, status: { developer_approved: false, transaction_verified: false, developer_completed: false } }), null)
 assertVerified(input({ ...baseCandidate, transaction: null }), null)
+assertVerified(input({ ...baseCandidate, transaction: {} }), null)
 assertVerified(input({ ...baseCandidate, transaction: { txid: "tx-a2u-1" } }), "tx-a2u-1")
 
 assertRejected(input({ ...baseCandidate }, expected, null), "NON_AUTHORITATIVE_SOURCE")
