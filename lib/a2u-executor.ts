@@ -132,6 +132,7 @@ export interface ExecutorContext {
   customerAmount: number // REQUIRED - validated amount
   piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
   isRecovery: boolean
+  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT"
 }
 
 /**
@@ -184,6 +185,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   }
 
   // STAGE 1: Get/Create A2U payment (skip if already have a2uPaymentId)
+  if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_CREATE" && ctx.payment.a2uPaymentId) {
+    return { ok: false, status: "settlement_pending", error: "Create target exists" }
+  }
+  if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_SUBMIT" && !ctx.payment.a2uPaymentId) {
+    return { ok: false, status: "settlement_pending", error: "Submit requires a2uPaymentId" }
+  }
   let a2uPaymentId = ctx.payment.a2uPaymentId
 
   if (!a2uPaymentId) {
@@ -321,6 +328,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       // Replace ctx.payment with fully merged record
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, continueUpdates)
     }
+  }
+
+  if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_CREATE") {
+    return { ok: true, status: "settlement_pending" }
   }
 
   // STAGE 2: Sign (skip if already have a2uTxid)
