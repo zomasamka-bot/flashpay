@@ -14,7 +14,18 @@ export type HorizonProofInput = Readonly<{
 export type HorizonProofResult = Readonly<
   { authorizesFinancialAction: false } &
     (
-      | { outcome: "VERIFIED"; proof: "horizon_tx_exact"; moneyMovementProven: true }
+      | {
+          outcome: "VERIFIED"
+          proof: "horizon_tx_exact"
+          moneyMovementProven: true
+          reference: Readonly<{
+            txid: string
+            a2uPaymentId: string
+            fromAddress: string
+            toAddress: string
+            amount: number
+          }>
+        }
       | {
           outcome: "INDETERMINATE"
           reason: "INVALID_INPUT" | "NON_AUTHORITATIVE_SOURCE" | "MALFORMED_OR_MISMATCH"
@@ -72,5 +83,11 @@ export function evaluateFinancialRecoveryHorizonProof(input: HorizonProofInput):
     return indeterminate("MALFORMED_OR_MISMATCH")
   }
 
-  return { authorizesFinancialAction: false, outcome: "VERIFIED", proof: "horizon_tx_exact", moneyMovementProven: true }
+  return {
+    authorizesFinancialAction: false,
+    outcome: "VERIFIED",
+    proof: "horizon_tx_exact",
+    moneyMovementProven: true,
+    reference: { txid, a2uPaymentId, fromAddress, toAddress, amount },
+  }
 }
