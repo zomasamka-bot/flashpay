@@ -65,7 +65,7 @@ export function evaluateFinancialRecoveryA2UProof(input: A2UProofInput): A2UProo
     candidate.direction !== "app_to_user" ||
     candidate.amount !== expected.amount ||
     candidate.user_uid !== expected.merchantUid ||
-    candidate.from_address !== expected.appAddress ||
+    candidate.from_address !== expected.appAddress
   ) return indeterminate("MALFORMED_OR_MISMATCH")
 
   const status = candidate.status
