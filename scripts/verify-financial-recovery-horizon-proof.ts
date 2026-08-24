@@ -70,6 +70,15 @@ for (const mismatch of txMismatches) assertRejected(input({ ...baseTx, ...mismat
 
 for (const operations of [[], [baseOp, baseOp]]) assertRejected(input(baseTx, operations), "MALFORMED_OR_MISMATCH")
 assertRejected(input(baseTx, [{ ...baseOp, type: "wrong" }]), "MALFORMED_OR_MISMATCH")
+const opWithoutAmount: Readonly<Record<string, unknown>> = {
+  type: baseOp.type,
+  transaction_hash: baseOp.transaction_hash,
+  transaction_successful: baseOp.transaction_successful,
+  from: baseOp.from,
+  to: baseOp.to,
+  asset_type: baseOp.asset_type,
+}
+assertRejected(input(baseTx, [opWithoutAmount]), "MALFORMED_OR_MISMATCH")
 assertRejected(input({ ...baseTx, operation_count: 2 }, [baseOp]), "MALFORMED_OR_MISMATCH")
 
 const opMismatches: readonly Readonly<Record<string, unknown>>[] = [
@@ -81,5 +90,3 @@ for (const mismatch of opMismatches) assertRejected(input(baseTx, [{ ...baseOp, 
 
 for (const malformed of [null, [], "tx"]) assertRejected(input(malformed, [baseOp]), "MALFORMED_OR_MISMATCH")
 for (const operations of [null, {}, [null], ["op"]]) assertRejected(input(baseTx, operations), "MALFORMED_OR_MISMATCH")
-
-console.log("Horizon proof verification passed")
