@@ -19,6 +19,7 @@ export type A2UProofResult = Readonly<
           a2uPaymentId: string
           paymentId: string
           merchantUid: string
+          amount: number
           fromAddress: string
           toAddress: string
           txid: string | null
@@ -51,10 +52,12 @@ export function evaluateFinancialRecoveryA2UProof(input: A2UProofInput): A2UProo
     !Number.isFinite(expected.amount) ||
     expected.amount <= 0
   ) return indeterminate("INVALID_INPUT")
-  if (!isRecord(input.candidate) || !isRecord(input.candidate.metadata)) return indeterminate("MALFORMED_OR_MISMATCH")
-
+  if (!isRecord(input.candidate)) return indeterminate("MALFORMED_OR_MISMATCH")
   const candidate = input.candidate
   const metadata = candidate.metadata
+  if (!isRecord(metadata)) return indeterminate("MALFORMED_OR_MISMATCH")
+  const toAddress = candidate.to_address
+  if (typeof toAddress !== "string" || !toAddress.trim()) return indeterminate("MALFORMED_OR_MISMATCH")
   if (
     candidate.identifier !== expected.a2uPaymentId ||
     metadata.type !== "a2u_settlement" ||
@@ -63,8 +66,6 @@ export function evaluateFinancialRecoveryA2UProof(input: A2UProofInput): A2UProo
     candidate.amount !== expected.amount ||
     candidate.user_uid !== expected.merchantUid ||
     candidate.from_address !== expected.appAddress ||
-    typeof candidate.to_address !== "string" ||
-    !candidate.to_address.trim()
   ) return indeterminate("MALFORMED_OR_MISMATCH")
 
   const status = candidate.status
@@ -87,8 +88,9 @@ export function evaluateFinancialRecoveryA2UProof(input: A2UProofInput): A2UProo
       a2uPaymentId: expected.a2uPaymentId,
       paymentId: expected.paymentId,
       merchantUid: expected.merchantUid,
+      amount: expected.amount,
       fromAddress: expected.appAddress,
-      toAddress: candidate.to_address,
+      toAddress,
       txid: isRecord(transaction) && typeof transaction.txid === "string" ? transaction.txid : null,
     },
   }
