@@ -96,11 +96,23 @@ assertDecision({
   u2a: validU2A,
 }, { decision: "RECONCILE_FIRST", reason: "PREREQUISITES_UNCONFIRMED" })
 
-const mismatchedCandidate: U2AInput["candidate"] = {
-  ...candidate,
-  metadata: { paymentId: "other-payment" },
+const otherExpected: U2AInput["expected"] = {
+  piPaymentId: "pi-payment-2",
+  paymentId: "other-payment",
+  u2aTxid: "u2a-tx-2",
+  amount: 2.5,
+  payerUid: "payer-1",
 }
-assertDecision({ orchestration, u2a: { source: "PI_PAYMENT_GET", candidate: mismatchedCandidate, expected } }, { decision: "MANUAL_REVIEW", reason: "INVALID_INPUT" })
+const otherCandidate: U2AInput["candidate"] = {
+  identifier: "pi-payment-2",
+  metadata: { paymentId: "other-payment" },
+  direction: "user_to_app",
+  amount: 2.5,
+  user_uid: "payer-1",
+  status: { developer_approved: true, transaction_verified: true, developer_completed: true },
+  transaction: { txid: "u2a-tx-2" },
+}
+assertDecision({ orchestration, u2a: { source: "PI_PAYMENT_GET", candidate: otherCandidate, expected: otherExpected } }, { decision: "MANUAL_REVIEW", reason: "INVALID_INPUT" })
 assertDecision({ orchestration, u2a: { source: null, candidate, expected } }, { decision: "MANUAL_REVIEW", reason: "INVALID_INPUT" })
 assertDecision({ orchestration, u2a: { source: "PI_PAYMENT_GET", candidate: {}, expected } }, { decision: "MANUAL_REVIEW", reason: "INVALID_INPUT" })
 
