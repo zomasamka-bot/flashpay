@@ -48,6 +48,7 @@ function assertVerified(value: A2UProofInput, txid: string | null): void {
     assert.deepEqual(result.reference, {
       a2uPaymentId: expected.a2uPaymentId,
       paymentId: expected.paymentId,
+      merchantUid: expected.merchantUid,
       amount: expected.amount,
       fromAddress: expected.appAddress,
       toAddress: "user-address-1",
@@ -68,6 +69,9 @@ function assertRejected(
 }
 
 assertVerified(input({ ...baseCandidate }), null)
+assertVerified(input({ ...baseCandidate, status: null }), null)
+assertVerified(input({ ...baseCandidate, status: { developer_approved: false, transaction_verified: false, developer_completed: false } }), null)
+assertVerified(input({ ...baseCandidate, transaction: null }), null)
 assertVerified(input({ ...baseCandidate, transaction: { txid: "tx-a2u-1" } }), "tx-a2u-1")
 
 assertRejected(input({ ...baseCandidate }, expected, null), "NON_AUTHORITATIVE_SOURCE")
@@ -81,7 +85,7 @@ for (const amount of [NaN, Infinity, 0, -1]) {
 
 assertRejected(input(null), "MALFORMED_OR_MISMATCH")
 assertRejected(input({ ...baseCandidate, metadata: null }), "MALFORMED_OR_MISMATCH")
-assertRejected(input({ ...baseCandidate, status: null }), "MALFORMED_OR_MISMATCH")
+assertRejected(input({ ...baseCandidate, status: [] }), "MALFORMED_OR_MISMATCH")
 assertRejected(input({ ...baseCandidate, transaction: "bad" }), "MALFORMED_OR_MISMATCH")
 assertRejected(input({ ...baseCandidate, to_address: "" }), "MALFORMED_OR_MISMATCH")
 
@@ -91,9 +95,6 @@ for (const field of ["identifier", "direction", "amount", "user_uid", "from_addr
 assertRejected(input({ ...baseCandidate, metadata: { ...baseMetadata, type: "wrong" } }), "MALFORMED_OR_MISMATCH")
 assertRejected(input({ ...baseCandidate, metadata: { ...baseMetadata, paymentId: "wrong" } }), "MALFORMED_OR_MISMATCH")
 
-for (const flag of ["developer_approved", "transaction_verified", "developer_completed"] as const) {
-  assertRejected(input({ ...baseCandidate, status: { ...baseStatus, [flag]: false } }), "MALFORMED_OR_MISMATCH")
-}
 for (const flag of ["cancelled", "user_cancelled"] as const) {
   assertRejected(input({ ...baseCandidate, status: { ...baseStatus, [flag]: true } }), "MALFORMED_OR_MISMATCH")
   assertRejected(input({ ...baseCandidate, status: { ...baseStatus, [flag]: "false" } }), "MALFORMED_OR_MISMATCH")
