@@ -303,6 +303,22 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // Extract state from PaymentDTO
     const isDevCompleted = fetchedPayment.status?.developer_completed === true
     const existingTxid = fetchedPayment.transaction?.txid
+
+    if (
+      ctx.isRecovery &&
+      ctx.recoveryOperation === "SETTLEMENT_SUBMIT" &&
+      (typeof ctx.payment.a2uTxid === "string" ||
+        ctx.payment.horizonSuccessFlag === true ||
+        ctx.payment.piCompletionPending === true ||
+        ctx.payment.piCompleted === true ||
+        ctx.payment.requiresDbReconciliation === true ||
+        typeof existingTxid === "string" ||
+        fetchedPayment.transaction?.verified === true ||
+        fetchedPayment.status?.transaction_verified === true ||
+        fetchedPayment.status?.developer_completed === true)
+    ) {
+      return { ok: false, status: "settlement_pending", error: "Existing A2U transfer evidence requires reconciliation" }
+    }
     
     // If any txid exists, preserve it and permanently skip Stage2
     if (typeof existingTxid === "string") {
