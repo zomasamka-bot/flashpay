@@ -29,6 +29,7 @@ try {
   require("./verify-financial-recovery-settlement-proof-orchestration.ts")
   require("./verify-financial-recovery-settlement-refund-checkpoint-barrier.ts")
   require("./verify-financial-recovery-settlement-refund-checkpoint-binding.ts")
+  require("./verify-financial-recovery-settlement-exactly-once-gate.ts")
 } finally {
   if (priorTsHandler) {
     require.extensions[".ts"] = priorTsHandler
