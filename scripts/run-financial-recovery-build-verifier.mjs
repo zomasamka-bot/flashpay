@@ -19,6 +19,15 @@ require.extensions[".ts"] = function registerTypeScript(module, filename) {
 }
 
 try {
+  require("./verify-financial-recovery-u2a-proof.ts")
+  require("./verify-financial-recovery-a2u-proof.ts")
+  require("./verify-financial-recovery-horizon-proof.ts")
+  require("./verify-financial-recovery-settlement-decision-binding.ts")
+  require("./verify-financial-recovery-settlement-proof-binding.ts")
+  require("./verify-financial-recovery-settlement-proof-decision.ts")
+  require("./verify-financial-recovery-settlement-opposite-evidence.ts")
+  require("./verify-financial-recovery-settlement-proof-orchestration.ts")
+  require("./verify-financial-recovery-settlement-refund-checkpoint-barrier.ts")
   require("./verify-financial-recovery-settlement-refund-checkpoint-binding.ts")
 } finally {
   if (priorTsHandler) {
