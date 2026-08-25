@@ -7,10 +7,17 @@ import {
 
 export function bindSettlementRefundCheckpointToDecision(
   decisionInput: FinancialRecoveryDecisionInput,
+  queriedPaymentId: string,
   lookup: PaymentRefundCheckpointLookup,
 ): SettlementRefundCheckpointBarrierResult {
   const paymentId = decisionInput.paymentId
-  if (paymentId.trim() === "" || paymentId !== paymentId.trim()) {
+  if (
+    paymentId.trim() === "" ||
+    paymentId !== paymentId.trim() ||
+    queriedPaymentId.trim() === "" ||
+    queriedPaymentId !== queriedPaymentId.trim() ||
+    queriedPaymentId !== paymentId
+  ) {
     return evaluateSettlementRefundCheckpointBarrier("uncertain")
   }
   if (lookup.state === "present" && lookup.checkpoint.paymentId !== paymentId) {
