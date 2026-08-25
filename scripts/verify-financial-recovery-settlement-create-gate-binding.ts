@@ -1,8 +1,6 @@
 import { strict as assert } from "node:assert"
-import {
-  evaluateFinancialRecoverySettlementCreateGateBinding,
-  type FinancialRecoverySettlementCreatePreGateInput,
-} from "../lib/financial-recovery-settlement-create-gate-binding"
+import { evaluateFinancialRecoverySettlementCreateGateBinding } from "../lib/financial-recovery-settlement-create-gate-binding"
+import type { FinancialRecoverySettlementCreatePreGateInput } from "../lib/financial-recovery-settlement-create-pre-gate"
 
 const baseDecision: FinancialRecoverySettlementCreatePreGateInput["decisionInput"] = {
   paymentId: "payment-1",
@@ -53,6 +51,7 @@ const allowed = evaluateFinancialRecoverySettlementCreateGateBinding(baseInput)
 assert.equal(allowed.authorizesFinancialAction, false)
 assert.equal(allowed.outcome, "GATE_RESULT")
 if (allowed.outcome === "GATE_RESULT") assert.deepEqual(allowed.gate, { allow: true })
+assert.equal(Object.prototype.hasOwnProperty.call(allowed, "allow"), false)
 
 const exact = evaluateFinancialRecoverySettlementCreateGateBinding({
   ...baseInput,
