@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { bindSettlementRefundCheckpointToDecision } from "../lib/financial-recovery-settlement-refund-checkpoint-binding"
 import type { FinancialRecoveryDecisionInput } from "../lib/financial-recovery-decision"
-import type { RefundCheckpoint } from "../lib/refund-checkpoint-store"
+import type { RefundCheckpoint } from "../lib/types"
 
 const baseDecision: FinancialRecoveryDecisionInput = {
   paymentId: "payment-1",
@@ -41,6 +41,16 @@ const checkpoint: RefundCheckpoint = {
 assert.deepEqual(bindSettlementRefundCheckpointToDecision(baseDecision, "payment-1", { state: "absent" }), {
   authorizesFinancialAction: false,
   outcome: "NO_CHECKPOINT_EVIDENCE",
+})
+assert.deepEqual(bindSettlementRefundCheckpointToDecision({ ...baseDecision, paymentId: " payment-1" }, "payment-1", { state: "absent" }), {
+  authorizesFinancialAction: false,
+  outcome: "BLOCKED",
+  reason: "OPPOSITE_BRANCH_UNCERTAIN",
+})
+assert.deepEqual(bindSettlementRefundCheckpointToDecision(baseDecision, " payment-1", { state: "absent" }), {
+  authorizesFinancialAction: false,
+  outcome: "BLOCKED",
+  reason: "OPPOSITE_BRANCH_UNCERTAIN",
 })
 assert.deepEqual(bindSettlementRefundCheckpointToDecision(baseDecision, "payment-1", { state: "uncertain" }), {
   authorizesFinancialAction: false,
