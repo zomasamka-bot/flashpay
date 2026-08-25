@@ -1,7 +1,4 @@
-import {
-  evaluateFinancialRecoveryU2AProof,
-  type U2AInput,
-} from "./financial-recovery-u2a-proof"
+import { evaluateFinancialRecoveryPiCandidates } from "./financial-recovery-pi-candidate-rules"
 import {
   evaluateFinancialRecoverySettlementCreateGateBinding,
   type FinancialRecoverySettlementCreateGateBindingResult,
@@ -53,23 +50,24 @@ export function evaluateFinancialRecoverySettlementCreateReadBinding(
     return { authorizesFinancialAction: false, outcome: "BLOCKED", reason: "EXPECTED_INVALID" }
   }
 
-  const u2a = evaluateFinancialRecoveryU2AProof({
-    source: input.read.u2a.source,
-    candidate: input.read.u2a.candidate,
-    expected: { piPaymentId, paymentId, u2aTxid, amount, payerUid },
-  } satisfies U2AInput)
-  if (u2a.outcome !== "VERIFIED") {
-    return { authorizesFinancialAction: false, outcome: "BLOCKED", reason: "U2A_EVIDENCE_UNVERIFIED" }
+  const pi = {
+    source: input.read.pi.source,
+    candidates: input.read.pi.candidates,
+    expected: { branch: "SETTLEMENT" as const, paymentId, amount, merchantUid },
+  }
+  const piEvaluation = evaluateFinancialRecoveryPiCandidates(pi)
+  if (piEvaluation.outcome === "INDETERMINATE") {
+    return { authorizesFinancialAction: false, outcome: "BLOCKED", reason: "PI_EVIDENCE_UNVERIFIED" }
   }
 
   const result = evaluateFinancialRecoverySettlementCreateGateBinding({
     decisionInput: input.decisionInput,
-    u2a: { ...u2a, expected: { piPaymentId, paymentId, u2aTxid, amount, payerUid } },
-    pi: {
-      source: input.read.pi.source,
-      candidates: input.read.pi.candidates,
-      expected: { branch: "SETTLEMENT", paymentId, amount, merchantUid },
+    u2a: {
+      source: input.read.u2a.source,
+      candidate: input.read.u2a.candidate,
+      expected: { piPaymentId, paymentId, u2aTxid, amount, payerUid },
     },
+    pi,
     queriedPaymentId: input.queriedPaymentId,
     refundCheckpoint: input.refundCheckpoint,
     refundPiOutcome: "CONFIRMED_NONE",
