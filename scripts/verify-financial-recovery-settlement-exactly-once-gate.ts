@@ -65,7 +65,7 @@ assert.deepEqual(evaluateFinancialRecoveryExactlyOnceGate({
   operation: "SETTLEMENT_CREATE",
   decisionInput: base,
   oppositePaymentId: "PRESENT",
-  oppositeTxid: "UNKNOWN",
+  oppositeTxid: "ABSENT",
   oppositeMoneyMovement: "ABSENT",
 }), { allow: false, reason: "OPPOSITE_BRANCH_EVIDENCE" })
 
@@ -143,7 +143,7 @@ assert.deepEqual(evaluateFinancialRecoveryExactlyOnceGate({
     ...base,
     currentState: "settlement_created",
     targetState: "settlement_blockchain_confirmed",
-    reconciliationOutcome: "CONFIRMED_NONE",
+    reconciliationOutcome: "FOUND",
     reconciliationSource: "HORIZON",
     targetPaymentIdPresent: true,
     targetTxidPresent: true,
@@ -156,7 +156,7 @@ assert.deepEqual(evaluateFinancialRecoveryExactlyOnceGate({
     ...base,
     currentState: "settlement_created",
     targetState: "settlement_blockchain_confirmed",
-    reconciliationOutcome: "CONFIRMED_NONE",
+    reconciliationOutcome: "FOUND",
     reconciliationSource: "HORIZON",
     targetPaymentIdPresent: true,
     targetMoneyMovementProof: "horizon_tx_exact",
