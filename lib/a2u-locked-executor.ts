@@ -121,6 +121,17 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 409, error: refundLookup.state === 'present' ? "Refund operation owns this payment" : "Refund state could not be verified" }
     }
 
+    if (params.recoveryOperation === undefined) {
+      const canonicalA2UPaymentId = typeof latestPayment.a2uPaymentId === "string" && latestPayment.a2uPaymentId.trim() !== "" && latestPayment.a2uPaymentId === latestPayment.a2uPaymentId.trim()
+      const canonicalA2UTxid = typeof latestPayment.a2uTxid === "string" && latestPayment.a2uTxid.trim() !== "" && latestPayment.a2uTxid === latestPayment.a2uTxid.trim()
+      if (
+        (latestPayment.a2uPaymentId !== undefined && (!canonicalA2UPaymentId || !canonicalA2UTxid)) ||
+        (latestPayment.a2uPaymentId === undefined && (latestPayment.a2uTxid !== undefined || (latestPayment.horizonSuccessFlag !== undefined && latestPayment.horizonSuccessFlag !== false)))
+      ) {
+        return { ok: false, status: 409, error: "Payment state could not be verified" }
+      }
+    }
+
     console.log("[A2U Locked Executor] Latest payment status:", latestPayment.status)
 
     if (params.recoveryOperation === "SETTLEMENT_CREATE") {
