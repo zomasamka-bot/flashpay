@@ -775,7 +775,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Payment missing required a2uPaymentId", userFacingStatus: "error" }
     }
     
-    if (ctx.payment.a2uPreparedTxHash !== undefined || ctx.payment.a2uPreparedSequence !== undefined) {
+    if (ctx.payment.a2uPreparedTxHash !== undefined || ctx.payment.a2uPreparedSequence !== undefined || ctx.payment.a2uPreparedEnvelopeXdr !== undefined) {
       return { ok: false, error: "Payment has a prepared A2U transaction requiring reconciliation", userFacingStatus: "settlement_pending" }
     }
 
@@ -849,12 +849,17 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const transaction = builder.build()
     transaction.sign(appKeypair)
 
+    const preparedEnvelopeXdr = transaction.toXDR()
+    if (typeof preparedEnvelopeXdr !== "string" || !preparedEnvelopeXdr.trim() || preparedEnvelopeXdr !== preparedEnvelopeXdr.trim()) {
+      return { ok: false, error: "Prepared A2U envelope is invalid", userFacingStatus: "error" }
+    }
     const preparedHash = Buffer.from(transaction.hash()).toString("hex")
     const preparedSequence = transaction.sequence
     if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) {
       return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
     }
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+      a2uPreparedEnvelopeXdr: preparedEnvelopeXdr,
       a2uPreparedTxHash: preparedHash,
       a2uPreparedSequence: preparedSequence,
     })
@@ -1089,6 +1094,12 @@ async function persistCheckpointMerged(
     }
 
     // Conflicting a2uTxid must fail immediately - stop workflow
+    if (latest.a2uPreparedEnvelopeXdr !== undefined && updates.a2uPreparedEnvelopeXdr !== undefined && latest.a2uPreparedEnvelopeXdr !== updates.a2uPreparedEnvelopeXdr) {
+      throw new Error(`[A2U Checkpoint] FATAL: Conflicting a2uPreparedEnvelopeXdr`)
+    }
+    if (latest.a2uPreparedEnvelopeXdr !== undefined) merged.a2uPreparedEnvelopeXdr = latest.a2uPreparedEnvelopeXdr
+    if (updates.a2uPreparedEnvelopeXdr !== undefined) merged.a2uPreparedEnvelopeXdr = updates.a2uPreparedEnvelopeXdr
+
     if (latest.a2uPreparedTxHash !== undefined && updates.a2uPreparedTxHash !== undefined && latest.a2uPreparedTxHash !== updates.a2uPreparedTxHash) {
       throw new Error(`[A2U Checkpoint] FATAL: Conflicting a2uPreparedTxHash`)
     }
