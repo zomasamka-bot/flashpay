@@ -138,10 +138,14 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         typeof payerUid !== "string" || !payerUid.trim() || payerUid !== payerUid.trim() ||
         typeof merchantUid !== "string" || !merchantUid.trim() || merchantUid !== merchantUid.trim() ||
         typeof customerAmount !== "number" || !Number.isFinite(customerAmount) || customerAmount <= 0 ||
-        latestPayment.a2uPaymentId || latestPayment.a2uTxid ||
-        latestPayment.horizonSuccessFlag === true || latestPayment.piCompletionPending === true ||
-        latestPayment.piCompleted === true || latestPayment.dbRecorded === true ||
-        latestPayment.requiresDbReconciliation === true
+        latestPayment.a2uPaymentId !== undefined || latestPayment.a2uTxid !== undefined ||
+        latestPayment.refundPaymentId !== undefined || latestPayment.refundTxid !== undefined ||
+        (latestPayment.refundStatus !== undefined && latestPayment.refundStatus !== "not_started") ||
+        (latestPayment.horizonSuccessFlag !== undefined && latestPayment.horizonSuccessFlag !== false) ||
+        (latestPayment.piCompletionPending !== undefined && latestPayment.piCompletionPending !== false) ||
+        (latestPayment.piCompleted !== undefined && latestPayment.piCompleted !== false) ||
+        (latestPayment.dbRecorded !== undefined && latestPayment.dbRecorded !== false) ||
+        (latestPayment.requiresDbReconciliation !== undefined && latestPayment.requiresDbReconciliation !== false)
       ) {
         return { ok: false, status: 409, error: "Settlement create prerequisites could not be verified" }
       }
@@ -151,7 +155,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         read,
         decisionInput: {
           paymentId,
-          currentState: "settlement_created",
+          currentState: "app_funds_confirmed",
           targetState: "settlement_created",
           reconciliationOutcome: "NOT_ATTEMPTED",
           reconciliationSource: null,
