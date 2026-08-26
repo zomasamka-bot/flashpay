@@ -440,6 +440,8 @@ export function markRefundPendingAfterFailedSettlement(
     !payment.payerUidCapturedAt ||
     payment.a2uPaymentId ||
     payment.a2uTxid ||
+    payment.a2uPreparedTxHash !== undefined ||
+    payment.a2uPreparedSequence !== undefined ||
     payment.horizonSuccessFlag === true
   ) return payment
   return {
@@ -466,6 +468,8 @@ export function isRefundEligible(payment: Payment): boolean {
     payment.payerUid.length > 0 &&
     !payment.a2uPaymentId &&
     !payment.a2uTxid &&
+    payment.a2uPreparedTxHash === undefined &&
+    payment.a2uPreparedSequence === undefined &&
     !payment.refundPaymentId &&
     !payment.refundTxid &&
     payment.horizonSuccessFlag !== true &&
