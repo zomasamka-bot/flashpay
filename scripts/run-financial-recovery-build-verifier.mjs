@@ -33,6 +33,7 @@ try {
   require("./verify-financial-recovery-settlement-create-pi-binding.ts")
   require("./verify-financial-recovery-settlement-create-pre-gate.ts")
   require("./verify-financial-recovery-settlement-create-gate-binding.ts")
+  require("./verify-financial-recovery-settlement-create-read-binding.ts")
   require("./verify-financial-recovery-settlement-exactly-once-gate.ts")
 } finally {
   if (priorTsHandler) {
