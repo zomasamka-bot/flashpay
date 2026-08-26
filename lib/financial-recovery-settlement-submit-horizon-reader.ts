@@ -62,7 +62,7 @@ export async function readSettlementSubmitHorizonEvidence(
     } catch {
       return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
     }
-    if (!accountResponse.ok) return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
+    if (accountResponse.status !== 200) return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
 
     let account: unknown
     try {
@@ -73,6 +73,9 @@ export async function readSettlementSubmitHorizonEvidence(
     if (
       typeof account !== "object" ||
       account === null ||
+      !("account_id" in account) ||
+      typeof account.account_id !== "string" ||
+      account.account_id !== fromAddress ||
       !("sequence" in account) ||
       typeof account.sequence !== "string" ||
       !/^(0|[1-9][0-9]*)$/.test(account.sequence)
@@ -89,7 +92,7 @@ export async function readSettlementSubmitHorizonEvidence(
     }
   }
 
-  if (!transactionResponse.ok) return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
+  if (transactionResponse.status !== 200) return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
 
   let transaction: unknown
   try {
@@ -107,7 +110,7 @@ export async function readSettlementSubmitHorizonEvidence(
   } catch {
     return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
   }
-  if (!operationsResponse.ok) return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
+  if (operationsResponse.status !== 200) return { authorizesFinancialAction: false, outcome: "INDETERMINATE" }
 
   let operationsBody: unknown
   try {
