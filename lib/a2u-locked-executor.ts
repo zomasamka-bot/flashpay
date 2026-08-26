@@ -123,8 +123,14 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
 
     if (params.recoveryOperation === undefined) {
       const canonicalA2UPaymentId = typeof latestPayment.a2uPaymentId === "string" && latestPayment.a2uPaymentId.trim() !== "" && latestPayment.a2uPaymentId === latestPayment.a2uPaymentId.trim()
-      const canonicalA2UTxid = typeof latestPayment.a2uTxid === "string" && latestPayment.a2uTxid.trim() !== "" && latestPayment.a2uTxid === latestPayment.a2uTxid.trim()
+      const canonicalA2UTxid = typeof latestPayment.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(latestPayment.a2uTxid) && latestPayment.a2uTxid === latestPayment.a2uTxid.trim()
+      const canonicalPreparedHash = typeof latestPayment.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(latestPayment.a2uPreparedTxHash) && latestPayment.a2uPreparedTxHash === latestPayment.a2uPreparedTxHash.trim()
+      const canonicalPreparedSequence = typeof latestPayment.a2uPreparedSequence === "string" && /^[1-9][0-9]*$/.test(latestPayment.a2uPreparedSequence) && latestPayment.a2uPreparedSequence === latestPayment.a2uPreparedSequence.trim()
+      const preparedPairAbsent = latestPayment.a2uPreparedTxHash === undefined && latestPayment.a2uPreparedSequence === undefined
+      const preparedPairCanonical = canonicalPreparedHash && canonicalPreparedSequence
       if (
+        (!preparedPairAbsent && !preparedPairCanonical) ||
+        (latestPayment.a2uPreparedTxHash !== undefined && latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash) ||
         (latestPayment.a2uPaymentId !== undefined && (!canonicalA2UPaymentId || !canonicalA2UTxid)) ||
         (latestPayment.a2uPaymentId === undefined && (latestPayment.a2uTxid !== undefined || (latestPayment.horizonSuccessFlag !== undefined && latestPayment.horizonSuccessFlag !== false)))
       ) {
@@ -155,6 +161,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         typeof retryCount !== "number" || !Number.isInteger(retryCount) || retryCount <= 0 ||
         typeof nextRetryAt !== "string" || !nextRetryAt.trim() || nextRetryAt !== nextRetryAt.trim() || !Number.isFinite(Date.parse(nextRetryAt)) || Date.parse(nextRetryAt) > Date.now() ||
         latestPayment.a2uPaymentId !== undefined || latestPayment.a2uTxid !== undefined ||
+        latestPayment.a2uPreparedTxHash !== undefined || latestPayment.a2uPreparedSequence !== undefined ||
         latestPayment.refundPaymentId !== undefined || latestPayment.refundTxid !== undefined ||
         (latestPayment.refundStatus !== undefined && latestPayment.refundStatus !== "not_started") ||
         (latestPayment.horizonSuccessFlag !== undefined && latestPayment.horizonSuccessFlag !== false) ||
