@@ -30,6 +30,8 @@ export interface Payment {
   // A2U recovery for atomic idempotency
   a2uPaymentId?: string // Pi A2U identifier - stored after Horizon succeeds
   a2uTxid?: string // Horizon transaction ID
+  a2uPreparedTxHash?: string // Pre-submit transaction intent; never money proof
+  a2uPreparedSequence?: string // Pre-submit transaction intent; never money proof
   a2uFromAddress?: string // Stellar account from address
   a2uToAddress?: string // Stellar account to address
   

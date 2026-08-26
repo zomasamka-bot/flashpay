@@ -775,6 +775,10 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Payment missing required a2uPaymentId", userFacingStatus: "error" }
     }
     
+    if (ctx.payment.a2uPreparedTxHash !== undefined || ctx.payment.a2uPreparedSequence !== undefined) {
+      return { ok: false, error: "Payment has a prepared A2U transaction requiring reconciliation", userFacingStatus: "settlement_pending" }
+    }
+
     const piPrivateSeed = process.env.PI_PRIVATE_SEED
     if (!piPrivateSeed) {
       console.error("[A2U Stage2] ❌ PI_PRIVATE_SEED not configured - cannot sign Horizon transaction")
@@ -845,10 +849,23 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const transaction = builder.build()
     transaction.sign(appKeypair)
 
+    const preparedHash = Buffer.from(transaction.hash()).toString("hex")
+    const preparedSequence = transaction.sequence
+    if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) {
+      return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
+    }
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+      a2uPreparedTxHash: preparedHash,
+      a2uPreparedSequence: preparedSequence,
+    })
+
     console.log("[A2U Stage2] Submitting to Horizon")
     const submitResult = await horizonServer.submitTransaction(transaction)
 
     const txidFromHorizon = submitResult.hash
+    if (txidFromHorizon !== preparedHash) {
+      return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
+    }
     console.log("[A2U Stage2] ✓ Horizon submission succeeded:", txidFromHorizon)
     
     // Fetch the typed transaction record from Horizon to read actual fee_charged
@@ -1072,6 +1089,17 @@ async function persistCheckpointMerged(
     }
 
     // Conflicting a2uTxid must fail immediately - stop workflow
+    if (latest.a2uPreparedTxHash !== undefined && updates.a2uPreparedTxHash !== undefined && latest.a2uPreparedTxHash !== updates.a2uPreparedTxHash) {
+      throw new Error(`[A2U Checkpoint] FATAL: Conflicting a2uPreparedTxHash`)
+    }
+    if (latest.a2uPreparedSequence !== undefined && updates.a2uPreparedSequence !== undefined && latest.a2uPreparedSequence !== updates.a2uPreparedSequence) {
+      throw new Error(`[A2U Checkpoint] FATAL: Conflicting a2uPreparedSequence`)
+    }
+    if (latest.a2uPreparedTxHash !== undefined) merged.a2uPreparedTxHash = latest.a2uPreparedTxHash
+    if (latest.a2uPreparedSequence !== undefined) merged.a2uPreparedSequence = latest.a2uPreparedSequence
+    if (updates.a2uPreparedTxHash !== undefined) merged.a2uPreparedTxHash = updates.a2uPreparedTxHash
+    if (updates.a2uPreparedSequence !== undefined) merged.a2uPreparedSequence = updates.a2uPreparedSequence
+
     if (latest.a2uTxid && updates.a2uTxid && latest.a2uTxid !== updates.a2uTxid) {
       const msg = `[A2U Checkpoint] FATAL: Conflicting a2uTxid - existing="${latest.a2uTxid}" vs new="${updates.a2uTxid}" - workflow stopped`
       console.error(msg)
