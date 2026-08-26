@@ -26,6 +26,7 @@ import crypto from "crypto"
 interface LockedExecutorParams {
   paymentId: string
   isRecovery: boolean
+  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT"
 }
 
 /**
@@ -180,6 +181,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           : latestPayment.amount,
         piPaymentId: latestPayment.piPaymentId,
         isRecovery: params.isRecovery,
+        ...(params.recoveryOperation ? { recoveryOperation: params.recoveryOperation } : {}),
       })
 
       // Map executor result string status to numeric HTTP status code
