@@ -3,6 +3,7 @@ import {
   evaluateFinancialRecoverySettlementCreateGateBinding,
   type FinancialRecoverySettlementCreateGateBindingResult,
 } from "./financial-recovery-settlement-create-gate-binding"
+import type { SettlementCreateBindingInput } from "./financial-recovery-settlement-create-pi-binding"
 import type { SettlementCreatePiReadResult } from "./financial-recovery-settlement-create-pi-reader"
 import type { FinancialRecoveryDecisionInput } from "./financial-recovery-decision"
 import type { PaymentRefundCheckpointLookup } from "./refund-checkpoint-store"
@@ -50,10 +51,10 @@ export function evaluateFinancialRecoverySettlementCreateReadBinding(
     return { authorizesFinancialAction: false, outcome: "BLOCKED", reason: "EXPECTED_INVALID" }
   }
 
-  const pi = {
+  const pi: SettlementCreateBindingInput["pi"] = {
     source: input.read.pi.source,
     candidates: input.read.pi.candidates,
-    expected: { branch: "SETTLEMENT" as const, paymentId, amount, merchantUid },
+    expected: { branch: "SETTLEMENT", paymentId, amount, merchantUid },
   }
   const piEvaluation = evaluateFinancialRecoveryPiCandidates(pi)
   if (piEvaluation.outcome === "INDETERMINATE") {
