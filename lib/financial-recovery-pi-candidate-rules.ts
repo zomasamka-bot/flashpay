@@ -107,7 +107,7 @@ export function evaluateFinancialRecoveryPiCandidates(input: FinancialRecoveryPi
       continue
     }
     const meta = metadata
-    if (typeof meta.paymentId !== "string" || !meta.paymentId.trim()) {
+    if (typeof meta.paymentId !== "string" || !meta.paymentId.trim() || meta.paymentId !== meta.paymentId.trim()) {
       malformed = true
       continue
     }
