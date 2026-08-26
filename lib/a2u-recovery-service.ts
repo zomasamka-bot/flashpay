@@ -318,17 +318,17 @@ export async function executeA2URecovery(
     if (payment.a2uTxid || payment.horizonSuccessFlag) {
       return { status: "manual_review_required", state: "paid_to_app_has_transfer_evidence", paymentId, details: { a2uTxid: payment.a2uTxid, error: "Transfer evidence exists; recovery is blocked" } }
     }
+    if (payment.a2uPaymentId !== undefined) {
+      return { status: "manual_review_required", state: "settlement_submit_not_authorized", paymentId, details: { error: "Settlement Submit is not authorized" } }
+    }
     if (payment.nextRetryAt && Date.parse(payment.nextRetryAt) > Date.now()) {
       return { status: "pending_pi_complete", state: "retry_backoff_active", paymentId, details: { error: "Retry backoff is active" } }
     }
-    const result = await executeA2ULocked({ paymentId, isRecovery: true })
+    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_CREATE" })
     if (!result.ok) {
       return { status: "manual_review_required", state: "paid_to_app_retry_failed", paymentId, details: { error: result.error } }
     }
-    const response = await buildA2USuccessResponse(paymentId)
-    return response
-      ? { status: "success", state: "paid_to_app_recovered", paymentId, details: { u2aTxid: response.u2aTxid, a2uTxid: response.a2uTxid } }
-      : { status: "manual_review_required", state: "paid_to_app_response_failed", paymentId, details: { error: "Response building failed" } }
+    return { status: "manual_review_required", state: "settlement_create_outcome_deferred", paymentId, details: { error: "Settlement Create returned; reconcile before any submit" } }
   }
 
   // ===== STATE 6: REFUND SAFETY GATE =====
