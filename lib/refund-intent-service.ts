@@ -117,10 +117,16 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
   const lockedCanonicalAmount = lockedPaymentRecord.customerAmount
   const lockedLegacyAmount = lockedPaymentRecord.customer_amount
   const lockedAmountConflict = lockedCanonicalAmount !== undefined && lockedCanonicalAmount !== null && lockedLegacyAmount !== undefined && lockedLegacyAmount !== null && (!Number.isFinite(Number(lockedCanonicalAmount)) || !Number.isFinite(Number(lockedLegacyAmount)) || Number(lockedCanonicalAmount) !== Number(lockedLegacyAmount))
+  const lockedSettlementFailureStateConflict = lockedPaymentRecord.settlement_failure_state !== undefined && lockedPaymentRecord.settlementFailureState !== undefined && lockedPaymentRecord.settlement_failure_state !== lockedPaymentRecord.settlementFailureState
+  const lockedRefundStatusConflict = lockedPaymentRecord.refund_status !== undefined && lockedPaymentRecord.refundStatus !== undefined && lockedPaymentRecord.refund_status !== lockedPaymentRecord.refundStatus
   if (
     lockedPayment.id !== payment.id ||
     lockedPayment.status !== payment.status ||
     lockedPayment.settlementFailureState !== payment.settlementFailureState ||
+    lockedPayment.refundStatus !== payment.refundStatus ||
+    !checkEligibility(lockedPayment) ||
+    lockedSettlementFailureStateConflict ||
+    lockedRefundStatusConflict ||
     lockedPayment.payerRefundEligible !== payment.payerRefundEligible ||
     lockedPayment.payerUidSource !== payment.payerUidSource ||
     lockedPayment.payerUid !== payment.payerUid ||
