@@ -81,6 +81,61 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
   const refundId = randomUUID()
   const paymentLockAcquired = await acquirePaymentOperationLock(payment.id, refundId)
   if (!paymentLockAcquired) return { status: 409, body: { error: 'Payment is already being processed' } }
+  const lockedStored = await redis.get(`payment:${paymentId}`)
+  let lockedPaymentRecord: any
+  try { lockedPaymentRecord = typeof lockedStored === 'string' ? JSON.parse(lockedStored) : lockedStored } catch {
+    await releasePaymentOperationLock(payment.id, refundId)
+    return { status: 409, body: { error: 'Payment changed while refund lock was acquired' } }
+  }
+  if (!lockedStored || !lockedPaymentRecord) {
+    await releasePaymentOperationLock(payment.id, refundId)
+    return { status: 409, body: { error: 'Payment changed while refund lock was acquired' } }
+  }
+  const lockedPayment: Payment = {
+    id: lockedPaymentRecord.id,
+    merchantId: lockedPaymentRecord.merchant_id || lockedPaymentRecord.merchantId,
+    merchantUid: lockedPaymentRecord.merchant_uid || lockedPaymentRecord.merchantUid,
+    merchantAddress: lockedPaymentRecord.merchant_address || lockedPaymentRecord.merchantAddress,
+    accessToken: lockedPaymentRecord.access_token || lockedPaymentRecord.accessToken,
+    amount: Number(lockedPaymentRecord.amount),
+    customerAmount: lockedPaymentRecord.customerAmount !== undefined && lockedPaymentRecord.customerAmount !== null ? Number(lockedPaymentRecord.customerAmount) : lockedPaymentRecord.customer_amount !== undefined && lockedPaymentRecord.customer_amount !== null ? Number(lockedPaymentRecord.customer_amount) : undefined,
+    note: lockedPaymentRecord.note,
+    status: lockedPaymentRecord.status,
+    settlementFailureState: lockedPaymentRecord.settlement_failure_state || lockedPaymentRecord.settlementFailureState,
+    payerUid: lockedPaymentRecord.payerUid,
+    payerUidSource: lockedPaymentRecord.payerUidSource,
+    payerUidCapturedAt: lockedPaymentRecord.payerUidCapturedAt,
+    payerRefundEligible: lockedPaymentRecord.payerRefundEligible === true,
+    a2uPaymentId: lockedPaymentRecord.a2uPaymentId,
+    a2uTxid: lockedPaymentRecord.a2uTxid,
+    horizonSuccessFlag: lockedPaymentRecord.horizonSuccessFlag === true,
+    refundStatus: lockedPaymentRecord.refund_status || lockedPaymentRecord.refundStatus,
+    refundPaymentId: lockedPaymentRecord.refund_payment_id || lockedPaymentRecord.refundPaymentId,
+    refundTxid: lockedPaymentRecord.refund_txid || lockedPaymentRecord.refundTxid,
+    createdAt: lockedPaymentRecord.created_at || lockedPaymentRecord.createdAt,
+  }
+  const lockedCanonicalAmount = lockedPaymentRecord.customerAmount
+  const lockedLegacyAmount = lockedPaymentRecord.customer_amount
+  const lockedAmountConflict = lockedCanonicalAmount !== undefined && lockedCanonicalAmount !== null && lockedLegacyAmount !== undefined && lockedLegacyAmount !== null && (!Number.isFinite(Number(lockedCanonicalAmount)) || !Number.isFinite(Number(lockedLegacyAmount)) || Number(lockedCanonicalAmount) !== Number(lockedLegacyAmount))
+  if (
+    lockedPayment.id !== payment.id ||
+    lockedPayment.status !== payment.status ||
+    lockedPayment.settlementFailureState !== payment.settlementFailureState ||
+    lockedPayment.payerRefundEligible !== payment.payerRefundEligible ||
+    lockedPayment.payerUidSource !== payment.payerUidSource ||
+    lockedPayment.payerUid !== payment.payerUid ||
+    lockedPayment.payerUidCapturedAt !== payment.payerUidCapturedAt ||
+    lockedPayment.customerAmount !== payment.customerAmount ||
+    lockedAmountConflict ||
+    lockedPaymentRecord.a2uPaymentId !== undefined || lockedPaymentRecord.a2uTxid !== undefined ||
+    lockedPaymentRecord.a2uPreparedTxHash !== undefined || lockedPaymentRecord.a2uPreparedSequence !== undefined ||
+    lockedPaymentRecord.refundPaymentId !== undefined || lockedPaymentRecord.refund_payment_id !== undefined ||
+    lockedPaymentRecord.refundTxid !== undefined || lockedPaymentRecord.refund_txid !== undefined ||
+    (lockedPaymentRecord.horizonSuccessFlag !== undefined && lockedPaymentRecord.horizonSuccessFlag !== false)
+  ) {
+    await releasePaymentOperationLock(payment.id, refundId)
+    return { status: 409, body: { error: 'Payment changed while refund lock was acquired' } }
+  }
   const idempotencyClaimed = await claimRefundIdempotency(idempotencyKey, refundId)
   if (!idempotencyClaimed) { await releasePaymentOperationLock(payment.id, refundId); return { status: 409, body: { error: 'Idempotency key already in use' } } }
   const now = new Date().toISOString()
