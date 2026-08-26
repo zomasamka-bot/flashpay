@@ -129,6 +129,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       const u2aTxid = latestPayment.u2aTxid
       const payerUid = latestPayment.payerUid
       const merchantUid = latestPayment.merchantUid
+      const retryCount = latestPayment.retryCount
+      const nextRetryAt = latestPayment.nextRetryAt
       if (
         params.isRecovery !== true ||
         latestPayment.status !== "paid_to_app" ||
@@ -138,6 +140,9 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         typeof payerUid !== "string" || !payerUid.trim() || payerUid !== payerUid.trim() ||
         typeof merchantUid !== "string" || !merchantUid.trim() || merchantUid !== merchantUid.trim() ||
         typeof customerAmount !== "number" || !Number.isFinite(customerAmount) || customerAmount <= 0 ||
+        latestPayment.settlementFailureState !== "retryable" ||
+        typeof retryCount !== "number" || !Number.isInteger(retryCount) || retryCount <= 0 ||
+        typeof nextRetryAt !== "string" || !nextRetryAt.trim() || nextRetryAt !== nextRetryAt.trim() || !Number.isFinite(Date.parse(nextRetryAt)) || Date.parse(nextRetryAt) > Date.now() ||
         latestPayment.a2uPaymentId !== undefined || latestPayment.a2uTxid !== undefined ||
         latestPayment.refundPaymentId !== undefined || latestPayment.refundTxid !== undefined ||
         (latestPayment.refundStatus !== undefined && latestPayment.refundStatus !== "not_started") ||
