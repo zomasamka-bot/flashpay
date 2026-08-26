@@ -3,6 +3,8 @@ import { executeA2U } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
+import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
+import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import crypto from "crypto"
 
 /**
@@ -115,11 +117,62 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     }
 
     const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
-    if (refundLookup.state !== 'absent') {
+    if (refundLookup.state !== 'absent' && params.recoveryOperation !== "SETTLEMENT_CREATE") {
       return { ok: false, status: 409, error: refundLookup.state === 'present' ? "Refund operation owns this payment" : "Refund state could not be verified" }
     }
 
     console.log("[A2U Locked Executor] Latest payment status:", latestPayment.status)
+
+    if (params.recoveryOperation === "SETTLEMENT_CREATE") {
+      const customerAmount = latestPayment.customerAmount
+      const piPaymentId = latestPayment.piPaymentId
+      const u2aTxid = latestPayment.u2aTxid
+      const payerUid = latestPayment.payerUid
+      const merchantUid = latestPayment.merchantUid
+      if (
+        params.isRecovery !== true ||
+        latestPayment.status !== "paid_to_app" ||
+        latestPayment.id !== paymentId ||
+        typeof piPaymentId !== "string" || !piPaymentId.trim() || piPaymentId !== piPaymentId.trim() ||
+        typeof u2aTxid !== "string" || !u2aTxid.trim() || u2aTxid !== u2aTxid.trim() ||
+        typeof payerUid !== "string" || !payerUid.trim() || payerUid !== payerUid.trim() ||
+        typeof merchantUid !== "string" || !merchantUid.trim() || merchantUid !== merchantUid.trim() ||
+        typeof customerAmount !== "number" || !Number.isFinite(customerAmount) || customerAmount <= 0 ||
+        latestPayment.a2uPaymentId || latestPayment.a2uTxid ||
+        latestPayment.horizonSuccessFlag === true || latestPayment.piCompletionPending === true ||
+        latestPayment.piCompleted === true || latestPayment.dbRecorded === true ||
+        latestPayment.requiresDbReconciliation === true
+      ) {
+        return { ok: false, status: 409, error: "Settlement create prerequisites could not be verified" }
+      }
+
+      const read = await readSettlementCreatePiEvidence(piPaymentId)
+      const readBinding = evaluateFinancialRecoverySettlementCreateReadBinding({
+        read,
+        decisionInput: {
+          paymentId,
+          currentState: "settlement_created",
+          targetState: "settlement_created",
+          reconciliationOutcome: "NOT_ATTEMPTED",
+          reconciliationSource: null,
+          prerequisitesConfirmed: true,
+          targetPaymentIdPresent: false,
+          targetTxidPresent: false,
+          targetMoneyMovementProof: null,
+          malformed: false,
+          multipleCandidates: false,
+          unknown: [],
+          missing: [],
+          conflicts: [],
+        },
+        expected: { paymentId, piPaymentId, u2aTxid, amount: customerAmount, payerUid, merchantUid },
+        queriedPaymentId: paymentId,
+        refundCheckpoint: refundLookup,
+      })
+      if (readBinding.outcome !== "BOUND" || readBinding.result.outcome !== "GATE_RESULT" || readBinding.result.gate.allow !== true) {
+        return { ok: false, status: 409, error: "Settlement create proof could not be verified" }
+      }
+    }
 
     // Validate and derive all fields from LATEST checkpoint (not stale caller copies)
     if (!latestPayment.merchantUid || typeof latestPayment.merchantUid !== "string") {
