@@ -130,6 +130,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       const preparedPairCanonical = canonicalPreparedHash && canonicalPreparedSequence
       if (
         (!preparedPairAbsent && !preparedPairCanonical) ||
+        (latestPayment.a2uPreparedTxHash !== undefined && latestPayment.status !== "settled_to_merchant") ||
+        (latestPayment.a2uPreparedSequence !== undefined && latestPayment.status !== "settled_to_merchant") ||
         (latestPayment.a2uPreparedTxHash !== undefined && latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash) ||
         (latestPayment.a2uPaymentId !== undefined && (!canonicalA2UPaymentId || !canonicalA2UTxid)) ||
         (latestPayment.a2uPaymentId === undefined && (latestPayment.a2uTxid !== undefined || (latestPayment.horizonSuccessFlag !== undefined && latestPayment.horizonSuccessFlag !== false)))
