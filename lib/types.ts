@@ -33,6 +33,7 @@ export interface Payment {
   a2uPreparedTxHash?: string // Pre-submit transaction intent; never money proof
   a2uPreparedSequence?: string // Pre-submit transaction intent; never money proof
   a2uPreparedEnvelopeXdr?: string // Exact signed pre-submit intent; never money proof
+  a2uPreparedEnvelopeXdr?: string // Exact signed pre-submit intent; never money proof
   a2uFromAddress?: string // Stellar account from address
   a2uToAddress?: string // Stellar account to address
   
@@ -443,6 +444,7 @@ export function markRefundPendingAfterFailedSettlement(
     payment.a2uTxid ||
     payment.a2uPreparedTxHash !== undefined ||
     payment.a2uPreparedSequence !== undefined ||
+    payment.a2uPreparedEnvelopeXdr !== undefined ||
     payment.horizonSuccessFlag === true
   ) return payment
   return {
@@ -471,6 +473,7 @@ export function isRefundEligible(payment: Payment): boolean {
     !payment.a2uTxid &&
     payment.a2uPreparedTxHash === undefined &&
     payment.a2uPreparedSequence === undefined &&
+    payment.a2uPreparedEnvelopeXdr === undefined &&
     !payment.refundPaymentId &&
     !payment.refundTxid &&
     payment.horizonSuccessFlag !== true &&

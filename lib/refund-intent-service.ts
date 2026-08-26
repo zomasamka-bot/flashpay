@@ -134,7 +134,7 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
     lockedPayment.customerAmount !== payment.customerAmount ||
     lockedAmountConflict ||
     lockedPaymentRecord.a2uPaymentId !== undefined || lockedPaymentRecord.a2uTxid !== undefined ||
-    lockedPaymentRecord.a2uPreparedTxHash !== undefined || lockedPaymentRecord.a2uPreparedSequence !== undefined ||
+    lockedPaymentRecord.a2uPreparedTxHash !== undefined || lockedPaymentRecord.a2uPreparedSequence !== undefined || lockedPaymentRecord.a2uPreparedEnvelopeXdr !== undefined ||
     lockedPaymentRecord.refundPaymentId !== undefined || lockedPaymentRecord.refund_payment_id !== undefined ||
     lockedPaymentRecord.refundTxid !== undefined || lockedPaymentRecord.refund_txid !== undefined ||
     (lockedPaymentRecord.horizonSuccessFlag !== undefined && lockedPaymentRecord.horizonSuccessFlag !== false)

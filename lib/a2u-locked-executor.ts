@@ -128,8 +128,10 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       const canonicalPreparedSequence = typeof latestPayment.a2uPreparedSequence === "string" && /^[1-9][0-9]*$/.test(latestPayment.a2uPreparedSequence) && latestPayment.a2uPreparedSequence === latestPayment.a2uPreparedSequence.trim()
       const preparedPairAbsent = latestPayment.a2uPreparedTxHash === undefined && latestPayment.a2uPreparedSequence === undefined
       const preparedPairCanonical = canonicalPreparedHash && canonicalPreparedSequence
+      const canonicalPreparedEnvelope = typeof latestPayment.a2uPreparedEnvelopeXdr === "string" && latestPayment.a2uPreparedEnvelopeXdr.trim() !== "" && latestPayment.a2uPreparedEnvelopeXdr === latestPayment.a2uPreparedEnvelopeXdr.trim()
       if (
         (!preparedPairAbsent && !preparedPairCanonical) ||
+        (latestPayment.a2uPreparedEnvelopeXdr !== undefined && (!canonicalPreparedEnvelope || latestPayment.a2uPreparedTxHash === undefined || latestPayment.a2uPreparedSequence === undefined || !canonicalPreparedHash || !canonicalPreparedSequence || latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash || latestPayment.status !== "settled_to_merchant")) ||
         (latestPayment.a2uPreparedTxHash !== undefined && latestPayment.status !== "settled_to_merchant") ||
         (latestPayment.a2uPreparedSequence !== undefined && latestPayment.status !== "settled_to_merchant") ||
         (latestPayment.a2uPreparedTxHash !== undefined && latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash) ||
@@ -163,7 +165,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         typeof retryCount !== "number" || !Number.isInteger(retryCount) || retryCount <= 0 ||
         typeof nextRetryAt !== "string" || !nextRetryAt.trim() || nextRetryAt !== nextRetryAt.trim() || !Number.isFinite(Date.parse(nextRetryAt)) || Date.parse(nextRetryAt) > Date.now() ||
         latestPayment.a2uPaymentId !== undefined || latestPayment.a2uTxid !== undefined ||
-        latestPayment.a2uPreparedTxHash !== undefined || latestPayment.a2uPreparedSequence !== undefined ||
+        latestPayment.a2uPreparedTxHash !== undefined || latestPayment.a2uPreparedSequence !== undefined || latestPayment.a2uPreparedEnvelopeXdr !== undefined ||
         latestPayment.refundPaymentId !== undefined || latestPayment.refundTxid !== undefined ||
         (latestPayment.refundStatus !== undefined && latestPayment.refundStatus !== "not_started") ||
         (latestPayment.horizonSuccessFlag !== undefined && latestPayment.horizonSuccessFlag !== false) ||
