@@ -40,6 +40,10 @@ export async function readFinancialRecoverySettlementSubmitEvidence(
       classified.outcome === "BLOCKED" ||
       input.piTransferResult.reference.paymentId !== input.paymentId ||
       input.piTransferResult.reference.merchantUid !== input.merchantUid ||
+      input.piTransferResult.reference.a2uPaymentId !== classified.reference.a2uPaymentId ||
+      input.piTransferResult.reference.fromAddress !== classified.reference.fromAddress ||
+      input.piTransferResult.reference.toAddress !== classified.reference.toAddress ||
+      input.piTransferResult.reference.amount !== classified.reference.amount ||
       classified.reference.a2uPaymentId !== input.horizonExpected.a2uPaymentId ||
       classified.reference.fromAddress !== input.horizonExpected.fromAddress ||
       classified.reference.toAddress !== input.horizonExpected.toAddress ||
@@ -47,6 +51,7 @@ export async function readFinancialRecoverySettlementSubmitEvidence(
     ) return {
       outcome: "BLOCKED",
       reference: null,
+      moneyMovementProven: false,
       authorizesFinancialAction: false,
     }
     return classified
