@@ -1,17 +1,18 @@
 import "server-only"
 
+import { readSettlementSubmitPiEvidence } from "./financial-recovery-settlement-submit-pi-reader"
+import { bindSettlementSubmitPiProof } from "./financial-recovery-settlement-submit-pi-proof-binding"
+import { blockSettlementSubmitPiTransfer } from "./financial-recovery-settlement-submit-pi-transfer-blocker"
 import { readSettlementSubmitHorizonEvidence } from "./financial-recovery-settlement-submit-horizon-reader"
 import { evaluateFinancialRecoverySettlementSubmitEvidenceBinding } from "./financial-recovery-settlement-submit-evidence-binding"
 import type { FinancialRecoverySettlementSubmitEvidenceBindingResult } from "./financial-recovery-settlement-submit-evidence-binding"
 import { classifyFinancialRecoverySettlementSubmitSequence } from "./financial-recovery-settlement-submit-sequence-classifier"
 import type { SettlementSubmitXdrVerifierInput } from "./financial-recovery-settlement-submit-xdr-verifier"
 import type { SettlementSubmitHorizonBindingInput } from "./financial-recovery-settlement-submit-horizon-binding"
-import type { SettlementSubmitPiTransferBlockerResult } from "./financial-recovery-settlement-submit-pi-transfer-blocker"
 
 export type FinancialRecoverySettlementSubmitReadOrchestrationInput = Readonly<{
   xdrInput: SettlementSubmitXdrVerifierInput
   horizonExpected: SettlementSubmitHorizonBindingInput["expected"]
-  piTransferResult: SettlementSubmitPiTransferBlockerResult
   paymentId: string
   merchantUid: string
 }>
@@ -24,6 +25,7 @@ export async function readFinancialRecoverySettlementSubmitEvidence(
   input: FinancialRecoverySettlementSubmitReadOrchestrationInput,
 ): Promise<FinancialRecoverySettlementSubmitReadOrchestrationResult> {
   try {
+    const piReadResult = await readSettlementSubmitPiEvidence(input.horizonExpected.a2uPaymentId)
     const read = await readSettlementSubmitHorizonEvidence(
       input.horizonExpected.preparedHash,
       input.horizonExpected.preparedSequence,
@@ -35,19 +37,25 @@ export async function readFinancialRecoverySettlementSubmitEvidence(
     })
     if (binding.outcome === "MOVEMENT_VERIFIED") return binding
     const classified = classifyFinancialRecoverySettlementSubmitSequence(binding)
+    const piProof = bindSettlementSubmitPiProof({
+      piReadResult,
+      expected: {
+        a2uPaymentId: input.horizonExpected.a2uPaymentId,
+        paymentId: input.paymentId,
+        amount: input.horizonExpected.amount,
+        merchantUid: input.merchantUid,
+        fromAddress: input.horizonExpected.fromAddress,
+        toAddress: input.horizonExpected.toAddress,
+      },
+    })
+    const piTransferResult = blockSettlementSubmitPiTransfer(piReadResult, piProof)
     if (
-      input.piTransferResult.outcome !== "NO_TRANSFER_EVIDENCE" ||
+      piTransferResult.outcome !== "NO_TRANSFER_EVIDENCE" ||
       classified.outcome === "BLOCKED" ||
-      input.piTransferResult.reference.paymentId !== input.paymentId ||
-      input.piTransferResult.reference.merchantUid !== input.merchantUid ||
-      input.piTransferResult.reference.a2uPaymentId !== classified.reference.a2uPaymentId ||
-      input.piTransferResult.reference.fromAddress !== classified.reference.fromAddress ||
-      input.piTransferResult.reference.toAddress !== classified.reference.toAddress ||
-      input.piTransferResult.reference.amount !== classified.reference.amount ||
-      classified.reference.a2uPaymentId !== input.horizonExpected.a2uPaymentId ||
-      classified.reference.fromAddress !== input.horizonExpected.fromAddress ||
-      classified.reference.toAddress !== input.horizonExpected.toAddress ||
-      classified.reference.amount !== input.horizonExpected.amount
+      piTransferResult.reference.a2uPaymentId !== classified.reference.a2uPaymentId ||
+      piTransferResult.reference.fromAddress !== classified.reference.fromAddress ||
+      piTransferResult.reference.toAddress !== classified.reference.toAddress ||
+      piTransferResult.reference.amount !== classified.reference.amount
     ) return {
       outcome: "BLOCKED",
       reference: null,
