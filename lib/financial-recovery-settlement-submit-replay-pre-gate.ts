@@ -47,7 +47,7 @@ export function evaluateFinancialRecoverySettlementSubmitReplayPreGate(
     input.payment.refundPaymentId !== undefined ||
     input.payment.refundTxid !== undefined ||
     (input.payment.refundStatus !== undefined && input.payment.refundStatus !== "not_started") ||
-    input.payment.a2uPreparedEnvelopeXdr !== read.reference.preparedEnvelopeXdr ||
+    input.payment.a2uPreparedEnvelopeXdr !== read.reference.envelopeXdr ||
     input.payment.a2uPreparedTxHash !== read.reference.preparedHash ||
     input.payment.a2uPreparedSequence !== read.reference.preparedSequence ||
     input.oppositeRefund.outcome !== "CLEAR"
