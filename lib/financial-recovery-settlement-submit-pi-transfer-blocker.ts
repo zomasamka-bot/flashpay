@@ -1,14 +1,18 @@
 import type { SettlementSubmitPiReadResult } from "./financial-recovery-settlement-submit-pi-reader"
 import type { SettlementSubmitPiProofBindingResult } from "./financial-recovery-settlement-submit-pi-proof-binding"
 
+type VerifiedIdentityResult = Extract<SettlementSubmitPiProofBindingResult, { outcome: "VERIFIED_IDENTITY" }>
+
 export type SettlementSubmitPiTransferBlockerResult = Readonly<
   | {
       outcome: "NO_TRANSFER_EVIDENCE"
+      reference: VerifiedIdentityResult["reference"]
       moneyMovementProven: false
       authorizesFinancialAction: false
     }
   | {
       outcome: "BLOCKED"
+      reference: null
       authorizesFinancialAction: false
     }
 >
@@ -23,6 +27,7 @@ export function blockSettlementSubmitPiTransfer(
 ): SettlementSubmitPiTransferBlockerResult {
   const blocked = (): SettlementSubmitPiTransferBlockerResult => ({
     outcome: "BLOCKED",
+    reference: null,
     authorizesFinancialAction: false,
   })
 
@@ -50,6 +55,7 @@ export function blockSettlementSubmitPiTransfer(
 
   return {
     outcome: "NO_TRANSFER_EVIDENCE",
+    reference: proofResult.reference,
     moneyMovementProven: false,
     authorizesFinancialAction: false,
   }
