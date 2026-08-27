@@ -50,8 +50,8 @@ export type RefundPiReconciliationReference = {
 
 export type RefundPiReconciliationResult =
   | { outcome: "FOUND"; payment: RefundPiPayment; reference: RefundPiReconciliationReference }
-  | { outcome: "CONFIRMED_NONE"; reference: RefundPiReconciliationReference }
-  | { outcome: "INDETERMINATE"; reference: null }
+  | { outcome: "CONFIRMED_NONE"; payment?: undefined; reference: RefundPiReconciliationReference }
+  | { outcome: "INDETERMINATE"; payment?: undefined; reference: null }
 
 const PI_API_BASE = "https://api.minepi.com/v2/payments"
 
