@@ -3,6 +3,7 @@ import { serverConfig } from "@/lib/server-config"
 import { recordA2UTransactionAtomic, ensureReceiptsSchema } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
+import { acquirePiWalletSubmitLock } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 
 /**
@@ -759,6 +760,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
  * Returns { txidFromHorizon, horizonFeeCharged } on success or error with userFacingStatus
  */
 async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> {
+  let walletLock: { release: () => Promise<void> } | null = null
   try {
     // CRITICAL: Use ONLY Payment fields (never undefined a2uPayment object parameter)
     const toAddress = ctx.payment.a2uToAddress
@@ -805,6 +807,9 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       console.error("[A2U Stage2] Address mismatch")
       return { ok: false, error: "Private seed does not match app wallet address", userFacingStatus: "error" }
     }
+
+    walletLock = await acquirePiWalletSubmitLock(appPublicKey)
+    if (!walletLock) return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
 
     console.log("[A2U Stage2] Connecting to Horizon")
     const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", {
@@ -903,6 +908,8 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
   } catch (error) {
     console.error("[A2U Stage2] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }
+  } finally {
+    if (walletLock) await walletLock.release()
   }
 }
 
