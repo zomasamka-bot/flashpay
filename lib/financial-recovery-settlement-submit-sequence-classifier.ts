@@ -2,7 +2,7 @@ import type { FinancialRecoverySettlementSubmitEvidenceBindingResult } from "./f
 
 type SettlementSubmitReference = Extract<
   FinancialRecoverySettlementSubmitEvidenceBindingResult,
-  { outcome: "MOVEMENT_VERIFIED" }
+  { outcome: "UNRESOLVED" }
 >["reference"]
 
 type FinancialRecoverySettlementSubmitSequenceClassification = Readonly<
@@ -14,21 +14,21 @@ type FinancialRecoverySettlementSubmitSequenceClassification = Readonly<
     }
   | {
       authorizesFinancialAction: false
-      outcome: "EXACT_REPLAY_CANDIDATE"
+      outcome: "PREPARED_IS_NEXT"
       reference: SettlementSubmitReference
       observedSourceSequence: string
       moneyMovementProven: false
     }
   | {
       authorizesFinancialAction: false
-      outcome: "EXACT_REPLAY_STALE"
+      outcome: "SOURCE_AT_OR_PAST_PREPARED"
       reference: SettlementSubmitReference
       observedSourceSequence: string
       moneyMovementProven: false
     }
   | {
       authorizesFinancialAction: false
-      outcome: "SEQUENCE_INCONSISTENT"
+      outcome: "SOURCE_BEHIND_PREPARED_GAP"
       reference: SettlementSubmitReference
       observedSourceSequence: string
       moneyMovementProven: false
@@ -78,10 +78,10 @@ export function classifyFinancialRecoverySettlementSubmitSequence(
   const nextObserved = incrementDecimalString(input.observedSourceSequence)
   const comparison = compareDecimalStrings(input.observedSourceSequence, input.reference.preparedSequence)
   const outcome = nextObserved === input.reference.preparedSequence
-    ? "EXACT_REPLAY_CANDIDATE"
+    ? "PREPARED_IS_NEXT"
     : comparison >= 0
-      ? "EXACT_REPLAY_STALE"
-      : "SEQUENCE_INCONSISTENT"
+      ? "SOURCE_AT_OR_PAST_PREPARED"
+      : "SOURCE_BEHIND_PREPARED_GAP"
 
   return {
     authorizesFinancialAction: false,
