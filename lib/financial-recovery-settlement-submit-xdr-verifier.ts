@@ -10,16 +10,36 @@ export type SettlementSubmitXdrVerifierInput = Readonly<{
   amount: number
 }>
 
-export type SettlementSubmitXdrVerifierResult = Readonly<{
-  outcome: "VERIFIED_INTENT" | "BLOCKED"
-  reason?: "INVALID_INPUT" | "XDR_INVALID" | "INTENT_MISMATCH" | "SIGNATURE_INVALID"
-  moneyMovementProven: false
-  authorizesFinancialAction: false
+export type SettlementSubmitXdrIntentReference = Readonly<{
+  envelopeXdr: string
+  preparedHash: string
+  preparedSequence: string
+  a2uPaymentId: string
+  fromAddress: string
+  toAddress: string
+  amount: number
 }>
 
-const blocked = (reason: NonNullable<SettlementSubmitXdrVerifierResult["reason"]>): SettlementSubmitXdrVerifierResult => ({
+export type SettlementSubmitXdrVerifierResult = Readonly<
+  | {
+      outcome: "VERIFIED_INTENT"
+      reference: SettlementSubmitXdrIntentReference
+      moneyMovementProven: false
+      authorizesFinancialAction: false
+    }
+  | {
+      outcome: "BLOCKED"
+      reason: "INVALID_INPUT" | "XDR_INVALID" | "INTENT_MISMATCH" | "SIGNATURE_INVALID"
+      reference: null
+      moneyMovementProven: false
+      authorizesFinancialAction: false
+    }
+>
+
+const blocked = (reason: "INVALID_INPUT" | "XDR_INVALID" | "INTENT_MISMATCH" | "SIGNATURE_INVALID"): SettlementSubmitXdrVerifierResult => ({
   outcome: "BLOCKED",
   reason,
+  reference: null,
   moneyMovementProven: false,
   authorizesFinancialAction: false,
 })
@@ -63,5 +83,18 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
     return blocked("INTENT_MISMATCH")
   }
 
-  return { outcome: "VERIFIED_INTENT", moneyMovementProven: false, authorizesFinancialAction: false }
+  return {
+    outcome: "VERIFIED_INTENT",
+    reference: {
+      envelopeXdr: input.envelopeXdr,
+      preparedHash: input.preparedHash,
+      preparedSequence: input.preparedSequence,
+      a2uPaymentId: input.a2uPaymentId,
+      fromAddress: input.fromAddress,
+      toAddress: input.toAddress,
+      amount: input.amount,
+    },
+    moneyMovementProven: false,
+    authorizesFinancialAction: false,
+  }
 }
