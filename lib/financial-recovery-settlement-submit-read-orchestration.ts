@@ -13,7 +13,7 @@ export type FinancialRecoverySettlementSubmitReadOrchestrationInput = Readonly<{
 }>
 
 export type FinancialRecoverySettlementSubmitReadOrchestrationResult =
-  | FinancialRecoverySettlementSubmitEvidenceBindingResult
+  | Extract<FinancialRecoverySettlementSubmitEvidenceBindingResult, { outcome: "MOVEMENT_VERIFIED" }>
   | ReturnType<typeof classifyFinancialRecoverySettlementSubmitSequence>
 
 export async function readFinancialRecoverySettlementSubmitEvidence(
