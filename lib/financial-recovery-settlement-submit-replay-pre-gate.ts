@@ -10,10 +10,12 @@ type PreparedIsNextResult = Extract<
 export type FinancialRecoverySettlementSubmitReplayPreGateResult =
   | Readonly<{
       outcome: "ELIGIBLE_EXACT_REPLAY"
+      reference: PreparedIsNextResult
       authorizesFinancialAction: false
     }>
   | Readonly<{
       outcome: "BLOCKED"
+      reference: null
       authorizesFinancialAction: false
     }>
 
@@ -27,7 +29,7 @@ export function evaluateFinancialRecoverySettlementSubmitReplayPreGate(
   input: FinancialRecoverySettlementSubmitReplayPreGateInput,
 ): FinancialRecoverySettlementSubmitReplayPreGateResult {
   if (input.readResult.outcome !== "PREPARED_IS_NEXT") {
-    return { outcome: "BLOCKED", authorizesFinancialAction: false }
+    return { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false }
   }
   const read: PreparedIsNextResult = input.readResult
   if (
@@ -52,8 +54,8 @@ export function evaluateFinancialRecoverySettlementSubmitReplayPreGate(
     input.payment.a2uPreparedSequence !== read.reference.preparedSequence ||
     input.oppositeRefund.outcome !== "CLEAR"
   ) {
-    return { outcome: "BLOCKED", authorizesFinancialAction: false }
+    return { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false }
   }
 
-  return { outcome: "ELIGIBLE_EXACT_REPLAY", authorizesFinancialAction: false }
+  return { outcome: "ELIGIBLE_EXACT_REPLAY", reference: read, authorizesFinancialAction: false }
 }
