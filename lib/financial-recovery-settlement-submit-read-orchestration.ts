@@ -17,9 +17,18 @@ export type FinancialRecoverySettlementSubmitReadOrchestrationInput = Readonly<{
   merchantUid: string
 }>
 
+type SuccessfulSequenceResult = Exclude<
+  ReturnType<typeof classifyFinancialRecoverySettlementSubmitSequence>,
+  Extract<ReturnType<typeof classifyFinancialRecoverySettlementSubmitSequence>, { outcome: "BLOCKED" }>
+> & Readonly<{
+  paymentId: string
+  merchantUid: string
+}>
+
 export type FinancialRecoverySettlementSubmitReadOrchestrationResult =
   | Extract<FinancialRecoverySettlementSubmitEvidenceBindingResult, { outcome: "MOVEMENT_VERIFIED" }>
-  | ReturnType<typeof classifyFinancialRecoverySettlementSubmitSequence>
+  | SuccessfulSequenceResult
+  | Extract<ReturnType<typeof classifyFinancialRecoverySettlementSubmitSequence>, { outcome: "BLOCKED" }>
 
 export async function readFinancialRecoverySettlementSubmitEvidence(
   input: FinancialRecoverySettlementSubmitReadOrchestrationInput,
@@ -62,7 +71,11 @@ export async function readFinancialRecoverySettlementSubmitEvidence(
       moneyMovementProven: false,
       authorizesFinancialAction: false,
     }
-    return classified
+    return {
+      ...classified,
+      paymentId: input.paymentId,
+      merchantUid: input.merchantUid,
+    }
   } catch {
     return {
       outcome: "BLOCKED",
