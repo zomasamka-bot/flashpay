@@ -40,10 +40,18 @@ export type RefundPiPayment = {
   transaction: { txid: string; verified: boolean; _link: string } | null
 }
 
-export type RefundPiReconciliationResult = {
-  outcome: RefundPiReconciliationOutcome
-  payment?: RefundPiPayment
+export type RefundPiReconciliationReference = {
+  paymentId: string
+  refundId: string
+  idempotencyKey: string
+  payerUid: string
+  amount: number
 }
+
+export type RefundPiReconciliationResult =
+  | { outcome: "FOUND"; payment: RefundPiPayment; reference: RefundPiReconciliationReference }
+  | { outcome: "CONFIRMED_NONE"; reference: RefundPiReconciliationReference }
+  | { outcome: "INDETERMINATE"; reference: null }
 
 const PI_API_BASE = "https://api.minepi.com/v2/payments"
 
@@ -111,20 +119,27 @@ async function getPi(path: string): Promise<{ kind: "ok" | "not_found" | "uncert
 
 export async function reconcileRefundWithPi(input: RefundPiReconciliationInput): Promise<RefundPiReconciliationResult> {
   if (!input.paymentId || !input.refundId || !input.idempotencyKey || !input.payerUid || !Number.isFinite(input.amount) || input.amount <= 0) {
-    return { outcome: "INDETERMINATE" }
+    return { outcome: "INDETERMINATE", reference: null }
+  }
+  const reference: RefundPiReconciliationReference = {
+    paymentId: input.paymentId,
+    refundId: input.refundId,
+    idempotencyKey: input.idempotencyKey,
+    payerUid: input.payerUid,
+    amount: input.amount,
   }
 
   if (input.refundPaymentId) {
     const response = await getPi(`/${encodeURIComponent(input.refundPaymentId)}`)
-    if (response.kind !== "ok" || !isRecord(response.body) || response.body.identifier !== input.refundPaymentId) return { outcome: "INDETERMINATE" }
+    if (response.kind !== "ok" || !isRecord(response.body) || response.body.identifier !== input.refundPaymentId) return { outcome: "INDETERMINATE", reference: null }
     const payment = validatePayment(response.body, input)
-    return payment ? { outcome: "FOUND", payment } : { outcome: "INDETERMINATE" }
+    return payment ? { outcome: "FOUND", payment, reference } : { outcome: "INDETERMINATE", reference: null }
   }
 
   const response = await getPi("/incomplete_server_payments")
-  if (response.kind !== "ok" || !isRecord(response.body)) return { outcome: "INDETERMINATE" }
+  if (response.kind !== "ok" || !isRecord(response.body)) return { outcome: "INDETERMINATE", reference: null }
   const raw = response.body.incomplete_server_payments
-  if (!Array.isArray(raw)) return { outcome: "INDETERMINATE" }
+  if (!Array.isArray(raw)) return { outcome: "INDETERMINATE", reference: null }
   const evaluation = evaluateFinancialRecoveryPiCandidates({
     source: "PI_INCOMPLETE_SERVER_PAYMENTS",
     candidates: raw,
@@ -137,8 +152,8 @@ export async function reconcileRefundWithPi(input: RefundPiReconciliationInput):
       payerUid: input.payerUid,
     },
   })
-  if (evaluation.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
-  if (evaluation.outcome === "CONFIRMED_NONE") return { outcome: "CONFIRMED_NONE" }
+  if (evaluation.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE", reference: null }
+  if (evaluation.outcome === "CONFIRMED_NONE") return { outcome: "CONFIRMED_NONE", reference }
   const payment = validatePayment(evaluation.candidate, input)
-  return payment ? { outcome: "FOUND", payment } : { outcome: "INDETERMINATE" }
+  return payment ? { outcome: "FOUND", payment, reference } : { outcome: "INDETERMINATE", reference: null }
 }
