@@ -51,12 +51,14 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
     const operation = transaction.operations[0]
     if (operation.type !== "payment" || operation.source !== undefined || !operation.asset.isNative() || operation.destination !== input.toAddress || !Number.isFinite(Number(operation.amount)) || Number(operation.amount) !== input.amount) return blocked("INTENT_MISMATCH")
     if (transaction.memo.type !== "text") return blocked("INTENT_MISMATCH")
-    const memo = typeof transaction.memo.value === "string" ? transaction.memo.value : transaction.memo.value.toString("utf8")
+    const memoValue = transaction.memo.value
+    if (typeof memoValue !== "string" && !Buffer.isBuffer(memoValue)) return blocked("INTENT_MISMATCH")
+    const memo = typeof memoValue === "string" ? memoValue : memoValue.toString("utf8")
     if (memo !== input.a2uPaymentId.substring(0, 28)) return blocked("INTENT_MISMATCH")
 
     const signature = transaction.signatures[0]
     const keypair = StellarSDK.Keypair.fromPublicKey(input.fromAddress)
-    if (!signature.hint.equals(keypair.signatureHint()) || !keypair.verify(transaction.hash(), signature.signature())) return blocked("SIGNATURE_INVALID")
+    if (!signature.hint().equals(keypair.signatureHint()) || !keypair.verify(transaction.hash(), signature.signature())) return blocked("SIGNATURE_INVALID")
   } catch {
     return blocked("INTENT_MISMATCH")
   }
