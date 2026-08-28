@@ -7,6 +7,7 @@ import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlem
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
 import { acquirePiWalletSubmitLock } from "@/lib/pi-wallet-submit-lock"
+import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
 
 /**
@@ -253,7 +254,72 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
-        return { ok: false, status: 409, error: "Settlement submit replay authorized but execution is not wired" }
+        if (
+          replay.paymentId !== latestPayment.id ||
+          replay.merchantUid !== latestPayment.merchantUid ||
+          replay.reference.paymentId !== latestPayment.id ||
+          replay.reference.merchantUid !== latestPayment.merchantUid ||
+          replay.reference.a2uPaymentId !== latestPayment.a2uPaymentId ||
+          replay.reference.fromAddress !== latestPayment.a2uFromAddress ||
+          replay.reference.toAddress !== latestPayment.a2uToAddress ||
+          replay.reference.amount !== latestPayment.merchantAmount ||
+          replay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr ||
+          replay.reference.preparedHash !== latestPayment.a2uPreparedTxHash ||
+          replay.reference.preparedSequence !== latestPayment.a2uPreparedSequence
+        ) {
+          return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        }
+        try {
+          const transaction = StellarSDK.TransactionBuilder.fromXDR(replay.reference.envelopeXdr, "Pi Testnet")
+          if (
+            !(transaction instanceof StellarSDK.Transaction) ||
+            transaction.toXDR() !== latestPayment.a2uPreparedEnvelopeXdr ||
+            transaction.hash().toString("hex") !== latestPayment.a2uPreparedTxHash ||
+            transaction.sequence !== latestPayment.a2uPreparedSequence ||
+            transaction.source !== latestPayment.a2uFromAddress
+          ) {
+            return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          }
+          const horizon = new StellarSDK.Horizon.Server("https://horizon-testnet.stellar.org")
+          const submitted = await horizon.submitTransaction(transaction)
+          if (submitted.hash !== latestPayment.a2uPreparedTxHash) {
+            return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          }
+        } catch {
+          return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        }
+        const verifiedReplay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
+        if (
+          verifiedReplay.outcome !== "MOVEMENT_VERIFIED" ||
+          verifiedReplay.paymentId !== latestPayment.id ||
+          verifiedReplay.merchantUid !== latestPayment.merchantUid ||
+          verifiedReplay.reference.paymentId !== latestPayment.id ||
+          verifiedReplay.reference.merchantUid !== latestPayment.merchantUid ||
+          verifiedReplay.reference.a2uPaymentId !== latestPayment.a2uPaymentId ||
+          verifiedReplay.reference.fromAddress !== latestPayment.a2uFromAddress ||
+          verifiedReplay.reference.toAddress !== latestPayment.a2uToAddress ||
+          verifiedReplay.reference.amount !== latestPayment.merchantAmount ||
+          verifiedReplay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr ||
+          verifiedReplay.reference.preparedHash !== latestPayment.a2uPreparedTxHash ||
+          verifiedReplay.reference.preparedSequence !== latestPayment.a2uPreparedSequence ||
+          !Number.isFinite(verifiedReplay.horizonFeeCharged) ||
+          verifiedReplay.horizonFeeCharged < 0
+        ) {
+          return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        }
+        try {
+          await persistCheckpointMerged(paymentId, {
+            a2uTxid: verifiedReplay.reference.preparedHash,
+            horizonSuccessFlag: true,
+            horizonSuccessAt: new Date().toISOString(),
+            status: "settlement_pending",
+            horizonFeeCharged: verifiedReplay.horizonFeeCharged,
+            piCompletionPending: true,
+          })
+        } catch {
+          return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }
+        }
+        return { ok: false, status: 409, error: "Settlement movement verified; reconciliation is not wired" }
       } finally {
         await walletLock.release()
       }
