@@ -26,6 +26,7 @@ export type SettlementSubmitHorizonBindingResult = Readonly<
           fromAddress: string
           toAddress: string
           amount: number
+          horizonFeeCharged: number
         }
       | { outcome: "UNRESOLVED"; observedSourceSequence: string }
       | { outcome: "BLOCKED" }
@@ -65,6 +66,14 @@ export function evaluateFinancialRecoverySettlementSubmitHorizonBinding(
     input.read.transaction.source_account_sequence !== preparedSequence
   ) return { authorizesFinancialAction: false, outcome: "BLOCKED" }
 
+  if (
+    (typeof input.read.transaction.fee_charged !== "number" && typeof input.read.transaction.fee_charged !== "string") ||
+    !Number.isFinite(Number(input.read.transaction.fee_charged)) ||
+    Number(input.read.transaction.fee_charged) < 0
+  ) return { authorizesFinancialAction: false, outcome: "BLOCKED" }
+  const feeChargedStroops = Number(input.read.transaction.fee_charged)
+  const horizonFeeCharged = feeChargedStroops / 10_000_000
+
   const proof = evaluateFinancialRecoveryHorizonProof({
     source: input.read.source,
     transaction: input.read.transaction,
@@ -83,5 +92,6 @@ export function evaluateFinancialRecoverySettlementSubmitHorizonBinding(
     fromAddress,
     toAddress,
     amount,
+    horizonFeeCharged,
   }
 }
