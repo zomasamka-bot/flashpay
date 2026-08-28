@@ -4,6 +4,7 @@ import type { Payment } from "./types"
 import { findRefundCheckpointByPaymentId } from "./refund-checkpoint-store"
 import { evaluateSettlementRefundCheckpointBarrier } from "./financial-recovery-settlement-refund-checkpoint-barrier"
 import { readFinancialRecoverySettlementSubmitEvidence } from "./financial-recovery-settlement-submit-read-orchestration"
+import type { FinancialRecoverySettlementSubmitReadOrchestrationResult } from "./financial-recovery-settlement-submit-read-orchestration"
 import { reconcileRefundAbsenceForPayment } from "./refund-pi-reconciliation"
 import { evaluateFinancialRecoverySettlementRefundOppositeBinding } from "./financial-recovery-settlement-refund-opposite-binding"
 import { evaluateFinancialRecoverySettlementSubmitReplayPreGate } from "./financial-recovery-settlement-submit-replay-pre-gate"
@@ -21,9 +22,21 @@ const blocked = (): FinancialRecoverySettlementSubmitReplayGateResult => ({
 const canonicalString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0 && value === value.trim()
 
+export type FinancialRecoverySettlementSubmitReplayOrchestrationResult =
+  | FinancialRecoverySettlementSubmitReplayGateResult
+  | Readonly<{
+      outcome: "MOVEMENT_VERIFIED"
+      paymentId: string
+      merchantUid: string
+      reference: Extract<FinancialRecoverySettlementSubmitReadOrchestrationResult, { outcome: "MOVEMENT_VERIFIED" }>["reference"]
+      proof: "horizon_tx_exact"
+      moneyMovementProven: true
+      authorizesFinancialAction: false
+    }>
+
 export async function executeFinancialRecoverySettlementSubmitReplay(
   input: { payment: Payment; paymentId: string },
-): Promise<FinancialRecoverySettlementSubmitReplayGateResult> {
+): Promise<FinancialRecoverySettlementSubmitReplayOrchestrationResult> {
   const { payment, paymentId } = input
   if (
     !canonicalString(paymentId) ||
@@ -75,6 +88,17 @@ export async function executeFinancialRecoverySettlementSubmitReplay(
       paymentId,
       merchantUid: merchantUid,
     })
+    if (readResult.outcome === "MOVEMENT_VERIFIED") {
+      return {
+        outcome: "MOVEMENT_VERIFIED",
+        paymentId,
+        merchantUid,
+        reference: readResult.reference,
+        proof: "horizon_tx_exact",
+        moneyMovementProven: true,
+        authorizesFinancialAction: false,
+      }
+    }
     const checkpointLookup = await findRefundCheckpointByPaymentId(paymentId)
     const checkpointState = checkpointLookup.state === "present" && checkpointLookup.checkpoint.paymentId !== paymentId
       ? "uncertain"
