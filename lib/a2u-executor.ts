@@ -867,6 +867,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       a2uPreparedEnvelopeXdr: preparedEnvelopeXdr,
       a2uPreparedTxHash: preparedHash,
       a2uPreparedSequence: preparedSequence,
+      status: "settlement_pending" as const,
     })
 
     console.log("[A2U Stage2] Submitting to Horizon")
