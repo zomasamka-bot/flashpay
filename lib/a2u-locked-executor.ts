@@ -230,7 +230,9 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
             replay.reference.fromAddress !== latestPayment.a2uFromAddress ||
             replay.reference.toAddress !== latestPayment.a2uToAddress ||
             replay.reference.amount !== latestPayment.merchantAmount ||
-            replay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr
+            replay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr ||
+            !Number.isFinite(replay.horizonFeeCharged) ||
+            replay.horizonFeeCharged < 0
           ) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           }
@@ -240,6 +242,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
               horizonSuccessFlag: true,
               horizonSuccessAt: new Date().toISOString(),
               status: "settlement_pending",
+              horizonFeeCharged: replay.horizonFeeCharged,
             })
           } catch {
             return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }

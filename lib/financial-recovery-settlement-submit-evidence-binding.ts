@@ -19,6 +19,7 @@ export type FinancialRecoverySettlementSubmitEvidenceBindingResult = Readonly<
       reference: NonNullable<Extract<ReturnType<typeof verifySettlementSubmitXdrIntent>, { outcome: "VERIFIED_INTENT" }>["reference"]>
       proof: "horizon_tx_exact"
       moneyMovementProven: true
+      horizonFeeCharged: number
     }
   | {
       authorizesFinancialAction: false
@@ -66,7 +67,7 @@ export function evaluateFinancialRecoverySettlementSubmitEvidenceBinding(
       horizonResult.toAddress !== reference.toAddress ||
       horizonResult.amount !== reference.amount
     ) return { authorizesFinancialAction: false, outcome: "BLOCKED" }
-    return { authorizesFinancialAction: false, outcome: "MOVEMENT_VERIFIED", reference, proof: "horizon_tx_exact", moneyMovementProven: true }
+    return { authorizesFinancialAction: false, outcome: "MOVEMENT_VERIFIED", reference, proof: "horizon_tx_exact", moneyMovementProven: true, horizonFeeCharged: horizonResult.horizonFeeCharged }
   } catch {
     return { authorizesFinancialAction: false, outcome: "BLOCKED" }
   }

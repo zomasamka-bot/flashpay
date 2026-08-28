@@ -32,6 +32,7 @@ export type FinancialRecoverySettlementSubmitReplayOrchestrationResult =
       proof: "horizon_tx_exact"
       moneyMovementProven: true
       authorizesFinancialAction: false
+      horizonFeeCharged: number
     }>
 
 export async function executeFinancialRecoverySettlementSubmitReplay(
@@ -97,6 +98,7 @@ export async function executeFinancialRecoverySettlementSubmitReplay(
         proof: "horizon_tx_exact",
         moneyMovementProven: true,
         authorizesFinancialAction: false,
+        horizonFeeCharged: readResult.horizonFeeCharged,
       }
     }
     const checkpointLookup = await findRefundCheckpointByPaymentId(paymentId)
