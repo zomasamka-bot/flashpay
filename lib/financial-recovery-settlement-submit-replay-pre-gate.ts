@@ -1,7 +1,7 @@
 import type { Payment } from "./types"
 import type { FinancialRecoverySettlementSubmitReadOrchestrationResult } from "./financial-recovery-settlement-submit-read-orchestration"
 import type { FinancialRecoverySettlementRefundOppositeBindingResult } from "./financial-recovery-settlement-refund-opposite-binding"
-import type { RefundPiReconciliationResult } from "./refund-pi-reconciliation"
+import type { ReconcileRefundAbsenceResult } from "./refund-pi-reconciliation"
 
 type PreparedIsNextResult = Extract<
   FinancialRecoverySettlementSubmitReadOrchestrationResult,
@@ -24,7 +24,7 @@ export type FinancialRecoverySettlementSubmitReplayPreGateInput = Readonly<{
   payment: Payment
   readResult: FinancialRecoverySettlementSubmitReadOrchestrationResult
   oppositeRefund: FinancialRecoverySettlementRefundOppositeBindingResult
-  refundPiResult: RefundPiReconciliationResult
+  refundPiResult: ReconcileRefundAbsenceResult
 }>
 
 export function evaluateFinancialRecoverySettlementSubmitReplayPreGate(
@@ -56,9 +56,11 @@ export function evaluateFinancialRecoverySettlementSubmitReplayPreGate(
     input.payment.a2uPreparedSequence !== read.reference.preparedSequence ||
     input.oppositeRefund.outcome !== "CLEAR" ||
     input.refundPiResult.outcome !== "CONFIRMED_NONE" ||
+    input.refundPiResult.authorizesFinancialAction !== false ||
     input.refundPiResult.reference.paymentId !== read.paymentId ||
     input.refundPiResult.reference.payerUid !== input.payment.payerUid ||
-    input.refundPiResult.reference.amount !== input.payment.customerAmount
+    input.refundPiResult.reference.amount !== input.payment.customerAmount ||
+    input.refundPiResult.reference.a2uPaymentId !== read.reference.a2uPaymentId
   ) {
     return { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false }
   }
