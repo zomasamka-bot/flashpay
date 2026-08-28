@@ -120,48 +120,54 @@ async function getPi(path: string): Promise<{ kind: "ok" | "not_found" | "uncert
 export type ReconcileRefundAbsenceInput = {
   paymentId: string
   payerUid: string
+  a2uPaymentId: string
   amount: number
 }
 
 export type ReconcileRefundAbsenceReference = {
   paymentId: string
   payerUid: string
+  a2uPaymentId: string
   amount: number
 }
 
 export type ReconcileRefundAbsenceResult =
-  | { outcome: "FOUND"; payment: unknown; reference: ReconcileRefundAbsenceReference }
-  | { outcome: "CONFIRMED_NONE"; reference: ReconcileRefundAbsenceReference }
-  | { outcome: "INDETERMINATE"; reference: null }
+  | { outcome: "FOUND"; payment: unknown; reference: ReconcileRefundAbsenceReference; authorizesFinancialAction: false }
+  | { outcome: "CONFIRMED_NONE"; reference: ReconcileRefundAbsenceReference; authorizesFinancialAction: false }
+  | { outcome: "INDETERMINATE"; reference: null; authorizesFinancialAction: false }
 
 export async function reconcileRefundAbsenceForPayment(input: ReconcileRefundAbsenceInput): Promise<ReconcileRefundAbsenceResult> {
   const paymentId = (input.paymentId ?? "").trim()
   const payerUid = (input.payerUid ?? "").trim()
-  if (!paymentId || !payerUid || !Number.isFinite(input.amount) || input.amount <= 0) {
-    return { outcome: "INDETERMINATE", reference: null }
+  const a2uPaymentId = (input.a2uPaymentId ?? "").trim()
+  if (!paymentId || !payerUid || !a2uPaymentId || !Number.isFinite(input.amount) || input.amount <= 0) {
+    return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
   }
-  const reference: ReconcileRefundAbsenceReference = { paymentId, payerUid, amount: input.amount }
+  const reference: ReconcileRefundAbsenceReference = { paymentId, payerUid, a2uPaymentId, amount: input.amount }
 
   const response = await getPi("/incomplete_server_payments")
-  if (response.kind !== "ok" || !isRecord(response.body)) return { outcome: "INDETERMINATE", reference: null }
+  if (response.kind !== "ok" || !isRecord(response.body)) return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
   const raw = response.body.incomplete_server_payments
-  if (!Array.isArray(raw)) return { outcome: "INDETERMINATE", reference: null }
+  if (!Array.isArray(raw)) return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
 
   for (const candidate of raw) {
-    if (!isRecord(candidate)) continue
+    if (!isRecord(candidate)) return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
     const candidateMetadata = candidate.metadata
-    if (!isRecord(candidateMetadata) || candidateMetadata.paymentId !== paymentId) continue
+    if (!isRecord(candidateMetadata) || typeof candidateMetadata.paymentId !== "string") return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
+    const candidatePaymentId = candidateMetadata.paymentId.trim()
+    if (!candidatePaymentId || candidatePaymentId !== candidateMetadata.paymentId) return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
+    if (candidatePaymentId !== paymentId) continue
+    if (candidateMetadata.type === "a2u_settlement" && candidate.identifier === a2uPaymentId) continue
     if (candidateMetadata.type === "refund") {
-      if (candidateMetadata.payerUid === payerUid && candidateMetadata.amount === input.amount &&
-        typeof candidate.identifier === "string" && candidate.identifier.length > 0 &&
-        candidate.direction === "app_to_user") {
-        return { outcome: "FOUND", payment: candidate, reference }
+      if (candidateMetadata.user_uid === payerUid && candidateMetadata.amount === input.amount &&
+        candidate.direction === "app_to_user" && typeof candidate.identifier === "string" && (candidate.identifier ?? "").trim().length > 0) {
+        return { outcome: "FOUND", payment: candidate, reference, authorizesFinancialAction: false }
       }
-      return { outcome: "INDETERMINATE", reference: null }
+      return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
     }
-    return { outcome: "INDETERMINATE", reference: null }
+    return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
   }
-  return { outcome: "CONFIRMED_NONE", reference }
+  return { outcome: "CONFIRMED_NONE", reference, authorizesFinancialAction: false }
 }
 
 export async function reconcileRefundWithPi(input: RefundPiReconciliationInput): Promise<RefundPiReconciliationResult> {
