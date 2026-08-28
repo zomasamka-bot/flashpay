@@ -217,6 +217,24 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       }
       try {
         const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
+        if (replay.outcome === "MOVEMENT_VERIFIED") {
+          if (
+            replay.moneyMovementProven !== true ||
+            replay.authorizesFinancialAction !== false ||
+            replay.paymentId !== paymentId ||
+            replay.merchantUid !== latestPayment.merchantUid ||
+            replay.reference.preparedHash !== latestPayment.a2uPreparedTxHash ||
+            replay.reference.preparedSequence !== latestPayment.a2uPreparedSequence ||
+            replay.reference.a2uPaymentId !== latestPayment.a2uPaymentId ||
+            replay.reference.fromAddress !== latestPayment.a2uFromAddress ||
+            replay.reference.toAddress !== latestPayment.a2uToAddress ||
+            replay.reference.amount !== latestPayment.merchantAmount ||
+            replay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr
+          ) {
+            return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          }
+          return { ok: false, status: 409, error: "Settlement movement verified; reconciliation is not wired" }
+        }
         if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
