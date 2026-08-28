@@ -289,9 +289,11 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         const verifiedReplay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
+        if (verifiedReplay.outcome !== "MOVEMENT_VERIFIED") {
+          return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        }
         const verifiedIntent = verifiedReplay.reference
         if (
-          verifiedReplay.outcome !== "MOVEMENT_VERIFIED" ||
           verifiedReplay.paymentId !== latestPayment.id ||
           verifiedReplay.merchantUid !== latestPayment.merchantUid ||
           verifiedIntent.a2uPaymentId !== latestPayment.a2uPaymentId ||
