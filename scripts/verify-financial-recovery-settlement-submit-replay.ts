@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert"
+import type { Payment } from "../lib/types"
 import { classifyFinancialRecoverySettlementSubmitSequence } from "../lib/financial-recovery-settlement-submit-sequence-classifier"
 import { evaluateFinancialRecoverySettlementSubmitReplayPreGate } from "../lib/financial-recovery-settlement-submit-replay-pre-gate"
 import { evaluateFinancialRecoverySettlementSubmitReplayGate } from "../lib/financial-recovery-settlement-submit-replay-gate"
@@ -13,8 +14,13 @@ const reference = {
   amount: 2.5,
 }
 
-const basePayment = {
+const basePayment: Payment = {
   id: "payment-1",
+  merchantId: "merchant-id",
+  accessToken: "access-token",
+  amount: 2.5,
+  note: "test payment",
+  createdAt: "2026-08-28T00:00:00.000Z",
   merchantUid: "merchant-1",
   payerUid: "payer-1",
   customerAmount: 2.5,
@@ -36,15 +42,17 @@ const sequenceInput = (observedSourceSequence: string) => ({
   authorizesFinancialAction: false as const,
 })
 
-assert.equal(classifyFinancialRecoverySettlementSubmitSequence(sequenceInput("41")).outcome, "PREPARED_IS_NEXT")
+const preparedResult = classifyFinancialRecoverySettlementSubmitSequence(sequenceInput("41"))
+assert.equal(preparedResult.outcome, "PREPARED_IS_NEXT")
+if (preparedResult.outcome !== "PREPARED_IS_NEXT") throw new Error("Expected PREPARED_IS_NEXT")
 assert.equal(classifyFinancialRecoverySettlementSubmitSequence(sequenceInput("42")).outcome, "SOURCE_AT_OR_PAST_PREPARED")
 assert.equal(classifyFinancialRecoverySettlementSubmitSequence(sequenceInput("40")).outcome, "SOURCE_BEHIND_PREPARED_GAP")
 
-const baseRead = { ...sequenceInput("41"), paymentId: "payment-1", merchantUid: "merchant-1" }
+const baseRead = { ...preparedResult, paymentId: "payment-1", merchantUid: "merchant-1" }
 const basePreGateInput = {
   payment: basePayment,
   readResult: baseRead,
-  oppositeRefund: { outcome: "CLEAR" as const },
+  oppositeRefund: { outcome: "CLEAR" as const, authorizesFinancialAction: false as const, oppositePaymentId: "ABSENT" as const, oppositeTxid: "ABSENT" as const, oppositeMoneyMovement: "ABSENT" as const },
   refundPiResult: {
     outcome: "CONFIRMED_NONE" as const,
     authorizesFinancialAction: false as const,
@@ -52,9 +60,9 @@ const basePreGateInput = {
   },
 }
 
-const eligible = evaluateFinancialRecoverySettlementSubmitReplayPreGate(basePreGateInput)
-assert.equal(eligible.outcome, "ELIGIBLE_EXACT_REPLAY")
-assert.equal(eligible.authorizesFinancialAction, false)
+const preGate = evaluateFinancialRecoverySettlementSubmitReplayPreGate(basePreGateInput)
+assert.equal(preGate.outcome, "ELIGIBLE_EXACT_REPLAY")
+assert.equal(preGate.authorizesFinancialAction, false)
 
 const mismatches = [
   ["id", { id: "other" }],
@@ -68,11 +76,32 @@ const mismatches = [
   ["sequence", { a2uPreparedSequence: "43" }],
   ["status", { status: "failed" }],
   ["flag", { horizonSuccessFlag: true }],
-  ["refund", { refundTxid: "refund" }],
-  ["refund Pi", { piCompletionPending: true }],
+  ["a2uTxid", { a2uTxid: "b".repeat(64) }],
+  ["horizonSuccessFlag", { horizonSuccessFlag: true }],
+  ["piCompletionPending", { piCompletionPending: true }],
+  ["piCompleted", { piCompleted: true }],
+  ["requiresDbReconciliation", { requiresDbReconciliation: true }],
+  ["dbRecorded", { dbRecorded: true }],
+  ["refundPaymentId", { refundPaymentId: "refund" }],
+  ["refundTxid", { refundTxid: "refund" }],
+  ["refundStatus", { refundStatus: "pending" }],
 ] as const
 for (const [, change] of mismatches) {
   const result = evaluateFinancialRecoverySettlementSubmitReplayPreGate({ ...basePreGateInput, payment: { ...basePayment, ...change } })
+  assert.deepEqual(result, { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false })
+}
+for (const oppositeRefund of [
+  { outcome: "BLOCKED" as const, authorizesFinancialAction: false as const, reason: "OPPOSITE_BRANCH_EVIDENCE" as const },
+  { outcome: "BLOCKED" as const, authorizesFinancialAction: false as const, reason: "OPPOSITE_BRANCH_UNCERTAIN" as const },
+]) {
+  const result = evaluateFinancialRecoverySettlementSubmitReplayPreGate({ ...basePreGateInput, oppositeRefund })
+  assert.deepEqual(result, { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false })
+}
+for (const refundPiResult of [
+  { ...basePreGateInput.refundPiResult, outcome: "FOUND" as const },
+  { ...basePreGateInput.refundPiResult, outcome: "INDETERMINATE" as const },
+]) {
+  const result = evaluateFinancialRecoverySettlementSubmitReplayPreGate({ ...basePreGateInput, refundPiResult })
   assert.deepEqual(result, { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false })
 }
 for (const change of [
@@ -85,16 +114,16 @@ for (const change of [
   assert.deepEqual(result, { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false })
 }
 
-const gate = evaluateFinancialRecoverySettlementSubmitReplayGate(eligible)
+const gate = evaluateFinancialRecoverySettlementSubmitReplayGate(preGate)
 assert.equal(gate.outcome, "ALLOW_EXACT_REPLAY")
 assert.equal(gate.authorizesFinancialAction, true)
 assert.equal(gate.mode, "EXACT_STORED_XDR_ONLY")
 assert.equal(gate.moneyMovementProven, false)
-assert.equal(gate.reference, eligible.reference)
+assert.equal(gate.reference, preGate.reference)
 
 for (const input of [
   { outcome: "BLOCKED" as const, reference: null, authorizesFinancialAction: false as const },
-  { outcome: "ELIGIBLE_EXACT_REPLAY" as const, reference: null, authorizesFinancialAction: false as const },
+  { outcome: "BLOCKED" as const, reference: null, authorizesFinancialAction: false as const },
 ]) {
   const result = evaluateFinancialRecoverySettlementSubmitReplayGate(input)
   assert.equal(result.outcome, "BLOCKED")
