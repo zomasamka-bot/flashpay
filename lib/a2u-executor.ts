@@ -1066,7 +1066,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
  * - settled_to_merchant never regresses
  * - Merge is strictly monotonic and irreversible
  */
-async function persistCheckpointMerged(
+export async function persistCheckpointMerged(
   paymentId: string,
   updates: Partial<Payment>
 ): Promise<Payment> {
