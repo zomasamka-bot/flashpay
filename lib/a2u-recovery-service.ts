@@ -312,6 +312,29 @@ export async function executeA2URecovery(
     }
   }
 
+  // ===== SETTLEMENT SUBMIT RECOVERY =====
+  if (
+    payment.status === "settlement_pending" &&
+    typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim().length > 0 && payment.a2uPaymentId === payment.a2uPaymentId.trim() &&
+    typeof payment.a2uPreparedEnvelopeXdr === "string" && payment.a2uPreparedEnvelopeXdr.trim().length > 0 && payment.a2uPreparedEnvelopeXdr === payment.a2uPreparedEnvelopeXdr.trim() &&
+    typeof payment.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(payment.a2uPreparedTxHash) &&
+    typeof payment.a2uPreparedSequence === "string" && /^[1-9][0-9]*$/.test(payment.a2uPreparedSequence) &&
+    typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim().length > 0 && payment.a2uFromAddress === payment.a2uFromAddress.trim() &&
+    typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim().length > 0 && payment.a2uToAddress === payment.a2uToAddress.trim() &&
+    typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 &&
+    typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount > 0 &&
+    payment.a2uTxid === undefined &&
+    payment.horizonSuccessFlag !== true && payment.piCompletionPending !== true && payment.piCompleted !== true && payment.requiresDbReconciliation !== true && payment.dbRecorded !== true &&
+    payment.refundPaymentId === undefined && payment.refundTxid === undefined &&
+    (payment.refundStatus === undefined || payment.refundStatus === "not_started")
+  ) {
+    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_SUBMIT" })
+    if (!result.ok) {
+      return { status: "manual_review_required", state: "settlement_submit_recovery_failed", paymentId, details: { error: result.error } }
+    }
+    return { status: "manual_review_required", state: "settlement_submit_outcome_deferred", paymentId, details: { error: "Settlement Submit returned; reconcile before any submit" } }
+  }
+
   // ===== STATE 5: PAID-TO-APP RECOVERY =====
   // A2U creation failures are retryable only after their backoff window.
   if (payment.status === "paid_to_app" && payment.settlementFailureState === "retryable") {
