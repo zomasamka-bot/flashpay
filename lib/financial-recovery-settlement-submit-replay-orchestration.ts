@@ -26,6 +26,7 @@ export async function executeFinancialRecoverySettlementSubmitReplay(
 ): Promise<FinancialRecoverySettlementSubmitReplayGateResult> {
   const { payment, paymentId } = input
   if (
+    !canonicalString(paymentId) ||
     payment.id !== paymentId ||
     !canonicalString(payment.merchantUid) ||
     !canonicalString(payment.payerUid) ||
@@ -35,31 +36,44 @@ export async function executeFinancialRecoverySettlementSubmitReplay(
     !canonicalString(payment.a2uPreparedEnvelopeXdr) ||
     !canonicalString(payment.a2uPreparedTxHash) ||
     !canonicalString(payment.a2uPreparedSequence) ||
+    typeof payment.customerAmount !== "number" ||
     !Number.isFinite(payment.customerAmount) || payment.customerAmount <= 0 ||
+    typeof payment.merchantAmount !== "number" ||
     !Number.isFinite(payment.merchantAmount) || payment.merchantAmount <= 0
   ) return blocked()
+
+  const merchantUid = payment.merchantUid
+  const payerUid = payment.payerUid
+  const a2uPaymentId = payment.a2uPaymentId
+  const fromAddress = payment.a2uFromAddress
+  const toAddress = payment.a2uToAddress
+  const envelopeXdr = payment.a2uPreparedEnvelopeXdr
+  const preparedHash = payment.a2uPreparedTxHash
+  const preparedSequence = payment.a2uPreparedSequence
+  const customerAmount = payment.customerAmount
+  const merchantAmount = payment.merchantAmount
 
   try {
     const readResult = await readFinancialRecoverySettlementSubmitEvidence({
       xdrInput: {
-        a2uPaymentId: payment.a2uPaymentId,
-        fromAddress: payment.a2uFromAddress,
-        toAddress: payment.a2uToAddress,
-        amount: payment.merchantAmount,
-        envelopeXdr: payment.a2uPreparedEnvelopeXdr,
-        preparedHash: payment.a2uPreparedTxHash,
-        preparedSequence: payment.a2uPreparedSequence,
+        a2uPaymentId: a2uPaymentId,
+        fromAddress: fromAddress,
+        toAddress: toAddress,
+        amount: merchantAmount,
+        envelopeXdr: envelopeXdr,
+        preparedHash: preparedHash,
+        preparedSequence: preparedSequence,
       },
       horizonExpected: {
-        a2uPaymentId: payment.a2uPaymentId,
-        fromAddress: payment.a2uFromAddress,
-        toAddress: payment.a2uToAddress,
-        amount: payment.merchantAmount,
-        preparedHash: payment.a2uPreparedTxHash,
-        preparedSequence: payment.a2uPreparedSequence,
+        a2uPaymentId: a2uPaymentId,
+        fromAddress: fromAddress,
+        toAddress: toAddress,
+        amount: merchantAmount,
+        preparedHash: preparedHash,
+        preparedSequence: preparedSequence,
       },
       paymentId,
-      merchantUid: payment.merchantUid,
+      merchantUid: merchantUid,
     })
     const checkpointLookup = await findRefundCheckpointByPaymentId(paymentId)
     const checkpointState = checkpointLookup.state === "present" && checkpointLookup.checkpoint.paymentId !== paymentId
@@ -68,9 +82,9 @@ export async function executeFinancialRecoverySettlementSubmitReplay(
     const barrier = evaluateSettlementRefundCheckpointBarrier(checkpointState)
     const refundPiResult = await reconcileRefundAbsenceForPayment({
       paymentId,
-      payerUid: payment.payerUid,
-      amount: payment.customerAmount,
-      a2uPaymentId: payment.a2uPaymentId,
+      payerUid: payerUid,
+      amount: customerAmount,
+      a2uPaymentId: a2uPaymentId,
     })
     const oppositeRefund = evaluateFinancialRecoverySettlementRefundOppositeBinding({
       checkpoint: barrier,
