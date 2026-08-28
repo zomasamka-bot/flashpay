@@ -137,9 +137,15 @@ export type ReconcileRefundAbsenceResult =
   | { outcome: "INDETERMINATE"; reference: null; authorizesFinancialAction: false }
 
 export async function reconcileRefundAbsenceForPayment(input: ReconcileRefundAbsenceInput): Promise<ReconcileRefundAbsenceResult> {
-  const paymentId = (input.paymentId ?? "").trim()
-  const payerUid = (input.payerUid ?? "").trim()
-  const a2uPaymentId = (input.a2uPaymentId ?? "").trim()
+  if (typeof input.paymentId !== "string" || !input.paymentId || input.paymentId !== input.paymentId.trim() ||
+    typeof input.payerUid !== "string" || !input.payerUid || input.payerUid !== input.payerUid.trim() ||
+    typeof input.a2uPaymentId !== "string" || !input.a2uPaymentId || input.a2uPaymentId !== input.a2uPaymentId.trim() ||
+    !Number.isFinite(input.amount) || input.amount <= 0) {
+    return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
+  }
+  const paymentId = input.paymentId
+  const payerUid = input.payerUid
+  const a2uPaymentId = input.a2uPaymentId
   if (!paymentId || !payerUid || !a2uPaymentId || !Number.isFinite(input.amount) || input.amount <= 0) {
     return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
   }
@@ -159,8 +165,8 @@ export async function reconcileRefundAbsenceForPayment(input: ReconcileRefundAbs
     if (candidatePaymentId !== paymentId) continue
     if (candidateMetadata.type === "a2u_settlement" && candidate.identifier === a2uPaymentId) continue
     if (candidateMetadata.type === "refund") {
-      if (candidateMetadata.user_uid === payerUid && candidateMetadata.amount === input.amount &&
-        candidate.direction === "app_to_user" && typeof candidate.identifier === "string" && (candidate.identifier ?? "").trim().length > 0) {
+      if (candidate.user_uid === payerUid && typeof candidate.amount === "number" && Number.isFinite(candidate.amount) && candidate.amount === input.amount &&
+        candidate.direction === "app_to_user" && typeof candidate.identifier === "string" && candidate.identifier.length > 0 && candidate.identifier === candidate.identifier.trim()) {
         return { outcome: "FOUND", payment: candidate, reference, authorizesFinancialAction: false }
       }
       return { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
