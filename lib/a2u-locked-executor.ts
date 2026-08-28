@@ -131,12 +131,13 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       const preparedPairAbsent = latestPayment.a2uPreparedTxHash === undefined && latestPayment.a2uPreparedSequence === undefined
       const preparedPairCanonical = canonicalPreparedHash && canonicalPreparedSequence
       const canonicalPreparedEnvelope = typeof latestPayment.a2uPreparedEnvelopeXdr === "string" && latestPayment.a2uPreparedEnvelopeXdr.trim() !== "" && latestPayment.a2uPreparedEnvelopeXdr === latestPayment.a2uPreparedEnvelopeXdr.trim()
+      const preparedRecoveryException = params.isRecovery === true && latestPayment.status === "settlement_pending" && canonicalA2UTxid && latestPayment.a2uTxid === latestPayment.a2uPreparedTxHash && latestPayment.horizonSuccessFlag === true && latestPayment.piCompletionPending === true && latestPayment.piCompleted !== true && canonicalPreparedEnvelope && canonicalPreparedHash && canonicalPreparedSequence
       if (
-        (!preparedPairAbsent && !preparedPairCanonical) ||
-        (latestPayment.a2uPreparedEnvelopeXdr !== undefined && (!canonicalPreparedEnvelope || latestPayment.a2uPreparedTxHash === undefined || latestPayment.a2uPreparedSequence === undefined || !canonicalPreparedHash || !canonicalPreparedSequence || latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash || latestPayment.status !== "settled_to_merchant")) ||
-        (latestPayment.a2uPreparedTxHash !== undefined && latestPayment.status !== "settled_to_merchant") ||
-        (latestPayment.a2uPreparedSequence !== undefined && latestPayment.status !== "settled_to_merchant") ||
-        (latestPayment.a2uPreparedTxHash !== undefined && latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash) ||
+        (!preparedRecoveryException && !preparedPairAbsent && !preparedPairCanonical) ||
+        (!preparedRecoveryException && latestPayment.a2uPreparedEnvelopeXdr !== undefined && (!canonicalPreparedEnvelope || latestPayment.a2uPreparedTxHash === undefined || latestPayment.a2uPreparedSequence === undefined || !canonicalPreparedHash || !canonicalPreparedSequence || latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash || latestPayment.status !== "settled_to_merchant")) ||
+        (!preparedRecoveryException && latestPayment.a2uPreparedTxHash !== undefined && latestPayment.status !== "settled_to_merchant") ||
+        (!preparedRecoveryException && latestPayment.a2uPreparedSequence !== undefined && latestPayment.status !== "settled_to_merchant") ||
+        (!preparedRecoveryException && latestPayment.a2uPreparedTxHash !== undefined && latestPayment.a2uTxid !== latestPayment.a2uPreparedTxHash) ||
         (latestPayment.a2uPaymentId !== undefined && (!canonicalA2UPaymentId || !canonicalA2UTxid)) ||
         (latestPayment.a2uPaymentId === undefined && (latestPayment.a2uTxid !== undefined || (latestPayment.horizonSuccessFlag !== undefined && latestPayment.horizonSuccessFlag !== false)))
       ) {
