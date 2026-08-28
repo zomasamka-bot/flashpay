@@ -243,6 +243,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
               horizonSuccessAt: new Date().toISOString(),
               status: "settlement_pending",
               horizonFeeCharged: replay.horizonFeeCharged,
+              piCompletionPending: true,
             })
           } catch {
             return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }
