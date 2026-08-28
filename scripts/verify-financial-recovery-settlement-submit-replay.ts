@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert"
 import type { Payment } from "../lib/types"
+import type { ReconcileRefundAbsenceResult } from "../lib/refund-pi-reconciliation"
 import { classifyFinancialRecoverySettlementSubmitSequence } from "../lib/financial-recovery-settlement-submit-sequence-classifier"
 import { evaluateFinancialRecoverySettlementSubmitReplayPreGate } from "../lib/financial-recovery-settlement-submit-replay-pre-gate"
 import { evaluateFinancialRecoverySettlementSubmitReplayGate } from "../lib/financial-recovery-settlement-submit-replay-gate"
@@ -75,7 +76,6 @@ const mismatches = [
   ["hash", { a2uPreparedTxHash: "b".repeat(64) }],
   ["sequence", { a2uPreparedSequence: "43" }],
   ["status", { status: "failed" }],
-  ["flag", { horizonSuccessFlag: true }],
   ["a2uTxid", { a2uTxid: "b".repeat(64) }],
   ["horizonSuccessFlag", { horizonSuccessFlag: true }],
   ["piCompletionPending", { piCompletionPending: true }],
@@ -97,10 +97,9 @@ for (const oppositeRefund of [
   const result = evaluateFinancialRecoverySettlementSubmitReplayPreGate({ ...basePreGateInput, oppositeRefund })
   assert.deepEqual(result, { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false })
 }
-for (const refundPiResult of [
-  { ...basePreGateInput.refundPiResult, outcome: "FOUND" as const },
-  { ...basePreGateInput.refundPiResult, outcome: "INDETERMINATE" as const },
-]) {
+const foundRefundPi: ReconcileRefundAbsenceResult = { outcome: "FOUND", payment: {}, reference: basePreGateInput.refundPiResult.reference, authorizesFinancialAction: false }
+const indeterminateRefundPi: ReconcileRefundAbsenceResult = { outcome: "INDETERMINATE", reference: null, authorizesFinancialAction: false }
+for (const refundPiResult of [foundRefundPi, indeterminateRefundPi]) {
   const result = evaluateFinancialRecoverySettlementSubmitReplayPreGate({ ...basePreGateInput, refundPiResult })
   assert.deepEqual(result, { outcome: "BLOCKED", reference: null, authorizesFinancialAction: false })
 }
@@ -122,7 +121,6 @@ assert.equal(gate.moneyMovementProven, false)
 assert.equal(gate.reference, preGate.reference)
 
 for (const input of [
-  { outcome: "BLOCKED" as const, reference: null, authorizesFinancialAction: false as const },
   { outcome: "BLOCKED" as const, reference: null, authorizesFinancialAction: false as const },
 ]) {
   const result = evaluateFinancialRecoverySettlementSubmitReplayGate(input)
