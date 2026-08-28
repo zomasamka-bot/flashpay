@@ -222,9 +222,17 @@ export async function executeA2URecovery(
   // Executor stages 3 and 4 (skip 1-2)
   if (
     payment.status === "settlement_pending" &&
-    payment.piCompletionPending === true &&
-    payment.a2uTxid &&
-    payment.a2uPaymentId
+    typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim().length > 0 && payment.a2uPaymentId === payment.a2uPaymentId.trim() &&
+    typeof payment.a2uPreparedEnvelopeXdr === "string" && payment.a2uPreparedEnvelopeXdr.trim().length > 0 && payment.a2uPreparedEnvelopeXdr === payment.a2uPreparedEnvelopeXdr.trim() &&
+    typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim().length > 0 && payment.a2uFromAddress === payment.a2uFromAddress.trim() &&
+    typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim().length > 0 && payment.a2uToAddress === payment.a2uToAddress.trim() &&
+    typeof payment.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(payment.a2uTxid) && payment.a2uTxid === payment.a2uTxid.trim() &&
+    typeof payment.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(payment.a2uPreparedTxHash) && payment.a2uPreparedTxHash === payment.a2uPreparedTxHash.trim() && payment.a2uTxid === payment.a2uPreparedTxHash &&
+    typeof payment.a2uPreparedSequence === "string" && /^[1-9][0-9]*$/.test(payment.a2uPreparedSequence) &&
+    typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount > 0 &&
+    payment.horizonSuccessFlag === true && typeof payment.horizonFeeCharged === "number" && Number.isFinite(payment.horizonFeeCharged) && payment.horizonFeeCharged >= 0 &&
+    payment.piCompletionPending === true && payment.piCompleted !== true &&
+    payment.refundPaymentId === undefined && payment.refundTxid === undefined && (payment.refundStatus === undefined || payment.refundStatus === "not_started")
   ) {
     console.log(
       "[A2U Recovery] 🔁 STATE 3: Pi /complete pending - delegating to executor stages 3-4"
@@ -339,10 +347,14 @@ export async function executeA2URecovery(
     const checkpoint = rereadPayment
     const validCheckpoint = refundLookup.state === "absent" && checkpoint !== null &&
       checkpoint.status === "settlement_pending" &&
-      typeof checkpoint.a2uPaymentId === "string" && checkpoint.a2uPaymentId.trim() !== "" && checkpoint.a2uPaymentId === checkpoint.a2uPaymentId.trim() &&
+      typeof checkpoint.a2uPaymentId === "string" && checkpoint.a2uPaymentId.trim().length > 0 && checkpoint.a2uPaymentId === checkpoint.a2uPaymentId.trim() &&
+      typeof checkpoint.a2uPreparedEnvelopeXdr === "string" && checkpoint.a2uPreparedEnvelopeXdr.trim().length > 0 && checkpoint.a2uPreparedEnvelopeXdr === checkpoint.a2uPreparedEnvelopeXdr.trim() &&
+      typeof checkpoint.a2uFromAddress === "string" && checkpoint.a2uFromAddress.trim().length > 0 && checkpoint.a2uFromAddress === checkpoint.a2uFromAddress.trim() &&
+      typeof checkpoint.a2uToAddress === "string" && checkpoint.a2uToAddress.trim().length > 0 && checkpoint.a2uToAddress === checkpoint.a2uToAddress.trim() &&
       typeof checkpoint.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(checkpoint.a2uTxid) && checkpoint.a2uTxid === checkpoint.a2uTxid.trim() &&
-      typeof checkpoint.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(checkpoint.a2uPreparedTxHash) && checkpoint.a2uPreparedTxHash === checkpoint.a2uPreparedTxHash.trim() &&
-      checkpoint.a2uTxid === checkpoint.a2uPreparedTxHash &&
+      typeof checkpoint.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(checkpoint.a2uPreparedTxHash) && checkpoint.a2uPreparedTxHash === checkpoint.a2uPreparedTxHash.trim() && checkpoint.a2uTxid === checkpoint.a2uPreparedTxHash &&
+      typeof checkpoint.a2uPreparedSequence === "string" && /^[1-9][0-9]*$/.test(checkpoint.a2uPreparedSequence) &&
+      typeof checkpoint.merchantAmount === "number" && Number.isFinite(checkpoint.merchantAmount) && checkpoint.merchantAmount > 0 &&
       checkpoint.horizonSuccessFlag === true && typeof checkpoint.horizonFeeCharged === "number" && Number.isFinite(checkpoint.horizonFeeCharged) && checkpoint.horizonFeeCharged >= 0 &&
       checkpoint.piCompletionPending === true && checkpoint.piCompleted !== true &&
       checkpoint.refundPaymentId === undefined && checkpoint.refundTxid === undefined && (checkpoint.refundStatus === undefined || checkpoint.refundStatus === "not_started")
