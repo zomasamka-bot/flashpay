@@ -870,12 +870,21 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       status: "settlement_pending" as const,
     })
 
+    if (ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
+      console.log("[A2U TEST] Stage2 prepared checkpoint fault point 0.11")
+      return { ok: false, error: "Temporary Stage2 prepared checkpoint fault", userFacingStatus: "settlement_pending" }
+    }
+
     console.log("[A2U Stage2] Submitting to Horizon")
     const submitResult = await horizonServer.submitTransaction(transaction)
 
     const txidFromHorizon = submitResult.hash
     if (txidFromHorizon !== preparedHash) {
       return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
+    }
+    if (ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
+      console.log("[A2U TEST] Stage2 post-submit fault point 0.12")
+      return { ok: false, error: "Temporary Stage2 post-submit fault", userFacingStatus: "settlement_pending" }
     }
     console.log("[A2U Stage2] ✓ Horizon submission succeeded:", txidFromHorizon)
     
