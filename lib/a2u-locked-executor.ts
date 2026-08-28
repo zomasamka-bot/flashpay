@@ -6,6 +6,7 @@ import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
+import { acquirePiWalletSubmitLock } from "@/lib/pi-wallet-submit-lock"
 import crypto from "crypto"
 
 /**
@@ -210,11 +211,19 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       if (params.isRecovery !== true || latestPayment.id !== paymentId) {
         return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
       }
-      const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
-      if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
+      const walletLock = await acquirePiWalletSubmitLock(latestPayment.a2uFromAddress)
+      if (!walletLock) {
         return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
       }
-      return { ok: false, status: 409, error: "Settlement submit replay authorized but execution is not wired" }
+      try {
+        const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
+        if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
+          return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        }
+        return { ok: false, status: 409, error: "Settlement submit replay authorized but execution is not wired" }
+      } finally {
+        await walletLock.release()
+      }
     }
 
     // Validate and derive all fields from LATEST checkpoint (not stale caller copies)
