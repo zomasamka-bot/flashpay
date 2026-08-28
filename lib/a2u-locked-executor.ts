@@ -1,5 +1,5 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
-import { executeA2U } from "@/lib/a2u-executor"
+import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
@@ -233,6 +233,16 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
             replay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr
           ) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          }
+          try {
+            await persistCheckpointMerged(paymentId, {
+              a2uTxid: replay.reference.preparedHash,
+              horizonSuccessFlag: true,
+              horizonSuccessAt: new Date().toISOString(),
+              status: "settlement_pending",
+            })
+          } catch {
+            return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }
           }
           return { ok: false, status: 409, error: "Settlement movement verified; reconciliation is not wired" }
         }
