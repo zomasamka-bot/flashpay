@@ -117,6 +117,53 @@ async function getPi(path: string): Promise<{ kind: "ok" | "not_found" | "uncert
   }
 }
 
+export type ReconcileRefundAbsenceInput = {
+  paymentId: string
+  payerUid: string
+  amount: number
+}
+
+export type ReconcileRefundAbsenceReference = {
+  paymentId: string
+  payerUid: string
+  amount: number
+}
+
+export type ReconcileRefundAbsenceResult =
+  | { outcome: "FOUND"; payment: unknown; reference: ReconcileRefundAbsenceReference }
+  | { outcome: "CONFIRMED_NONE"; reference: ReconcileRefundAbsenceReference }
+  | { outcome: "INDETERMINATE"; reference: null }
+
+export async function reconcileRefundAbsenceForPayment(input: ReconcileRefundAbsenceInput): Promise<ReconcileRefundAbsenceResult> {
+  const paymentId = (input.paymentId ?? "").trim()
+  const payerUid = (input.payerUid ?? "").trim()
+  if (!paymentId || !payerUid || !Number.isFinite(input.amount) || input.amount <= 0) {
+    return { outcome: "INDETERMINATE", reference: null }
+  }
+  const reference: ReconcileRefundAbsenceReference = { paymentId, payerUid, amount: input.amount }
+
+  const response = await getPi("/incomplete_server_payments")
+  if (response.kind !== "ok" || !isRecord(response.body)) return { outcome: "INDETERMINATE", reference: null }
+  const raw = response.body.incomplete_server_payments
+  if (!Array.isArray(raw)) return { outcome: "INDETERMINATE", reference: null }
+
+  for (const candidate of raw) {
+    if (!isRecord(candidate)) continue
+    const candidateMetadata = candidate.metadata
+    if (!isRecord(candidateMetadata) || candidateMetadata.paymentId !== paymentId) continue
+    if (candidateMetadata.type === "refund") {
+      if (candidateMetadata.payerUid === payerUid && candidateMetadata.amount === input.amount &&
+        typeof candidate.identifier === "string" && candidate.identifier.length > 0 &&
+        candidate.direction === "app_to_user") {
+        return { outcome: "FOUND", payment: candidate, reference }
+      }
+      return { outcome: "INDETERMINATE", reference: null }
+    }
+    return { outcome: "INDETERMINATE", reference: null }
+  }
+  return { outcome: "CONFIRMED_NONE", reference }
+}
+
 export async function reconcileRefundWithPi(input: RefundPiReconciliationInput): Promise<RefundPiReconciliationResult> {
   if (!input.paymentId || !input.refundId || !input.idempotencyKey || !input.payerUid || !Number.isFinite(input.amount) || input.amount <= 0) {
     return { outcome: "INDETERMINATE", reference: null }
