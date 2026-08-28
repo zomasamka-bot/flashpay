@@ -254,33 +254,33 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
+        const allowed = replay.reference
+        const intent = allowed.reference
         if (
-          replay.paymentId !== latestPayment.id ||
-          replay.merchantUid !== latestPayment.merchantUid ||
-          replay.reference.paymentId !== latestPayment.id ||
-          replay.reference.merchantUid !== latestPayment.merchantUid ||
-          replay.reference.a2uPaymentId !== latestPayment.a2uPaymentId ||
-          replay.reference.fromAddress !== latestPayment.a2uFromAddress ||
-          replay.reference.toAddress !== latestPayment.a2uToAddress ||
-          replay.reference.amount !== latestPayment.merchantAmount ||
-          replay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr ||
-          replay.reference.preparedHash !== latestPayment.a2uPreparedTxHash ||
-          replay.reference.preparedSequence !== latestPayment.a2uPreparedSequence
+          allowed.paymentId !== latestPayment.id ||
+          allowed.merchantUid !== latestPayment.merchantUid ||
+          intent.a2uPaymentId !== latestPayment.a2uPaymentId ||
+          intent.fromAddress !== latestPayment.a2uFromAddress ||
+          intent.toAddress !== latestPayment.a2uToAddress ||
+          intent.amount !== latestPayment.merchantAmount ||
+          intent.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr ||
+          intent.preparedHash !== latestPayment.a2uPreparedTxHash ||
+          intent.preparedSequence !== latestPayment.a2uPreparedSequence
         ) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         try {
-          const transaction = StellarSDK.TransactionBuilder.fromXDR(replay.reference.envelopeXdr, "Pi Testnet")
+          const transaction = StellarSDK.TransactionBuilder.fromXDR(intent.envelopeXdr, "Pi Testnet")
           if (
             !(transaction instanceof StellarSDK.Transaction) ||
-            transaction.toXDR() !== latestPayment.a2uPreparedEnvelopeXdr ||
-            transaction.hash().toString("hex") !== latestPayment.a2uPreparedTxHash ||
-            transaction.sequence !== latestPayment.a2uPreparedSequence ||
-            transaction.source !== latestPayment.a2uFromAddress
+            transaction.toXDR() !== intent.envelopeXdr ||
+            transaction.hash().toString("hex") !== intent.preparedHash ||
+            transaction.sequence !== intent.preparedSequence ||
+            transaction.source !== intent.fromAddress
           ) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           }
-          const horizon = new StellarSDK.Horizon.Server("https://horizon-testnet.stellar.org")
+          const horizon = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
           const submitted = await horizon.submitTransaction(transaction)
           if (submitted.hash !== latestPayment.a2uPreparedTxHash) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
@@ -289,19 +289,18 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         const verifiedReplay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
+        const verifiedIntent = verifiedReplay.reference
         if (
           verifiedReplay.outcome !== "MOVEMENT_VERIFIED" ||
           verifiedReplay.paymentId !== latestPayment.id ||
           verifiedReplay.merchantUid !== latestPayment.merchantUid ||
-          verifiedReplay.reference.paymentId !== latestPayment.id ||
-          verifiedReplay.reference.merchantUid !== latestPayment.merchantUid ||
-          verifiedReplay.reference.a2uPaymentId !== latestPayment.a2uPaymentId ||
-          verifiedReplay.reference.fromAddress !== latestPayment.a2uFromAddress ||
-          verifiedReplay.reference.toAddress !== latestPayment.a2uToAddress ||
-          verifiedReplay.reference.amount !== latestPayment.merchantAmount ||
-          verifiedReplay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr ||
-          verifiedReplay.reference.preparedHash !== latestPayment.a2uPreparedTxHash ||
-          verifiedReplay.reference.preparedSequence !== latestPayment.a2uPreparedSequence ||
+          verifiedIntent.a2uPaymentId !== latestPayment.a2uPaymentId ||
+          verifiedIntent.fromAddress !== latestPayment.a2uFromAddress ||
+          verifiedIntent.toAddress !== latestPayment.a2uToAddress ||
+          verifiedIntent.amount !== latestPayment.merchantAmount ||
+          verifiedIntent.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr ||
+          verifiedIntent.preparedHash !== latestPayment.a2uPreparedTxHash ||
+          verifiedIntent.preparedSequence !== latestPayment.a2uPreparedSequence ||
           !Number.isFinite(verifiedReplay.horizonFeeCharged) ||
           verifiedReplay.horizonFeeCharged < 0
         ) {
@@ -309,7 +308,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         }
         try {
           await persistCheckpointMerged(paymentId, {
-            a2uTxid: verifiedReplay.reference.preparedHash,
+            a2uTxid: verifiedIntent.preparedHash,
             horizonSuccessFlag: true,
             horizonSuccessAt: new Date().toISOString(),
             status: "settlement_pending",
