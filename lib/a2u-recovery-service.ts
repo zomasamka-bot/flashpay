@@ -3,6 +3,7 @@ import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
+import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -332,7 +333,23 @@ export async function executeA2URecovery(
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_submit_recovery_failed", paymentId, details: { error: result.error } }
     }
-    return { status: "manual_review_required", state: "settlement_submit_outcome_deferred", paymentId, details: { error: "Settlement Submit returned; reconcile before any submit" } }
+    const rereadData = await redis.get(paymentKey)
+    const rereadPayment: Payment | null = rereadData ? (typeof rereadData === "string" ? JSON.parse(rereadData) : rereadData) : null
+    const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
+    const checkpoint = rereadPayment
+    const validCheckpoint = refundLookup.state === "absent" && checkpoint !== null &&
+      checkpoint.status === "settlement_pending" &&
+      typeof checkpoint.a2uPaymentId === "string" && checkpoint.a2uPaymentId.trim() !== "" && checkpoint.a2uPaymentId === checkpoint.a2uPaymentId.trim() &&
+      typeof checkpoint.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(checkpoint.a2uTxid) && checkpoint.a2uTxid === checkpoint.a2uTxid.trim() &&
+      typeof checkpoint.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(checkpoint.a2uPreparedTxHash) && checkpoint.a2uPreparedTxHash === checkpoint.a2uPreparedTxHash.trim() &&
+      checkpoint.a2uTxid === checkpoint.a2uPreparedTxHash &&
+      checkpoint.horizonSuccessFlag === true && typeof checkpoint.horizonFeeCharged === "number" && Number.isFinite(checkpoint.horizonFeeCharged) && checkpoint.horizonFeeCharged >= 0 &&
+      checkpoint.piCompletionPending === true && checkpoint.piCompleted !== true &&
+      checkpoint.refundPaymentId === undefined && checkpoint.refundTxid === undefined && (checkpoint.refundStatus === undefined || checkpoint.refundStatus === "not_started")
+    if (validCheckpoint) {
+      return { status: "pending_pi_complete", state: "settlement_submit_movement_checkpointed", paymentId, details: { a2uTxid: checkpoint.a2uTxid } }
+    }
+    return { status: "manual_review_required", state: "settlement_submit_movement_checkpoint_invalid", paymentId, details: { error: "Settlement movement checkpoint could not be verified" } }
   }
 
   // ===== STATE 5: PAID-TO-APP RECOVERY =====

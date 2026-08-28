@@ -249,7 +249,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           } catch {
             return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }
           }
-          return { ok: false, status: 409, error: "Settlement movement verified; reconciliation is not wired" }
+        return { ok: true, status: 202 }
         }
         if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
@@ -320,7 +320,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         } catch {
           return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }
         }
-        return { ok: false, status: 409, error: "Settlement movement verified; reconciliation is not wired" }
+        return { ok: true, status: 202 }
       } finally {
         await walletLock.release()
       }
