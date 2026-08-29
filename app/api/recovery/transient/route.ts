@@ -50,6 +50,30 @@ function hasExcludedState(payment: Payment): boolean {
   )
 }
 
+function isPreparedSubmitEligible(payment: Payment): boolean {
+  return (
+    payment.status === "settlement_pending" &&
+    typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim() &&
+    typeof payment.a2uPreparedEnvelopeXdr === "string" && payment.a2uPreparedEnvelopeXdr.trim() !== "" && payment.a2uPreparedEnvelopeXdr === payment.a2uPreparedEnvelopeXdr.trim() &&
+    typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim() !== "" && payment.a2uFromAddress === payment.a2uFromAddress.trim() &&
+    typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim() !== "" && payment.a2uToAddress === payment.a2uToAddress.trim() &&
+    typeof payment.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(payment.a2uPreparedTxHash) && payment.a2uPreparedTxHash === payment.a2uPreparedTxHash.trim() &&
+    typeof payment.a2uPreparedSequence === "string" && /^[1-9]*$/.test(payment.a2uPreparedSequence) &&
+    typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 &&
+    typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount > 0 &&
+    payment.a2uTxid === undefined &&
+    payment.horizonSuccessFlag !== true &&
+    payment.piCompletionPending !== true &&
+    payment.piCompleted !== true &&
+    payment.requiresDbReconciliation !== true &&
+    payment.dbRecorded !== true &&
+    payment.refundPaymentId === undefined &&
+    payment.refundTxid === undefined &&
+    (payment.refundStatus === undefined || payment.refundStatus === "not_started") &&
+    !hasExcludedState(payment)
+  )
+}
+
 function isEligible(payment: Payment, now: number): boolean {
   const nextRetryAt = payment.nextRetryAt ? Date.parse(payment.nextRetryAt) : NaN
 
@@ -68,7 +92,7 @@ function isEligible(payment: Payment, now: number): boolean {
 }
 
 function isPostHorizonEligible(payment: Payment, now: number): boolean {
-  const nextRetryAt = payment.nextRetryAt ? Date.parse(payment.nextRetryAt) : NaN
+  const nextRetryAt = payment.nextRetryAt === undefined ? now : typeof payment.nextRetryAt === "string" && payment.nextRetryAt.trim() !== "" ? Date.parse(payment.nextRetryAt.trim()) : NaN
 
   return (
     payment.status === "settlement_pending" &&
@@ -98,6 +122,7 @@ export async function POST(request: NextRequest) {
 
   const keys = await redis.keys("payment:*")
   const postHorizonIds: string[] = []
+  const preparedSubmitIds: string[] = []
   const retryableIds: string[] = []
   const refundCandidateIds: string[] = []
   const now = Date.now()
@@ -110,14 +135,17 @@ export async function POST(request: NextRequest) {
     if (payment.id === paymentId && checkRefundEligibility(payment)) {
       refundCandidateIds.push(paymentId)
     }
+    if (payment.id !== paymentId) continue
     if (isPostHorizonEligible(payment, now)) {
       postHorizonIds.push(paymentId)
+    } else if (isPreparedSubmitEligible(payment)) {
+      preparedSubmitIds.push(paymentId)
     } else if (isEligible(payment, now)) {
       retryableIds.push(paymentId)
     }
   }
 
-  const eligibleIds = [...postHorizonIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
+  const eligibleIds = [...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
 
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
 
