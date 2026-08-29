@@ -58,7 +58,7 @@ function isPreparedSubmitEligible(payment: Payment): boolean {
     typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim() !== "" && payment.a2uFromAddress === payment.a2uFromAddress.trim() &&
     typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim() !== "" && payment.a2uToAddress === payment.a2uToAddress.trim() &&
     typeof payment.a2uPreparedTxHash === "string" && /^[0-9a-f]{64}$/.test(payment.a2uPreparedTxHash) && payment.a2uPreparedTxHash === payment.a2uPreparedTxHash.trim() &&
-    typeof payment.a2uPreparedSequence === "string" && /^[1-9]*$/.test(payment.a2uPreparedSequence) &&
+    typeof payment.a2uPreparedSequence === "string" && /^[1-9]$/.test(payment.a2uPreparedSequence) &&
     typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 &&
     typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount > 0 &&
     payment.a2uTxid === undefined &&
@@ -92,7 +92,7 @@ function isEligible(payment: Payment, now: number): boolean {
 }
 
 function isPostHorizonEligible(payment: Payment, now: number): boolean {
-  const nextRetryAt = payment.nextRetryAt === undefined ? now : typeof payment.nextRetryAt === "string" && payment.nextRetryAt.trim() !== "" ? Date.parse(payment.nextRetryAt.trim()) : NaN
+  const nextRetryAt = payment.nextRetryAt === undefined ? now : typeof payment.nextRetryAt === "string" && payment.nextRetryAt !== "" && payment.nextRetryAt === payment.nextRetryAt.trim() && Number.isFinite(Date.parse(payment.nextRetryAt)) ? Date.parse(payment.nextRetryAt) : NaN
 
   return (
     payment.status === "settlement_pending" &&
