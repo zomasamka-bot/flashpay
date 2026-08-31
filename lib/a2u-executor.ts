@@ -151,6 +151,7 @@ type ExecutorResult =
  * Validates all context inputs and returns discriminated union (success must include txidFromHorizon)
  */
 export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> {
+  const executeA2UTimingStartedAt = Date.now()
   // Validate required context fields - no optional coercion
   if (!ctx.paymentId || typeof ctx.paymentId !== 'string') {
     return { ok: false, status: "invalid_context", error: "paymentId required and must be string" }
@@ -202,7 +203,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       retryCount: (ctx.payment.retryCount || 0) + 1,
       settlementFailureState: "reconciling",
     })
+    const stage1TimingStartedAt = Date.now()
     const stageResult = await stage1CreateA2U(ctx)
+    console.log("[P7B TIMING] executeA2U Stage1", { paymentId: ctx.paymentId, durationMs: Date.now() - stage1TimingStartedAt })
     if (!stageResult.ok) {
       const retryable = stageResult.retryable === true
       let failedPayment = ctx.payment
@@ -369,7 +372,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
   if (!txidFromHorizon) {
     console.log("[A2U Executor] STAGE 2: Signing transaction")
+    const stage2TimingStartedAt = Date.now()
     const signResult = await stage2SignAndSubmit(ctx)
+    console.log("[P7B TIMING] executeA2U Stage2/Horizon", { paymentId: ctx.paymentId, durationMs: Date.now() - stage2TimingStartedAt })
     if (!signResult.ok) {
       return {
         ok: false,
@@ -408,7 +413,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!txidFromHorizon || typeof txidFromHorizon !== 'string') {
       return { ok: false, status: "error", error: "txidFromHorizon missing before stage 3 - Horizon must have succeeded" }
     }
+    const stage3TimingStartedAt = Date.now()
     const piResult = await stage3CompletePi(ctx, a2uPaymentId, txidFromHorizon)
+    console.log("[P7B TIMING] executeA2U Stage3 Pi complete", { paymentId: ctx.paymentId, durationMs: Date.now() - stage3TimingStartedAt })
     if (!piResult.ok) {
       return {
         ok: false,
@@ -466,7 +473,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       appNetImpact: calculatedAppNetImpact,
       appCommission: appCommissionValue,
     }
+    const accountingTimingStartedAt = Date.now()
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, accountingUpdates)
+    console.log("[P7B TIMING] executeA2U accounting checkpoint", { paymentId: ctx.paymentId, durationMs: Date.now() - accountingTimingStartedAt })
     console.log("[A2U Executor] ✓ Accounting checkpoint persisted: appNetImpact:", calculatedAppNetImpact, "appCommission:", appCommissionValue)
   } else {
     console.log("[A2U Executor] Accounting checkpoint: Fields already present, skipping")
@@ -479,7 +488,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!txidFromHorizon || typeof txidFromHorizon !== 'string') {
       return { ok: false, status: "error", error: "txidFromHorizon missing before stage 4 - cannot record in DB" }
     }
+    const stage4TimingStartedAt = Date.now()
     const dbResult = await stage4ReconcileDB(ctx, txidFromHorizon)
+    console.log("[P7B TIMING] executeA2U Stage4 DB", { paymentId: ctx.paymentId, durationMs: Date.now() - stage4TimingStartedAt })
     if (!dbResult.ok) {
       return {
         ok: false,
@@ -572,6 +583,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   // Executor completes all stages successfully
   // Caller branches on result.ok, then invokes buildA2USuccessResponse() for final response
   console.log("[A2U Executor] ===== ALL STAGES COMPLETE - SETTLEMENT PENDING =====")
+  console.log("[P7B TIMING] executeA2U total", { paymentId: ctx.paymentId, durationMs: Date.now() - executeA2UTimingStartedAt })
   return { ok: true, status: "settlement_pending" }
 }
 

@@ -35,6 +35,7 @@ export async function OPTIONS() {
 
 // POST /api/payments - Create a new payment
 export async function POST(request: NextRequest) {
+  const paymentTimingStartedAt = Date.now()
   try {
     console.log("[API] ========================================")
     console.log("[API] PAYMENT CREATION REQUEST RECEIVED")
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest) {
       )
     }
     
+    const piMeTimingStartedAt = Date.now()
     const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
       method: "GET",
       headers: {
@@ -101,6 +103,7 @@ export async function POST(request: NextRequest) {
       )
     }
     
+    console.log("[P7B TIMING] Pi /v2/me", { durationMs: Date.now() - piMeTimingStartedAt })
     const verifiedUser = await verifyResponse.json()
     const verifiedMerchantUid = verifiedUser.uid
     const verifiedUsername = verifiedUser.username
@@ -179,7 +182,9 @@ export async function POST(request: NextRequest) {
       console.log("[API]   - JSON includes 'createdAt':", paymentString.includes('"createdAt"'))
       console.log("[API]   - Full JSON string:", paymentString)
       
+      const redisPersistTimingStartedAt = Date.now()
       await redis.set(kvKey, paymentString)
+      const redisPersistDurationMs = Date.now() - redisPersistTimingStartedAt
       console.log("[API] ✅ Redis.set() completed successfully for key:", kvKey)
       
       // CRITICAL: Verify merchantId and createdAt were actually persisted
@@ -220,6 +225,7 @@ export async function POST(request: NextRequest) {
       }
       
       console.log("[API] ✅ All verification checks passed - merchantUid successfully persisted")
+      console.log("[P7B TIMING] Redis persist/verify", { paymentId, durationMs: Date.now() - redisPersistTimingStartedAt, persistDurationMs: redisPersistDurationMs })
       
       console.log("[API] ========================================")
     } catch (storageError) {
@@ -243,6 +249,7 @@ export async function POST(request: NextRequest) {
     console.log("[API] ✅ Payment created successfully:", paymentId)
     console.log("[API] Returning payment to client")
 
+    console.log("[P7B TIMING] payment total", { paymentId, durationMs: Date.now() - paymentTimingStartedAt })
     return NextResponse.json(
       {
         success: true,

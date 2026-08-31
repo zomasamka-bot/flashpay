@@ -28,6 +28,7 @@ export const runtime = "nodejs"
  * Never overwrites stale payment state over newer checkpoint
  */
 export async function POST(request: NextRequest) {
+  const completeTimingStartedAt = Date.now()
   console.log("[Pi Complete] Request received at", new Date().toISOString())
 
   try {
@@ -61,6 +62,7 @@ export async function POST(request: NextRequest) {
     // === STAGE 1: U2A VERIFICATION (validation only, no state changes) ===
     console.log("[Pi Complete] === STAGE 1: U2A VERIFICATION ===")
 
+    const u2aPiTimingStartedAt = Date.now()
     const piResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
       method: "GET",
       headers: {
@@ -174,6 +176,7 @@ export async function POST(request: NextRequest) {
     } else {
       console.log("[Pi Complete] Payment already developer_completed - skipping Pi /complete call")
     }
+    console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
 
     // Derive flashPaymentId from metadata BEFORE loading Redis (internal app identifier)
     const flashPaymentId = finalPiPayment.metadata?.paymentId
@@ -317,16 +320,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment in unexpected status" }, { status: 400 })
     }
     
+    const redisU2ATimingStartedAt = Date.now()
     await redis.set(`payment:${flashPaymentId}`, JSON.stringify(payment))
+    console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
 
     // === STAGE 4: Call unified executor with ONE concurrency boundary ===
     console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
 
+    const lockedExecutorTimingStartedAt = Date.now()
     const executorResult = await executeA2ULocked({
       paymentId: flashPaymentId,
       isRecovery: false,
     })
+    console.log("[P7B TIMING] executeA2ULocked", { paymentId: flashPaymentId, durationMs: Date.now() - lockedExecutorTimingStartedAt })
 
     if (!executorResult.ok) {
       console.warn("[Pi Complete] Executor failed - status:", executorResult.status, "error:", executorResult.error)
@@ -357,6 +364,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Pi Complete] ✅ Returning canonical response - final status:", latestPayment.status)
+    console.log("[P7B TIMING] /complete total", { paymentId: flashPaymentId, durationMs: Date.now() - completeTimingStartedAt })
     return NextResponse.json(canonicalResponse, { status: 200 })
   } catch (error) {
     console.error("[Pi Complete] Exception:", error)
