@@ -53,7 +53,7 @@ function hasExcludedState(payment: Payment): boolean {
 function isFreshSettlementDispatchCandidate(payment: Payment, now: number): boolean {
   const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
   const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
-  const a2uTxid = payment.a2uTxid
+  const u2aTxid = payment.u2aTxid
   return (
     payment.status === "paid_to_app" &&
     typeof payment.settlementDispatchRequestedAt === "string" && typeof payment.paidAt === "string" &&
@@ -67,7 +67,7 @@ function isFreshSettlementDispatchCandidate(payment: Payment, now: number): bool
     typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() &&
     payment.payerUidSource === "verified_u2a" &&
     typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now &&
-    typeof a2uTxid === "string" && a2uTxid === a2uTxid.trim() && /^[0-9a-f]{64}$/.test(a2uTxid) &&
+    typeof u2aTxid === "string" && u2aTxid === u2aTxid.trim() && /^[0-9a-f]{64}$/.test(u2aTxid) &&
     payment.a2uTxid === undefined &&
     payment.settlementFailureState === undefined && payment.retryCount === undefined && payment.lastAttemptAt === undefined && payment.nextRetryAt === undefined &&
     payment.a2uPaymentId === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined && payment.a2uToAddress === undefined &&
