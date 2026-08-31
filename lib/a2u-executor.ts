@@ -1018,16 +1018,6 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     console.log("[A2U Stage4]   - horizonFeeCharged:", financialData.horizonFeeCharged)
     console.log("[A2U Stage4]   - appCommission:", financialData.appCommission)
 
-    // CRITICAL: Ensure receipts table schema is ready before entering transaction
-    // This must succeed - any schema error fails Stage 4 immediately without fallback
-    try {
-      await ensureReceiptsSchema()
-    } catch (schemaErr) {
-      const schemaError = schemaErr instanceof Error ? schemaErr.message : String(schemaErr)
-      console.error("[A2U Stage4] CRITICAL: Receipts schema preparation failed - cannot proceed to transaction:", schemaError)
-      return { ok: false, error: `Schema preparation failed: ${schemaError}`, userFacingStatus: "error" }
-    }
-
     // Call DB with VALIDATED financial data only
     // CRITICAL: Pass ONLY validated identifiers from financialData
     const dbResult = await recordA2UTransactionAtomic({
