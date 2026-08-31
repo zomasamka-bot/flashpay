@@ -334,11 +334,11 @@ export async function POST(request: NextRequest) {
       current.piPaymentId = incoming.piPaymentId
       current.u2aTxid = incoming.u2aTxid
       if current.paidAt == nil then current.paidAt = incoming.paidAt end
-      if incoming.payerUid ~= nil then current.payerUid = incoming.payerUid; current.payerUidSource = incoming.payerUidSource; current.payerUidCapturedAt = incoming.payerUidCapturedAt end
+      if incoming.payerUid ~= nil then current.payerUid = incoming.payerUid; current.payerUidSource = incoming.payerUidSource; if current.payerUidCapturedAt == nil then current.payerUidCapturedAt = incoming.payerUidCapturedAt end end
       redis.call('SET', KEYS[1], cjson.encode(current))
       return 1
     `, [`payment:${flashPaymentId}`], [JSON.stringify({
-      id: payment.id,
+      id: flashPaymentId,
       amount: payment.amount,
       customerAmount: payment.customerAmount,
       merchantId: payment.merchantId,
@@ -352,7 +352,7 @@ export async function POST(request: NextRequest) {
       paidAt: payment.paidAt,
     })])
     console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
-    if (atomicU2AResult !== 1) {
+    if (Number(atomicU2AResult) !== 1) {
       console.error("[Pi Complete] Atomic U2A persistence rejected")
       return NextResponse.json({ error: "Payment state conflict" }, { status: 409 })
     }
