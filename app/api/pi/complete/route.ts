@@ -321,8 +321,41 @@ export async function POST(request: NextRequest) {
     }
     
     const redisU2ATimingStartedAt = Date.now()
-    await redis.set(`payment:${flashPaymentId}`, JSON.stringify(payment))
+    const atomicU2AResult = await redis.eval(`
+      local latest = redis.call('GET', KEYS[1])
+      if not latest then return 0 end
+      local ok, current = pcall(cjson.decode, latest)
+      if not ok or type(current) ~= 'table' then return 0 end
+      local incoming = cjson.decode(ARGV[1])
+      if current.id ~= incoming.id or current.amount ~= incoming.amount or current.customerAmount ~= nil and current.customerAmount ~= incoming.customerAmount or current.merchantId ~= incoming.merchantId or current.merchantUid ~= incoming.merchantUid or current.accessToken ~= incoming.accessToken or current.piPaymentId ~= nil and current.piPaymentId ~= incoming.piPaymentId or current.u2aTxid ~= nil and current.u2aTxid ~= incoming.u2aTxid or current.payerUid ~= nil and incoming.payerUid ~= nil and current.payerUid ~= incoming.payerUid then return 0 end
+      if current.status ~= nil and current.status ~= 'pending' and current.status ~= 'paid_to_app' and current.status ~= 'settlement_pending' and current.status ~= 'settled_to_merchant' then return 0 end
+      if current.status == nil or current.status == 'pending' then current.status = 'paid_to_app' end
+      current.customerAmount = incoming.customerAmount
+      current.piPaymentId = incoming.piPaymentId
+      current.u2aTxid = incoming.u2aTxid
+      if current.paidAt == nil then current.paidAt = incoming.paidAt end
+      if incoming.payerUid ~= nil then current.payerUid = incoming.payerUid; current.payerUidSource = incoming.payerUidSource; current.payerUidCapturedAt = incoming.payerUidCapturedAt end
+      redis.call('SET', KEYS[1], cjson.encode(current))
+      return 1
+    `, [`payment:${flashPaymentId}`], [JSON.stringify({
+      id: payment.id,
+      amount: payment.amount,
+      customerAmount: payment.customerAmount,
+      merchantId: payment.merchantId,
+      merchantUid: payment.merchantUid,
+      accessToken: payment.accessToken,
+      piPaymentId: payment.piPaymentId,
+      u2aTxid: payment.u2aTxid,
+      payerUid: payment.payerUid,
+      payerUidSource: payment.payerUidSource,
+      payerUidCapturedAt: payment.payerUidCapturedAt,
+      paidAt: payment.paidAt,
+    })])
     console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
+    if (atomicU2AResult !== 1) {
+      console.error("[Pi Complete] Atomic U2A persistence rejected")
+      return NextResponse.json({ error: "Payment state conflict" }, { status: 409 })
+    }
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
 
     // === STAGE 4: Call unified executor with ONE concurrency boundary ===
