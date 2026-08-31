@@ -51,6 +51,7 @@ export interface Payment {
   retryCount?: number
   lastAttemptAt?: string
   nextRetryAt?: string
+  settlementDispatchRequestedAt?: string
   settlementFailureState?: SettlementFailureState
   payerUid?: string
   payerUidSource?: "verified_u2a" | "pi_payment" | "manual_review"
