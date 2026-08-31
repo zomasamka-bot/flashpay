@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, ensureReceiptsSchema } from "@/lib/db"
+import { recordA2UTransactionAtomic } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletSubmitLock } from "@/lib/pi-wallet-submit-lock"
