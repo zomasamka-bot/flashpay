@@ -34,6 +34,13 @@ interface LockedExecutorParams {
   recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
 }
 
+function isSettlementDispatchCandidate(payment: Payment, now: number): boolean {
+  const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
+  const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
+  const u2aTxid = payment.u2aTxid
+  return payment.status === "paid_to_app" && Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && payment.settlementDispatchRequestedAt === payment.paidAt && dispatchAt <= now && typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 && typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && payment.amount === payment.customerAmount && typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() && typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() && typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() && typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim() && typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" && typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now && typeof u2aTxid === "string" && u2aTxid === u2aTxid.trim() && /^[0-9a-f]{64}$/.test(u2aTxid) && payment.a2uTxid === undefined && payment.settlementFailureState === undefined && payment.retryCount === undefined && payment.lastAttemptAt === undefined && payment.nextRetryAt === undefined && payment.a2uPaymentId === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined && payment.a2uToAddress === undefined && payment.merchantAmount === undefined && payment.horizonFeeCharged === undefined && payment.appCommission === undefined && payment.appNetImpact === undefined && payment.a2uErrorCode === undefined && payment.a2uErrorMessage === undefined && payment.a2uErrorBody === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined && payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundStatus === undefined && payment.refundFailureCode === undefined && payment.refundProof === undefined && (payment.payerRefundEligible === undefined || payment.payerRefundEligible === false) && (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) && (payment.piCompletionPending === undefined || payment.piCompletionPending === false) && (payment.piCompleted === undefined || payment.piCompleted === false) && (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false) && (payment.dbRecorded === undefined || payment.dbRecorded === false)
+}
+
 function isSettlementReconcileCandidate(payment: Payment, now: number): boolean {
   const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
   const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
@@ -134,6 +141,12 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
     if (refundLookup.state !== 'absent' && params.recoveryOperation !== "SETTLEMENT_CREATE") {
       return { ok: false, status: 409, error: refundLookup.state === 'present' ? "Refund operation owns this payment" : "Refund state could not be verified" }
+    }
+
+    if (params.recoveryOperation === "SETTLEMENT_DISPATCH") {
+      if (params.isRecovery !== true || latestPayment.id !== paymentId || !isSettlementDispatchCandidate(latestPayment, Date.now())) {
+        return { ok: false, status: 409, error: "Settlement dispatch proof could not be verified" }
+      }
     }
 
     if (params.recoveryOperation === "SETTLEMENT_RECONCILE") {
