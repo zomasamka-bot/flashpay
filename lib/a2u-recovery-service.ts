@@ -364,6 +364,18 @@ export async function executeA2URecovery(
     return { status: "manual_review_required", state: "settlement_submit_movement_checkpoint_invalid", paymentId, details: { error: "Settlement movement checkpoint could not be verified" } }
   }
 
+  if (payment.status === "paid_to_app" && payment.settlementFailureState === "reconciling") {
+    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_RECONCILE" })
+    if (!result.ok) {
+      return { status: "manual_review_required", state: "settlement_reconcile_failed", paymentId, details: { error: result.error } }
+    }
+    const response = await buildA2USuccessResponse(paymentId)
+    if (response?.success === true && response.status === "settled_to_merchant") {
+      return { status: "success", state: "settlement_reconcile_completed", paymentId, details: { u2aTxid: response.u2aTxid, a2uTxid: response.a2uTxid } }
+    }
+    return { status: "manual_review_required", state: "settlement_reconcile_outcome_deferred", paymentId, details: {} }
+  }
+
   // ===== STATE 5: PAID-TO-APP RECOVERY =====
   // A2U creation failures are retryable only after their backoff window.
   if (payment.status === "paid_to_app" && payment.settlementFailureState === "retryable") {
