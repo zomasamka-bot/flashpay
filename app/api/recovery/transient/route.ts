@@ -266,6 +266,15 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const settlementReconcilingExecutionIds=[...new Set([...settlementReconcilingDiscoveryIds,...staleRetryReconcilingDiscoveryIds])].slice(0,1)
+  for (const id of settlementReconcilingExecutionIds) {
+    const payment = parsePayment(await redis.get(`payment:${id}`))
+    if (payment?.id !== id || (!isStaleFreshReconcilingCandidate(payment, Date.now()) && !isStaleRetryReconcilingCandidate(payment, Date.now()))) continue
+    const result = await executeA2URecovery(id)
+    const latest = parsePayment(await redis.get(`payment:${id}`))
+    results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
+  }
+
   const refundAccountingReady = await ensureRefundAccountingTable()
   let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
   const refundResults = []
