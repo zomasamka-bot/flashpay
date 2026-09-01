@@ -364,6 +364,18 @@ export async function executeA2URecovery(
     return { status: "manual_review_required", state: "settlement_submit_movement_checkpoint_invalid", paymentId, details: { error: "Settlement movement checkpoint could not be verified" } }
   }
 
+  if(payment.status==="paid_to_app"&&payment.settlementFailureState===undefined&&typeof payment.settlementDispatchRequestedAt==="string") {
+    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_DISPATCH" })
+    if (!result.ok) {
+      return { status: "manual_review_required", state: "settlement_dispatch_failed", paymentId, details: { error: result.error } }
+    }
+    const response = await buildA2USuccessResponse(paymentId)
+    if (response?.success === true && response.status === "settled_to_merchant") {
+      return { status: "success", state: "settlement_dispatch_completed", paymentId, details: { u2aTxid: response.u2aTxid, a2uTxid: response.a2uTxid } }
+    }
+    return { status: "manual_review_required", state: "settlement_dispatch_outcome_deferred", paymentId, details: {} }
+  }
+
   if (payment.status === "paid_to_app" && payment.settlementFailureState === "reconciling") {
     const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_RECONCILE" })
     if (!result.ok) {
