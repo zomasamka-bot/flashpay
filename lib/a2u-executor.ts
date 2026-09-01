@@ -29,7 +29,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
  */
 
 import type { Payment } from "@/lib/types"
-import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
+import { reconcileIncompleteA2UPayment, isPiA2UPayment as isReconciledPiA2UPayment } from "@/lib/pi-reconciliation"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 
 /**
@@ -210,7 +210,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       const retryable = stageResult.retryable === true
       let failedPayment = ctx.payment
       let refundPendingFromConfirmedNone = false
-      if (!retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
+      if (stageResult.errorCode !== "a2u_precreate_found_requires_reconciliation" && !retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
         typeof ctx.merchantUid === "string" && ctx.merchantUid.trim().length > 0) {
         const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
         if (reconciliation.outcome === "FOUND" && reconciliation.dto) {
@@ -627,8 +627,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
 
     // Reconcile before creation. Only CONFIRMED_NONE permits POST /v2/payments.
     const existing = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
-    if (existing.outcome === "FOUND" && existing.dto && isPiA2UPayment(existing.dto)) {
-      return { ok: true, data: { a2uPaymentId: existing.dto.identifier, a2uPayment: existing.dto } }
+    if (existing.outcome === "FOUND") {
+      const dto = existing.dto
+      const transaction = isRecord(isRecord(dto) ? dto.transaction : undefined) ? dto.transaction : null
+      const status = isRecord(isRecord(dto) ? dto.status : undefined) ? dto.status : null
+      const invalidFound = dto === undefined || !isReconciledPiA2UPayment(dto) || !isPiA2UPayment(dto) || dto.amount !== ctx.customerAmount || typeof (isRecord(dto) ? dto.txid : undefined) === "string" || typeof (isRecord(dto) ? dto.transaction_id : undefined) === "string" || typeof transaction?.txid === "string" || transaction?.verified === true || status?.transaction_verified === true || status?.developer_completed === true || status?.cancelled === true || status?.user_cancelled === true
+      if (invalidFound) return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
+      return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
     }
     if (existing.outcome === "INDETERMINATE") {
       return { ok: false, error: existing.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_reconciliation_indeterminate" }
