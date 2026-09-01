@@ -210,7 +210,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       const retryable = stageResult.retryable === true
       let failedPayment = ctx.payment
       let refundPendingFromConfirmedNone = false
-      if (stageResult.errorCode !== "a2u_precreate_found_requires_reconciliation" && !retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
+      if (stageResult.errorCode !== "a2u_precreate_found_requires_reconciliation" && !(ctx.isRecovery === true && ctx.recoveryOperation === "SETTLEMENT_RECONCILE" && stageResult.errorCode === "a2u_precreate_reconciliation_indeterminate") && !retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
         typeof ctx.merchantUid === "string" && ctx.merchantUid.trim().length > 0) {
         const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
         if (reconciliation.outcome === "FOUND" && reconciliation.dto) {
