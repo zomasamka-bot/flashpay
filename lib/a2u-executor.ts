@@ -133,7 +133,7 @@ export interface ExecutorContext {
   customerAmount: number // REQUIRED - validated amount
   piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
   isRecovery: boolean
-  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT"
+  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE"
 }
 
 /**
