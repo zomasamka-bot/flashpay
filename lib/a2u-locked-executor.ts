@@ -31,7 +31,7 @@ import crypto from "crypto"
 interface LockedExecutorParams {
   paymentId: string
   isRecovery: boolean
-  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE"
+  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
 }
 
 function isSettlementReconcileCandidate(payment: Payment, now: number): boolean {
