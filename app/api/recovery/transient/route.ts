@@ -266,6 +266,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
+for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await redis.get(`payment:${id}`)); if(payment?.id!==id||!isFreshSettlementDispatchCandidate(payment,Date.now())) continue; const result=await executeA2URecovery(id); const latest=parsePayment(await redis.get(`payment:${id}`)); results.push({paymentId:id,ok:result.status==="success",status:latest?.status,error:result.details?.error}); }
+
   const settlementReconcilingExecutionIds=[...new Set([...settlementReconcilingDiscoveryIds,...staleRetryReconcilingDiscoveryIds])].slice(0,1)
   for (const id of settlementReconcilingExecutionIds) {
     const payment = parsePayment(await redis.get(`payment:${id}`))
