@@ -6,6 +6,7 @@ import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { ensureAutomaticRefundIntent, runAutomaticRefundPass } from "@/lib/refund-auto-orchestrator"
 import { ensureRefundAccountingTable } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
+import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -286,5 +287,23 @@ export async function POST(request: NextRequest) {
     refundPass = { state: "blocked" }
   }
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length } })
+  const settlementReconcilingEvidence = { FOUND: 0, CONFIRMED_NONE: 0, INDETERMINATE: 0, skipped: 0 }
+  const settlementReconcilingEvidenceIds = [...new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])].slice(0, 1)
+  for (const id of settlementReconcilingEvidenceIds) {
+    const payment = parsePayment(await redis.get(`payment:${id}`))
+    if (!payment || payment.id !== id || (!isStaleFreshReconcilingCandidate(payment, Date.now()) && !isStaleRetryReconcilingCandidate(payment, Date.now()))) {
+      settlementReconcilingEvidence.skipped++
+      continue
+    }
+    const customerAmount = payment.customerAmount
+    const merchantUid = payment.merchantUid
+    if (typeof customerAmount !== "number" || !Number.isFinite(customerAmount) || customerAmount <= 0 || typeof merchantUid !== "string" || merchantUid.trim() === "" || merchantUid !== merchantUid.trim()) {
+      settlementReconcilingEvidence.skipped++
+      continue
+    }
+    const evidence = await reconcileIncompleteA2UPayment(id, customerAmount, merchantUid)
+    settlementReconcilingEvidence[evidence.outcome]++
+  }
+
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
