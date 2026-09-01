@@ -629,10 +629,14 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     const existing = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
     if (existing.outcome === "FOUND") {
       const dto = existing.dto
-      const transaction = isRecord(isRecord(dto) ? dto.transaction : undefined) ? dto.transaction : null
-      const status = isRecord(isRecord(dto) ? dto.status : undefined) ? dto.status : null
-      const invalidFound = dto === undefined || !isReconciledPiA2UPayment(dto) || !isPiA2UPayment(dto) || dto.amount !== ctx.customerAmount || typeof (isRecord(dto) ? dto.txid : undefined) === "string" || typeof (isRecord(dto) ? dto.transaction_id : undefined) === "string" || typeof transaction?.txid === "string" || transaction?.verified === true || status?.transaction_verified === true || status?.developer_completed === true || status?.cancelled === true || status?.user_cancelled === true
-      if (invalidFound) return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
+      if (dto === undefined || !isReconciledPiA2UPayment(dto) || !isPiA2UPayment(dto)) {
+        return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
+      }
+      const transaction = isRecord(dto.transaction) ? dto.transaction : null
+      const status = isRecord(dto.status) ? dto.status : null
+      if (dto.amount !== ctx.customerAmount || typeof dto.txid === "string" || typeof dto.transaction_id === "string" || typeof transaction?.txid === "string" || dto.completed === true || dto.cancelled === true || dto.rejected === true || transaction?.verified === true || status?.transaction_verified === true || status?.developer_completed === true || status?.cancelled === true || status?.user_cancelled === true) {
+        return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
+      }
       return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
     }
     if (existing.outcome === "INDETERMINATE") {
