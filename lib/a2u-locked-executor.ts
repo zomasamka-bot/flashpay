@@ -34,6 +34,18 @@ interface LockedExecutorParams {
   recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE"
 }
 
+function isSettlementReconcileCandidate(payment: Payment, now: number): boolean {
+  const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
+  const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
+  const lastAttemptAt = typeof payment.lastAttemptAt === "string" && payment.lastAttemptAt.trim() !== "" && payment.lastAttemptAt === payment.lastAttemptAt.trim() ? Date.parse(payment.lastAttemptAt) : NaN
+  const nextRetryAt = payment.nextRetryAt === undefined ? NaN : typeof payment.nextRetryAt === "string" && payment.nextRetryAt.trim() !== "" && payment.nextRetryAt === payment.nextRetryAt.trim() ? Date.parse(payment.nextRetryAt) : NaN
+  const u2aTxid = payment.u2aTxid
+  const common = payment.status === "paid_to_app" && Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && dispatchAt <= now && Number.isFinite(lastAttemptAt) && lastAttemptAt >= paidAt && typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 && typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && payment.amount === payment.customerAmount && typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() && typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() && typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() && typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim() && typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" && typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now && typeof u2aTxid === "string" && u2aTxid === u2aTxid.trim() && /^[0-9a-f]{64}$/.test(u2aTxid) && payment.a2uTxid === undefined && payment.a2uPaymentId === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined && payment.a2uToAddress === undefined && payment.merchantAmount === undefined && payment.horizonFeeCharged === undefined && payment.appCommission === undefined && payment.appNetImpact === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined && payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundStatus === undefined && payment.refundFailureCode === undefined && payment.refundProof === undefined && payment.payerRefundEligible !== true && (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) && (payment.piCompletionPending === undefined || payment.piCompletionPending === false) && (payment.piCompleted === undefined || payment.piCompleted === false) && (payment.dbRecorded === undefined || payment.dbRecorded === false) && (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false)
+  const freshAttempt = payment.settlementFailureState === "reconciling" && payment.retryCount === 1 && payment.nextRetryAt === undefined && lastAttemptAt <= now - 660000
+  const retryAttempt = payment.settlementFailureState === "reconciling" && typeof payment.retryCount === "number" && Number.isInteger(payment.retryCount) && payment.retryCount >= 2 && Number.isFinite(nextRetryAt) && nextRetryAt <= lastAttemptAt
+  return common && (freshAttempt || retryAttempt)
+}
+
 /**
  * Execute A2U under ONE shared concurrency lock.
  * If lock acquisition fails, reread payment and return its current state.
@@ -122,6 +134,12 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
     if (refundLookup.state !== 'absent' && params.recoveryOperation !== "SETTLEMENT_CREATE") {
       return { ok: false, status: 409, error: refundLookup.state === 'present' ? "Refund operation owns this payment" : "Refund state could not be verified" }
+    }
+
+    if (params.recoveryOperation === "SETTLEMENT_RECONCILE") {
+      if (params.isRecovery !== true || latestPayment.id !== paymentId || !isSettlementReconcileCandidate(latestPayment, Date.now())) {
+        return { ok: false, status: 409, error: "Settlement reconcile proof could not be verified" }
+      }
     }
 
     if (params.recoveryOperation === undefined) {
