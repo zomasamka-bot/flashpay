@@ -251,7 +251,7 @@ export const createPiPayment = async (
 
             // ONLY call onSuccess when settled_to_merchant
             // Pass the verified U2A txid from Pi Wallet callback to component
-            if (completeData.status === "settled_to_merchant") {
+            if (completeData.success === true && completeData.status === "settled_to_merchant") {
               console.log("[v0][Pi SDK] ✅ Settlement complete - calling onSuccess with U2A txid")
               CoreLogger.info("Payment settled to merchant", { piPaymentId, txid, paymentId })
               console.log("[v0][Pi SDK] Passing U2A txid to component callback:", txid)
