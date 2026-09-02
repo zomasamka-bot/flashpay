@@ -288,21 +288,19 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
     
     // Check if payment is cancelled
-    if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true) {
+    if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true || fetchedPayment.cancelled === true || fetchedPayment.rejected === true) {
       return { ok: false, status: "error", error: "A2U payment was cancelled" }
     }
 
-    if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_SUBMIT") {
-      const metadata = isRecord(fetchedPayment.metadata) ? fetchedPayment.metadata : null
-      if (
-        metadata === null ||
-        metadata.type !== "a2u_settlement" ||
-        metadata.paymentId !== ctx.paymentId ||
-        fetchedPayment.direction !== "app_to_user" ||
-        fetchedPayment.user_uid !== ctx.merchantUid
-      ) {
-        return { ok: false, status: "settlement_pending", error: "A2U identity mismatch" }
-      }
+    const metadata = isRecord(fetchedPayment.metadata) ? fetchedPayment.metadata : null
+    if (
+      metadata === null ||
+      metadata.type !== "a2u_settlement" ||
+      metadata.paymentId !== ctx.paymentId ||
+      fetchedPayment.direction !== "app_to_user" ||
+      fetchedPayment.user_uid !== ctx.merchantUid
+    ) {
+      return { ok: false, status: "settlement_pending", error: "A2U identity mismatch" }
     }
     
     // Extract state from PaymentDTO
@@ -311,13 +309,16 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
     if (
       ctx.isRecovery &&
-      ctx.recoveryOperation === "SETTLEMENT_SUBMIT" &&
+      (ctx.recoveryOperation === "SETTLEMENT_SUBMIT" || ctx.recoveryOperation === "SETTLEMENT_DISPATCH") &&
       (typeof ctx.payment.a2uTxid === "string" ||
         ctx.payment.horizonSuccessFlag === true ||
         ctx.payment.piCompletionPending === true ||
         ctx.payment.piCompleted === true ||
         ctx.payment.requiresDbReconciliation === true ||
         typeof existingTxid === "string" ||
+        typeof fetchedPayment.txid === "string" ||
+        typeof fetchedPayment.transaction_id === "string" ||
+        fetchedPayment.completed === true ||
         fetchedPayment.transaction?.verified === true ||
         fetchedPayment.status?.transaction_verified === true ||
         fetchedPayment.status?.developer_completed === true)
