@@ -104,16 +104,18 @@ export function canClientRetryPayment(payment: Payment): boolean {
  * @returns true if payment meets all finality requirements
  */
 export function isPaymentFinal(payment: Payment): boolean {
-  return (
-    payment.status === "settled_to_merchant" &&
-    payment.piCompleted === true &&
-    payment.dbRecorded === true &&
-    payment.requiresDbReconciliation !== true &&
-    !!payment.piPaymentId &&
-    !!payment.a2uPaymentId &&
-    !!payment.u2aTxid &&
-    !!payment.a2uTxid
-  )
+  const merchantIdValid = typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim()
+  const merchantUidValid = typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim()
+  const piPaymentIdValid = typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim()
+  const a2uPaymentIdValid = typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim()
+  const txidPattern = /^[0-9a-f]{64}$/
+  const txidsValid = typeof payment.u2aTxid === "string" && txidPattern.test(payment.u2aTxid) && typeof payment.a2uTxid === "string" && txidPattern.test(payment.a2uTxid)
+  const amountsValid = typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 && typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount > 0 && payment.amount === payment.customerAmount && payment.customerAmount === payment.merchantAmount
+  const feeValid = typeof payment.horizonFeeCharged === "number" && Number.isFinite(payment.horizonFeeCharged) && payment.horizonFeeCharged >= 0
+  const netImpactValid = typeof payment.appNetImpact === "number" && Number.isFinite(payment.appNetImpact) && payment.appNetImpact === payment.customerAmount - payment.merchantAmount - payment.horizonFeeCharged
+  const horizonSuccessAt = typeof payment.horizonSuccessAt === "string" && payment.horizonSuccessAt.trim() !== "" && payment.horizonSuccessAt === payment.horizonSuccessAt.trim() ? Date.parse(payment.horizonSuccessAt) : NaN
+  const settledAt = typeof payment.settledAt === "string" && payment.settledAt.trim() !== "" && payment.settledAt === payment.settledAt.trim() ? Date.parse(payment.settledAt) : NaN
+  return payment.status === "settled_to_merchant" && payment.piCompleted === true && payment.dbRecorded === true && payment.requiresDbReconciliation === false && payment.horizonSuccessFlag === true && payment.piCompletionPending === false && merchantIdValid && merchantUidValid && piPaymentIdValid && a2uPaymentIdValid && txidsValid && amountsValid && feeValid && payment.appCommission === 0 && netImpactValid && Number.isFinite(horizonSuccessAt) && Number.isFinite(settledAt) && horizonSuccessAt <= settledAt
 }
 
 /**
