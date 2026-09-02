@@ -454,9 +454,9 @@ export default function PaymentContentWithId({
     setTimeout(() => {
       stopped = true
       clearInterval(pollInterval)
-      console.log("[v0] Stopping status polling after 5 minutes")
+      console.log("[v0] Stopping status polling after 15 minutes")
       if (lastProcessingStatus === null) setIsPaying(false)
-    }, 300000)
+    }, 900000)
   }
 
   const handlePay = async () => {
