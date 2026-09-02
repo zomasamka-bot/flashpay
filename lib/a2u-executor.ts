@@ -743,8 +743,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       responseData = await createResponse.json()
     } catch {
       const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
-      if (reconciliation.outcome === "FOUND" && reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
-        return { ok: true, data: { a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto } }
+      if (reconciliation.outcome === "FOUND") {
+        const dto = reconciliation.dto
+        const tx = isRecord(dto?.transaction) ? dto.transaction : null
+        const st = isRecord(dto?.status) ? dto.status : null
+        if (dto && isReconciledPiA2UPayment(dto) && isPiA2UPayment(dto) && typeof dto.identifier === "string" && dto.identifier.trim() !== "" && dto.identifier === dto.identifier.trim() && typeof dto.txid !== "string" && typeof dto.transaction_id !== "string" && typeof tx?.txid !== "string" && dto.completed !== true && dto.cancelled !== true && dto.rejected !== true && tx?.verified !== true && st?.transaction_verified !== true && st?.developer_completed !== true && st?.cancelled !== true && st?.user_cancelled !== true) {
+          return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
+        }
       }
       return { ok: false, error: 'A2U response could not be parsed; reconciliation did not produce a usable DTO', userFacingStatus: 'error', retryable: false, errorCode: reconciliation.outcome === 'CONFIRMED_NONE' ? 'unparseable_confirmed_none' : reconciliation.outcome === 'FOUND' ? 'unparseable_found_invalid' : 'unparseable_indeterminate' }
     }
@@ -753,8 +758,13 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     if (!isPiA2UPayment(responseData)) {
       console.error("[A2U Stage1] A2U response validation failed:", responseData)
       const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
-      if (reconciliation.outcome === "FOUND" && reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
-        return { ok: true, data: { a2uPaymentId: reconciliation.dto.identifier, a2uPayment: reconciliation.dto } }
+      if (reconciliation.outcome === "FOUND") {
+        const dto = reconciliation.dto
+        const tx = isRecord(dto?.transaction) ? dto.transaction : null
+        const st = isRecord(dto?.status) ? dto.status : null
+        if (dto && isReconciledPiA2UPayment(dto) && isPiA2UPayment(dto) && typeof dto.identifier === "string" && dto.identifier.trim() !== "" && dto.identifier === dto.identifier.trim() && typeof dto.txid !== "string" && typeof dto.transaction_id !== "string" && typeof tx?.txid !== "string" && dto.completed !== true && dto.cancelled !== true && dto.rejected !== true && tx?.verified !== true && st?.transaction_verified !== true && st?.developer_completed !== true && st?.cancelled !== true && st?.user_cancelled !== true) {
+          return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
+        }
       }
       if (reconciliation.outcome === "FOUND") {
         return { ok: false, error: "A2U response invalid; Pi found an existing transfer with an invalid DTO", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_transfer_invalid" }
@@ -777,8 +787,14 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
   } catch (error) {
     console.error("[A2U Stage1] Exception:", error)
     const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
-    if (reconciled.outcome === "FOUND" && reconciled.dto && isPiA2UPayment(reconciled.dto)) {
-      return { ok: true, data: { a2uPaymentId: reconciled.dto.identifier, a2uPayment: reconciled.dto } }
+    if (reconciled.outcome === "FOUND") {
+      const dto = reconciled.dto
+      const tx = isRecord(dto?.transaction) ? dto.transaction : null
+      const st = isRecord(dto?.status) ? dto.status : null
+      if (dto && isReconciledPiA2UPayment(dto) && isPiA2UPayment(dto) && typeof dto.identifier === "string" && dto.identifier.trim() !== "" && dto.identifier === dto.identifier.trim() && typeof dto.txid !== "string" && typeof dto.transaction_id !== "string" && typeof tx?.txid !== "string" && dto.completed !== true && dto.cancelled !== true && dto.rejected !== true && tx?.verified !== true && st?.transaction_verified !== true && st?.developer_completed !== true && st?.cancelled !== true && st?.user_cancelled !== true) {
+        return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
+      }
+      return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
     }
     if (reconciled.outcome === "INDETERMINATE") {
       return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_network_reconciliation_indeterminate", errorBody: String(error).slice(0, 2000) }
