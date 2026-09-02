@@ -265,6 +265,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       }
       // Replace ctx.payment with fully merged record returned from persist
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage1Updates)
+      if (ctx.isRecovery===false && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
+        console.log("[P7 TEST] Stage1-only interruption 0.14")
+        return { ok:false,status:"settlement_pending",error:"Temporary Stage1-only interruption test" }
+      }
     }
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
