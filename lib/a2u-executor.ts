@@ -690,6 +690,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
             return { ok: true, data: { a2uPaymentId: fetchResult.identifier, a2uPayment: fetchResult } }
           }
         }
+        return {ok:false,error:"Pi ongoing A2U requires reconciliation",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_precreate_found_requires_reconciliation"}
       }
 
       // A failed POST is ambiguous: Pi may have created the A2U before the response was lost.
