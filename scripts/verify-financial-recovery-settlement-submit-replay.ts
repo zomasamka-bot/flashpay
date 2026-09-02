@@ -72,6 +72,7 @@ const mismatches = [
   ["from", { a2uFromAddress: "other" }],
   ["to", { a2uToAddress: "other" }],
   ["amount", { merchantAmount: 3 }],
+  ["customerAmount", { customerAmount: 3 }],
   ["XDR", { a2uPreparedEnvelopeXdr: "other" }],
   ["hash", { a2uPreparedTxHash: "b".repeat(64) }],
   ["sequence", { a2uPreparedSequence: "43" }],
