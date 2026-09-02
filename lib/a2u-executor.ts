@@ -1001,8 +1001,17 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
       const errorText = await response.text()
       if (response.status === 400 && errorText.includes("already_completed")) {
         console.log("[A2U Stage3] Payment already_completed - refetching to validate")
-        // This is OK - payment was already marked complete
-        return { ok: true }
+        const dto = await fetchA2UPayment(a2uPaymentId)
+        if (!dto || !isReconciledPiA2UPayment(dto)) {
+          return { ok: false, error: "Pi already_completed state unverified", userFacingStatus: "settlement_pending" }
+        }
+        const md = isRecord(dto.metadata) ? dto.metadata : null
+        const tx = isRecord(dto.transaction) ? dto.transaction : null
+        const st = isRecord(dto.status) ? dto.status : null
+        if (dto.identifier === a2uPaymentId && dto.amount === ctx.customerAmount && dto.direction === "app_to_user" && dto.user_uid === ctx.merchantUid && md?.paymentId === ctx.paymentId && md?.type === "a2u_settlement" && tx?.txid === txidFromHorizon && tx?.verified === true && st?.transaction_verified === true && st?.developer_completed === true && st?.cancelled !== true && st?.user_cancelled !== true) {
+          return { ok: true }
+        }
+        return { ok: false, error: "Pi already_completed state unverified", userFacingStatus: "settlement_pending" }
       }
       console.error("[A2U Stage3] Pi /complete failed:", errorText)
       return { ok: false, error: "Pi /complete failed", userFacingStatus: "error" }
