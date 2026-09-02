@@ -150,7 +150,7 @@ export async function executeA2URecovery(
     }
 
     const response = await buildA2USuccessResponse(paymentId)
-    if (!response) {
+    if (!response || response.success !== true || response.status !== "settled_to_merchant") {
       return {
         status: "manual_review_required",
         state: "state1_response_failed",
@@ -197,7 +197,7 @@ export async function executeA2URecovery(
     }
 
     const response = await buildA2USuccessResponse(paymentId)
-    if (!response) {
+    if (!response || response.success !== true || response.status !== "settled_to_merchant") {
       return {
         status: "manual_review_required",
         state: "state2_response_failed",
@@ -253,7 +253,7 @@ export async function executeA2URecovery(
     }
 
     const response = await buildA2USuccessResponse(paymentId)
-    if (!response) {
+    if (!response || response.success !== true || response.status !== "settled_to_merchant") {
       return {
         status: "manual_review_required",
         state: "state3_response_failed",
@@ -301,7 +301,7 @@ export async function executeA2URecovery(
     }
 
     const response = await buildA2USuccessResponse(paymentId)
-    if (!response) {
+    if (!response || response.success !== true || response.status !== "settled_to_merchant") {
       return {
         status: "manual_review_required",
         state: "state4_response_failed",
