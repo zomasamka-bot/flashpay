@@ -774,6 +774,15 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       }
       return { ok: false, error: "A2U response invalid; Pi confirmed no incomplete transfer", userFacingStatus: "error", retryable: false, errorCode: "invalid_dto_confirmed_none" }
     }
+    if (!isReconciledPiA2UPayment(responseData)) {
+      return {ok:false,error:"A2U binding failed",userFacingStatus:"manual_review_required",retryable:false,errorCode:"invalid_dto_create_response_binding"}
+    }
+    const md = isRecord(responseData.metadata) ? responseData.metadata : null
+    const tx = isRecord(responseData.transaction) ? responseData.transaction : null
+    const st = isRecord(responseData.status) ? responseData.status : null
+    if (typeof responseData.identifier !== "string" || responseData.identifier.trim() === "" || responseData.identifier !== responseData.identifier.trim() || responseData.amount !== ctx.customerAmount || responseData.direction !== "app_to_user" || responseData.user_uid !== ctx.merchantUid || md?.paymentId !== ctx.paymentId || md?.type !== "a2u_settlement" || typeof responseData.txid === "string" || typeof responseData.transaction_id === "string" || typeof tx?.txid === "string" || responseData.completed === true || responseData.cancelled === true || responseData.rejected === true || tx?.verified === true || st?.transaction_verified === true || st?.developer_completed === true || st?.cancelled === true || st?.user_cancelled === true) {
+      return {ok:false,error:"A2U binding failed",userFacingStatus:"manual_review_required",retryable:false,errorCode:"invalid_dto_create_response_binding"}
+    }
     
     console.log("[A2U Stage1] ✓ A2U payment created:", responseData.identifier)
 
