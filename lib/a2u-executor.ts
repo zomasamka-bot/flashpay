@@ -635,7 +635,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       }
       const transaction = isRecord(dto.transaction) ? dto.transaction : null
       const status = isRecord(dto.status) ? dto.status : null
-      if (dto.amount !== ctx.customerAmount || typeof dto.txid === "string" || typeof dto.transaction_id === "string" || typeof transaction?.txid === "string" || dto.completed === true || dto.cancelled === true || dto.rejected === true || transaction?.verified === true || status?.transaction_verified === true || status?.developer_completed === true || status?.cancelled === true || status?.user_cancelled === true) {
+      if (dto.identifier.trim() === "" || dto.identifier !== dto.identifier.trim() || dto.amount !== ctx.customerAmount || typeof dto.txid === "string" || typeof dto.transaction_id === "string" || typeof transaction?.txid === "string" || dto.completed === true || dto.cancelled === true || dto.rejected === true || transaction?.verified === true || status?.transaction_verified === true || status?.developer_completed === true || status?.cancelled === true || status?.user_cancelled === true) {
         return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
       }
       return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
