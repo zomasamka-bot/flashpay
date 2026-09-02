@@ -62,11 +62,11 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: `Invalid customerAmount: ${payment.customerAmount}` }
   }
 
-  // STEP 3: Validate merchantAmount (must be finite positive)
+  // STEP 3: Validate merchantAmount (must be finite positive and equal customerAmount)
   if (
     typeof payment.merchantAmount !== "number" ||
     !Number.isFinite(payment.merchantAmount) ||
-    payment.merchantAmount <= 0
+    payment.merchantAmount <= 0 || payment.merchantAmount !== payment.customerAmount
   ) {
     return { success: false, error: `Invalid merchantAmount: ${payment.merchantAmount}` }
   }
@@ -80,11 +80,11 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: `Invalid horizonFeeCharged: ${payment.horizonFeeCharged}` }
   }
 
-  // STEP 5: Validate appCommission (must be finite nonnegative)
+  // STEP 5: Validate appCommission (must be exactly zero)
   if (
     typeof payment.appCommission !== "number" ||
     !Number.isFinite(payment.appCommission) ||
-    payment.appCommission < 0
+    payment.appCommission !== 0
   ) {
     return { success: false, error: `Invalid appCommission: ${payment.appCommission}` }
   }
@@ -97,11 +97,11 @@ export function validateFinancialData(payment: Payment):
     return { success: false, error: `Invalid appNetImpact: ${payment.appNetImpact}` }
   }
 
-  // STEP 7: Verify appNetImpact calculation with tolerance
+  // STEP 7: Verify appNetImpact calculation exactly
   // CRITICAL: appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
-  // Allow small tolerance for floating-point rounding (0.01 units)
+  // No tolerance is allowed
   const calculatedNetImpact = payment.customerAmount - payment.merchantAmount - (payment.horizonFeeCharged ?? 0)
-  const tolerance = 0.01
+  const tolerance = 0
   const difference = Math.abs(calculatedNetImpact - payment.appNetImpact)
   
   if (difference > tolerance) {
