@@ -683,10 +683,10 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       // Handle ongoing_payment_found
       if (errorData.code === "ongoing_payment_found" || errorText.includes("ongoing_payment")) {
         const ongoingPaymentId = errorData.payment?.identifier || errorData.identifier || errorData.payment_id
-        if (typeof ongoingPaymentId === "string") {
+        if (typeof ongoingPaymentId === "string" && ongoingPaymentId.trim() !== "" && ongoingPaymentId === ongoingPaymentId.trim()) {
           const fetchResult = await fetchA2UPayment(ongoingPaymentId)
           const metadata = fetchResult && isRecord(fetchResult.metadata) ? fetchResult.metadata : null
-          if (fetchResult && isPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === ctx.customerAmount && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid) {
+          if (fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === ctx.customerAmount && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid && fetchResult.identifier === ongoingPaymentId && typeof fetchResult.txid !== "string" && typeof fetchResult.transaction_id !== "string" && fetchResult.completed !== true && fetchResult.cancelled !== true && fetchResult.rejected !== true && typeof fetchResult.transaction?.txid !== "string" && fetchResult.transaction?.verified !== true && fetchResult.status?.transaction_verified !== true && fetchResult.status?.developer_completed !== true && fetchResult.status?.cancelled !== true && fetchResult.status?.user_cancelled !== true) {
             return { ok: true, data: { a2uPaymentId: fetchResult.identifier, a2uPayment: fetchResult } }
           }
         }
