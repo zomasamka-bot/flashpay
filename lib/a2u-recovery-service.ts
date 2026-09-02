@@ -1,6 +1,6 @@
 import { redis } from "@/lib/redis"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { executeA2ULocked } from "@/lib/a2u-locked-executor"
+import { executeA2ULocked, isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
@@ -364,7 +364,7 @@ export async function executeA2URecovery(
     return { status: "manual_review_required", state: "settlement_submit_movement_checkpoint_invalid", paymentId, details: { error: "Settlement movement checkpoint could not be verified" } }
   }
 
-  if(payment.status==="paid_to_app"&&payment.settlementFailureState===undefined&&typeof payment.settlementDispatchRequestedAt==="string") {
+  if(payment.status==="paid_to_app"&&(payment.settlementFailureState===undefined&&typeof payment.settlementDispatchRequestedAt==="string"||isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) {
     const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_DISPATCH" })
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_dispatch_failed", paymentId, details: { error: result.error } }

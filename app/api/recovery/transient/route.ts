@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from "next/server"
 
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
+import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, runAutomaticRefundPass } from "@/lib/refund-auto-orchestrator"
 import { ensureRefundAccountingTable } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
@@ -229,7 +230,7 @@ export async function POST(request: NextRequest) {
       refundCandidateIds.push(paymentId)
     }
     if (payment.id !== paymentId) continue
-    if (isFreshSettlementDispatchCandidate(payment, now)) freshDispatchIds.push(paymentId)
+    if (isFreshSettlementDispatchCandidate(payment, now) || isStage1OnlySettlementDispatchCandidate(payment, now)) freshDispatchIds.push(paymentId)
     if (isStaleFreshReconcilingCandidate(payment, now)) settlementReconcilingDiscoveryIds.push(paymentId)
     if (isStaleRetryReconcilingCandidate(payment, now)) staleRetryReconcilingDiscoveryIds.push(paymentId)
     if (isPostHorizonEligible(payment, now)) {
@@ -266,7 +267,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await redis.get(`payment:${id}`)); if(payment?.id!==id||!isFreshSettlementDispatchCandidate(payment,Date.now())) continue; const result=await executeA2URecovery(id); const latest=parsePayment(await redis.get(`payment:${id}`)); results.push({paymentId:id,ok:result.status==="success",status:latest?.status,error:result.details?.error}); }
+for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await redis.get(`payment:${id}`)); if(payment?.id!==id||!(isFreshSettlementDispatchCandidate(payment,Date.now()) || isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) continue; const result=await executeA2URecovery(id); const latest=parsePayment(await redis.get(`payment:${id}`)); results.push({paymentId:id,ok:result.status==="success",status:latest?.status,error:result.details?.error}); }
 
   const settlementReconcilingExecutionIds=[...new Set([...settlementReconcilingDiscoveryIds,...staleRetryReconcilingDiscoveryIds])].slice(0,1)
   for (const id of settlementReconcilingExecutionIds) {

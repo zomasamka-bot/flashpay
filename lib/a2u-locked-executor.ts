@@ -53,7 +53,7 @@ function isSettlementReconcileCandidate(payment: Payment, now: number): boolean 
   return common && (freshAttempt || retryAttempt)
 }
 
-function isStage1OnlySettlementDispatchCandidate(payment: Payment, now: number): boolean {
+export function isStage1OnlySettlementDispatchCandidate(payment: Payment, now: number): boolean {
   return payment.status === "paid_to_app" && payment.settlementFailureState === "none" && typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim() && typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim() !== "" && payment.a2uFromAddress === payment.a2uFromAddress.trim() && typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim() !== "" && payment.a2uToAddress === payment.a2uToAddress.trim() && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount > 0 && payment.merchantAmount === payment.customerAmount && isSettlementReconcileCandidate({ ...payment, a2uPaymentId: undefined, a2uFromAddress: undefined, a2uToAddress: undefined, merchantAmount: undefined, settlementFailureState: "reconciling" }, now)
 }
 
