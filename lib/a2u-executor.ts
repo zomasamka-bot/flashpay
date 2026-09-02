@@ -709,8 +709,17 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       const ambiguous = responseStatusRetryable(createResponse.status) || codeIsTooManyPayments(errorData, errorText)
       if (ambiguous) {
         const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
-        if (reconciled.outcome === "FOUND" && reconciled.dto && isPiA2UPayment(reconciled.dto)) {
-          return { ok: true, data: { a2uPaymentId: reconciled.dto.identifier, a2uPayment: reconciled.dto } }
+        if (reconciled.outcome === "FOUND") {
+          const dto = reconciled.dto
+          if (dto === undefined || !isReconciledPiA2UPayment(dto) || !isPiA2UPayment(dto)) {
+            return { ok:false,error:"Pi found an existing A2U transfer requiring reconciliation",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_precreate_found_requires_reconciliation" }
+          }
+          const tx = isRecord(dto.transaction) ? dto.transaction : null
+          const st = isRecord(dto.status) ? dto.status : null
+          if (typeof dto.identifier !== "string" || dto.identifier.trim() === "" || dto.identifier !== dto.identifier.trim() || typeof dto.txid === "string" || typeof dto.transaction_id === "string" || typeof tx?.txid === "string" || dto.completed === true || dto.cancelled === true || dto.rejected === true || tx?.verified === true || st?.transaction_verified === true || st?.developer_completed === true || st?.cancelled === true || st?.user_cancelled === true) {
+            return { ok:false,error:"Pi found an existing A2U transfer requiring reconciliation",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_precreate_found_requires_reconciliation" }
+          }
+          return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
         }
         if (reconciled.outcome === "INDETERMINATE") {
           return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_ambiguous_reconciliation_indeterminate" }
