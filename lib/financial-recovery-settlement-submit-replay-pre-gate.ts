@@ -41,6 +41,7 @@ export function evaluateFinancialRecoverySettlementSubmitReplayPreGate(
     input.payment.a2uFromAddress !== read.reference.fromAddress ||
     input.payment.a2uToAddress !== read.reference.toAddress ||
     input.payment.merchantAmount !== read.reference.amount ||
+    input.payment.customerAmount !== read.reference.amount ||
     input.payment.status !== "settlement_pending" ||
     input.payment.a2uTxid !== undefined ||
     input.payment.horizonSuccessFlag === true ||
