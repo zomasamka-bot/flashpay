@@ -275,6 +275,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!fetchedPayment) {
       return { ok: false, status: "error", error: "Failed to fetch existing A2U payment from Pi" }
     }
+    if (!isReconciledPiA2UPayment(fetchedPayment)) { return { ok:false,status:"settlement_pending",error:"A2U identity mismatch" } }
     if (fetchedPayment.identifier !== a2uPaymentId) {
       return { ok: false, status: "error", error: "A2U identifier mismatch from Pi API" }
     }
