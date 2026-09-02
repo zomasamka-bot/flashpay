@@ -356,10 +356,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         a2uToAddress: fetchedPayment.to_address,
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
-        status: "settlement_pending" as const,
-        piCompleted: isDevCompleted,
-        piCompletionPending: !isDevCompleted,
-        requiresDbReconciliation: false,
       }
       // Replace ctx.payment with fully merged record
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, continueUpdates)
