@@ -840,17 +840,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     if (!piPrivateSeed) {
       console.error("[A2U Stage2] ❌ PI_PRIVATE_SEED not configured - cannot sign Horizon transaction")
       // DO NOT set horizonSuccessFlag=true or persist a2uTxid on failure
-      // Update status with merge and stop workflow
-      try {
-        const failureUpdates = {
-          status: "settlement_pending" as const,
-          piCompletionPending: true,
-        }
-        ctx.payment = await persistCheckpointMerged(ctx.paymentId, failureUpdates)
-      } catch (persistError) {
-        console.error("[A2U Stage2] Failed to persist failure checkpoint:", persistError)
-        return { ok: false, error: "Configuration error and checkpoint persist failed", userFacingStatus: "settlement_pending" }
-      }
       return { ok: false, error: "PI_PRIVATE_SEED not configured - requires manual intervention", userFacingStatus: "settlement_pending" }
     }
 
