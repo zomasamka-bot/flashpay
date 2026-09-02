@@ -148,7 +148,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     }
 
     if (params.recoveryOperation === "SETTLEMENT_DISPATCH") {
-      if (params.isRecovery !== true || latestPayment.id !== paymentId || !isSettlementDispatchCandidate(latestPayment, Date.now())) {
+      const now = Date.now()
+      if (!(params.isRecovery === true && latestPayment.id === paymentId && (isSettlementDispatchCandidate(latestPayment, now) || isStage1OnlySettlementDispatchCandidate(latestPayment, now)))) {
         return { ok: false, status: 409, error: "Settlement dispatch proof could not be verified" }
       }
     }

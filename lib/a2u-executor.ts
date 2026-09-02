@@ -287,6 +287,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!fetchedPayment.from_address || !fetchedPayment.to_address) {
       return { ok: false, status: "error", error: "A2U missing addresses" }
     }
+    if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_DISPATCH" && (fetchedPayment.from_address !== ctx.payment.a2uFromAddress || fetchedPayment.to_address !== ctx.payment.a2uToAddress)) {
+      return { ok: false, status: "settlement_pending", error: "A2U identity mismatch" }
+    }
     
     // Check if payment is cancelled
     if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true || fetchedPayment.cancelled === true || fetchedPayment.rejected === true) {
