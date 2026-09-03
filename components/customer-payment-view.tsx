@@ -33,6 +33,7 @@ export function CustomerPaymentView({
   const [authError, setAuthError] = useState<string>("")
   const [isPaymentPaid, setIsPaymentPaid] = useState(false)
   const [isInPiBrowser, setIsInPiBrowser] = useState(true)
+  const hasPayment = payment !== null
   // CRITICAL: Store executed paymentId to prevent multi-execution per paymentId (synchronous ref guard)
   const successCallbackExecutedPaymentIdRef = useRef<string | null>(null)
 
@@ -88,7 +89,7 @@ export function CustomerPaymentView({
         
         // CRITICAL: Never downgrade from settled_to_merchant
         // If local state is already settled, preserve it and its transaction identifiers
-        const currentStatus = payment?.status
+        const currentStatus = paymentStatus
         if (currentStatus === "settled_to_merchant" && serverPayment.status !== "settled_to_merchant") {
           console.log("[v0][CustomerView] ⚠️ PROTECTION: Ignoring server status downgrade")
           console.log("[v0][CustomerView] Local settled_to_merchant preserved, server returned:", serverPayment.status)
@@ -125,7 +126,7 @@ export function CustomerPaymentView({
 
     // Poll for payment status updates every 2 seconds while payment is not completed
     const intervalId = setInterval(() => {
-      if (payment && !isPaymentPaid && !isPaying) {
+      if (hasPayment && !isPaymentPaid && !isPaying) {
         console.log("[v0][CustomerView] Polling payment status...")
         
         fetchPayment()
@@ -133,7 +134,7 @@ export function CustomerPaymentView({
     }, 2000)
 
     return () => clearInterval(intervalId)
-  }, [paymentId, payment, isPaying])
+  }, [paymentId, paymentStatus, hasPayment, isPaymentPaid, isPaying, loading])
 
   const handlePay = async () => {
     if (!payment || !piSDKReady) {
