@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 import { redis, isRedisConfigured as isKvConfigured } from "@/lib/redis"
+import { isPaymentFinal } from "@/lib/payment-status"
 
 // Helper: Check if origin is allowed for CORS
 function isOriginAllowed(origin: string | null): boolean {
@@ -51,7 +52,7 @@ function getPublicPayment(payment: any) {
     merchantAddress: payment.merchantAddress,
     amount: payment.amount,
     note: payment.note,
-    status: payment.status,
+    status: payment.status === "settled_to_merchant" && !isPaymentFinal(payment) ? "settlement_pending" : payment.status,
     createdAt: payment.createdAt,
     paidAt: payment.paidAt,
     txid: payment.u2aTxid || payment.a2uTxid,
