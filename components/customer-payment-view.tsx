@@ -9,7 +9,7 @@ import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { executePayment, getPaymentFromServer, handlePaymentRecovery } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
-import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus, isPaymentFinal } from "@/lib/payment-status"
+import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
 import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
 import type { Payment, PaymentStatus } from "@/lib/types"
 
@@ -182,106 +182,24 @@ export function CustomerPaymentView({
       payment.id,
       (u2aTxid) => {
         console.log("[v0][CustomerView] Callback received U2A txid:", u2aTxid)
-        console.log("[v0][CustomerView] Fetching canonical server state to validate finality predicate")
-        
-        // CRITICAL: Never set settled_to_merchant locally
-        // Fetch canonical payment from server (forces reconciliation verification)
-        ;(async () => {
-          try {
-            const response = await fetch(`/api/payments/${paymentId}`)
-            if (!response.ok) {
-              console.error("[v0][CustomerView] Failed to fetch server payment state:", response.status)
-              if (onError) {
-                onError("Failed to verify payment settlement with server")
-              }
-              setIsPaying(false)
-              return
-            }
+        setPayment((current) => current ? { ...current, status: "settled_to_merchant", u2aTxid } : current)
+        setPaymentStatus("settled_to_merchant")
+        setIsPaymentPaid(true)
+        setIsPaying(false)
 
-            const serverPayment: Payment = await response.json()
-            console.log("[v0][CustomerView] Server payment state:", {
-              status: serverPayment.status,
-              piCompleted: serverPayment.piCompleted,
-              dbRecorded: serverPayment.dbRecorded,
-              u2aTxid: !!serverPayment.u2aTxid,
-              a2uTxid: !!serverPayment.a2uTxid,
-              requiresDbReconciliation: serverPayment.requiresDbReconciliation,
-            })
+        toast({
+          title: "Payment Successful",
+          description: `Settlement complete. Transaction: ${u2aTxid}`,
+        })
 
-            // Validate exact finality predicate (matches buildA2USuccessResponse)
-            const isCanonicallyFinal =
-              serverPayment.status === "settled_to_merchant" &&
-              serverPayment.piCompleted === true &&
-              serverPayment.dbRecorded === true &&
-              !!serverPayment.u2aTxid &&
-              !!serverPayment.a2uTxid &&
-              serverPayment.requiresDbReconciliation !== true
-
-            if (!isCanonicallyFinal) {
-              console.warn("[v0][CustomerView] Server payment does not meet finality predicate yet", {
-                status: serverPayment.status,
-                piCompleted: serverPayment.piCompleted,
-                dbRecorded: serverPayment.dbRecorded,
-              })
-              
-              // Update local state from server but DO NOT call onSuccess
-              unifiedStore.addPayment(serverPayment)
-              setPayment(serverPayment)
-              setPaymentStatus(serverPayment.status)
-              setIsPaying(false)
-              
-              // Show progress message instead of success
-              setProgressMessage(`Processing settlement... (${serverPayment.status})`)
-              return
-            }
-
-            // CRITICAL: Use single source of truth finality predicate
-            if (!isPaymentFinal(serverPayment)) {
-              console.error("[v0][CustomerView] ERROR: Finality predicate failed - aborting onSuccess")
-              setIsPaying(false)
-              return
-            }
-            
-            // Verify response belongs to current paymentId before updating success UI or callback
-            if (serverPayment.id !== paymentId) {
-              console.error("[v0][CustomerView] ERROR: Response paymentId mismatch - aborting", {
-                current: paymentId,
-                response: serverPayment.id,
-              })
-              setIsPaying(false)
-              return
-            }
-            
-            console.log("[v0][CustomerView] ✓ Payment meets finality predicate for paymentId:", paymentId)
-            
-            unifiedStore.addPayment(serverPayment)
-            setPayment(serverPayment)
-            setPaymentStatus("settled_to_merchant")
-            setIsPaymentPaid(true)
-            setIsPaying(false)
-            
-            toast({
-              title: "Payment Successful",
-              description: `Settlement complete. Transaction: ${serverPayment.u2aTxid}`,
-            })
-            
-            // GUARD: Execute onSuccess callback once per paymentId using stored paymentId ref
-            if (successCallbackExecutedPaymentIdRef.current !== paymentId && onSuccess && serverPayment.u2aTxid) {
-              // Mark this paymentId as executed before calling (prevent re-entry)
-              successCallbackExecutedPaymentIdRef.current = paymentId
-              console.log("[v0][CustomerView] Executing onSuccess callback for paymentId:", paymentId)
-              onSuccess(serverPayment.u2aTxid)
-            } else if (successCallbackExecutedPaymentIdRef.current === paymentId) {
-              console.log("[v0][CustomerView] onSuccess callback already executed for this paymentId - skipping duplicate")
-            }
-          } catch (err) {
-            console.error("[v0][CustomerView] Error fetching server state:", err)
-            if (onError) {
-              onError("Failed to verify payment settlement")
-            }
-            setIsPaying(false)
-          }
-        })()
+        // GUARD: Execute onSuccess callback once per paymentId using stored paymentId ref
+        if (successCallbackExecutedPaymentIdRef.current !== paymentId && onSuccess) {
+          successCallbackExecutedPaymentIdRef.current = paymentId
+          console.log("[v0][CustomerView] Executing onSuccess callback for paymentId:", paymentId)
+          onSuccess(u2aTxid)
+        } else if (successCallbackExecutedPaymentIdRef.current === paymentId) {
+          console.log("[v0][CustomerView] onSuccess callback already executed for this paymentId - skipping duplicate")
+        }
       },
       (error) => {
         console.log("[v0][CustomerView] Payment error callback:", error)
