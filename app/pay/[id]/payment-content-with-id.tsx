@@ -471,6 +471,8 @@ export default function PaymentContentWithId({
       return
     }
 
+    if (authoritativeLoaded !== true || payment.status !== "pending") return
+
     if (isPaymentPaid(paymentId)) {
       addDiagnostic("Payment already completed")
       toast({
@@ -816,7 +818,7 @@ export default function PaymentContentWithId({
 
                 <Button
                   onClick={handlePay}
-                  disabled={isPaying || !piSDKReady || authStatus === "failed" || !authoritativeLoaded}
+                  disabled={isPaying || !piSDKReady || authStatus === "failed" || !authoritativeLoaded || payment.status !== "pending"}
                   className="w-full h-12 text-lg"
                   size="lg"
                 >
