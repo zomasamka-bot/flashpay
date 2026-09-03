@@ -81,7 +81,7 @@ export function CustomerPaymentView({
         console.log("[v0][CustomerView] Initial fetch for payment:", paymentId)
       }
 
-      const serverPayment = await getPaymentFromServer(paymentId)
+      const serverPayment = await getPaymentFromServer(paymentId, true)
 
       if (serverPayment) {
         console.log("[v0][CustomerView] Payment status from server:", serverPayment.status)
@@ -170,6 +170,7 @@ export function CustomerPaymentView({
       console.log("[v0][CustomerView] - piSDKReady:", piSDKReady)
       return
     }
+    if (payment.status !== "pending") return
 
     console.log("[v0][CustomerView] ========== PAYMENT BUTTON CLICKED ==========")
     console.log("[v0][CustomerView] Authentication will be handled inside createPiPayment")
@@ -413,7 +414,7 @@ export function CustomerPaymentView({
               <>
                 <Button
                   onClick={handlePay}
-                  disabled={isPaying}
+                  disabled={isPaying || payment.status !== "pending"}
                   className="w-full"
                   size="lg"
                 >
