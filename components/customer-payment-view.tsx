@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { ExternalLink, XCircle, Loader2 } from "lucide-react"
 import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
-import { executePayment, getPaymentFromServer, handlePaymentRecovery } from "@/lib/operations"
+import { executePayment, getPaymentFromServer } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
 import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
 import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
@@ -128,35 +128,7 @@ export function CustomerPaymentView({
       if (payment && !isPaymentPaid && !isPaying) {
         console.log("[v0][CustomerView] Polling payment status...")
         
-        // Check for recovery states during polling
-        if (
-          payment.status === "settlement_pending" ||
-          payment.status === "paid_to_app" ||
-          (payment.requiresDbReconciliation && payment.a2uTxid) ||
-          (payment.horizonSuccessFlag && !payment.requiresDbReconciliation)
-        ) {
-          console.log("[v0][CustomerView] Recovery state detected - attempting recovery:", payment.status)
-          handlePaymentRecovery(
-            payment,
-            (txid) => {
-              console.log("[v0][CustomerView] Recovery successful - calling onSuccess")
-              setPaymentStatus("settled_to_merchant")
-              setIsPaymentPaid(true)
-              setIsPaying(false)
-              toast({
-                title: "Payment Completed",
-                description: `Settlement confirmed. Transaction: ${txid}`,
-              })
-            },
-            (error) => {
-              console.log("[v0][CustomerView] Recovery failed:", error)
-              // Continue polling, don't fail yet
-            },
-          )
-        } else {
-          // Normal polling
-          fetchPayment()
-        }
+        fetchPayment()
       }
     }, 2000)
 
@@ -230,6 +202,11 @@ export function CustomerPaymentView({
         setIsPaying(false)
         setProgressMessage("")
         setPaymentStatus(null)
+      },
+      (status) => {
+        setPayment((current) => current ? { ...current, status } : current)
+        setPaymentStatus(status)
+        setIsPaying(false)
       },
     )
   }
