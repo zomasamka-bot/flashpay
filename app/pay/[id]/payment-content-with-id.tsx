@@ -190,7 +190,7 @@ export default function PaymentContentWithId({
           abortController = new AbortController()
           const timeoutId = setTimeout(() => abortController?.abort(), 5000) // 5 second timeout
           
-          const serverPayment = await getPaymentFromServer(paymentId, false, abortController.signal)
+          const serverPayment = await getPaymentFromServer(paymentId, true, abortController.signal)
           clearTimeout(timeoutId)
           
           if (serverPayment) {

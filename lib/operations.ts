@@ -290,6 +290,7 @@ export async function getPaymentFromServer(id: string, forceServer?: boolean, si
 
   } catch (error) {
     CoreLogger.error("getPaymentFromServer failed:", error)
+    if (forceServer) return null
     return unifiedStore.getPayment(id) || null
   }
 }
