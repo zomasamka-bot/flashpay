@@ -129,15 +129,37 @@ export async function markAutomaticRefundManualReview(refundId: string, expected
           (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
         SELECT $3, refund_id, payment_id, 'refund_manual_review', 'system', idempotency_key, $4, jsonb_build_object('refundId', refund_id, 'paymentId', payment_id, 'idempotencyKey', idempotency_key)
         FROM transitioned
-        ON CONFLICT (event_id) DO NOTHING
+        RETURNING refund_id
       )
-      SELECT * FROM transitioned`, [refundId, expectedStage, eventId, createdAt])
+      SELECT transitioned.*
+      FROM transitioned
+      INNER JOIN audited ON audited.refund_id = transitioned.refund_id`, [refundId, expectedStage, eventId, createdAt])
     let checkpoint: RefundCheckpoint | null = null
     if (Array.isArray(result) && result.length === 1) checkpoint = normalizeCheckpoint(result[0])
     if (!checkpoint) {
-      const replay = await query('SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND stage=$2 AND status=\'manual_review_required\' AND last_error_code=\'refund_cancelled\' AND last_error_message=\'refund_cancelled\' LIMIT 1', [refundId, expectedStage])
+      const replay = await query(`
+        SELECT c.*
+        FROM refund_checkpoints c
+        WHERE c.refund_id=$1
+          AND c.stage=$2
+          AND c.status='manual_review_required'
+          AND c.last_error_code='refund_cancelled'
+          AND c.last_error_message='refund_cancelled'
+          AND c.next_retry_at IS NULL
+          AND (
+            SELECT COUNT(*) FROM refund_audit_events a
+            WHERE a.event_id=$3
+              AND a.refund_id=c.refund_id
+              AND a.payment_id=c.payment_id
+              AND a.event_type='refund_manual_review'
+              AND a.actor_type='system'
+              AND a.idempotency_key=c.idempotency_key
+              AND a.details=jsonb_build_object('refundId', c.refund_id, 'paymentId', c.payment_id, 'idempotencyKey', c.idempotency_key)
+          ) = 1
+        LIMIT 1`, [refundId, expectedStage, eventId])
       if (Array.isArray(replay) && replay.length === 1) checkpoint = normalizeCheckpoint(replay[0])
     }
+    if (checkpoint && (checkpoint.stage !== expectedStage || checkpoint.status !== 'manual_review_required' || checkpoint.lastErrorCode !== 'refund_cancelled' || checkpoint.lastErrorMessage !== 'refund_cancelled' || checkpoint.nextRetryAt !== null)) checkpoint = null
     if (checkpoint && isRedisConfigured) {
       try { await redis.set(redisKey(checkpoint.refundId), checkpoint) } catch { /* Redis mirror is best effort. */ }
     }
