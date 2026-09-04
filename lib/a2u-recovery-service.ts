@@ -4,6 +4,7 @@ import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked, isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
+import { persistCheckpointMerged } from "@/lib/a2u-executor"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import type { Payment } from "@/lib/types"
 
@@ -84,28 +85,54 @@ interface RecoveryResult {
   }
 }
 
-async function commitRecoverySettlement(paymentId: string, branch: string, customerAmount: number, merchantUid: string, reconciliation: Awaited<ReturnType<typeof reconcileIncompleteA2UPayment>>): Promise<boolean> {
+async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customerAmount: number, merchantUid: string): Promise<"FOUND" | "CONFIRMED_NONE" | "INDETERMINATE" | "MANUAL_REVIEW"> {
   const lockKey = `flashpay:payment:operation:${paymentId}`
   const lockToken = randomUUID()
-  if (await redis.set(lockKey, lockToken, { nx: true, ex: 600 }) !== "OK") return false
+  if (await redis.set(lockKey, lockToken, { nx: true, ex: 600 }) !== "OK") return "MANUAL_REVIEW"
   try {
     const latestData = await redis.get(`payment:${paymentId}`)
     const latest: Payment | null = latestData ? (typeof latestData === "string" ? JSON.parse(latestData) : latestData) : null
     const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
-    if (!latest || latest.id !== paymentId || latest.settlementFailureState !== branch || latest.customerAmount !== customerAmount || latest.merchantUid !== merchantUid || latest.a2uPaymentId || latest.a2uTxid || latest.horizonSuccessFlag || latest.refundPaymentId || latest.refundTxid || latest.refundStatus !== undefined || refundLookup.state !== "absent") return false
+    const stateMatches = mode === 6
+      ? latest?.settlementFailureState === "held" || latest?.settlementFailureState === "manual_review_required"
+      : latest?.status === "settlement_failed"
+    if (!latest || latest.id !== paymentId || !stateMatches || latest.customerAmount !== customerAmount || latest.merchantUid !== merchantUid || latest.a2uPaymentId || latest.a2uTxid || latest.a2uPreparedTxHash || latest.a2uPreparedSequence || latest.a2uPreparedEnvelopeXdr || latest.horizonSuccessFlag || latest.refundPaymentId || latest.refundTxid || refundLookup.state !== "absent") return "MANUAL_REVIEW"
+
+    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, latest.customerAmount, latest.merchantUid)
+    if (reconciliation.outcome === "INDETERMINATE") return "INDETERMINATE"
     if (reconciliation.outcome === "FOUND") {
-      if (!reconciliation.dto || !isPiA2UPayment(reconciliation.dto)) return false
+      if (!reconciliation.dto || !isPiA2UPayment(reconciliation.dto)) return "MANUAL_REVIEW"
       const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
       await persistCheckpointMerged(paymentId, { a2uPaymentId: reconciliation.dto.identifier, ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}) })
-      return true
+      return "FOUND"
     }
-    if (reconciliation.outcome !== "CONFIRMED_NONE") return false
-    const refundPending = markRefundPendingAfterFailedSettlement(branch === "held" ? { ...latest, status: "settlement_failed" } : latest, { code: latest.a2uErrorCode || "a2u_non_retryable_no_transfer", message: "A2U failed before any merchant transfer evidence existed", occurredAt: new Date().toISOString() })
-    if (refundPending.refundStatus !== "pending" || refundPending.settlementFailureState !== "refund_pending") return false
-    await persistCheckpointMerged(paymentId, { status: refundPending.status, settlementFailureState: refundPending.settlementFailureState, refundStatus: refundPending.refundStatus })
-    return true
+    if (reconciliation.outcome !== "CONFIRMED_NONE") return "MANUAL_REVIEW"
+
+    const refundPending = markRefundPendingAfterFailedSettlement(
+      mode === 6 ? { ...latest, status: "settlement_failed" } : latest,
+      {
+        code: latest.a2uErrorCode || "a2u_non_retryable_no_transfer",
+        message: "A2U failed before any merchant transfer evidence existed",
+        occurredAt: new Date().toISOString(),
+      },
+    )
+    if (refundPending.refundStatus !== "pending" || refundPending.settlementFailureState !== "refund_pending") return "MANUAL_REVIEW"
+    await persistCheckpointMerged(paymentId, {
+      status: refundPending.status,
+      settlementFailureState: refundPending.settlementFailureState,
+      payerRefundEligible: refundPending.payerRefundEligible,
+      a2uErrorCode: refundPending.a2uErrorCode,
+      a2uErrorMessage: refundPending.a2uErrorMessage,
+      lastAttemptAt: refundPending.lastAttemptAt,
+      refundStatus: refundPending.refundStatus,
+    })
+    return "CONFIRMED_NONE"
   } finally {
-    await redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", [lockKey], [lockToken])
+    try {
+      await redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", [lockKey], [lockToken])
+    } catch (error) {
+      console.warn("[A2U Recovery] Failed to release payment operation lock", error)
+    }
   }
 }
 
@@ -451,38 +478,10 @@ export async function executeA2URecovery(
     if (typeof payment.merchantUid !== "string" || payment.merchantUid.trim().length === 0) {
       return { status: "manual_review_required", state: "a2u_reconciliation_merchant_uid_missing", paymentId, details: { error: "Merchant UID is required for scoped A2U reconciliation" } }
     }
-    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount, payment.merchantUid)
-    if (reconciliation.outcome === "FOUND") {
-      if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
-        const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
-        const reconciledPayment = {
-          ...payment,
-          a2uPaymentId: reconciliation.dto.identifier,
-          ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}),
-        }
-        if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "recovery_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
-        return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
-      }
-      return { status: "manual_review_required", state: "a2u_found_invalid_dto", paymentId, details: { error: "Pi found an A2U payment but its DTO failed validation" } }
-    }
-    if (reconciliation.outcome === "INDETERMINATE") {
-      return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: reconciliation.reason } }
-    }
-
-    // Convert only a proven no-transfer, verified-U2A failure into the
-    // refund_pending state. This is the exact fail-closed transition point.
-    const refundPending = markRefundPendingAfterFailedSettlement(
-      { ...payment, status: "settlement_failed" },
-      {
-        code: payment.a2uErrorCode || "a2u_non_retryable_no_transfer",
-        message: "A2U failed before any merchant transfer evidence existed",
-        occurredAt: new Date().toISOString(),
-      },
-    )
-    if (refundPending.refundStatus === "pending" && refundPending.settlementFailureState === "refund_pending") {
-      if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "refund_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
-      return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "Refund intent may now be created" } }
-    }
+    const commitResult = await commitRecoverySettlement(paymentId, 6, payment.customerAmount, payment.merchantUid)
+    if (commitResult === "FOUND") return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { error: "A2U evidence reconciled under payment lock" } }
+    if (commitResult === "INDETERMINATE") return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: "A2U reconciliation remained indeterminate" } }
+    if (commitResult === "CONFIRMED_NONE") return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "Refund intent may now be created" } }
     return { status: "manual_review_required", state: "refund_implementation_guarded", paymentId, details: { error: "Refund eligibility or verified payer scope cannot be proven" } }
   }
 
@@ -512,44 +511,10 @@ export async function executeA2URecovery(
     if (typeof payment.merchantUid !== "string" || payment.merchantUid.trim().length === 0) {
       return { status: "manual_review_required", state: "a2u_reconciliation_merchant_uid_missing", paymentId, details: { error: "Merchant UID is required for scoped A2U reconciliation" } }
     }
-    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, payment.customerAmount, payment.merchantUid)
-    if (reconciliation.outcome === "FOUND") {
-      if (reconciliation.dto && isPiA2UPayment(reconciliation.dto)) {
-        const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
-        const reconciledPayment = {
-          ...payment,
-          a2uPaymentId: reconciliation.dto.identifier,
-          ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}),
-        }
-        if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "recovery_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
-        return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
-      }
-      return { status: "manual_review_required", state: "a2u_found_invalid_dto", paymentId, details: { error: "Pi found an A2U payment but its DTO failed validation" } }
-    }
-    if (reconciliation.outcome === "INDETERMINATE") {
-      return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: reconciliation.reason } }
-    }
-
-    // No Horizon identifiers and verified U2A payer identity: this is the
-    // sole recovery point allowed to create a refund-eligible state. Never
-    // broaden this transition to payments with any transfer evidence.
-    const refundPending = markRefundPendingAfterFailedSettlement(
-      payment,
-      {
-        code: payment.a2uErrorCode || "a2u_non_retryable_no_transfer",
-        message: "A2U failed before any merchant transfer evidence existed",
-        occurredAt: new Date().toISOString(),
-      },
-    )
-    if (refundPending.refundStatus === "pending" && refundPending.settlementFailureState === "refund_pending") {
-      if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "refund_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
-      return {
-        status: "manual_review_required",
-        state: "refund_pending_eligible",
-        paymentId,
-        details: { error: "No merchant transfer evidence; refund intent may be created" },
-      }
-    }
+    const commitResult = await commitRecoverySettlement(paymentId, 7, payment.customerAmount, payment.merchantUid)
+    if (commitResult === "FOUND") return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { error: "A2U evidence reconciled under payment lock" } }
+    if (commitResult === "INDETERMINATE") return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: "A2U reconciliation remained indeterminate" } }
+    if (commitResult === "CONFIRMED_NONE") return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "No merchant transfer evidence; refund intent may be created" } }
 
     console.log(
       "[A2U Recovery] Safe failure remains non-refundable: verified payer/failure proof incomplete"
