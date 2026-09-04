@@ -90,14 +90,10 @@ export async function POST(request: NextRequest) {
     })
     
     if (!verifyResponse.ok) {
-      const errorText = await verifyResponse.text()
-      console.error("[API] ❌ UID verification failed")
-      console.error("[API] Pi /v2/me status:", verifyResponse.status)
-      console.error("[API] Error:", errorText)
       return NextResponse.json(
         {
           error: "UID verification failed with Pi Network",
-          details: errorText,
+          piStatus: verifyResponse.status,
         },
         { status: 401, headers: corsHeaders }
       )
@@ -105,22 +101,16 @@ export async function POST(request: NextRequest) {
     
     console.log("[P7B TIMING] Pi /v2/me", { durationMs: Date.now() - piMeTimingStartedAt })
     const verifiedUser = await verifyResponse.json()
-    const verifiedMerchantUid = verifiedUser.uid
-    const verifiedUsername = verifiedUser.username
+    const verifiedMerchantUid = typeof verifiedUser.uid === "string" ? verifiedUser.uid.trim() : ""
+    const trustedMerchantId = typeof verifiedUser.username === "string" ? verifiedUser.username.trim() : ""
+
+    if (verifiedMerchantUid.length === 0 || trustedMerchantId.length === 0) {
+      return NextResponse.json({ error: "Verified merchant identity invalid" }, { status: 502, headers: corsHeaders })
+    }
     
     console.log("[API] ✅ UID VERIFIED")
     console.log("[API] Verified UID:", verifiedMerchantUid)
-    console.log("[API] Merchant username:", verifiedUsername)
-    
-    // CRITICAL: Use verified username as merchantId (overrides client-provided merchantId)
-    const trustedMerchantId = verifiedUsername
-    if (!trustedMerchantId) {
-      console.error("[API] ❌ Verified username is empty - cannot proceed")
-      return NextResponse.json(
-        { error: "Verified username is empty" },
-        { status: 400, headers: corsHeaders }
-      )
-    }
+    console.log("[API] Merchant username:", trustedMerchantId)
     
     console.log("[API] Using verified username as merchantId:", trustedMerchantId)
 

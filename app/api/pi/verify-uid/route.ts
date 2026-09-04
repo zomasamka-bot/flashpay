@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
       {
         verified: true,
         uid: verifiedUid,
-        username: verifiedUser.username,
+        username: verifiedUsername,
         message: "UID verified successfully",
       },
       { status: 200 }
