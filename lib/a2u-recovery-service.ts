@@ -1,4 +1,5 @@
 import { redis } from "@/lib/redis"
+import { randomUUID } from "crypto"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked, isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
@@ -80,6 +81,31 @@ interface RecoveryResult {
     u2aTxid?: string
     a2uTxid?: string
     error?: string
+  }
+}
+
+async function commitRecoverySettlement(paymentId: string, branch: string, customerAmount: number, merchantUid: string, reconciliation: Awaited<ReturnType<typeof reconcileIncompleteA2UPayment>>): Promise<boolean> {
+  const lockKey = `flashpay:payment:operation:${paymentId}`
+  const lockToken = randomUUID()
+  if (await redis.set(lockKey, lockToken, { nx: true, ex: 600 }) !== "OK") return false
+  try {
+    const latestData = await redis.get(`payment:${paymentId}`)
+    const latest: Payment | null = latestData ? (typeof latestData === "string" ? JSON.parse(latestData) : latestData) : null
+    const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
+    if (!latest || latest.id !== paymentId || latest.settlementFailureState !== branch || latest.customerAmount !== customerAmount || latest.merchantUid !== merchantUid || latest.a2uPaymentId || latest.a2uTxid || latest.horizonSuccessFlag || latest.refundPaymentId || latest.refundTxid || latest.refundStatus !== undefined || refundLookup.state !== "absent") return false
+    if (reconciliation.outcome === "FOUND") {
+      if (!reconciliation.dto || !isPiA2UPayment(reconciliation.dto)) return false
+      const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
+      await persistCheckpointMerged(paymentId, { a2uPaymentId: reconciliation.dto.identifier, ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}) })
+      return true
+    }
+    if (reconciliation.outcome !== "CONFIRMED_NONE") return false
+    const refundPending = markRefundPendingAfterFailedSettlement(branch === "held" ? { ...latest, status: "settlement_failed" } : latest, { code: latest.a2uErrorCode || "a2u_non_retryable_no_transfer", message: "A2U failed before any merchant transfer evidence existed", occurredAt: new Date().toISOString() })
+    if (refundPending.refundStatus !== "pending" || refundPending.settlementFailureState !== "refund_pending") return false
+    await persistCheckpointMerged(paymentId, { status: refundPending.status, settlementFailureState: refundPending.settlementFailureState, refundStatus: refundPending.refundStatus })
+    return true
+  } finally {
+    await redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", [lockKey], [lockToken])
   }
 }
 
@@ -434,7 +460,7 @@ export async function executeA2URecovery(
           a2uPaymentId: reconciliation.dto.identifier,
           ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}),
         }
-        await redis.set(paymentKey, JSON.stringify(reconciledPayment))
+        if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "recovery_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
         return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
       }
       return { status: "manual_review_required", state: "a2u_found_invalid_dto", paymentId, details: { error: "Pi found an A2U payment but its DTO failed validation" } }
@@ -454,7 +480,7 @@ export async function executeA2URecovery(
       },
     )
     if (refundPending.refundStatus === "pending" && refundPending.settlementFailureState === "refund_pending") {
-      await redis.set(paymentKey, JSON.stringify(refundPending))
+      if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "refund_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
       return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "Refund intent may now be created" } }
     }
     return { status: "manual_review_required", state: "refund_implementation_guarded", paymentId, details: { error: "Refund eligibility or verified payer scope cannot be proven" } }
@@ -495,7 +521,7 @@ export async function executeA2URecovery(
           a2uPaymentId: reconciliation.dto.identifier,
           ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}),
         }
-        await redis.set(paymentKey, JSON.stringify(reconciledPayment))
+        if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "recovery_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
         return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { a2uTxid: typeof reconciliation.dto.txid === "string" ? reconciliation.dto.txid : undefined, error: reconciliation.reason } }
       }
       return { status: "manual_review_required", state: "a2u_found_invalid_dto", paymentId, details: { error: "Pi found an A2U payment but its DTO failed validation" } }
@@ -516,7 +542,7 @@ export async function executeA2URecovery(
       },
     )
     if (refundPending.refundStatus === "pending" && refundPending.settlementFailureState === "refund_pending") {
-      await redis.set(paymentKey, JSON.stringify(refundPending))
+      if (!(await commitRecoverySettlement(paymentId, payment.settlementFailureState, payment.customerAmount, payment.merchantUid, reconciliation))) return { status: "manual_review_required", state: "refund_commit_failed", paymentId, details: { error: "Recovery commit could not be verified" } }
       return {
         status: "manual_review_required",
         state: "refund_pending_eligible",
