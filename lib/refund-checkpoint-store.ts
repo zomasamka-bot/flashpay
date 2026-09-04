@@ -159,7 +159,7 @@ export async function markAutomaticRefundManualReview(refundId: string, expected
         LIMIT 1`, [refundId, expectedStage, eventId])
       if (Array.isArray(replay) && replay.length === 1) checkpoint = normalizeCheckpoint(replay[0])
     }
-    if (checkpoint && (checkpoint.stage !== expectedStage || checkpoint.status !== 'manual_review_required' || checkpoint.lastErrorCode !== 'refund_cancelled' || checkpoint.lastErrorMessage !== 'refund_cancelled' || checkpoint.nextRetryAt !== null)) checkpoint = null
+    if (checkpoint && (checkpoint.stage !== expectedStage || checkpoint.status !== 'manual_review_required' || checkpoint.lastErrorCode !== 'refund_cancelled' || checkpoint.lastErrorMessage !== 'refund_cancelled' || checkpoint.nextRetryAt !== undefined)) checkpoint = null
     if (checkpoint && isRedisConfigured) {
       try { await redis.set(redisKey(checkpoint.refundId), checkpoint) } catch { /* Redis mirror is best effort. */ }
     }
