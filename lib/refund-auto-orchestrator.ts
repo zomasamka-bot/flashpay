@@ -5,6 +5,7 @@ import {
   deferAutomaticRefund,
   getRefundCheckpointReadOnly,
   listAutomaticRefundCheckpoints,
+  markAutomaticRefundManualReview,
   findRefundCheckpointByPaymentId,
 } from "@/lib/refund-checkpoint-store"
 import { createRefundIntentInternal } from "@/lib/refund-intent-service"
@@ -117,6 +118,14 @@ export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRe
       await clearAutomaticRefundDeferral(checkpoint.refundId)
       results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "success" })
     } else {
+      if (!thrown && reason === "refund_cancelled") {
+        const manualReview = await markAutomaticRefundManualReview(checkpoint.refundId, checkpoint.stage)
+        if (manualReview?.status === "manual_review_required") {
+          results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason })
+          processed += 1
+          continue
+        }
+      }
       const deferred = await deferAfterFailure(checkpoint, reason, thrown)
       results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: deferred ? "deferred" : "blocked", reason })
     }

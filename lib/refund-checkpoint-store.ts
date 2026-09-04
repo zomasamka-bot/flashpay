@@ -113,6 +113,38 @@ export async function deferAutomaticRefund(
   } catch { return null }
 }
 
+export async function markAutomaticRefundManualReview(refundId: string, expectedStage: RefundCheckpoint['stage']): Promise<RefundCheckpoint | null> {
+  if (typeof refundId !== 'string' || refundId.length === 0 || typeof expectedStage !== 'string' || expectedStage.length === 0) return null
+  try {
+    const eventId = `refund:${refundId}:manual_review`
+    const createdAt = new Date().toISOString()
+    const result = await query(`
+      WITH transitioned AS (
+        UPDATE refund_checkpoints
+        SET status='manual_review_required', last_error_code='refund_cancelled', last_error_message='refund_cancelled', next_retry_at=NULL, updated_at=NOW()
+        WHERE refund_id=$1 AND stage=$2 AND status='pending'
+        RETURNING *
+      ), audited AS (
+        INSERT INTO refund_audit_events
+          (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+        SELECT $3, refund_id, payment_id, 'refund_manual_review', 'system', idempotency_key, $4, jsonb_build_object('refundId', refund_id, 'paymentId', payment_id, 'idempotencyKey', idempotency_key)
+        FROM transitioned
+        ON CONFLICT (event_id) DO NOTHING
+      )
+      SELECT * FROM transitioned`, [refundId, expectedStage, eventId, createdAt])
+    let checkpoint: RefundCheckpoint | null = null
+    if (Array.isArray(result) && result.length === 1) checkpoint = normalizeCheckpoint(result[0])
+    if (!checkpoint) {
+      const replay = await query('SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND stage=$2 AND status=\'manual_review_required\' AND last_error_code=\'refund_cancelled\' AND last_error_message=\'refund_cancelled\' LIMIT 1', [refundId, expectedStage])
+      if (Array.isArray(replay) && replay.length === 1) checkpoint = normalizeCheckpoint(replay[0])
+    }
+    if (checkpoint && isRedisConfigured) {
+      try { await redis.set(redisKey(checkpoint.refundId), checkpoint) } catch { /* Redis mirror is best effort. */ }
+    }
+    return checkpoint
+  } catch { return null }
+}
+
 export async function clearAutomaticRefundDeferral(refundId: string): Promise<RefundCheckpoint | null> {
   if (typeof refundId !== 'string' || refundId.length === 0) return null
   try {
