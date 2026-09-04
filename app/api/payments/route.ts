@@ -109,10 +109,6 @@ export async function POST(request: NextRequest) {
     }
     
     console.log("[API] ✅ UID VERIFIED")
-    console.log("[API] Verified UID:", verifiedMerchantUid)
-    console.log("[API] Merchant username:", trustedMerchantId)
-    
-    console.log("[API] Using verified username as merchantId:", trustedMerchantId)
 
     // Generate unique payment ID (Edge Runtime compatible)
     const paymentId = crypto.randomUUID()
@@ -132,8 +128,6 @@ export async function POST(request: NextRequest) {
     console.log("[API] ========================================")
     console.log("[API] PAYMENT OBJECT CREATED WITH REQUIRED FIELDS:")
     console.log("[API]   - payment.id:", payment.id)
-    console.log("[API]   - payment.merchantId:", payment.merchantId, "TYPE:", typeof payment.merchantId)
-    console.log("[API]   - payment.merchantUid:", payment.merchantUid, "TYPE:", typeof payment.merchantUid)
     console.log("[API]   - payment.amount:", payment.amount)
     console.log("[API]   - payment.note:", payment.note)
     console.log("[API]   - payment.status:", payment.status)
@@ -159,12 +153,8 @@ export async function POST(request: NextRequest) {
       
       console.log("[API] CRITICAL CHECK BEFORE REDIS STORAGE:")
       console.log("[API]   - kvKey:", kvKey)
-      console.log("[API]   - Has merchantId:", !!payment.merchantId, "Value:", payment.merchantId)
-      console.log("[API]   - Has merchantUid:", !!payment.merchantUid, "Value:", payment.merchantUid)
       console.log("[API]   - Has merchantAddress:", !!payment.merchantAddress, "Value:", payment.merchantAddress)
       console.log("[API]   - Has createdAt:", !!payment.createdAt, "Value:", payment.createdAt)
-      console.log("[API]   - merchantUid type:", typeof payment.merchantUid)
-      console.log("[API]   - merchantUid length:", payment.merchantUid ? payment.merchantUid.length : "N/A")
       console.log("[API]   - JSON includes 'merchantId':", paymentString.includes('"merchantId"'))
       console.log("[API]   - JSON includes 'merchantUid':", paymentString.includes('"merchantUid"'))
       console.log("[API]   - JSON includes 'merchantAddress':", paymentString.includes('"merchantAddress"'))
@@ -196,8 +186,6 @@ export async function POST(request: NextRequest) {
       const storedData = typeof verification === "string" ? JSON.parse(verification) : verification
       console.log("[API] VERIFICATION AFTER REDIS RETRIEVAL - PASSED")
       console.log("[API]   - Retrieved ID:", storedData.id)
-      console.log("[API]   - Retrieved merchantId:", storedData.merchantId)
-      console.log("[API]   - Retrieved merchantUid:", storedData.merchantUid)
       console.log("[API]   - Retrieved amount:", storedData.amount)
       console.log("[API]   - Retrieved status:", storedData.status)
       

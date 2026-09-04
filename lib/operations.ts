@@ -66,13 +66,6 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     const merchantId = merchantState.merchantId
     let merchantUid = merchantState.uid || ""
     
-    console.log("[v0] ===== PAYMENT CREATION - UID EXTRACTION =====")
-    console.log("[v0] merchantId (merchantId field):", merchantId)
-    console.log("[v0] merchantUid (uid field):", merchantUid)
-    console.log("[v0] merchantUid type:", typeof merchantUid)
-    console.log("[v0] merchantUid length:", merchantUid.length)
-    console.log("[v0] merchantUid has leading/trailing spaces:", /^\s|\s$/.test(merchantUid))
-    console.log("[v0]")
     
     if (!merchantId) {
       const trackingId = errorTracker.logError(operation, "Merchant not authenticated - no merchantId in merchant state")
@@ -91,7 +84,6 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
       }
     }
 
-    console.log("[v0] ✓ Payment creation - UID is valid:", merchantUid.substring(0, 10) + "...")
 
     // Get the accessToken for UID verification
     const accessToken = merchantState.accessToken
@@ -105,34 +97,7 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
       }
     }
 
-    console.log("[v0] ===== PAYMENT CREATION - TOKEN FRESHNESS CHECK =====")
-    console.log("[v0] accessToken retrieved from unifiedStore")
-    console.log("[v0] accessToken length:", accessToken.length)
-    console.log("[v0] merchantUid matches merchant state UID:", merchantUid === merchantState.uid)
-    console.log("[v0]")
 
-    console.log("[v0] ===== PAYMENT CREATION - UID FLOW SUMMARY =====")
-    console.log("[v0] Frontend Context (Pi Browser):")
-    console.log("[v0]   - merchantUid from state = " + merchantUid)
-    console.log("[v0]   - accessToken available = YES")
-    console.log("[v0] Sending to /api/payments with:")
-    console.log("[v0]   - merchantUid = " + merchantUid)
-    console.log("[v0]   - accessToken = PROVIDED")
-    console.log("[v0]")
-    console.log("[v0] Backend will:")
-    console.log("[v0]   1. Call /v2/me(accessToken) to verify UID")
-    console.log("[v0]   2. Get fresh verified UID from /v2/me response")
-    console.log("[v0]   3. Store fresh verified UID in Redis (may differ from frontend UID)")
-    console.log("[v0]   4. Include accessToken in Redis for later A2U verification")
-    console.log("[v0]")
-    console.log("[v0] Later during A2U settlement:")
-    console.log("[v0]   1. A2U retrieves payment from Redis")
-    console.log("[v0]   2. Gets merchantUid from Redis (the verified one, not frontend's)")
-    console.log("[v0]   3. Gets accessToken from Redis")
-    console.log("[v0]   4. Calls /v2/me(accessToken) again to verify accessToken still valid")
-    console.log("[v0]   5. Sends UID to Pi createPayment API using PI_API_KEY")
-    console.log("[v0]   → If Pi rejects: user_not_found = UID is valid but not in PI_API_KEY's app")
-    console.log("[v0]")
 
     // CRITICAL: Send amount, note, and accessToken for server verification.
     // Do NOT send merchantId or merchantUid - server will verify from /v2/me call.
