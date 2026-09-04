@@ -362,9 +362,6 @@ export const authenticateCustomer = async (): Promise<{
     const authResult = await Promise.race([authPromise, timeoutPromise])
 
     console.log("[CUSTOMER-AUTH] Pi.authenticate() returned:")
-    console.log("[CUSTOMER-AUTH] Full response:", JSON.stringify(authResult, null, 2))
-    console.log("[CUSTOMER-AUTH] authResult.user:", authResult?.user)
-    console.log("[CUSTOMER-AUTH] authResult.user.scopes:", authResult?.user?.scopes)
     console.log("[CUSTOMER-AUTH] authResult.accessToken:", authResult?.accessToken ? "EXISTS" : "MISSING")
 
     if (!authResult) {
@@ -525,10 +522,6 @@ export const authenticateMerchant = async (): Promise<{
     const authResult = await Promise.race([authPromise, timeoutPromise])
     
     console.log("[MERCHANT-AUTH] Pi.authenticate() returned successfully")
-    console.log("[MERCHANT-AUTH] ===== FULL AUTHENTICATION RESPONSE =====")
-    console.log(JSON.stringify(authResult, null, 2))
-    console.log("[MERCHANT-AUTH] ===== END AUTH RESPONSE =====")
-    console.log("[MERCHANT-AUTH] authResult.user:", authResult?.user)
     console.log("[MERCHANT-AUTH] authResult.user.uid:", authResult?.user?.uid)
     console.log("[MERCHANT-AUTH] authResult.accessToken:", authResult?.accessToken ? "EXISTS" : "MISSING")
 
@@ -581,28 +574,20 @@ export const authenticateMerchant = async (): Promise<{
     
     // Extract UID from various possible field names
     console.log("[MERCHANT-AUTH] Extracting UID from authResult.user...")
-    console.log("[MERCHANT-AUTH]   authResult.user.uid:", authResult.user.uid)
-    console.log("[MERCHANT-AUTH]   authResult.user.userId:", authResult.user.userId)
-    console.log("[MERCHANT-AUTH]   authResult.user.user_id:", authResult.user.user_id)
-    console.log("[MERCHANT-AUTH]   authResult.user.app_uid:", authResult.user.app_uid)
-    console.log("[MERCHANT-AUTH]   authResult.user.appUid:", authResult.user.appUid)
     
     const rawAuthUid = authResult.user.uid || authResult.user.userId || authResult.user.user_id || authResult.user.app_uid || authResult.user.appUid || ""
     
     if (!rawAuthUid || typeof rawAuthUid !== "string" || rawAuthUid.trim() === "") {
       console.error("[MERCHANT-AUTH] ERROR: No valid UID extracted from authResult")
-      console.error("[MERCHANT-AUTH] Full authResult.user object:", JSON.stringify(authResult.user, null, 2))
       return { success: false, error: "Authentication failed - no user ID returned from Pi Network" }
     }
     
     console.log("[MERCHANT-AUTH] ✅ UID extracted successfully from Pi.authenticate()")
-    console.log("[MERCHANT-AUTH] Extracted UID:", rawAuthUid.substring(0, 20) + "...")
     
     // CRITICAL: Get the accessToken for verifying uid with Pi /v2/me
     const accessToken = authResult.accessToken
     if (!accessToken || typeof accessToken !== "string" || accessToken.trim() === "") {
       console.error("[MERCHANT-AUTH] ERROR: No accessToken in authentication response")
-      console.error("[MERCHANT-AUTH] accessToken value:", authResult.accessToken)
       return { success: false, error: "Authentication failed - no access token returned" }
     }
     
