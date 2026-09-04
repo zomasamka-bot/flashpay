@@ -211,6 +211,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
 
+  const wakeStartedAt = Date.now()
+  const discoveryStartedAt = Date.now()
   const keys = await redis.keys("payment:*")
   const postHorizonIds: string[] = []
   const preparedSubmitIds: string[] = []
@@ -241,9 +243,11 @@ export async function POST(request: NextRequest) {
       retryableIds.push(paymentId)
     }
   }
+  const discoveryDurationMs = Date.now() - discoveryStartedAt
 
   const eligibleIds = [...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
 
+  const workStartedAt = Date.now()
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
 
   for (const paymentId of eligibleIds) {
@@ -316,6 +320,10 @@ for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await
     const evidence = await reconcileIncompleteA2UPayment(id, customerAmount, merchantUid)
     settlementReconcilingEvidence[evidence.outcome]++
   }
+
+  const workDurationMs = Date.now() - workStartedAt
+  const wakeDurationMs = Date.now() - wakeStartedAt
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
