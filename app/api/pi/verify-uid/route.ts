@@ -12,64 +12,33 @@ interface VerifyUidRequest {
 
 export async function POST(request: NextRequest) {
   try {
-    console.log("[Pi Verify] ===== UID VERIFICATION REQUEST =====")
     const body = (await request.json()) as VerifyUidRequest
     const { uid, accessToken, merchantId } = body
 
-    console.log("[Pi Verify] Verifying UID:", uid.substring(0, 20) + "...")
-    console.log("[Pi Verify] Merchant ID:", merchantId)
-
-    if (!uid || !accessToken || !merchantId) {
-      console.error("[Pi Verify] Missing required fields")
+    if (typeof uid !== "string" || typeof accessToken !== "string" || typeof merchantId !== "string" || uid.trim().length === 0 || accessToken.trim().length === 0 || merchantId.trim().length === 0) {
       return NextResponse.json(
         { error: "Missing uid, accessToken, or merchantId", verified: false },
         { status: 400 }
       )
     }
 
-    // Call Pi /v2/me endpoint to verify the uid with the access token
-    console.log("[Pi Verify] Calling Pi /v2/me to verify uid...")
+    const normalizedUid = uid.trim()
+    const normalizedAccessToken = accessToken.trim()
+    const normalizedMerchantId = merchantId.trim()
+
     const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${normalizedAccessToken}`,
         "Content-Type": "application/json",
       },
     })
 
-    console.log("[Pi Verify] Pi /v2/me response status:", verifyResponse.status)
-
     if (!verifyResponse.ok) {
-      let errorData = await verifyResponse.text()
-      let errorMessage = errorData
-      
-      // Try to parse as JSON for better error details
-      try {
-        const jsonError = JSON.parse(errorData)
-        errorMessage = JSON.stringify(jsonError, null, 2)
-      } catch {
-        // If not JSON, use text as-is
-      }
-      
-      console.error("[Pi Verify] ❌ Pi /v2/me returned error")
-      console.error("[Pi Verify] Status:", verifyResponse.status)
-      console.error("[Pi Verify] Headers:", {
-        'content-type': verifyResponse.headers.get('content-type'),
-        'cache-control': verifyResponse.headers.get('cache-control'),
-      })
-      console.error("[Pi Verify] UID attempted:", uid)
-      console.error("[Pi Verify] Access Token analysis:")
-      console.error("[Pi Verify]   - Length:", accessToken.length)
-      console.error("[Pi Verify]   - Contains Bearer prefix:", accessToken.includes("Bearer") ? "YES (INVALID)" : "NO (correct)")
-      console.error("[Pi Verify]   - Looks like JWT:", accessToken.split(".").length === 3 ? "YES (has 3 parts)" : "NO (only " + accessToken.split(".").length + " parts)")
-      console.error("[Pi Verify] Merchant ID:", merchantId)
-      console.error("[Pi Verify] Request timestamp:", new Date().toISOString())
-      
       return NextResponse.json(
         {
           error: "Failed to verify UID with Pi Network",
           piStatus: verifyResponse.status,
-          piErrorDetails: errorData,
           verified: false,
         },
         { status: 401 }
@@ -77,36 +46,22 @@ export async function POST(request: NextRequest) {
     }
 
     const verifiedUser = await verifyResponse.json()
-    console.log("[Pi Verify] ✓ Pi /v2/me returned user data")
-    console.log("[Pi Verify] User UID from Pi:", verifiedUser.uid)
-    console.log("[Pi Verify] User username:", verifiedUser.username)
-    console.log("[Pi Verify] User scopes:", verifiedUser.scopes)
-    console.log("[Pi Verify] User wallet address:", verifiedUser.wallet_address)
+    const verifiedUid = typeof verifiedUser.uid === "string" ? verifiedUser.uid.trim() : ""
+    const verifiedUsername = typeof verifiedUser.username === "string" ? verifiedUser.username.trim() : ""
 
-    // The verified uid from Pi /v2/me is what we should use for A2U
-    const verifiedUid = verifiedUser.uid
-    if (verifiedUid !== uid) {
-      console.warn("[Pi Verify] ⚠️ UID mismatch!")
-      console.warn("[Pi Verify] Original uid:", uid)
-      console.warn("[Pi Verify] Verified uid:", verifiedUid)
-      // This could indicate token reuse or tampering - but we'll use the verified one
+    if (verifiedUid.length === 0 || verifiedUsername.length === 0 || verifiedUid !== normalizedUid || verifiedUsername !== normalizedMerchantId) {
+      return NextResponse.json({ error: "Pi identity mismatch", verified: false }, { status: 409 })
     }
 
-    console.log("[Pi Verify] ✓ UID verified successfully")
-    console.log("[Pi Verify] Saving verified UID for merchant:", merchantId)
-
-    // Store the verified UID in Redis with a verification cache
     await redis.set(
-      `merchant:verified-uid:${merchantId}`,
+      `merchant:verified-uid:${verifiedUsername}`,
       JSON.stringify({
         uid: verifiedUid,
         verifiedAt: new Date().toISOString(),
-        username: verifiedUser.username,
+        username: verifiedUsername,
       }),
-      { ex: 3600 } // Cache for 1 hour
+      { ex: 3600 }
     )
-
-    console.log("[Pi Verify] ✅ Verification complete - UID saved")
 
     return NextResponse.json(
       {
@@ -122,7 +77,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error: "Verification failed",
-        details: error instanceof Error ? error.message : String(error),
         verified: false,
       },
       { status: 500 }
