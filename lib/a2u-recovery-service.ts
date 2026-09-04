@@ -102,8 +102,10 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
     if (reconciliation.outcome === "INDETERMINATE") return "INDETERMINATE"
     if (reconciliation.outcome === "FOUND") {
       if (!reconciliation.dto || !isPiA2UPayment(reconciliation.dto)) return "MANUAL_REVIEW"
+      const identifier = reconciliation.dto.identifier
+      if (typeof identifier !== "string" || identifier.trim().length === 0) return "MANUAL_REVIEW"
       const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
-      await persistCheckpointMerged(paymentId, { a2uPaymentId: reconciliation.dto.identifier, ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}) })
+      await persistCheckpointMerged(paymentId, { a2uPaymentId: identifier, ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}) })
       return "FOUND"
     }
     if (reconciliation.outcome !== "CONFIRMED_NONE") return "MANUAL_REVIEW"
@@ -515,6 +517,7 @@ export async function executeA2URecovery(
     if (commitResult === "FOUND") return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { error: "A2U evidence reconciled under payment lock" } }
     if (commitResult === "INDETERMINATE") return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: "A2U reconciliation remained indeterminate" } }
     if (commitResult === "CONFIRMED_NONE") return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "No merchant transfer evidence; refund intent may be created" } }
+    if (commitResult === "MANUAL_REVIEW") return { status: "manual_review_required", state: "recovery_commit_guarded", paymentId, details: { error: "Recovery commit was guarded" } }
 
     console.log(
       "[A2U Recovery] Safe failure remains non-refundable: verified payer/failure proof incomplete"
