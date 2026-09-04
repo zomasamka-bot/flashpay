@@ -415,7 +415,7 @@ export const authenticateCustomer = async (): Promise<{
     return {
       success: false,
       error: isStuckPayment
-        ? "A payment is stuck. Please contact support or use the emergency recovery page to clear it."
+        ? "A payment is stuck. Manual review is required; do not clear or retry it automatically."
         : isTimeout
         ? "Pi wallet not responding. Please check that you're using Pi Browser and the app is approved in the Developer Portal."
         : error instanceof Error
@@ -522,7 +522,6 @@ export const authenticateMerchant = async (): Promise<{
     const authResult = await Promise.race([authPromise, timeoutPromise])
     
     console.log("[MERCHANT-AUTH] Pi.authenticate() returned successfully")
-    console.log("[MERCHANT-AUTH] authResult.user.uid:", authResult?.user?.uid)
     console.log("[MERCHANT-AUTH] authResult.accessToken:", authResult?.accessToken ? "EXISTS" : "MISSING")
 
     if (!authResult) {
@@ -639,7 +638,7 @@ export const authenticateMerchant = async (): Promise<{
     return {
       success: false,
       error: isStuckPayment
-        ? "Stuck payment detected. Please use the emergency recovery page to clear it."
+        ? "A payment is stuck. Manual review is required; do not clear or retry it automatically."
         : isTimeout
         ? "Pi wallet is not responding. Make sure you're in Pi Browser and the app is approved in Developer Portal. The system will retry automatically."
         : error instanceof Error
