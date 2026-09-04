@@ -5,7 +5,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, runAutomaticRefundPass } from "@/lib/refund-auto-orchestrator"
-import { query } from "@/lib/db"
+import { ensureRefundAccountingTable } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import type { Payment } from "@/lib/types"
@@ -282,7 +282,7 @@ for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await
     results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
   }
 
-  const refundAccountingReady = (await query("SELECT 1 FROM refund_accounting_records LIMIT 0")) !== null
+  const refundAccountingReady = await ensureRefundAccountingTable()
   let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
   const refundResults = []
   if (refundAccountingReady) {
