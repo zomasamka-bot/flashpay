@@ -6,6 +6,7 @@ export const runtime = "nodejs"
 
 import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/redis"
 import type { Payment } from "@/lib/types"
+import { isPaymentFinal } from "@/lib/payment-status"
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -257,7 +258,7 @@ export async function POST(request: NextRequest) {
           merchantUid: payment.merchantUid,
           amount: payment.amount,
           note: payment.note,
-          status: payment.status,
+    status: payment.status === "settled_to_merchant" && !isPaymentFinal(payment) ? "settlement_pending" : payment.status,
           createdAt: payment.createdAt,
         },
       },
@@ -310,6 +311,10 @@ export async function GET(request: NextRequest) {
     }
 
     console.log("[API] Payment retrieved:", id)
+
+    if (typeof payment.id !== "string" || payment.id !== id) {
+      return NextResponse.json({ error: "Payment identity conflict", paymentId: id }, { status: 409, headers: corsHeaders })
+    }
 
     return NextResponse.json(
       {

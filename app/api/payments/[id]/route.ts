@@ -105,6 +105,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     console.log("[API] Payment retrieved:", id, "status:", payment.status)
 
+    if (typeof payment.id !== "string" || payment.id !== id) {
+      const conflictResponse = NextResponse.json({ error: "Payment identity conflict", paymentId: id }, { status: 409 })
+      if (allowCors && origin) {
+        return addCorsHeaders(conflictResponse, origin)
+      }
+      return conflictResponse
+    }
+
     const successResponse = NextResponse.json({
       success: true,
       payment: getPublicPayment(payment),
