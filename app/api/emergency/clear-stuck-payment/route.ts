@@ -178,31 +178,7 @@ export async function POST(request: NextRequest) {
       )
     }
     
-    // Mark as cancelled, preserving all existing fields
-    const clearedPayment = {
-      ...payment,
-      status: "cancelled",
-      cancelledAt: new Date().toISOString(),
-      cancelReason: "Emergency clear - owner action",
-    }
-    
-    await redis.set(key, JSON.stringify(clearedPayment))
-    console.log("[Emergency-POST] Successfully cleared payment:", paymentId)
-    
-    // Return public payment fields only (no sensitive data)
-    return NextResponse.json({
-      success: true,
-      message: `Cleared payment ${paymentId}. System is now ready for new payments.`,
-      payment: {
-        id: clearedPayment.id,
-        merchantId: clearedPayment.merchantId,
-        amount: clearedPayment.amount,
-        note: clearedPayment.note,
-        status: clearedPayment.status,
-        createdAt: clearedPayment.createdAt,
-        cancelledAt: clearedPayment.cancelledAt,
-      }
-    })
+    return NextResponse.json({ error: "Emergency clear blocked: local pending is not authoritative proof; manual review required." }, { status: 409 })
   } catch (error) {
     console.error("[Emergency-POST] Error clearing payment:", error)
     return NextResponse.json(
