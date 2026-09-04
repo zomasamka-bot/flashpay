@@ -57,13 +57,9 @@ export async function POST(request: NextRequest) {
         'content-type': verifyResponse.headers.get('content-type'),
         'cache-control': verifyResponse.headers.get('cache-control'),
       })
-      console.error("[Pi Verify] Full Response Body:")
-      console.error(errorMessage)
       console.error("[Pi Verify] UID attempted:", uid)
       console.error("[Pi Verify] Access Token analysis:")
       console.error("[Pi Verify]   - Length:", accessToken.length)
-      console.error("[Pi Verify]   - First 50 chars:", accessToken.substring(0, 50))
-      console.error("[Pi Verify]   - Last 30 chars:", accessToken.substring(Math.max(0, accessToken.length - 30)))
       console.error("[Pi Verify]   - Contains Bearer prefix:", accessToken.includes("Bearer") ? "YES (INVALID)" : "NO (correct)")
       console.error("[Pi Verify]   - Looks like JWT:", accessToken.split(".").length === 3 ? "YES (has 3 parts)" : "NO (only " + accessToken.split(".").length + " parts)")
       console.error("[Pi Verify] Merchant ID:", merchantId)
@@ -82,9 +78,6 @@ export async function POST(request: NextRequest) {
 
     const verifiedUser = await verifyResponse.json()
     console.log("[Pi Verify] ✓ Pi /v2/me returned user data")
-    console.log("[Pi Verify] ===== FULL /v2/me RESPONSE =====")
-    console.log(JSON.stringify(verifiedUser, null, 2))
-    console.log("[Pi Verify] ===== END /v2/me RESPONSE =====")
     console.log("[Pi Verify] User UID from Pi:", verifiedUser.uid)
     console.log("[Pi Verify] User username:", verifiedUser.username)
     console.log("[Pi Verify] User scopes:", verifiedUser.scopes)

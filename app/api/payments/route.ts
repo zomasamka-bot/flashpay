@@ -40,7 +40,6 @@ export async function POST(request: NextRequest) {
     console.log("[API] ========================================")
     console.log("[API] PAYMENT CREATION REQUEST RECEIVED")
     const body = await request.json()
-    console.log("[API] Raw request body:", JSON.stringify(body))
     const { amount, note, accessToken } = body
 
     console.log("[API] Extracted values:")
@@ -148,7 +147,6 @@ export async function POST(request: NextRequest) {
     console.log("[API]   - payment.note:", payment.note)
     console.log("[API]   - payment.status:", payment.status)
     console.log("[API]   - payment.createdAt:", payment.createdAt, "TYPE:", typeof payment.createdAt)
-    console.log("[API] Full payment object:", JSON.stringify(payment))
     console.log("[API] ========================================")
 
     try {
@@ -160,10 +158,10 @@ export async function POST(request: NextRequest) {
       
       // CRITICAL: Ensure merchantId and createdAt are present before serialization
       if (!payment.merchantId) {
-        throw new Error(`CRITICAL: Cannot store payment without merchantId. payment object: ${JSON.stringify(payment)}`)
+        throw new Error("CRITICAL: Cannot store payment without merchantId")
       }
       if (!payment.createdAt) {
-        throw new Error(`CRITICAL: Cannot store payment without createdAt. payment object: ${JSON.stringify(payment)}`)
+        throw new Error("CRITICAL: Cannot store payment without createdAt")
       }
 
       const paymentString = JSON.stringify(payment)
@@ -180,7 +178,6 @@ export async function POST(request: NextRequest) {
       console.log("[API]   - JSON includes 'merchantUid':", paymentString.includes('"merchantUid"'))
       console.log("[API]   - JSON includes 'merchantAddress':", paymentString.includes('"merchantAddress"'))
       console.log("[API]   - JSON includes 'createdAt':", paymentString.includes('"createdAt"'))
-      console.log("[API]   - Full JSON string:", paymentString)
       
       const redisPersistTimingStartedAt = Date.now()
       await redis.set(kvKey, paymentString)

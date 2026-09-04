@@ -108,7 +108,6 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
     console.log("[v0] ===== PAYMENT CREATION - TOKEN FRESHNESS CHECK =====")
     console.log("[v0] accessToken retrieved from unifiedStore")
     console.log("[v0] accessToken length:", accessToken.length)
-    console.log("[v0] accessToken first 30 chars:", accessToken.substring(0, 30))
     console.log("[v0] merchantUid matches merchant state UID:", merchantUid === merchantState.uid)
     console.log("[v0]")
 
