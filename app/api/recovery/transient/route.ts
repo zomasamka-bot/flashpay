@@ -361,11 +361,11 @@ for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await
   }
 
   try {
-    const cursorCasResult = await redis.eval<number>(`local current = redis.call('GET', KEYS[1]) or 'c:0'
+    const cursorCasResult = await redis.eval<[string, string], number>(`local current = redis.call('GET', KEYS[1]) or 'c:0'
 if current ~= ARGV[1] then return 0 end
 redis.call('SET', KEYS[1], ARGV[2])
 return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken, scanNextToken])
-    if (cursorCasResult !== 1) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+    if (cursorCasResult !== 0 && cursorCasResult !== 1) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
   } catch {
     return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
   }
