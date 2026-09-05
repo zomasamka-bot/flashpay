@@ -150,6 +150,11 @@ export async function POST(request: NextRequest) {
       }
 
       const paymentString = JSON.stringify(payment)
+      const historyKey = `flashpay:merchant:${payment.merchantId}:payments:v1`
+      const historyScore = Date.parse(payment.createdAt)
+      if (!Number.isSafeInteger(historyScore)) {
+        throw new Error("Invalid payment createdAt for history index")
+      }
       
       console.log("[API] CRITICAL CHECK BEFORE REDIS STORAGE:")
       console.log("[API]   - kvKey:", kvKey)
@@ -161,9 +166,16 @@ export async function POST(request: NextRequest) {
       console.log("[API]   - JSON includes 'createdAt':", paymentString.includes('"createdAt"'))
       
       const redisPersistTimingStartedAt = Date.now()
-      await redis.set(kvKey, paymentString)
+      const redisPersistResult = await redis.eval<[string, string, string], number>(
+        "if redis.call('EXISTS',KEYS[1])~=0 then return 0 end local a=redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) if a~=1 then return -1 end redis.call('SET',KEYS[1],ARGV[1]) return 1",
+        [kvKey, historyKey],
+        [paymentString, String(historyScore), payment.id]
+      )
+      if (redisPersistResult !== 1) {
+        throw new Error("Atomic payment persistence failed")
+      }
       const redisPersistDurationMs = Date.now() - redisPersistTimingStartedAt
-      console.log("[API] ✅ Redis.set() completed successfully for key:", kvKey)
+      console.log("[API] ✅ Atomic payment and history index persistence completed successfully for key:", kvKey)
       
       // CRITICAL: Verify merchantId and createdAt were actually persisted
       // Use retry mechanism because Redis might need a moment to confirm the write
