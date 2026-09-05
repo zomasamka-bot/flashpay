@@ -31,6 +31,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
 import type { Payment } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment as isReconciledPiA2UPayment } from "@/lib/pi-reconciliation"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
+import { isPaymentFinal } from "@/lib/payment-status"
 
 /**
  * Pi A2U Payment API Response - Strict type definition
@@ -1281,6 +1282,14 @@ export async function persistCheckpointMerged(
     console.log("[A2U Checkpoint] Persisting strictly monotonic checkpoint to Redis")
     await redis.set(`payment:${paymentId}`, JSON.stringify(merged))
     console.log("[A2U Checkpoint] ✓ Strictly monotonic checkpoint persisted successfully")
+
+    try {
+      if (isPaymentFinal(merged)) {
+        await redis.srem("flashpay:recovery:active-payments:v1", paymentId)
+      }
+    } catch (error) {
+      console.warn("[A2U Checkpoint] Active recovery index cleanup failed", error)
+    }
 
     return merged
   } catch (error) {
