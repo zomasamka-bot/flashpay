@@ -1,9 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { query } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
 
 /**
  * GET /api/payments/history?merchantId=xxx
@@ -44,150 +47,54 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    console.log("[Payment History] Fetching history for verified merchant:", verifiedMerchant.username)
-
-    // 3. Use verified username as authoritative merchant identity
-    // 4. Query PostgreSQL
-
-    // Query using verified username (not request parameter)
-    const isDbConfigured = !!process.env.DATABASE_URL
-    
-    if (isDbConfigured) {
-      try {
-        console.log("[Payment History] Querying PostgreSQL for persistent payment history")
-        
-        const result = await query(
-          `SELECT 
-            t.id as transaction_id,
-            t.payment_id,
-            t.merchant_id,
-            t.merchant_uid,
-            t.amount,
-            t.created_at,
-            t.status,
-            r.id as receipt_id,
-            r.txid,
-            r.currency,
-            r.timestamp as receipt_timestamp,
-            r.metadata,
-            r.created_at as receipt_created_at
-          FROM transactions t
-          LEFT JOIN receipts r ON t.id = r.transaction_id
-          WHERE t.merchant_id = $1
-          ORDER BY t.created_at DESC
-          LIMIT $2`,
-          [verifiedMerchant.username, limit]
-        )
-
-        if (result && result.length > 0) {
-          // Calculate total balance
-          const totalAmount = result.reduce((sum: number, row: any) => sum + parseFloat(row.amount || 0), 0)
-          
-          const payments = result.map((row: any) => ({
-            transactionId: row.transaction_id,
-            id: row.payment_id,
-            merchantId: row.merchant_id,
-            merchantUid: row.merchant_uid,
-            amount: parseFloat(row.amount),
-            status: row.status,
-            createdAt: row.created_at,
-            receipt: row.receipt_id ? {
-              id: row.receipt_id,
-              transactionId: row.transaction_id,
-              txid: row.txid,
-              currency: row.currency,
-              timestamp: row.receipt_timestamp,
-              metadata: row.metadata,
-              createdAt: row.receipt_created_at,
-            } : null,
-          }))
-
-          console.log("[Payment History] Found", payments.length, "payments in PostgreSQL")
-          
-          return NextResponse.json({
-            payments,
-            balance: {
-              total: totalAmount,
-              currency: "π",
-            },
-            source: "postgresql",
-          })
-        } else {
-          console.log("[Payment History] No results from PostgreSQL - will try Redis fallback")
-        }
-      } catch (dbError) {
-        console.warn("[Payment History] PostgreSQL query failed, will try Redis:", dbError)
-      }
-    }
-
-    // 5. Fallback to Redis if DB is not configured or query failed
-    console.log("[Payment History] Falling back to Redis")
-    
+    const safeLimit = Number.isNaN(limit) ? 100 : Math.max(1, Math.min(limit, 1000))
     const { redis, isRedisConfigured } = await import("@/lib/redis")
-    
-    if (!isRedisConfigured) {
-      return NextResponse.json({
-        payments: [],
-        total: 0,
-        source: "none",
-        message: "No persistent storage configured",
-      })
-    }
+    if (!isRedisConfigured) return NextResponse.json({ error: "Active payment history unavailable" }, { status: 503 })
+    const bootstrapMarker = await redis.get("flashpay:merchant-history:v1:bootstrap")
+    if (bootstrapMarker !== "done") return NextResponse.json({ error: "Payment history not ready" }, { status: 503 })
 
-    // Fetch all payments from Redis and filter by verified username
-    const paymentKeys = await redis.keys("payment:*")
-    const payments: any[] = []
-    
-    if (paymentKeys && paymentKeys.length > 0) {
-      for (const key of paymentKeys) {
+    const historyIds = await redis.zrange<string[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, safeLimit - 1, { rev: true })
+    const ids = [...new Set(historyIds.filter((id) => typeof id === "string" && id.trim().length > 0).map((id) => id.trim()))]
+    const payments: Array<Record<string, unknown>> = []
+    for (let index = 0; index < ids.length; index += 200) {
+      const batchIds = ids.slice(index, index + 200)
+      const batchKeys = batchIds.map((id) => `payment:${id}`)
+      const values = await redis.mget<unknown[]>(batchKeys)
+      if (!Array.isArray(values) || values.length !== batchKeys.length) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+      for (let valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
+        const raw = values[valueIndex]
+        let payment: unknown
         try {
-          const data = await redis.get(key)
-          if (!data) continue
-
-          const payment = typeof data === "string" ? JSON.parse(data) : data
-
-          // Filter by verified username (not request parameter)
-          if (payment.merchantId !== verifiedMerchant.username) continue
-
-          payments.push({
-            transactionId: payment.id,
-            id: payment.id,
-            merchantId: payment.merchantId,
-            merchantUid: payment.merchantUid,
-            amount: payment.amount,
-            status: payment.status,
-            createdAt: payment.createdAt,
-            receipt: (payment.u2aTxid || payment.a2uTxid) ? {
-              transactionId: payment.id,
-              txid: payment.u2aTxid || payment.a2uTxid,
-              currency: "π",
-              timestamp: payment.paidAt,
-            } : null,
-          })
-        } catch (error) {
-          console.error("[Payment History] Error parsing payment from key:", key, error)
+          payment = typeof raw === "string" ? JSON.parse(raw) : raw
+        } catch {
           continue
         }
+        if (!isRecord(payment)) continue
+        const id = payment.id
+        const amount = payment.amount
+        const merchant = payment.merchantId
+        const status = payment.status
+        const createdAt = payment.createdAt
+        if (typeof id !== "string" || id !== batchIds[valueIndex] || typeof merchant !== "string" || merchant !== verifiedMerchant.username || typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || typeof createdAt !== "string" || Number.isNaN(Date.parse(createdAt)) || typeof status !== "string" || status.trim().length === 0) continue
+        payments.push({
+          transactionId: id,
+          id,
+          merchantId: merchant,
+          merchantUid: payment.merchantUid,
+          amount,
+          status,
+          createdAt,
+          receipt: typeof payment.u2aTxid === "string" || typeof payment.a2uTxid === "string" ? {
+            transactionId: id,
+            txid: payment.u2aTxid || payment.a2uTxid,
+            currency: "π",
+            timestamp: payment.paidAt,
+          } : null,
+        })
       }
-
-      // Sort by created date descending
-      payments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     }
-
-    // Apply limit and calculate balance
-    const limitedPayments = payments.slice(0, limit)
-    const totalAmount = limitedPayments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
-
-    console.log("[Payment History] Returning", limitedPayments.length, "payments from Redis for verified merchant:", verifiedMerchant.username)
-
-    return NextResponse.json({
-      payments: limitedPayments,
-      balance: {
-        total: totalAmount,
-        currency: "π",
-      },
-      source: "redis",
-    })
+    const totalAmount = payments.reduce((sum, payment) => sum + (typeof payment.amount === "number" ? payment.amount : 0), 0)
+    return NextResponse.json({ payments, balance: { total: totalAmount, currency: "π" }, source: "redis" })
   } catch (error) {
     console.error("[Payment History] Error:", error)
     return NextResponse.json(
