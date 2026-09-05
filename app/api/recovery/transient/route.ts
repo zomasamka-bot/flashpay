@@ -242,6 +242,7 @@ export async function POST(request: NextRequest) {
   const settlementReconcilingDiscoveryIds: string[] = []
   const staleRetryReconcilingDiscoveryIds: string[] = []
   const refundCandidateIds: string[] = []
+  const pendingActivePaymentKeys: string[] = []
   const now = Date.now()
 
   for (const key of keys) {
@@ -253,6 +254,7 @@ export async function POST(request: NextRequest) {
       refundCandidateIds.push(paymentId)
     }
     if (payment.id !== paymentId) continue
+    if (payment.status === "pending") pendingActivePaymentKeys.push(key)
     if (isFreshSettlementDispatchCandidate(payment, now) || isStage1OnlySettlementDispatchCandidate(payment, now)) freshDispatchIds.push(paymentId)
     if (isStaleFreshReconcilingCandidate(payment, now)) settlementReconcilingDiscoveryIds.push(paymentId)
     if (isStaleRetryReconcilingCandidate(payment, now)) staleRetryReconcilingDiscoveryIds.push(paymentId)
@@ -265,6 +267,36 @@ export async function POST(request: NextRequest) {
     }
   }
   const discoveryDurationMs = Date.now() - discoveryStartedAt
+  let activePendingPruned = 0
+  let activePendingRemaining = 0
+  try {
+    const pruneMarker = await redis.get("flashpay:recovery:active-payments:v1:prune-pending")
+    if (activeBootstrapState === "done" && pruneMarker !== "done") {
+      const pruneScript = `local removed = 0
+for i = 2, #KEYS do
+  local raw = redis.call('GET', KEYS[i])
+  if raw then
+    local ok, payment = pcall(cjson.decode, raw)
+    if ok and payment then
+      local id = string.sub(KEYS[i], 9)
+      if payment.id == id and payment.status == 'pending' then
+        removed = removed + redis.call('SREM', KEYS[1], id)
+      end
+    end
+  end
+end
+return removed`
+      for (let index = 0; index < pendingActivePaymentKeys.length; index += 200) {
+        const batch = pendingActivePaymentKeys.slice(index, index + 200)
+        if (batch.length > 0) activePendingPruned += Number(await redis.eval(pruneScript, ["flashpay:recovery:active-payments:v1", ...batch], []))
+      }
+      activePendingRemaining = Number(await redis.scard("flashpay:recovery:active-payments:v1"))
+      await redis.set("flashpay:recovery:active-payments:v1:prune-pending", "done")
+    }
+  } catch {
+    activePendingPruned = 0
+    activePendingRemaining = 0
+  }
   let activeShadowState: "skipped" | "ok" | "unavailable" | "mismatch" = "skipped"
   let activeShadowChecked = 0
   let activeShadowMissing = 0
@@ -366,7 +398,7 @@ for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, activeBootstrapState, activeShadowState, activeShadowChecked, activeShadowMissing })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, activeBootstrapState, activeShadowState, activeShadowChecked, activeShadowMissing, activePendingPruned, activePendingRemaining })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
