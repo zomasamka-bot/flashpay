@@ -224,15 +224,13 @@ export async function POST(request: NextRequest) {
         .filter((key) => key.startsWith("payment:"))
         .map((key) => key.slice("payment:".length))
         .filter((paymentId) => paymentId.length > 0)
-      let bootstrapSucceeded = true
       for (let index = 0; index < activePaymentIds.length; index += 200) {
         const batch = activePaymentIds.slice(index, index + 200)
-        if (batch.length > 0) await redis.sadd("flashpay:recovery:active-payments:v1", ...batch)
+        const [first, ...rest] = batch
+        if (first !== undefined) await redis.sadd("flashpay:recovery:active-payments:v1", first, ...rest)
       }
-      if (bootstrapSucceeded) {
-        await redis.set("flashpay:recovery:active-payments:v1:bootstrap", "done")
-        activeBootstrapState = "done"
-      }
+      await redis.set("flashpay:recovery:active-payments:v1:bootstrap", "done")
+      activeBootstrapState = "done"
     }
   } catch {
     activeBootstrapState = "retry"
