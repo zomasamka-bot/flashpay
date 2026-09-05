@@ -252,6 +252,13 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
   const alreadyFinal = payment.status === 'refunded' && payment.refundStatus === 'completed' && payment.settlementFailureState === 'refunded' && payment.refundPaymentId === checkpoint.refundPaymentId && payment.refundTxid === checkpoint.refundTxid
   if (alreadyFinal) {
     const finalized = await finalizeRefundProjectionWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount)
+    if (finalized) {
+      try {
+        await redis.srem('flashpay:recovery:active-payments:v1', checkpoint.paymentId)
+      } catch (error) {
+        console.warn('[refunds/executor] Active recovery index cleanup failed', error)
+      }
+    }
     return finalized ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'projection_finality_uncertain' }
   }
   if (payment.status !== 'refund_pending' || payment.refundStatus !== 'submitted' || payment.settlementFailureState !== 'refund_pending' || payment.refundPaymentId !== checkpoint.refundPaymentId || payment.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'projection_conflict' }
@@ -263,6 +270,13 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
   const readBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
   if (!readBack || readBack.status !== 'refunded' || readBack.refundStatus !== 'completed' || readBack.settlementFailureState !== 'refunded' || readBack.refundPaymentId !== checkpoint.refundPaymentId || readBack.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'projection_uncertain' }
   const finalized = await finalizeRefundProjectionWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount)
+  if (finalized) {
+    try {
+      await redis.srem('flashpay:recovery:active-payments:v1', checkpoint.paymentId)
+    } catch (error) {
+      console.warn('[refunds/executor] Active recovery index cleanup failed', error)
+    }
+  }
   return finalized ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'projection_finality_uncertain' }
 }
 
