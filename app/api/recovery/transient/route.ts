@@ -214,6 +214,29 @@ export async function POST(request: NextRequest) {
   const wakeStartedAt = Date.now()
   const discoveryStartedAt = Date.now()
   const keys = await redis.keys("payment:*")
+  let activeBootstrapState: "done" | "retry" = "retry"
+  try {
+    const bootstrapMarker = await redis.get("flashpay:recovery:active-payments:v1:bootstrap")
+    if (bootstrapMarker === "done") {
+      activeBootstrapState = "done"
+    } else {
+      const activePaymentIds = keys
+        .filter((key) => key.startsWith("payment:"))
+        .map((key) => key.slice("payment:".length))
+        .filter((paymentId) => paymentId.length > 0)
+      let bootstrapSucceeded = true
+      for (let index = 0; index < activePaymentIds.length; index += 200) {
+        const batch = activePaymentIds.slice(index, index + 200)
+        if (batch.length > 0) await redis.sadd("flashpay:recovery:active-payments:v1", ...batch)
+      }
+      if (bootstrapSucceeded) {
+        await redis.set("flashpay:recovery:active-payments:v1:bootstrap", "done")
+        activeBootstrapState = "done"
+      }
+    }
+  } catch {
+    activeBootstrapState = "retry"
+  }
   const postHorizonIds: string[] = []
   const preparedSubmitIds: string[] = []
   const retryableIds: string[] = []
@@ -323,7 +346,7 @@ for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, activeBootstrapState })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
