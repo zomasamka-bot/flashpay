@@ -214,6 +214,9 @@ export async function POST(request: NextRequest) {
   const wakeStartedAt = Date.now()
   const discoveryStartedAt = Date.now()
   let keys: string[]
+  let activeSetSize = 0
+  let scanStartToken = "c:0"
+  let scanNextToken = "c:0"
   try {
     const markers = await Promise.all([
       redis.get("flashpay:recovery:active-payments:v1:bootstrap"),
@@ -221,8 +224,18 @@ export async function POST(request: NextRequest) {
       redis.get("flashpay:recovery:active-payments:v1:prune-final-settlement"),
     ])
     if (markers.some((marker) => marker !== "done")) return NextResponse.json({ error: "Active recovery index not ready" }, { status: 503 })
-    const activePaymentIds = await redis.smembers("flashpay:recovery:active-payments:v1")
-    if (activePaymentIds.some((paymentId) => typeof paymentId !== "string" || paymentId.length === 0 || paymentId !== paymentId.trim())) return NextResponse.json({ error: "Active recovery index invalid" }, { status: 503 })
+
+    const storedCursor = await redis.get("flashpay:recovery:active-payments:v1:scan-cursor")
+    if (storedCursor !== null && (typeof storedCursor !== "string" || !/^c:[0-9]+$/.test(storedCursor))) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+    scanStartToken = storedCursor ?? "c:0"
+    const scanCursor = scanStartToken.slice(2)
+    const scanResult = await redis.sscan("flashpay:recovery:active-payments:v1", scanCursor, { count: 200 })
+    if (!Array.isArray(scanResult) || scanResult.length !== 2) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+    const [nextCursor, members] = scanResult
+    if (typeof nextCursor !== "string" || !/^[0-9]+$/.test(nextCursor) || !Array.isArray(members) || members.some((member) => typeof member !== "string" || member.length === 0 || member !== member.trim())) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+    const activePaymentIds = [...new Set(members)]
+    scanNextToken = `c:${nextCursor}`
+    activeSetSize = Number(await redis.scard("flashpay:recovery:active-payments:v1"))
     keys = activePaymentIds.map((paymentId) => `payment:${paymentId}`)
   } catch {
     return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
@@ -347,9 +360,19 @@ for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await
     settlementReconcilingEvidence[evidence.outcome]++
   }
 
+  try {
+    const cursorCasResult = await redis.eval<number>(`local current = redis.call('GET', KEYS[1]) or 'c:0'
+if current ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[2])
+return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken, scanNextToken])
+    if (cursorCasResult !== 1) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+  } catch {
+    return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+  }
+
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
