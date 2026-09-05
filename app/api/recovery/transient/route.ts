@@ -238,9 +238,9 @@ export async function POST(request: NextRequest) {
 
   for (let index = 0; index < keys.length; index += 200) {
     const batchKeys = keys.slice(index, index + 200)
-    let values: Array<string | null>
+    let values: unknown[]
     try {
-      const batchValues = await redis.mget<string>(batchKeys)
+      const batchValues = await redis.mget<unknown[]>(batchKeys)
       if (!Array.isArray(batchValues) || batchValues.length !== batchKeys.length) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
       values = batchValues
     } catch {
