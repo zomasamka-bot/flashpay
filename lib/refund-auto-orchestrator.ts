@@ -10,6 +10,7 @@ import {
 } from "@/lib/refund-checkpoint-store"
 import { createRefundIntentInternal } from "@/lib/refund-intent-service"
 import { executeRefundNextStep } from "@/lib/refund-executor"
+import { isRedisConfigured, redis } from "@/lib/redis"
 import type { RefundCheckpoint } from "@/lib/types"
 
 export type AutomaticRefundPassResult =
@@ -74,7 +75,29 @@ export async function ensureAutomaticRefundIntent(paymentId: string): Promise<Au
   if (typeof paymentId !== "string" || paymentId.trim().length === 0) return { outcome: "blocked", paymentId, reason: "invalid_payment_id" }
   const first = await findRefundCheckpointByPaymentId(paymentId)
   if (first.state === "uncertain") return { outcome: "blocked", paymentId, reason: "checkpoint_uncertain" }
-  if (first.state === "present") return { outcome: "existing", paymentId, refundId: first.checkpoint.refundId }
+  if (first.state === "present") {
+    if (first.checkpoint.status === "manual_review_required") {
+      const manualReview = await markAutomaticRefundManualReview(first.checkpoint.refundId, first.checkpoint.stage)
+      if (
+        manualReview &&
+        manualReview.refundId === first.checkpoint.refundId &&
+        manualReview.paymentId === first.checkpoint.paymentId &&
+        manualReview.stage === first.checkpoint.stage &&
+        manualReview.status === "manual_review_required" &&
+        manualReview.lastErrorCode === "refund_cancelled" &&
+        manualReview.lastErrorMessage === "refund_cancelled" &&
+        manualReview.nextRetryAt === undefined &&
+        isRedisConfigured
+      ) {
+        try {
+          await redis.srem("flashpay:recovery:active-payments:v1", first.checkpoint.paymentId)
+        } catch (error) {
+          console.warn("[refund/orchestrator] Active recovery index cleanup failed", error)
+        }
+      }
+    }
+    return { outcome: "existing", paymentId, refundId: first.checkpoint.refundId }
+  }
   const key = `auto-refund:${paymentId}`
   const intent = await createRefundIntentInternal(paymentId, key)
   const second = await findRefundCheckpointByPaymentId(paymentId)
