@@ -236,24 +236,37 @@ export async function POST(request: NextRequest) {
   const refundCandidateIds: string[] = []
   const now = Date.now()
 
-  for (const key of keys) {
-    const payment = parsePayment(await redis.get(key))
-    if (!payment) continue
-
-    const paymentId = key.slice("payment:".length)
-    if (payment.id === paymentId && checkRefundEligibility(payment)) {
-      refundCandidateIds.push(paymentId)
+  for (let index = 0; index < keys.length; index += 200) {
+    const batchKeys = keys.slice(index, index + 200)
+    let values: Array<string | null>
+    try {
+      const batchValues = await redis.mget<string>(batchKeys)
+      if (!Array.isArray(batchValues) || batchValues.length !== batchKeys.length) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+      values = batchValues
+    } catch {
+      return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
     }
-    if (payment.id !== paymentId) continue
-    if (isFreshSettlementDispatchCandidate(payment, now) || isStage1OnlySettlementDispatchCandidate(payment, now)) freshDispatchIds.push(paymentId)
-    if (isStaleFreshReconcilingCandidate(payment, now)) settlementReconcilingDiscoveryIds.push(paymentId)
-    if (isStaleRetryReconcilingCandidate(payment, now)) staleRetryReconcilingDiscoveryIds.push(paymentId)
-    if (isPostHorizonEligible(payment, now)) {
-      postHorizonIds.push(paymentId)
-    } else if (isPreparedSubmitEligible(payment)) {
-      preparedSubmitIds.push(paymentId)
-    } else if (isEligible(payment, now)) {
-      retryableIds.push(paymentId)
+
+    for (let valueIndex = 0; valueIndex < batchKeys.length; valueIndex += 1) {
+      const key = batchKeys[valueIndex]
+      const payment = parsePayment(values[valueIndex])
+      if (!payment) continue
+
+      const paymentId = key.slice("payment:".length)
+      if (payment.id === paymentId && checkRefundEligibility(payment)) {
+        refundCandidateIds.push(paymentId)
+      }
+      if (payment.id !== paymentId) continue
+      if (isFreshSettlementDispatchCandidate(payment, now) || isStage1OnlySettlementDispatchCandidate(payment, now)) freshDispatchIds.push(paymentId)
+      if (isStaleFreshReconcilingCandidate(payment, now)) settlementReconcilingDiscoveryIds.push(paymentId)
+      if (isStaleRetryReconcilingCandidate(payment, now)) staleRetryReconcilingDiscoveryIds.push(paymentId)
+      if (isPostHorizonEligible(payment, now)) {
+        postHorizonIds.push(paymentId)
+      } else if (isPreparedSubmitEligible(payment)) {
+        preparedSubmitIds.push(paymentId)
+      } else if (isEligible(payment, now)) {
+        retryableIds.push(paymentId)
+      }
     }
   }
   const discoveryDurationMs = Date.now() - discoveryStartedAt
