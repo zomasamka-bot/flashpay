@@ -172,13 +172,23 @@ export async function GET(request: NextRequest) {
         refundIdsByPaymentId.set(row.payment_id, row.refund_id)
       }
     }
+    const refundCandidates: Array<{ payment: Record<string, unknown>; paymentId: string; refundId: string }> = []
     for (const payment of operationalPayments) {
       const paymentId = typeof payment.paymentId === "string" ? payment.paymentId : undefined
       const refundId = paymentId ? refundIdsByPaymentId.get(paymentId) : undefined
-      if (!refundId) continue
-      const refundPresentation = await readRefundPresentation(refundId)
-      if (refundPresentation.outcome === "FOUND" && refundPresentation.presentation.paymentId === paymentId) {
-        payment.refundPresentation = refundPresentation.presentation
+      if (paymentId === undefined || refundId === undefined) continue
+      refundCandidates.push({ payment, paymentId, refundId })
+    }
+    for (let index = 0; index < refundCandidates.length; index += 2) {
+      const chunk = refundCandidates.slice(index, index + 2)
+      const results = await Promise.all(chunk.map(async (candidate) => ({
+        candidate,
+        result: await readRefundPresentation(candidate.refundId),
+      })))
+      for (const { candidate, result } of results) {
+        if (result.outcome === "FOUND" && result.presentation.paymentId === candidate.paymentId) {
+          candidate.payment.refundPresentation = result.presentation
+        }
       }
     }
 
