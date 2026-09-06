@@ -126,7 +126,7 @@ export default function EmergencyPage() {
         <div className="mt-6">
           <h1 className="text-3xl font-bold mb-2">Emergency Payment Recovery</h1>
           <p className="text-muted-foreground mb-6">
-            Clear stuck pending payments that are blocking the system
+            Emergency pending listing is disabled; manual review is required.
           </p>
 
           {error && (
@@ -164,7 +164,7 @@ export default function EmergencyPage() {
                 <span>Checking for stuck payments...</span>
               </CardContent>
             </Card>
-          ) : (
+          ) : error ? null : (
             <>
               {stuckPayments.length > 0 ? (
                 <Card className="mb-6 border-orange-500/50 bg-orange-50/50 dark:bg-orange-950/20">
