@@ -353,6 +353,7 @@ export interface RefundAuditEvent {
     | "refund_rejected"
     | "refund_completed"
     | "refund_projection_finalized"
+    | "refund_presentation_proof_recorded"
     | "refund_manual_review"
   actorType: "system" | "merchant" | "customer" | "operator"
   idempotencyKey: string
@@ -420,6 +421,21 @@ export type RefundPresentationPersistenceReadResult =
 export type RefundPresentationBlockchainReadResult =
   | { outcome: "CONFIRMED"; transactionAt: string; network: "Pi Testnet"; piTransactionVerified: true; piDeveloperCompleted: boolean; horizonSuccessful: true }
   | { outcome: "PENDING" }
+  | { outcome: "INDETERMINATE" }
+
+export interface RefundPresentationProof {
+  refundPaymentId: string
+  refundTxid: string
+  transactionAt: string
+  network: "Pi Testnet"
+  piTransactionVerified: true
+  piDeveloperCompleted: true
+  horizonSuccessful: true
+}
+
+export type RefundPresentationProofReadResult =
+  | { outcome: "FOUND"; proof: RefundPresentationProof }
+  | { outcome: "ABSENT" }
   | { outcome: "INDETERMINATE" }
 
 /**
