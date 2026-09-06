@@ -196,6 +196,46 @@ export async function GET(request: NextRequest) {
     // Read-only correction overlay: completed refund presentations classify their
     // canonical transaction from exactly one settlement row, without changing the total.
     const overlaidPiPaymentIds = new Set<string>()
+    const correctionPiPaymentIds: string[] = []
+    const correctionPiPaymentIdSet = new Set<string>()
+    for (const payment of authoritativeOperationalPayments) {
+      const presentationValue: unknown = payment.refundPresentation
+      if (
+        typeof presentationValue !== "object" ||
+        presentationValue === null ||
+        Array.isArray(presentationValue)
+      ) continue
+      const presentation = presentationValue as Record<string, unknown>
+      if (presentation.merchantStatus !== "refund_completed") continue
+      if (presentation.paymentId !== payment.paymentId) continue
+      if (typeof payment.piPaymentId !== "string" || payment.piPaymentId.length === 0) continue
+      if (correctionPiPaymentIdSet.has(payment.piPaymentId)) continue
+      correctionPiPaymentIdSet.add(payment.piPaymentId)
+      correctionPiPaymentIds.push(payment.piPaymentId)
+    }
+
+    const correctionRowsByPaymentId = new Map<string, unknown[]>()
+    for (let index = 0; index < correctionPiPaymentIds.length; index += 200) {
+      const batchPaymentIds = correctionPiPaymentIds.slice(index, index + 200)
+      const placeholders = batchPaymentIds.map((_, batchIndex) => `$${batchIndex + 2}`).join(",")
+      const transactionRows = await query(
+        `SELECT t.payment_id, t.id, t.amount, r.settlement_status
+         FROM transactions t
+         LEFT JOIN receipts r ON r.transaction_id = t.id
+         WHERE t.merchant_id = $1 AND t.payment_id IN (${placeholders})`,
+        [verifiedMerchant.username, ...batchPaymentIds],
+      )
+      if (!Array.isArray(transactionRows)) return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+      for (const rowValue of transactionRows) {
+        if (!isRecord(rowValue) || typeof rowValue.payment_id !== "string" || !correctionPiPaymentIdSet.has(rowValue.payment_id)) {
+          return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+        }
+        const rows = correctionRowsByPaymentId.get(rowValue.payment_id) ?? []
+        rows.push(rowValue)
+        correctionRowsByPaymentId.set(rowValue.payment_id, rows)
+      }
+    }
+
     for (const payment of authoritativeOperationalPayments) {
       const presentationValue: unknown = payment.refundPresentation
       if (
@@ -209,25 +249,16 @@ export async function GET(request: NextRequest) {
       if (typeof payment.piPaymentId !== "string" || payment.piPaymentId.length === 0) continue
       if (overlaidPiPaymentIds.has(payment.piPaymentId)) continue
       overlaidPiPaymentIds.add(payment.piPaymentId)
-
-      const transactionRows = await query(
-        `SELECT t.id, t.amount, r.settlement_status
-         FROM transactions t
-         LEFT JOIN receipts r ON r.transaction_id = t.id
-         WHERE t.merchant_id = $1 AND t.payment_id = $2
-         LIMIT 2`,
-        [verifiedMerchant.username, payment.piPaymentId],
-      )
-      if (!Array.isArray(transactionRows) || transactionRows.length !== 1) continue
+      const transactionRows = correctionRowsByPaymentId.get(payment.piPaymentId) ?? []
+      if (transactionRows.length !== 1) continue
 
       const rowValue: unknown = transactionRows[0]
-      if (typeof rowValue !== "object" || rowValue === null || Array.isArray(rowValue)) continue
-      const row = rowValue as Record<string, unknown>
-      const settlementStatus: unknown = row.settlement_status
+      if (!isRecord(rowValue)) continue
+      const settlementStatus: unknown = rowValue.settlement_status
       if (typeof settlementStatus !== "string") continue
       if (settlementStatus === "failed" || settlementStatus === "settlement_failed") continue
 
-      const amountValue: unknown = row.amount
+      const amountValue: unknown = rowValue.amount
       const amount = typeof amountValue === "number"
         ? amountValue
         : typeof amountValue === "string"
