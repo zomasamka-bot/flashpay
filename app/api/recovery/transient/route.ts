@@ -235,8 +235,9 @@ export async function POST(request: NextRequest) {
       const scanResult = await redis.sscan("flashpay:recovery:active-payments:v1", pageCursor, { count: 200 })
       if (!Array.isArray(scanResult) || scanResult.length !== 2) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
       const [nextCursor, members] = scanResult
-      if (typeof nextCursor !== "string" || !/^[0-9]+$/.test(nextCursor) || !Array.isArray(members) || members.some((member) => typeof member !== "string" || member.length === 0 || member !== member.trim())) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+      if (typeof nextCursor !== "string" || !/^[0-9]+$/.test(nextCursor) || !Array.isArray(members)) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
       for (const member of members) {
+        if (typeof member !== "string" || member.length === 0 || member !== member.trim()) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
         if (!seenActivePaymentIds.has(member)) {
           seenActivePaymentIds.add(member)
           activePaymentIds.push(member)
