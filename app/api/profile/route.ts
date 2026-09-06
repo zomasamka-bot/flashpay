@@ -168,7 +168,10 @@ export async function GET(request: NextRequest) {
       const chunk = refundCandidates.slice(index, index + 2)
       const results = await Promise.all(chunk.map(async (candidate) => ({
         candidate,
-        result: await readRefundPresentation(candidate.refundId, candidate.checkpoint),
+        result: await readRefundPresentation(
+          candidate.refundId,
+          candidate.checkpoint && candidate.checkpoint.stage === "audit_recorded" && candidate.checkpoint.status === "completed" ? candidate.checkpoint : undefined,
+        ),
       })))
       for (const { candidate, result } of results) {
         if (result.outcome === "FOUND" && result.presentation.paymentId === candidate.paymentId) {

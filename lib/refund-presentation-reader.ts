@@ -20,7 +20,8 @@ import type {
 
 export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint): Promise<RefundPresentationReadResult> {
   try {
-    const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.refundId === refundId && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
+    if (suppliedCheckpoint && suppliedCheckpoint.refundId !== refundId) return { outcome: "INDETERMINATE" }
+    const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
       ? { state: "present", checkpoint: suppliedCheckpoint }
       : await getRefundCheckpointReadOnly(refundId)
     if (checkpointResult.state === "absent") return { outcome: "NOT_FOUND" }

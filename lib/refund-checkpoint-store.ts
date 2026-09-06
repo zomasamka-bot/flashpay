@@ -77,12 +77,17 @@ export async function listAutomaticRefundCheckpoints(limit: number): Promise<Aut
 }
 
 export async function getRefundCheckpointsByPaymentIds(paymentIds: string[]): Promise<{ state: 'ok'; checkpoints: Map<string, RefundCheckpoint> } | { state: 'uncertain' }> {
-  const uniquePaymentIds = [...new Set(paymentIds.filter((paymentId) => typeof paymentId === 'string' && paymentId.length > 0 && paymentId === paymentId.trim()))]
-  if (uniquePaymentIds.length !== paymentIds.length) return { state: 'uncertain' }
+  if (!Array.isArray(paymentIds)) return { state: 'uncertain' }
+  const uniquePaymentIds: string[] = []
+  const seen = new Set<string>()
+  for (const paymentId of paymentIds) {
+    if (typeof paymentId !== 'string' || paymentId.length === 0 || paymentId !== paymentId.trim() || seen.has(paymentId)) return { state: 'uncertain' }
+    seen.add(paymentId)
+    uniquePaymentIds.push(paymentId)
+  }
   try {
     if (uniquePaymentIds.length === 0) return { state: 'ok', checkpoints: new Map() }
-    const placeholders = uniquePaymentIds.map((_, index) => `$${index + 1}`).join(',')
-    const rows = await query(`SELECT * FROM refund_checkpoints WHERE payment_id IN (${placeholders})`, uniquePaymentIds)
+    const rows = await query('SELECT * FROM refund_checkpoints WHERE payment_id = ANY($1::text[])', [uniquePaymentIds])
     if (!Array.isArray(rows)) return { state: 'uncertain' }
     const requested = new Set(uniquePaymentIds)
     const checkpoints = new Map<string, RefundCheckpoint>()
