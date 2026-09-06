@@ -1,7 +1,7 @@
 import 'server-only'
 
 import { query } from './db'
-import { normalizeRefundPersistenceTimestamps } from './refund-presentation'
+import { normalizeRefundBlockchainTransactionAt, normalizeRefundPersistenceTimestamps } from './refund-presentation'
 import type {
   RefundCheckpoint,
   RefundPresentationBlockchainReadResult,
@@ -9,11 +9,8 @@ import type {
   RefundPresentationProofReadResult,
 } from './types'
 
-function normalizeRefundBlockchainTransactionAt(value: string): string | null {
-  const milliseconds = Date.parse(value)
-  if (!Number.isFinite(milliseconds)) return null
-  const normalized = new Date(milliseconds).toISOString()
-  return normalized === value ? normalized : null
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export async function readRefundPresentationPersistence(
@@ -148,31 +145,47 @@ export async function readRefundPresentationPersistence(
 export async function readRefundPresentationProof(
   checkpoint: RefundCheckpoint,
 ): Promise<RefundPresentationProofReadResult> {
-  if (checkpoint.stage !== 'audit_recorded' || checkpoint.status !== 'completed' || !checkpoint.refundPaymentId || !checkpoint.refundTxid) return { outcome: 'INDETERMINATE' }
-  const proofRows = await query(`SELECT refund_payment_id, refund_txid, transaction_at, network, pi_transaction_verified, pi_developer_completed, horizon_successful FROM refund_audit_events WHERE refund_id=$1 AND event_type='refund_presentation_proof_recorded' LIMIT 2`, [checkpoint.refundId])
+  let proofRows: unknown
+  try {
+    proofRows = await query(`SELECT event_id, payment_id, idempotency_key, actor_type, details FROM refund_audit_events WHERE refund_id=$1 AND event_type='refund_presentation_proof_recorded' LIMIT 2`, [checkpoint.refundId])
+  } catch {
+    return { outcome: 'INDETERMINATE' }
+  }
   if (!Array.isArray(proofRows)) return { outcome: 'INDETERMINATE' }
   if (proofRows.length === 0) return { outcome: 'ABSENT' }
-  if (proofRows.length !== 1 || typeof proofRows[0] !== 'object' || proofRows[0] === null || Array.isArray(proofRows[0])) return { outcome: 'INDETERMINATE' }
-  const proofRow = proofRows[0] as Record<string, unknown>
-  if (proofRow.refund_payment_id !== checkpoint.refundPaymentId || proofRow.refund_txid !== checkpoint.refundTxid || typeof proofRow.transaction_at !== 'string' || proofRow.network !== 'Pi Testnet' || proofRow.pi_transaction_verified !== true || proofRow.pi_developer_completed !== true || proofRow.horizon_successful !== true) return { outcome: 'INDETERMINATE' }
-  const transactionAt = normalizeRefundBlockchainTransactionAt(proofRow.transaction_at)
+  if (proofRows.length !== 1 || !isRecord(proofRows[0])) return { outcome: 'INDETERMINATE' }
+  const proofRow = proofRows[0]
+  if (proofRow.event_id !== `refund:${checkpoint.refundId}:presentation_proof` || proofRow.payment_id !== checkpoint.paymentId || proofRow.idempotency_key !== checkpoint.idempotencyKey || proofRow.actor_type !== 'system' || !isRecord(proofRow.details)) return { outcome: 'INDETERMINATE' }
+  const proofDetails = proofRow.details
+  const proofKeys = Object.keys(proofDetails)
+  if (proofKeys.length !== 7 || proofKeys.some((key) => !['refundPaymentId', 'refundTxid', 'transactionAt', 'network', 'piTransactionVerified', 'piDeveloperCompleted', 'horizonSuccessful'].includes(key))) return { outcome: 'INDETERMINATE' }
+  if (proofDetails.refundPaymentId !== checkpoint.refundPaymentId || proofDetails.refundTxid !== checkpoint.refundTxid || proofDetails.network !== 'Pi Testnet' || proofDetails.piTransactionVerified !== true || proofDetails.piDeveloperCompleted !== true || proofDetails.horizonSuccessful !== true || typeof proofDetails.transactionAt !== 'string') return { outcome: 'INDETERMINATE' }
+  const transactionAt = normalizeRefundBlockchainTransactionAt(proofDetails.transactionAt)
   if (!transactionAt) return { outcome: 'INDETERMINATE' }
-  return { outcome: 'FOUND', proof: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, transactionAt, network: 'Pi Testnet', piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true } }
+  return { outcome: 'FOUND', proof: { refundPaymentId: checkpoint.refundPaymentId ?? '', refundTxid: checkpoint.refundTxid ?? '', transactionAt, network: 'Pi Testnet', piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true } }
 }
 
 export async function recordRefundPresentationProof(
   checkpoint: RefundCheckpoint,
   blockchain: RefundPresentationBlockchainReadResult,
 ): Promise<boolean> {
-  if (blockchain.outcome !== 'CONFIRMED' || !blockchain.piDeveloperCompleted || checkpoint.stage !== 'audit_recorded' || checkpoint.status !== 'completed' || !checkpoint.refundPaymentId || !checkpoint.refundTxid) return false
+  if (blockchain.outcome !== 'CONFIRMED' || blockchain.piDeveloperCompleted !== true || !checkpoint.refundPaymentId || !checkpoint.refundTxid) return false
   const transactionAt = normalizeRefundBlockchainTransactionAt(blockchain.transactionAt)
   if (!transactionAt) return false
-  const proofRead = await query(`SELECT 1 FROM refund_audit_events WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND event_type='refund_audit_recorded' AND actor_type='system' AND details->>'refundPaymentId'=$4 AND details->>'refundTxid'=$5 AND (SELECT count(*) FROM refund_audit_events WHERE refund_id=$1 AND event_id=$6 AND event_type='refund_projection_finalized' AND payment_id=$2 AND idempotency_key=$3 AND actor_type='system' AND details=jsonb_build_object('refundPaymentId',$4,'refundTxid',$5))=1 LIMIT 2`, [checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, `refund:${checkpoint.refundId}:projection_finalized`])
-  if (!Array.isArray(proofRead) || proofRead.length !== 1) return false
-  const eventId = `refund:${checkpoint.refundId}:presentation_proof`
-  const details = { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, transactionAt, network: blockchain.network, piTransactionVerified: blockchain.piTransactionVerified, piDeveloperCompleted: blockchain.piDeveloperCompleted, horizonSuccessful: blockchain.horizonSuccessful }
-  const inserted = await query(`INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details) VALUES ($1,$2,$3,'refund_presentation_proof_recorded','system',$4,NOW(),$5::jsonb) ON CONFLICT (event_id) DO NOTHING RETURNING event_id`, [eventId, checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, details])
-  if (!Array.isArray(inserted) || inserted.length === 1) return false
-  const readback = await query(`SELECT event_id FROM refund_audit_events WHERE refund_id=$1 AND event_id=$2 AND payment_id=$3 AND idempotency_key=$4 AND event_type='refund_presentation_proof_recorded' AND actor_type='system' AND details=$5::jsonb LIMIT 2`, [checkpoint.refundId, eventId, checkpoint.paymentId, checkpoint.idempotencyKey, details])
-  return Array.isArray(readback) && readback.length === 1
+  try {
+    const checkpointRows = await query(`SELECT payment_id, idempotency_key, status, stage, refund_payment_id, refund_txid FROM refund_checkpoints WHERE refund_id=$1 LIMIT 2`, [checkpoint.refundId])
+    if (!Array.isArray(checkpointRows) || checkpointRows.length !== 1 || !isRecord(checkpointRows[0])) return false
+    const checkpointRow = checkpointRows[0]
+    if (checkpointRow.payment_id !== checkpoint.paymentId || checkpointRow.idempotency_key !== checkpoint.idempotencyKey || checkpointRow.status !== 'completed' || checkpointRow.stage !== 'audit_recorded' || checkpointRow.refund_payment_id !== checkpoint.refundPaymentId || checkpointRow.refund_txid !== checkpoint.refundTxid) return false
+    const persistence = await readRefundPresentationPersistence(checkpoint)
+    if (persistence.outcome !== 'FOUND' || Object.values(persistence.timestamps).some((value) => value === null)) return false
+    const eventId = `refund:${checkpoint.refundId}:presentation_proof`
+    const details = { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, transactionAt, network: blockchain.network, piTransactionVerified: blockchain.piTransactionVerified, piDeveloperCompleted: blockchain.piDeveloperCompleted, horizonSuccessful: blockchain.horizonSuccessful }
+    const inserted = await query(`INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details) VALUES ($1,$2,$3,'refund_presentation_proof_recorded','system',$4,NOW(),$5::jsonb) ON CONFLICT (event_id) DO NOTHING RETURNING event_id`, [eventId, checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, details])
+    if (!Array.isArray(inserted) || inserted.length > 1) return false
+    const readback = await readRefundPresentationProof(checkpoint)
+    return readback.outcome === 'FOUND'
+  } catch {
+    return false
+  }
 }
