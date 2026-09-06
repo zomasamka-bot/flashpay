@@ -142,6 +142,69 @@ export async function readRefundPresentationPersistence(
   return normalized
 }
 
+export async function readRefundPresentationPersistences(
+  checkpoints: RefundCheckpoint[],
+): Promise<{ state: 'ok'; persistences: Map<string, RefundPresentationPersistenceReadResult> } | { state: 'uncertain' }> {
+  const valid = checkpoints.filter((checkpoint) => checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed')
+  const seenRefundIds = new Set<string>()
+  const seenPaymentIds = new Set<string>()
+  const seenRefundPaymentIds = new Set<string>()
+  const seenRefundTxids = new Set<string>()
+  for (const checkpoint of valid) {
+    const refundId = checkpoint.refundId
+    const paymentId = checkpoint.paymentId
+    const refundPaymentId = checkpoint.refundPaymentId
+    const refundTxid = checkpoint.refundTxid
+    if (
+      typeof refundId !== 'string' || refundId.length === 0 || refundId !== refundId.trim() || seenRefundIds.has(refundId) ||
+      typeof paymentId !== 'string' || paymentId.length === 0 || paymentId !== paymentId.trim() || seenPaymentIds.has(paymentId) ||
+      typeof refundPaymentId !== 'string' || refundPaymentId.length === 0 || refundPaymentId !== refundPaymentId.trim() || seenRefundPaymentIds.has(refundPaymentId) ||
+      typeof refundTxid !== 'string' || refundTxid.length === 0 || refundTxid !== refundTxid.trim() || seenRefundTxids.has(refundTxid)
+    ) return { state: 'uncertain' }
+    seenRefundIds.add(refundId)
+    seenPaymentIds.add(paymentId)
+    seenRefundPaymentIds.add(refundPaymentId)
+    seenRefundTxids.add(refundTxid)
+  }
+  const persistences = new Map<string, RefundPresentationPersistenceReadResult>()
+  if (valid.length === 0) return { state: 'ok', persistences }
+  let rows: unknown
+  try {
+    rows = await query(`WITH input AS (
+      SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::numeric[], $8::text[]) WITH ORDINALITY AS t(refund_id,payment_id,idempotency_key,refund_payment_id,refund_txid,payer_uid,amount,currency,ordinality)
+    )
+    SELECT i.ordinality, i.refund_id, i.payment_id, i.idempotency_key,
+      x.requested_total, x.requested_exact, x.requested_at, x.confirmed_total, x.confirmed_exact, x.confirmation_recorded_at,
+      x.accounting_event_total, x.accounting_event_exact, x.accounting_total, x.accounting_exact, x.accounting_recorded_at,
+      x.audit_total, x.audit_exact, x.audit_recorded_at, x.completed_total, x.completed_exact, x.completed_at,
+      x.finalized_total, x.finalized_exact, x.finalized_at
+    FROM input i
+    CROSS JOIN LATERAL (
+      WITH requested AS (SELECT count(*)::int total, count(*) FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('stage','intent_created') OR a.details=jsonb_build_object('resumed',true)))::int exact, max(a.created_at AT TIME ZONE 'UTC') FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('stage','intent_created') OR a.details=jsonb_build_object('resumed',true))) created_at FROM refund_audit_events a WHERE a.refund_id=i.refund_id AND a.event_type='refund_requested'),
+      confirmed AS (SELECT count(*)::int total, count(*) FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid) OR a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'recovered',true)))::int exact, max(a.created_at AT TIME ZONE 'UTC') FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid) OR a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'recovered',true))) created_at FROM refund_audit_events a WHERE a.refund_id=i.refund_id AND a.event_type='refund_submission_confirmed'),
+      accounting AS (SELECT count(*) FILTER (WHERE r.refund_id=i.refund_id AND r.payment_id=i.payment_id AND r.refund_payment_id=i.refund_payment_id AND r.refund_txid=i.refund_txid AND r.payer_uid=i.payer_uid AND r.amount=i.amount AND r.currency=i.currency)::int exact, count(*) FILTER (WHERE r.refund_id=i.refund_id OR r.payment_id=i.payment_id OR r.refund_payment_id=i.refund_payment_id OR r.refund_txid=i.refund_txid)::int total, max(r.created_at AT TIME ZONE 'UTC') FILTER (WHERE r.refund_id=i.refund_id AND r.payment_id=i.payment_id AND r.refund_payment_id=i.refund_payment_id AND r.refund_txid=i.refund_txid AND r.payer_uid=i.payer_uid AND r.amount=i.amount AND r.currency=i.currency) created_at FROM refund_accounting_records r),
+      events AS (SELECT e.event_type, count(*)::int total, count(*) FILTER (WHERE e.payment_id=i.payment_id AND e.idempotency_key=i.idempotency_key AND e.actor_type='system' AND e.event_id<>'' AND e.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'horizonFeeStroops',r.horizon_fee_stroops))::int exact, max(e.created_at AT TIME ZONE 'UTC') FILTER (WHERE e.payment_id=i.payment_id AND e.idempotency_key=i.idempotency_key AND e.actor_type='system' AND e.event_id<>'' AND e.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'horizonFeeStroops',r.horizon_fee_stroops)) created_at FROM refund_audit_events e LEFT JOIN refund_accounting_records r ON r.refund_id=i.refund_id AND r.payment_id=i.payment_id AND r.refund_payment_id=i.refund_payment_id AND r.refund_txid=i.refund_txid AND r.payer_uid=i.payer_uid AND r.amount=i.amount AND r.currency=i.currency WHERE e.refund_id=i.refund_id AND e.event_type IN ('refund_accounting_recorded','refund_audit_recorded','refund_completed','refund_projection_finalized') GROUP BY e.event_type),
+      finalized AS (SELECT count(*) FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.event_id='refund:'||i.refund_id||':projection_finalized' AND a.actor_type='system' AND a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid))::int exact, count(*)::int total, max(a.created_at AT TIME ZONE 'UTC') FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.event_id='refund:'||i.refund_id||':projection_finalized' AND a.actor_type='system' AND a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid)) created_at FROM refund_audit_events a WHERE a.refund_id=i.refund_id AND a.event_type='refund_projection_finalized')
+      SELECT requested.total requested_total, requested.exact requested_exact, requested.created_at requested_at, confirmed.total confirmed_total, confirmed.exact confirmed_exact, confirmed.created_at confirmation_recorded_at, COALESCE((SELECT total FROM events WHERE event_type='refund_accounting_recorded'),0) accounting_event_total, COALESCE((SELECT exact FROM events WHERE event_type='refund_accounting_recorded'),0) accounting_event_exact, accounting.total accounting_total, accounting.exact accounting_exact, accounting.created_at accounting_recorded_at, COALESCE((SELECT total FROM events WHERE event_type='refund_audit_recorded'),0) audit_total, COALESCE((SELECT exact FROM events WHERE event_type='refund_audit_recorded'),0) audit_exact, (SELECT created_at FROM events WHERE event_type='refund_audit_recorded') audit_recorded_at, COALESCE((SELECT total FROM events WHERE event_type='refund_completed'),0) completed_total, COALESCE((SELECT exact FROM events WHERE event_type='refund_completed'),0) completed_exact, (SELECT created_at FROM events WHERE event_type='refund_completed') completed_at, finalized.total finalized_total, finalized.exact finalized_exact, finalized.created_at finalized_at FROM requested, confirmed, accounting, finalized
+    ) x ORDER BY i.ordinality`, [valid.map((c) => c.refundId), valid.map((c) => c.paymentId), valid.map((c) => c.idempotencyKey), valid.map((c) => c.refundPaymentId), valid.map((c) => c.refundTxid), valid.map((c) => c.payerUid), valid.map((c) => c.amount), valid.map((c) => c.currency)])
+  } catch {
+    return { state: 'uncertain' }
+  }
+  if (!Array.isArray(rows) || rows.length !== valid.length) return { state: 'uncertain' }
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]
+    if (!isRecord(row) || row.ordinality !== index + 1 || row.refund_id !== valid[index].refundId || row.payment_id !== valid[index].paymentId || row.idempotency_key !== valid[index].idempotencyKey) return { state: 'uncertain' }
+    const sources = [['requested_total', 'requested_exact'], ['confirmed_total', 'confirmed_exact'], ['accounting_event_total', 'accounting_event_exact'], ['accounting_total', 'accounting_exact'], ['audit_total', 'audit_exact'], ['completed_total', 'completed_exact'], ['finalized_total', 'finalized_exact']] as const
+    if (!sources.every(([total, exact]) => {
+      const totalValue = row[total]
+      const exactValue = row[exact]
+      return typeof totalValue === 'number' && Number.isInteger(totalValue) && typeof exactValue === 'number' && Number.isInteger(exactValue) && totalValue <= 1 && totalValue === exactValue
+    })) return { state: 'uncertain' }
+    persistences.set(valid[index].refundId, normalizeRefundPersistenceTimestamps({ requestedAt: row.requested_at, confirmationRecordedAt: row.confirmation_recorded_at, accountingRecordedAt: row.accounting_recorded_at, auditRecordedAt: row.audit_recorded_at, completedAt: row.completed_at, finalizedAt: row.finalized_at }))
+  }
+  return { state: 'ok', persistences }
+}
+
 function validateRefundPresentationProofRow(
   checkpoint: RefundCheckpoint,
   row: unknown,

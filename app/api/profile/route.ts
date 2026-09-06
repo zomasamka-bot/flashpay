@@ -2,9 +2,9 @@ import { type NextRequest, NextResponse } from "next/server"
 import { getMerchantProfileSummary, getSettledPaymentIds, query } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { readRefundPresentation } from "@/lib/refund-presentation-reader"
-import { readRefundPresentationProofs } from "@/lib/refund-presentation-persistence"
+import { readRefundPresentationPersistences, readRefundPresentationProofs } from "@/lib/refund-presentation-persistence"
 import { getRefundCheckpointsByPaymentIds } from "@/lib/refund-checkpoint-store"
-import type { RefundCheckpoint, RefundPresentationProofReadResult } from "@/lib/types"
+import type { RefundCheckpoint, RefundPresentationPersistenceReadResult, RefundPresentationProofReadResult } from "@/lib/types"
 import { redis, isRedisConfigured } from "@/lib/redis"
 
 export const dynamic = "force-dynamic"
@@ -157,9 +157,12 @@ export async function GET(request: NextRequest) {
     if (checkpointResult.state === "uncertain") return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
     const refundIdsByPaymentId = new Map<string, string>()
     for (const checkpoint of checkpointResult.checkpoints.values()) refundIdsByPaymentId.set(checkpoint.paymentId, checkpoint.refundId)
-    const proofResult = await readRefundPresentationProofs([...checkpointResult.checkpoints.values()])
+    const completedCheckpoints = [...checkpointResult.checkpoints.values()].filter((checkpoint) => checkpoint.stage === "audit_recorded" && checkpoint.status === "completed")
+    const persistenceResult = await readRefundPresentationPersistences(completedCheckpoints)
+    if (persistenceResult.state === "uncertain") return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+    const proofResult = await readRefundPresentationProofs(completedCheckpoints)
     if (proofResult.state === "uncertain") return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
-    const refundCandidates: Array<{ payment: Record<string, unknown>; paymentId: string; refundId: string; checkpoint: RefundCheckpoint | undefined; proof: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult } | undefined }> = []
+    const refundCandidates: Array<{ payment: Record<string, unknown>; paymentId: string; refundId: string; checkpoint: RefundCheckpoint | undefined; proof: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult } | undefined; persistence: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationPersistenceReadResult } | undefined }> = []
     for (const payment of operationalPayments) {
       const paymentId = typeof payment.paymentId === "string" ? payment.paymentId : undefined
       const refundId = paymentId ? refundIdsByPaymentId.get(paymentId) : undefined
@@ -167,7 +170,9 @@ export async function GET(request: NextRequest) {
       const checkpoint = checkpointResult.checkpoints.get(paymentId)
       const proofResultForPayment = checkpoint && checkpoint.stage === "audit_recorded" && checkpoint.status === "completed" ? proofResult.proofs.get(checkpoint.refundId) : undefined
       const proof = checkpoint && proofResultForPayment ? { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, idempotencyKey: checkpoint.idempotencyKey, result: proofResultForPayment } : undefined
-      refundCandidates.push({ payment, paymentId, refundId, checkpoint, proof })
+      const persistenceValue = checkpoint && checkpoint.stage === "audit_recorded" && checkpoint.status === "completed" ? persistenceResult.persistences.get(checkpoint.refundId) : undefined
+      const persistence = checkpoint && persistenceValue ? { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, idempotencyKey: checkpoint.idempotencyKey, result: persistenceValue } : undefined
+      refundCandidates.push({ payment, paymentId, refundId, checkpoint, proof, persistence })
     }
     for (let index = 0; index < refundCandidates.length; index += 2) {
       const chunk = refundCandidates.slice(index, index + 2)
@@ -177,6 +182,7 @@ export async function GET(request: NextRequest) {
           candidate.refundId,
           candidate.checkpoint && candidate.checkpoint.stage === "audit_recorded" && candidate.checkpoint.status === "completed" ? candidate.checkpoint : undefined,
           candidate.proof,
+          candidate.persistence,
         ),
       })))
       for (const { candidate, result } of results) {

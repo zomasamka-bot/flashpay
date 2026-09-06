@@ -5,6 +5,7 @@ import type { RefundCheckpointReadOnly } from "./refund-checkpoint-store"
 import { readRefundPresentationBlockchain } from "./refund-presentation-blockchain"
 import {
   readRefundPresentationPersistence,
+  readRefundPresentationPersistences,
   readRefundPresentationProof,
   readRefundPresentationProofs,
   recordRefundPresentationProof,
@@ -16,11 +17,12 @@ import {
 import type {
   RefundCheckpoint,
   RefundPresentationBlockchainReadResult,
+  RefundPresentationPersistenceReadResult,
   RefundPresentationProofReadResult,
   RefundPresentationReadResult,
 } from "./types"
 
-export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult }): Promise<RefundPresentationReadResult> {
+export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult }, suppliedPersistence?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationPersistenceReadResult }): Promise<RefundPresentationReadResult> {
   try {
     if (suppliedCheckpoint && suppliedCheckpoint.refundId !== refundId) return { outcome: "INDETERMINATE" }
     const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
@@ -30,7 +32,8 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
     if (checkpointResult.state === "uncertain") return { outcome: "INDETERMINATE" }
 
     const checkpoint = checkpointResult.checkpoint
-    const persistence = await readRefundPresentationPersistence(checkpoint)
+    if (suppliedPersistence && (suppliedPersistence.refundId !== checkpoint.refundId || suppliedPersistence.paymentId !== checkpoint.paymentId || suppliedPersistence.idempotencyKey !== checkpoint.idempotencyKey)) return { outcome: "INDETERMINATE" }
+    const persistence = suppliedPersistence?.result ?? await readRefundPresentationPersistence(checkpoint)
     if (persistence.outcome !== "FOUND") return { outcome: "INDETERMINATE" }
 
     let blockchain: RefundPresentationBlockchainReadResult
