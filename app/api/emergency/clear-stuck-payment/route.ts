@@ -41,10 +41,8 @@ async function verifyOwnerAuth(token: string, ownerUid?: string) {
   }
 }
 
-// GET /api/emergency/clear-stuck-payment — List all pending payments (owner only)
+// GET /api/emergency/clear-stuck-payment — Pending listing disabled (owner only)
 export async function GET(request: NextRequest) {
-  console.log("[Emergency] GET - Listing stuck payments")
-  
   // Get config for owner UID
   const config = require("@/lib/config").config || {}
   
@@ -65,54 +63,8 @@ export async function GET(request: NextRequest) {
     console.log("[Emergency] Authorization failed with status:", authResult.statusCode)
     return NextResponse.json({ error: "Unauthorized" }, { status: authResult.statusCode })
   }
-  
-  if (!isRedisConfigured) {
-    return NextResponse.json(
-      { error: "Redis not configured", stuckPayments: [] },
-      { status: 503 }
-    )
-  }
 
-  try {
-    // Get all payment keys from Redis
-    const allKeys = await redis.keys("payment:*")
-    console.log("[Emergency] Found payment keys:", allKeys.length)
-    
-    const stuckPayments: any[] = []
-    
-    for (const key of allKeys) {
-      const paymentData = await redis.get(key)
-      if (paymentData) {
-        const payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
-        if (String(payment.status).toLowerCase() === "pending") {
-          stuckPayments.push({
-            id: payment.id,
-            amount: payment.amount,
-            status: payment.status,
-            createdAt: payment.createdAt,
-            note: payment.note,
-          })
-        }
-      }
-    }
-    
-    console.log("[Emergency] Stuck pending payments:", stuckPayments.length)
-    
-    return NextResponse.json({
-      success: true,
-      stuckPaymentCount: stuckPayments.length,
-      stuckPayments,
-      message: stuckPayments.length > 0 
-        ? `Found ${stuckPayments.length} stuck payment(s) - POST to clear` 
-        : "No stuck payments found"
-    })
-  } catch (error) {
-    console.error("[Emergency] Error listing payments:", error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
-      { status: 500 }
-    )
-  }
+  return NextResponse.json({ error: "Emergency pending listing disabled: local pending is not authoritative proof; manual review required.", stuckPayments: [] }, { status: 409 })
 }
 
 // POST /api/emergency/clear-stuck-payment — Clear a single stuck payment (owner only)
