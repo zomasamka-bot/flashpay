@@ -7,6 +7,10 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 /**
  * GET /api/profile?merchantId=xxx
  * Returns merchant profile summary with transaction statistics
@@ -63,16 +67,45 @@ export async function GET(request: NextRequest) {
     }
 
     const operationalPayments: Array<Record<string, unknown>> = []
-    if (isRedisConfigured) {
-      const keys = await redis.keys("payment:*")
-      for (const key of keys || []) {
+    if (!isRedisConfigured) {
+      return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+    }
+    let historyIds: unknown[]
+    try {
+      const bootstrapMarker = await redis.get("flashpay:merchant-history:v1:bootstrap")
+      if (bootstrapMarker !== "done") return NextResponse.json({ error: "Operational payment history not ready" }, { status: 503 })
+      historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, -1)
+    } catch {
+      return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+    }
+    if (!Array.isArray(historyIds) || !historyIds.every((id): id is string => typeof id === "string" && id.length > 0 && id === id.trim() && historyIds.indexOf(id) === historyIds.lastIndexOf(id))) {
+      return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+    }
+    for (let index = 0; index < historyIds.length; index += 200) {
+      const batchIds = historyIds.slice(index, index + 200)
+      const batchKeys = batchIds.map((id) => `payment:${id}`)
+      let values: unknown[]
+      try {
+        const batchValues = await redis.mget<unknown[]>(batchKeys)
+        if (!Array.isArray(batchValues) || batchValues.length !== batchKeys.length) return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+        values = batchValues
+      } catch {
+        return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+      }
+      for (let valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
+        const raw = values[valueIndex]
+        let paymentValue: unknown
         try {
-          const raw = await redis.get(key)
-          if (!raw) continue
-          const payment = typeof raw === "string" ? JSON.parse(raw) : raw
-          if (!payment || payment.merchantId !== verifiedMerchant.username) continue
-          if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(payment.status) || payment.settlementFailureState) {
-            const operationalPayment: Record<string, unknown> = {
+          paymentValue = typeof raw === "string" ? JSON.parse(raw) : raw
+        } catch {
+          return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+        }
+        if (!isRecord(paymentValue) || paymentValue.id !== batchIds[valueIndex] || paymentValue.merchantId !== verifiedMerchant.username) {
+          return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+        }
+        const payment = paymentValue
+        if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(String(payment.status)) || payment.settlementFailureState) {
+          const operationalPayment: Record<string, unknown> = {
               paymentId: payment.id,
               piPaymentId: payment.piPaymentId,
               amount: payment.customerAmount ?? payment.amount,
@@ -90,8 +123,8 @@ export async function GET(request: NextRequest) {
               updatedAt: payment.lastAttemptAt || payment.paidAt || payment.createdAt,
             }
             const shouldReadRefund =
-              ["settlement_failed", "refund_pending", "refunded"].includes(payment.status) ||
-              ["refund_pending", "refunded"].includes(payment.settlementFailureState) ||
+              ["settlement_failed", "refund_pending", "refunded"].includes(String(payment.status)) ||
+              ["refund_pending", "refunded"].includes(String(payment.settlementFailureState)) ||
               ["pending", "submitted", "completed", "failed", "manual_review_required"].includes(payment.refundStatus)
             if (
               shouldReadRefund &&
@@ -124,8 +157,6 @@ export async function GET(request: NextRequest) {
             }
             operationalPayments.push(operationalPayment)
           }
-        } catch (error) {
-          console.warn("[Profile API] Skipping malformed operational payment", key, error)
         }
       }
     }
