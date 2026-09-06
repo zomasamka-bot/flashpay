@@ -199,9 +199,11 @@ export async function readRefundPresentationPersistences(
       const totalValue = row[total]
       const exactValue = row[exact]
       return typeof totalValue === 'number' && Number.isInteger(totalValue) && typeof exactValue === 'number' && Number.isInteger(exactValue) && totalValue <= 1 && totalValue === exactValue
-    })) return { state: 'uncertain' }
+    })) {
+      persistences.set(valid[index].refundId, { outcome: 'INDETERMINATE' })
+      continue
+    }
     const normalized = normalizeRefundPersistenceTimestamps({ requestedAt: row.requested_at, confirmationRecordedAt: row.confirmation_recorded_at, accountingRecordedAt: row.accounting_recorded_at, auditRecordedAt: row.audit_recorded_at, completedAt: row.completed_at, finalizedAt: row.finalized_at })
-    if (normalized.outcome === 'INDETERMINATE') return { state: 'uncertain' }
     persistences.set(valid[index].refundId, normalized)
   }
   return { state: 'ok', persistences }
