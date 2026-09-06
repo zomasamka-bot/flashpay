@@ -154,7 +154,16 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { merchantId, fromDate, toDate, limit = 50, page = 1 } = body
+    const { merchantId, fromDate, toDate } = body
+    const requestedLimit = body?.limit ?? 50
+    const requestedPage = body?.page ?? 1
+
+    if (typeof requestedLimit !== "number" || !Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || typeof requestedPage !== "number" || !Number.isSafeInteger(requestedPage) || requestedPage < 1) {
+      return NextResponse.json({ error: "Invalid pagination parameters" }, { status: 400 })
+    }
+
+    const limit = Math.min(requestedLimit, 100)
+    const page = requestedPage
 
     if (!merchantId) {
       return NextResponse.json({ error: "merchantId required" }, { status: 400 })
@@ -183,7 +192,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const offset = Math.max(page - 1, 0) * limit
+    const offset = (page - 1) * limit
 
     // Query with date range
     const { transactions, total } = await getTransactionsByMerchant(merchantId, {
