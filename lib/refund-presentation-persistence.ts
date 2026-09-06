@@ -142,6 +142,50 @@ export async function readRefundPresentationPersistence(
   return normalized
 }
 
+function validateRefundPresentationProofRow(
+  checkpoint: RefundCheckpoint,
+  row: unknown,
+): RefundPresentationProofReadResult {
+  if (!isRecord(row) || row.event_id !== `refund:${checkpoint.refundId}:presentation_proof` || row.payment_id !== checkpoint.paymentId || row.idempotency_key !== checkpoint.idempotencyKey || row.actor_type !== 'system' || !isRecord(row.details)) return { outcome: 'INDETERMINATE' }
+  const details = row.details
+  const keys = Object.keys(details)
+  if (keys.length !== 7 || keys.some((key) => !['refundPaymentId', 'refundTxid', 'transactionAt', 'network', 'piTransactionVerified', 'piDeveloperCompleted', 'horizonSuccessful'].includes(key))) return { outcome: 'INDETERMINATE' }
+  if (details.refundPaymentId !== checkpoint.refundPaymentId || details.refundTxid !== checkpoint.refundTxid || details.network !== 'Pi Testnet' || details.piTransactionVerified !== true || details.piDeveloperCompleted !== true || details.horizonSuccessful !== true || typeof details.transactionAt !== 'string') return { outcome: 'INDETERMINATE' }
+  const transactionAt = normalizeRefundBlockchainTransactionAt(details.transactionAt)
+  if (!transactionAt) return { outcome: 'INDETERMINATE' }
+  return { outcome: 'FOUND', proof: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, transactionAt, network: 'Pi Testnet', piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true } }
+}
+
+export async function readRefundPresentationProofs(
+  checkpoints: RefundCheckpoint[],
+): Promise<{ state: 'ok'; proofs: Map<string, RefundPresentationProofReadResult> } | { state: 'uncertain' }> {
+  const validCheckpoints = checkpoints.filter((checkpoint) => checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed')
+  const refundIds = [...new Set(validCheckpoints.map((checkpoint) => checkpoint.refundId))]
+  if (refundIds.some((refundId) => typeof refundId !== 'string' || refundId.length === 0 || refundId !== refundId.trim())) return { state: 'uncertain' }
+  const byRefundId = new Map(validCheckpoints.map((checkpoint) => [checkpoint.refundId, checkpoint]))
+  const proofs = new Map<string, RefundPresentationProofReadResult>()
+  if (refundIds.length === 0) return { state: 'ok', proofs }
+  let rows: unknown
+  try {
+    rows = await query(`SELECT event_id, refund_id, payment_id, idempotency_key, actor_type, details FROM refund_audit_events WHERE refund_id = ANY($1::text[]) AND event_type='refund_presentation_proof_recorded' LIMIT ${refundIds.length + 1}`, [refundIds])
+  } catch {
+    return { state: 'uncertain' }
+  }
+  if (!Array.isArray(rows)) return { state: 'uncertain' }
+  const seen = new Set<string>()
+  for (const row of rows) {
+    if (!isRecord(row) || typeof row.refund_id !== 'string' || !byRefundId.has(row.refund_id) || seen.has(row.refund_id)) return { state: 'uncertain' }
+    seen.add(row.refund_id)
+    const checkpoint = validCheckpoints.find((candidate) => candidate.refundId === row.refund_id)
+    if (!checkpoint) return { state: 'uncertain' }
+    const result = validateRefundPresentationProofRow(checkpoint, row)
+    if (result.outcome === 'INDETERMINATE') return { state: 'uncertain' }
+    proofs.set(row.refund_id, result)
+  }
+  for (const refundId of refundIds) if (!proofs.has(refundId)) proofs.set(refundId, { outcome: 'ABSENT' })
+  return { state: 'ok', proofs }
+}
+
 export async function readRefundPresentationProof(
   checkpoint: RefundCheckpoint,
 ): Promise<RefundPresentationProofReadResult> {
@@ -167,16 +211,8 @@ export async function readRefundPresentationProof(
   }
   if (!Array.isArray(proofRows)) return { outcome: 'INDETERMINATE' }
   if (proofRows.length === 0) return { outcome: 'ABSENT' }
-  if (proofRows.length !== 1 || !isRecord(proofRows[0])) return { outcome: 'INDETERMINATE' }
-  const proofRow = proofRows[0]
-  if (proofRow.event_id !== `refund:${refundId}:presentation_proof` || proofRow.payment_id !== paymentId || proofRow.idempotency_key !== idempotencyKey || proofRow.actor_type !== 'system' || !isRecord(proofRow.details)) return { outcome: 'INDETERMINATE' }
-  const proofDetails = proofRow.details
-  const proofKeys = Object.keys(proofDetails)
-  if (proofKeys.length !== 7 || proofKeys.some((key) => !['refundPaymentId', 'refundTxid', 'transactionAt', 'network', 'piTransactionVerified', 'piDeveloperCompleted', 'horizonSuccessful'].includes(key))) return { outcome: 'INDETERMINATE' }
-  if (proofDetails.refundPaymentId !== refundPaymentId || proofDetails.refundTxid !== refundTxid || proofDetails.network !== 'Pi Testnet' || proofDetails.piTransactionVerified !== true || proofDetails.piDeveloperCompleted !== true || proofDetails.horizonSuccessful !== true || typeof proofDetails.transactionAt !== 'string') return { outcome: 'INDETERMINATE' }
-  const transactionAt = normalizeRefundBlockchainTransactionAt(proofDetails.transactionAt)
-  if (!transactionAt) return { outcome: 'INDETERMINATE' }
-  return { outcome: 'FOUND', proof: { refundPaymentId, refundTxid, transactionAt, network: 'Pi Testnet', piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true } }
+  if (proofRows.length !== 1) return { outcome: 'INDETERMINATE' }
+  return validateRefundPresentationProofRow(checkpoint, proofRows[0])
 }
 
 export async function recordRefundPresentationProof(
