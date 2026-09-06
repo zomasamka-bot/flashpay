@@ -78,11 +78,18 @@ export async function GET(request: NextRequest) {
     } catch {
       return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
     }
-    if (!Array.isArray(historyIds) || !historyIds.every((id): id is string => typeof id === "string" && id.length > 0 && id === id.trim() && historyIds.indexOf(id) === historyIds.lastIndexOf(id))) {
-      return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+    const seen = new Set<string>()
+    const validatedIds: string[] = []
+    if (!Array.isArray(historyIds)) return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+    for (const id of historyIds) {
+      if (typeof id !== "string" || id.length === 0 || id !== id.trim() || seen.has(id)) {
+        return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+      }
+      seen.add(id)
+      validatedIds.push(id)
     }
-    for (let index = 0; index < historyIds.length; index += 200) {
-      const batchIds = historyIds.slice(index, index + 200)
+    for (let index = 0; index < validatedIds.length; index += 200) {
+      const batchIds = validatedIds.slice(index, index + 200)
       const batchKeys = batchIds.map((id) => `payment:${id}`)
       let values: unknown[]
       try {
@@ -104,7 +111,10 @@ export async function GET(request: NextRequest) {
           return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
         }
         const payment = paymentValue
-        if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(String(payment.status)) || payment.settlementFailureState) {
+        const status = typeof payment.status === "string" ? payment.status : undefined
+        const settlementFailureState = typeof payment.settlementFailureState === "string" ? payment.settlementFailureState : undefined
+        const refundStatus = typeof payment.refundStatus === "string" ? payment.refundStatus : undefined
+        if (["paid_to_app", "settlement_pending", "settlement_failed", "refund_pending", "refunded"].includes(status ?? "") || payment.settlementFailureState) {
           const operationalPayment: Record<string, unknown> = {
               paymentId: payment.id,
               piPaymentId: payment.piPaymentId,
@@ -123,9 +133,9 @@ export async function GET(request: NextRequest) {
               updatedAt: payment.lastAttemptAt || payment.paidAt || payment.createdAt,
             }
             const shouldReadRefund =
-              ["settlement_failed", "refund_pending", "refunded"].includes(String(payment.status)) ||
-              ["refund_pending", "refunded"].includes(String(payment.settlementFailureState)) ||
-              ["pending", "submitted", "completed", "failed", "manual_review_required"].includes(payment.refundStatus)
+              ["settlement_failed", "refund_pending", "refunded"].includes(status ?? "") ||
+              ["refund_pending", "refunded"].includes(settlementFailureState ?? "") ||
+              ["pending", "submitted", "completed", "failed", "manual_review_required"].includes(refundStatus ?? "")
             if (
               shouldReadRefund &&
               typeof payment.id === "string" &&
