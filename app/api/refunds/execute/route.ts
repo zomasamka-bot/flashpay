@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto'
 import { type NextRequest, NextResponse } from 'next/server'
 import { serverConfig } from '@/lib/server-config'
 import { executeRefundNextStep } from '@/lib/refund-executor'
@@ -6,7 +7,13 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {
-  if (!serverConfig.refundInternalSecret || request.headers.get('x-refund-internal-secret') !== serverConfig.refundInternalSecret) {
+  const supplied = request.headers.get('x-refund-internal-secret')
+  if (!serverConfig.refundInternalSecret || !supplied) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  const expectedBuffer = Buffer.from(serverConfig.refundInternalSecret)
+  const suppliedBuffer = Buffer.from(supplied)
+  if (expectedBuffer.length !== suppliedBuffer.length || timingSafeEqual(expectedBuffer, suppliedBuffer) !== true) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
   try {

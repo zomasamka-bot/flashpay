@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto"
 import { type NextRequest, NextResponse } from "next/server"
 import { serverConfig } from "@/lib/server-config"
 import { redis, isRedisConfigured } from "@/lib/redis"
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest) {
     const secretBuffer = Buffer.from(serverConfig.a2uInternalSecret)
     const providedBuffer = Buffer.from(providedSecret)
 
-    if (secretBuffer.length !== providedBuffer.length || !secretBuffer.equals(providedBuffer)) {
+    if (secretBuffer.length !== providedBuffer.length || timingSafeEqual(secretBuffer, providedBuffer) !== true) {
       console.error("[Pi A2U] SECURITY: Invalid x-flashpay-internal-secret header")
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }

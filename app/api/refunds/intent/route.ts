@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto'
 import { type NextRequest, NextResponse } from 'next/server'
 import { isRedisConfigured } from '@/lib/redis'
 import { verifyRefundTables } from '@/lib/refund-checkpoint-store'
@@ -12,7 +13,10 @@ const INTERNAL_SECRET = serverConfig.refundInternalSecret
 function hasInternalAuthorization(request: NextRequest): boolean {
   if (!INTERNAL_SECRET) return false
   const supplied = request.headers.get('x-refund-internal-secret')
-  return supplied === INTERNAL_SECRET
+  if (!supplied) return false
+  const expectedBuffer = Buffer.from(INTERNAL_SECRET)
+  const suppliedBuffer = Buffer.from(supplied)
+  return expectedBuffer.length === suppliedBuffer.length && timingSafeEqual(expectedBuffer, suppliedBuffer) === true
 }
 
 const corsHeaders = {
