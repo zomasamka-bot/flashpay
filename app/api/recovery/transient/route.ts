@@ -228,13 +228,24 @@ export async function POST(request: NextRequest) {
     const storedCursor = await redis.get("flashpay:recovery:active-payments:v1:scan-cursor")
     if (storedCursor !== null && (typeof storedCursor !== "string" || !/^c:[0-9]+$/.test(storedCursor))) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
     scanStartToken = storedCursor ?? "c:0"
-    const scanCursor = scanStartToken.slice(2)
-    const scanResult = await redis.sscan("flashpay:recovery:active-payments:v1", scanCursor, { count: 200 })
-    if (!Array.isArray(scanResult) || scanResult.length !== 2) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
-    const [nextCursor, members] = scanResult
-    if (typeof nextCursor !== "string" || !/^[0-9]+$/.test(nextCursor) || !Array.isArray(members) || members.some((member) => typeof member !== "string" || member.length === 0 || member !== member.trim())) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
-    const activePaymentIds = [...new Set(members)]
-    scanNextToken = `c:${nextCursor}`
+    let pageCursor = scanStartToken.slice(2)
+    const activePaymentIds: string[] = []
+    const seenActivePaymentIds = new Set<string>()
+    for (let page = 0; page < 4; page += 1) {
+      const scanResult = await redis.sscan("flashpay:recovery:active-payments:v1", pageCursor, { count: 200 })
+      if (!Array.isArray(scanResult) || scanResult.length !== 2) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+      const [nextCursor, members] = scanResult
+      if (typeof nextCursor !== "string" || !/^[0-9]+$/.test(nextCursor) || !Array.isArray(members) || members.some((member) => typeof member !== "string" || member.length === 0 || member !== member.trim())) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+      for (const member of members) {
+        if (!seenActivePaymentIds.has(member)) {
+          seenActivePaymentIds.add(member)
+          activePaymentIds.push(member)
+        }
+      }
+      pageCursor = nextCursor
+      scanNextToken = `c:${nextCursor}`
+      if (nextCursor === "0") break
+    }
     activeSetSize = Number(await redis.scard("flashpay:recovery:active-payments:v1"))
     keys = activePaymentIds.map((paymentId) => `payment:${paymentId}`)
   } catch {
