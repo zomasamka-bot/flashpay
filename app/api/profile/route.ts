@@ -78,13 +78,14 @@ export async function GET(request: NextRequest) {
     try {
       const bootstrapMarker = await redis.get("flashpay:merchant-history:v1:bootstrap")
       if (bootstrapMarker !== "done") return NextResponse.json({ error: "Operational payment history not ready" }, { status: 503 })
-      historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, -1)
+      historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, 1000)
     } catch {
       return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
     }
     const seen = new Set<string>()
     const validatedIds: string[] = []
     if (!Array.isArray(historyIds)) return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+    if (historyIds.length > 1000) return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
     for (const id of historyIds) {
       if (typeof id !== "string" || id.length === 0 || id !== id.trim() || seen.has(id)) {
         return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
