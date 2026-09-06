@@ -20,7 +20,7 @@ import type {
   RefundPresentationReadResult,
 } from "./types"
 
-export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: RefundPresentationProofReadResult): Promise<RefundPresentationReadResult> {
+export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult }): Promise<RefundPresentationReadResult> {
   try {
     if (suppliedCheckpoint && suppliedCheckpoint.refundId !== refundId) return { outcome: "INDETERMINATE" }
     const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
@@ -39,7 +39,8 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
       checkpoint.status === "completed" &&
       Object.values(persistence.timestamps).every((value) => value !== null)
     ) {
-      const proof = suppliedProof ?? await readRefundPresentationProof(checkpoint)
+      if (suppliedProof && (suppliedProof.refundId !== checkpoint.refundId || suppliedProof.paymentId !== checkpoint.paymentId || suppliedProof.idempotencyKey !== checkpoint.idempotencyKey)) return { outcome: "INDETERMINATE" }
+      const proof = suppliedProof?.result ?? await readRefundPresentationProof(checkpoint)
       if (proof.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
       if (proof.outcome === "FOUND") {
         blockchain = {
