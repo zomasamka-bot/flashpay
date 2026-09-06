@@ -2,12 +2,19 @@ import "server-only"
 
 import { getRefundCheckpointReadOnly } from "./refund-checkpoint-store"
 import { readRefundPresentationBlockchain } from "./refund-presentation-blockchain"
-import { readRefundPresentationPersistence } from "./refund-presentation-persistence"
+import {
+  readRefundPresentationPersistence,
+  readRefundPresentationProof,
+  recordRefundPresentationProof,
+} from "./refund-presentation-persistence"
 import {
   buildRefundPresentationFromEvidence,
   deriveRefundFinalizationFromPersistence,
 } from "./refund-presentation"
-import type { RefundPresentationReadResult } from "./types"
+import type {
+  RefundPresentationBlockchainReadResult,
+  RefundPresentationReadResult,
+} from "./types"
 
 export async function readRefundPresentation(refundId: string): Promise<RefundPresentationReadResult> {
   try {
@@ -19,8 +26,37 @@ export async function readRefundPresentation(refundId: string): Promise<RefundPr
     const persistence = await readRefundPresentationPersistence(checkpoint)
     if (persistence.outcome !== "FOUND") return { outcome: "INDETERMINATE" }
 
-    const blockchain = await readRefundPresentationBlockchain(checkpoint)
-    if (blockchain.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
+    let blockchain: RefundPresentationBlockchainReadResult
+    if (
+      checkpoint.stage === "audit_recorded" &&
+      checkpoint.status === "completed" &&
+      Object.values(persistence.timestamps).every((value) => value !== null)
+    ) {
+      const proof = await readRefundPresentationProof(checkpoint)
+      if (proof.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
+      if (proof.outcome === "FOUND") {
+        blockchain = {
+          outcome: "CONFIRMED",
+          transactionAt: proof.proof.transactionAt,
+          network: proof.proof.network,
+          piTransactionVerified: proof.proof.piTransactionVerified,
+          piDeveloperCompleted: proof.proof.piDeveloperCompleted,
+          horizonSuccessful: proof.proof.horizonSuccessful,
+        }
+      } else {
+        const blockchainRead = await readRefundPresentationBlockchain(checkpoint)
+        if (blockchainRead.outcome !== "CONFIRMED" || blockchainRead.piDeveloperCompleted !== true) {
+          return { outcome: "INDETERMINATE" }
+        }
+        if (!(await recordRefundPresentationProof(checkpoint, blockchainRead))) {
+          return { outcome: "INDETERMINATE" }
+        }
+        blockchain = blockchainRead
+      }
+    } else {
+      blockchain = await readRefundPresentationBlockchain(checkpoint)
+      if (blockchain.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
+    }
 
     const persisted = persistence.timestamps
     if (
