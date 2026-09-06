@@ -67,6 +67,7 @@ export async function GET(request: NextRequest) {
     }
 
     const operationalPayments: Array<Record<string, unknown>> = []
+    const refundPaymentIds = new Set<string>()
     if (!isRedisConfigured) {
       return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
     }
@@ -142,33 +143,44 @@ export async function GET(request: NextRequest) {
               payment.id.length > 0 &&
               payment.id === payment.id.trim()
             ) {
-              const checkpointRows = await query(
-                "SELECT refund_id FROM refund_checkpoints WHERE payment_id=$1 LIMIT 2",
-                [payment.id],
-              )
-              const checkpointRow = checkpointRows?.length === 1 ? checkpointRows[0] : null
-              let refundId = ""
-              if (typeof checkpointRow === "object" && checkpointRow !== null && !Array.isArray(checkpointRow)) {
-                const refundIdValue: unknown = (checkpointRow as Record<string, unknown>).refund_id
-                if (
-                  typeof refundIdValue === "string" &&
-                  refundIdValue.length > 0 &&
-                  refundIdValue === refundIdValue.trim()
-                ) {
-                  refundId = refundIdValue
-                }
-              }
-              if (refundId) {
-                const refundPresentation = await readRefundPresentation(refundId)
-                if (refundPresentation.outcome === "FOUND" && refundPresentation.presentation.paymentId === payment.id) {
-                  operationalPayment.refundPresentation = refundPresentation.presentation
-                }
-              }
+              refundPaymentIds.add(payment.id)
             }
             operationalPayments.push(operationalPayment)
           }
         }
       }
+
+    const refundIdsByPaymentId = new Map<string, string>()
+    const requestedRefundPaymentIds = [...refundPaymentIds]
+    for (let index = 0; index < requestedRefundPaymentIds.length; index += 200) {
+      const batchPaymentIds = requestedRefundPaymentIds.slice(index, index + 200)
+      const placeholders = batchPaymentIds.map((_, batchIndex) => `$${batchIndex + 1}`).join(",")
+      let checkpointRows: unknown
+      try {
+        checkpointRows = await query(`SELECT payment_id, refund_id FROM refund_checkpoints WHERE payment_id IN (${placeholders})`, batchPaymentIds)
+      } catch {
+        return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+      }
+      if (!Array.isArray(checkpointRows)) return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+      const batchRequested = new Set(batchPaymentIds)
+      const batchSeen = new Set<string>()
+      for (const row of checkpointRows) {
+        if (!isRecord(row) || typeof row.payment_id !== "string" || !batchRequested.has(row.payment_id) || batchSeen.has(row.payment_id) || typeof row.refund_id !== "string" || row.refund_id.length === 0 || row.refund_id !== row.refund_id.trim()) {
+          return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+        }
+        batchSeen.add(row.payment_id)
+        refundIdsByPaymentId.set(row.payment_id, row.refund_id)
+      }
+    }
+    for (const payment of operationalPayments) {
+      const paymentId = typeof payment.paymentId === "string" ? payment.paymentId : undefined
+      const refundId = paymentId ? refundIdsByPaymentId.get(paymentId) : undefined
+      if (!refundId) continue
+      const refundPresentation = await readRefundPresentation(refundId)
+      if (refundPresentation.outcome === "FOUND" && refundPresentation.presentation.paymentId === paymentId) {
+        payment.refundPresentation = refundPresentation.presentation
+      }
+    }
 
     const settledPaymentIds = await getSettledPaymentIds(
       verifiedMerchant.username,
