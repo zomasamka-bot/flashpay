@@ -169,7 +169,6 @@ export async function GET(request: NextRequest) {
           }
         }
       }
-    }
 
     const settledPaymentIds = await getSettledPaymentIds(
       verifiedMerchant.username,
