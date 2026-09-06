@@ -1,6 +1,7 @@
 import "server-only"
 
 import { getRefundCheckpointReadOnly } from "./refund-checkpoint-store"
+import type { RefundCheckpointReadOnly } from "./refund-checkpoint-store"
 import { readRefundPresentationBlockchain } from "./refund-presentation-blockchain"
 import {
   readRefundPresentationPersistence,
@@ -12,13 +13,16 @@ import {
   deriveRefundFinalizationFromPersistence,
 } from "./refund-presentation"
 import type {
+  RefundCheckpoint,
   RefundPresentationBlockchainReadResult,
   RefundPresentationReadResult,
 } from "./types"
 
-export async function readRefundPresentation(refundId: string): Promise<RefundPresentationReadResult> {
+export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint): Promise<RefundPresentationReadResult> {
   try {
-    const checkpointResult = await getRefundCheckpointReadOnly(refundId)
+    const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.refundId === refundId && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
+      ? { state: "present", checkpoint: suppliedCheckpoint }
+      : await getRefundCheckpointReadOnly(refundId)
     if (checkpointResult.state === "absent") return { outcome: "NOT_FOUND" }
     if (checkpointResult.state === "uncertain") return { outcome: "INDETERMINATE" }
 
