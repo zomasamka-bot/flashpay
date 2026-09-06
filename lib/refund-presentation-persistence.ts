@@ -146,11 +146,14 @@ function validateRefundPresentationProofRow(
   checkpoint: RefundCheckpoint,
   row: unknown,
 ): RefundPresentationProofReadResult {
+  const refundPaymentId = checkpoint.refundPaymentId
+  const refundTxid = checkpoint.refundTxid
+  if (typeof refundPaymentId !== 'string' || refundPaymentId.length === 0 || refundPaymentId !== refundPaymentId.trim() || typeof refundTxid !== 'string' || refundTxid.length === 0 || refundTxid !== refundTxid.trim()) return { outcome: 'INDETERMINATE' }
   if (!isRecord(row) || row.event_id !== `refund:${checkpoint.refundId}:presentation_proof` || row.payment_id !== checkpoint.paymentId || row.idempotency_key !== checkpoint.idempotencyKey || row.actor_type !== 'system' || !isRecord(row.details)) return { outcome: 'INDETERMINATE' }
   const details = row.details
   const keys = Object.keys(details)
   if (keys.length !== 7 || keys.some((key) => !['refundPaymentId', 'refundTxid', 'transactionAt', 'network', 'piTransactionVerified', 'piDeveloperCompleted', 'horizonSuccessful'].includes(key))) return { outcome: 'INDETERMINATE' }
-  if (details.refundPaymentId !== checkpoint.refundPaymentId || details.refundTxid !== checkpoint.refundTxid || details.network !== 'Pi Testnet' || details.piTransactionVerified !== true || details.piDeveloperCompleted !== true || details.horizonSuccessful !== true || typeof details.transactionAt !== 'string') return { outcome: 'INDETERMINATE' }
+  if (details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.network !== 'Pi Testnet' || details.piTransactionVerified !== true || details.piDeveloperCompleted !== true || details.horizonSuccessful !== true || typeof details.transactionAt !== 'string') return { outcome: 'INDETERMINATE' }
   const transactionAt = normalizeRefundBlockchainTransactionAt(details.transactionAt)
   if (!transactionAt) return { outcome: 'INDETERMINATE' }
   return { outcome: 'FOUND', proof: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, transactionAt, network: 'Pi Testnet', piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true } }
@@ -160,9 +163,20 @@ export async function readRefundPresentationProofs(
   checkpoints: RefundCheckpoint[],
 ): Promise<{ state: 'ok'; proofs: Map<string, RefundPresentationProofReadResult> } | { state: 'uncertain' }> {
   const validCheckpoints = checkpoints.filter((checkpoint) => checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed')
-  const refundIds = [...new Set(validCheckpoints.map((checkpoint) => checkpoint.refundId))]
-  if (refundIds.some((refundId) => typeof refundId !== 'string' || refundId.length === 0 || refundId !== refundId.trim())) return { state: 'uncertain' }
-  const byRefundId = new Map(validCheckpoints.map((checkpoint) => [checkpoint.refundId, checkpoint]))
+  const refundIds: string[] = []
+  const byRefundId = new Map<string, RefundCheckpoint>()
+  const seenRefundIds = new Set<string>()
+  for (const checkpoint of validCheckpoints) {
+    const refundId = checkpoint.refundId
+    const paymentId = checkpoint.paymentId
+    const idempotencyKey = checkpoint.idempotencyKey
+    const refundPaymentId = checkpoint.refundPaymentId
+    const refundTxid = checkpoint.refundTxid
+    if (typeof refundId !== 'string' || refundId.length === 0 || refundId !== refundId.trim() || typeof paymentId !== 'string' || paymentId.length === 0 || paymentId !== paymentId.trim() || typeof idempotencyKey !== 'string' || idempotencyKey.length === 0 || idempotencyKey !== idempotencyKey.trim() || typeof refundPaymentId !== 'string' || refundPaymentId.length === 0 || refundPaymentId !== refundPaymentId.trim() || typeof refundTxid !== 'string' || refundTxid.length === 0 || refundTxid !== refundTxid.trim() || seenRefundIds.has(refundId)) return { state: 'uncertain' }
+    seenRefundIds.add(refundId)
+    refundIds.push(refundId)
+    byRefundId.set(refundId, checkpoint)
+  }
   const proofs = new Map<string, RefundPresentationProofReadResult>()
   if (refundIds.length === 0) return { state: 'ok', proofs }
   let rows: unknown
@@ -176,7 +190,7 @@ export async function readRefundPresentationProofs(
   for (const row of rows) {
     if (!isRecord(row) || typeof row.refund_id !== 'string' || !byRefundId.has(row.refund_id) || seen.has(row.refund_id)) return { state: 'uncertain' }
     seen.add(row.refund_id)
-    const checkpoint = validCheckpoints.find((candidate) => candidate.refundId === row.refund_id)
+    const checkpoint = byRefundId.get(row.refund_id)
     if (!checkpoint) return { state: 'uncertain' }
     const result = validateRefundPresentationProofRow(checkpoint, row)
     if (result.outcome === 'INDETERMINATE') return { state: 'uncertain' }

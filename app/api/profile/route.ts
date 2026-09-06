@@ -159,13 +159,14 @@ export async function GET(request: NextRequest) {
     for (const checkpoint of checkpointResult.checkpoints.values()) refundIdsByPaymentId.set(checkpoint.paymentId, checkpoint.refundId)
     const proofResult = await readRefundPresentationProofs([...checkpointResult.checkpoints.values()])
     if (proofResult.state === "uncertain") return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
-    const refundCandidates: Array<{ payment: Record<string, unknown>; paymentId: string; refundId: string; checkpoint: RefundCheckpoint | undefined; proof: RefundPresentationProofReadResult | undefined }> = []
+    const refundCandidates: Array<{ payment: Record<string, unknown>; paymentId: string; refundId: string; checkpoint: RefundCheckpoint | undefined; proof: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult } | undefined }> = []
     for (const payment of operationalPayments) {
       const paymentId = typeof payment.paymentId === "string" ? payment.paymentId : undefined
       const refundId = paymentId ? refundIdsByPaymentId.get(paymentId) : undefined
       if (paymentId === undefined || refundId === undefined) continue
       const checkpoint = checkpointResult.checkpoints.get(paymentId)
-      const proof = checkpoint && checkpoint.stage === "audit_recorded" && checkpoint.status === "completed" ? proofResult.proofs.get(checkpoint.refundId) : undefined
+      const proofResultForPayment = checkpoint && checkpoint.stage === "audit_recorded" && checkpoint.status === "completed" ? proofResult.proofs.get(checkpoint.refundId) : undefined
+      const proof = checkpoint && proofResultForPayment ? { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, idempotencyKey: checkpoint.idempotencyKey, result: proofResultForPayment } : undefined
       refundCandidates.push({ payment, paymentId, refundId, checkpoint, proof })
     }
     for (let index = 0; index < refundCandidates.length; index += 2) {
