@@ -337,10 +337,10 @@ export async function POST(request: NextRequest) {
       if current.paidAt == nil then current.paidAt = incoming.paidAt end
       if transitioningToPaidToApp and current.settlementDispatchRequestedAt == nil then current.settlementDispatchRequestedAt = incoming.settlementDispatchRequestedAt end
       if incoming.payerUid ~= nil then current.payerUid = incoming.payerUid; current.payerUidSource = incoming.payerUidSource; if current.payerUidCapturedAt == nil then current.payerUidCapturedAt = incoming.payerUidCapturedAt end end
-      if transitioningToPaidToApp then redis.call('SADD', KEYS[2], ARGV[2]) end
+      if transitioningToPaidToApp then redis.call('SADD', KEYS[2], ARGV[2]); redis.call('ZADD', KEYS[3], 'NX', ARGV[3], ARGV[2]) end
       redis.call('SET', KEYS[1], cjson.encode(current))
       return 1
-    `, [`payment:${flashPaymentId}`, "flashpay:recovery:active-payments:v1"], [JSON.stringify({
+    `, [`payment:${flashPaymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [JSON.stringify({
       id: flashPaymentId,
       amount: payment.amount,
       customerAmount: payment.customerAmount,
@@ -354,7 +354,7 @@ export async function POST(request: NextRequest) {
       payerUidCapturedAt: payment.payerUidCapturedAt,
       paidAt: payment.paidAt,
       settlementDispatchRequestedAt: payment.paidAt,
-    }), flashPaymentId])
+    }), flashPaymentId, String(Date.now())])
     console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
     if (Number(atomicU2AResult) !== 1) {
       console.error("[Pi Complete] Atomic U2A persistence rejected")
