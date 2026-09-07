@@ -318,6 +318,7 @@ export async function POST(request: NextRequest) {
   let readyFirstScore: number | null = null
   let readyLastScore: number | null = null
   let readyStrictlyIncreasing: boolean | null = null
+  let readyOrderedValid = false
   const readyOrderedIds: string[] = []
   try {
     const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", 0, 199, { withScores: true })
@@ -348,6 +349,7 @@ export async function POST(request: NextRequest) {
     readyFirstScore = firstScore
     readyLastScore = previousScore
     readyStrictlyIncreasing = strictlyIncreasing
+    readyOrderedValid = true
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready telemetry unavailable")
   }
@@ -369,6 +371,9 @@ export async function POST(request: NextRequest) {
     let classStage1Only = 0
     let classReconciling = 0
     let classOther = 0
+    if (!readyOrderedValid) {
+      throw new Error("Ordered settlement ready telemetry unavailable")
+    }
     if (readyOrderedIds.length > 0) {
       const readyValues = await redis.mget<unknown[]>(readyOrderedIds.map((id) => `payment:${id}`))
       if (!Array.isArray(readyValues) || readyValues.length !== readyOrderedIds.length) throw new Error("Invalid ordered settlement ready payment telemetry")
