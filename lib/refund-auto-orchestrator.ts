@@ -91,6 +91,7 @@ export async function ensureAutomaticRefundIntent(paymentId: string): Promise<Au
       ) {
         try {
           await redis.srem("flashpay:recovery:active-payments:v1", first.checkpoint.paymentId)
+          await redis.zrem("flashpay:settlement:ready:v1", first.checkpoint.paymentId)
         } catch (error) {
           console.warn("[refund/orchestrator] Active recovery index cleanup failed", error)
         }

@@ -1286,6 +1286,7 @@ export async function persistCheckpointMerged(
     try {
       if (isPaymentFinal(merged)) {
         await redis.srem("flashpay:recovery:active-payments:v1", paymentId)
+        await redis.zrem("flashpay:settlement:ready:v1", paymentId)
       }
     } catch (error) {
       console.warn("[A2U Checkpoint] Active recovery index cleanup failed", error)
