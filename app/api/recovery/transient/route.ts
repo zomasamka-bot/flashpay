@@ -314,6 +314,39 @@ export async function POST(request: NextRequest) {
   } catch {
     console.warn("[P7H CAPACITY] settlement ready telemetry unavailable")
   }
+  let readyOrderedCount: number | null = null
+  let readyFirstScore: number | null = null
+  let readyLastScore: number | null = null
+  let readyStrictlyIncreasing: boolean | null = null
+  try {
+    const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", 0, 199, { withScores: true })
+    if (!Array.isArray(readyOrdered) || readyOrdered.length > 400 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
+    readyOrderedCount = readyOrdered.length / 2
+    if (readyOrdered.length === 0) {
+      readyFirstScore = null
+      readyLastScore = null
+      readyStrictlyIncreasing = true
+    } else {
+      let previousScore: number | null = null
+      let strictlyIncreasing = true
+      for (let index = 0; index < readyOrdered.length; index += 2) {
+        const member = readyOrdered[index]
+        const score = readyOrdered[index + 1]
+        if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isFinite(score) || !Number.isSafeInteger(score) || score < 0) throw new Error("Invalid ordered settlement ready telemetry")
+        if (previousScore !== null) {
+          if (score < previousScore) throw new Error("Invalid ordered settlement ready telemetry")
+          if (score <= previousScore) strictlyIncreasing = false
+        } else {
+          readyFirstScore = score
+        }
+        previousScore = score
+      }
+      readyLastScore = previousScore
+      readyStrictlyIncreasing = strictlyIncreasing
+    }
+  } catch {
+    console.warn("[P7H CAPACITY] ordered settlement ready telemetry unavailable")
+  }
 
   const discoveryDurationMs = Date.now() - discoveryStartedAt
 
@@ -405,7 +438,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
