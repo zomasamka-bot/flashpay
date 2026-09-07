@@ -274,6 +274,7 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
   if (finalized) {
     try {
       await redis.srem('flashpay:recovery:active-payments:v1', checkpoint.paymentId)
+      await redis.zrem('flashpay:settlement:ready:v1', checkpoint.paymentId)
     } catch (error) {
       console.warn('[refunds/executor] Active recovery index cleanup failed', error)
     }
