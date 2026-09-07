@@ -368,8 +368,16 @@ export async function POST(request: NextRequest) {
   let readyClassStage1Only: number | null = null
   let readyClassReconciling: number | null = null
   let readyClassOther: number | null = null
+  let readyShadowEligibleIds: string[] | null = null
+  let readyShadowFreshIds: string[] | null = null
+  let readyShadowReconcilingIds: string[] | null = null
   try {
     let classInvalid = 0
+    const shadowPostHorizonIds: string[] = []
+    const shadowPreparedIds: string[] = []
+    const shadowRetryableIds: string[] = []
+    const shadowFreshDispatchIds: string[] = []
+    const shadowReconcilingIds: string[] = []
     let classPostHorizon = 0
     let classPrepared = 0
     let classRetryable = 0
@@ -390,16 +398,22 @@ export async function POST(request: NextRequest) {
           classInvalid++
         } else if (isPostHorizonEligible(payment, now)) {
           classPostHorizon++
+          shadowPostHorizonIds.push(paymentId)
         } else if (isPreparedSubmitEligible(payment)) {
           classPrepared++
+          shadowPreparedIds.push(paymentId)
         } else if (isEligible(payment, now)) {
           classRetryable++
+          shadowRetryableIds.push(paymentId)
         } else if (isFreshSettlementDispatchCandidate(payment, now)) {
           classFresh++
+          shadowFreshDispatchIds.push(paymentId)
         } else if (isStage1OnlySettlementDispatchCandidate(payment, now)) {
           classStage1Only++
+          shadowFreshDispatchIds.push(paymentId)
         } else if (isStaleFreshReconcilingCandidate(payment, now) || isStaleRetryReconcilingCandidate(payment, now)) {
           classReconciling++
+          shadowReconcilingIds.push(paymentId)
         } else {
           classOther++
         }
@@ -413,6 +427,9 @@ export async function POST(request: NextRequest) {
     readyClassStage1Only = classStage1Only
     readyClassReconciling = classReconciling
     readyClassOther = classOther
+    readyShadowEligibleIds = [...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds].slice(0, MAX_ATTEMPTS)
+    readyShadowFreshIds = shadowFreshDispatchIds.slice(0, 1)
+    readyShadowReconcilingIds = shadowReconcilingIds.slice(0, 1)
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
@@ -507,7 +524,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyCursorCas, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyCursorCas, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
