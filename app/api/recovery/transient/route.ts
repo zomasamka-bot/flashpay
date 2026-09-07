@@ -343,16 +343,8 @@ export async function POST(request: NextRequest) {
   let readyStrictlyIncreasing: boolean | null = null
   let readyOrderedValid = false
   const readyOrderedIds: string[] = []
-  let readyCursorCas: number | null = null
-  let readyShadowStartCursor: string | null = null
-  let readyShadowNextCursor: string | null = null
   try {
-    const storedCursor = await redis.get<unknown>("flashpay:settlement:ready:v1:shadow-cursor")
-    if (storedCursor !== null && typeof storedCursor !== "string") throw new Error("Invalid settlement ready shadow cursor")
-    const startCursor = storedCursor ?? "s:0"
-    if (!/^s:[0-9]+$/.test(startCursor)) throw new Error("Invalid settlement ready shadow cursor")
-    const startScore = Number(startCursor.slice(2))
-    if (!Number.isSafeInteger(startScore) || startScore < 0 || startScore >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid settlement ready shadow cursor")
+    const startScore = 0
     const orderedIds: string[] = []
     let firstScore: number | null = null
     let strictlyIncreasing = true
@@ -380,9 +372,6 @@ export async function POST(request: NextRequest) {
       pageStartScore = previousScore + 1
     }
     if (orderedIds.length > 800) throw new Error("Invalid ordered settlement ready telemetry")
-    const nextCursor = previousScore === null ? "s:0" : `s:${previousScore}`
-    readyShadowStartCursor = startCursor
-    readyShadowNextCursor = nextCursor
     readyOrderedIds.push(...orderedIds)
     readyOrderedCount = orderedIds.length
     readyFirstScore = firstScore
@@ -470,15 +459,6 @@ export async function POST(request: NextRequest) {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
 
-  if (readyShadowStartCursor !== null && readyShadowNextCursor !== null && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowReconcilingIds !== null) {
-    try {
-      const casResult = await redis.eval<[string, string], number>("local current=redis.call('GET',KEYS[1]); if not current then current='s:0' end; if current==ARGV[1] then return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:shadow-cursor"], [readyShadowStartCursor, readyShadowNextCursor])
-      if (typeof casResult !== "number" || (casResult !== 0 && casResult !== 1)) throw new Error("Invalid settlement ready cursor CAS")
-      readyCursorCas = casResult
-    } catch {
-      console.warn("[P7H CAPACITY] settlement ready cursor CAS unavailable")
-    }
-  }
 
   const discoveryDurationMs = Date.now() - discoveryStartedAt
 
@@ -570,7 +550,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyCursorCas, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
