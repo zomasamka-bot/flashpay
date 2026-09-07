@@ -322,8 +322,9 @@ export async function POST(request: NextRequest) {
   const readyOrderedIds: string[] = []
   let readyCursorCas: number | null = null
   try {
-    const storedCursor = await redis.get("flashpay:settlement:ready:v1:shadow-cursor")
-    const startCursor = storedCursor === null ? "s:0" : storedCursor
+    const storedCursor = await redis.get<unknown>("flashpay:settlement:ready:v1:shadow-cursor")
+    if (storedCursor !== null && typeof storedCursor !== "string") throw new Error("Invalid settlement ready shadow cursor")
+    const startCursor = storedCursor ?? "s:0"
     if (!/^s:[0-9]+$/.test(startCursor)) throw new Error("Invalid settlement ready shadow cursor")
     const startScore = Number(startCursor.slice(2))
     if (!Number.isSafeInteger(startScore) || startScore < 0 || startScore >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid settlement ready shadow cursor")
@@ -332,7 +333,6 @@ export async function POST(request: NextRequest) {
     if (!Array.isArray(readyOrdered) || readyOrdered.length > 400 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
     const orderedIds: string[] = []
     let firstScore: number | null = null
-    let lastScore: number | null = null
     let strictlyIncreasing = true
     let previousScore: number | null = null
     for (let index = 0; index < readyOrdered.length; index += 2) {
@@ -342,19 +342,18 @@ export async function POST(request: NextRequest) {
       orderedIds.push(member)
       if (firstScore === null) firstScore = score
       if (previousScore !== null) {
-        if (score < previousScore) throw new Error("Invalid ordered settlement ready telemetry")
-        if (score <= previousScore) strictlyIncreasing = false
+        if (score <= previousScore) throw new Error("Invalid ordered settlement ready telemetry")
       }
       previousScore = score
     }
-    const nextCursor = lastScore === null ? "s:0" : `s:${lastScore}`
-    const casResult = await redis.eval("local current=redis.call('GET',KEYS[1]); if not current then current='s:0' end; if current==ARGV[1] then return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:shadow-cursor"], [startCursor, nextCursor])
+    const nextCursor = previousScore === null ? "s:0" : `s:${previousScore}`
+    const casResult = await redis.eval<[string, string], number>("local current=redis.call('GET',KEYS[1]); if not current then current='s:0' end; if current==ARGV[1] then return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:shadow-cursor"], [startCursor, nextCursor])
     if (typeof casResult !== "number" || (casResult !== 0 && casResult !== 1)) throw new Error("Invalid settlement ready cursor CAS")
     readyCursorCas = casResult
     readyOrderedIds.push(...orderedIds)
     readyOrderedCount = orderedIds.length
     readyFirstScore = firstScore
-    readyLastScore = lastScore
+    readyLastScore = previousScore
     readyStrictlyIncreasing = strictlyIncreasing
     readyOrderedValid = true
   } catch {
