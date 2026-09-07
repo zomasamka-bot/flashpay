@@ -322,43 +322,53 @@ export async function POST(request: NextRequest) {
   try {
     const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", 0, 199, { withScores: true })
     if (!Array.isArray(readyOrdered) || readyOrdered.length > 400 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
-    readyOrderedCount = readyOrdered.length / 2
-    if (readyOrdered.length === 0) {
-      readyFirstScore = null
-      readyLastScore = null
-      readyStrictlyIncreasing = true
-    } else {
-      let previousScore: number | null = null
-      let strictlyIncreasing = true
-      for (let index = 0; index < readyOrdered.length; index += 2) {
-        const member = readyOrdered[index]
-        const score = readyOrdered[index + 1]
-        if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isFinite(score) || !Number.isSafeInteger(score) || score < 0) throw new Error("Invalid ordered settlement ready telemetry")
-        readyOrderedIds.push(member)
-        if (previousScore !== null) {
-          if (score < previousScore) throw new Error("Invalid ordered settlement ready telemetry")
-          if (score <= previousScore) strictlyIncreasing = false
-        } else {
-          readyFirstScore = score
-        }
-        previousScore = score
+    const orderedIds: string[] = []
+    let orderedCount = readyOrdered.length / 2
+    let firstScore: number | null = null
+    let lastScore: number | null = null
+    let strictlyIncreasing = true
+    let previousScore: number | null = null
+    for (let index = 0; index < readyOrdered.length; index += 2) {
+      const member = readyOrdered[index]
+      const score = readyOrdered[index + 1]
+      if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isFinite(score) || !Number.isSafeInteger(score) || score < 0) throw new Error("Invalid ordered settlement ready telemetry")
+      orderedIds.push(member)
+      if (previousScore !== null) {
+        if (score < previousScore) throw new Error("Invalid ordered settlement ready telemetry")
+        if (score <= previousScore) strictlyIncreasing = false
+      } else {
+        firstScore = score
       }
-      readyLastScore = previousScore
-      readyStrictlyIncreasing = strictlyIncreasing
+      previousScore = score
     }
+    if (readyOrdered.length === 0) strictlyIncreasing = true
+    orderedCount = readyOrdered.length / 2
+    readyOrderedIds.push(...orderedIds)
+    readyOrderedCount = orderedCount
+    readyFirstScore = firstScore
+    readyLastScore = previousScore
+    readyStrictlyIncreasing = strictlyIncreasing
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready telemetry unavailable")
   }
 
-  let readyClassInvalid = 0
-  let readyClassPostHorizon = 0
-  let readyClassPrepared = 0
-  let readyClassRetryable = 0
-  let readyClassFresh = 0
-  let readyClassStage1Only = 0
-  let readyClassReconciling = 0
-  let readyClassOther = 0
+  let readyClassInvalid: number | null = null
+  let readyClassPostHorizon: number | null = null
+  let readyClassPrepared: number | null = null
+  let readyClassRetryable: number | null = null
+  let readyClassFresh: number | null = null
+  let readyClassStage1Only: number | null = null
+  let readyClassReconciling: number | null = null
+  let readyClassOther: number | null = null
   try {
+    let classInvalid = 0
+    let classPostHorizon = 0
+    let classPrepared = 0
+    let classRetryable = 0
+    let classFresh = 0
+    let classStage1Only = 0
+    let classReconciling = 0
+    let classOther = 0
     if (readyOrderedIds.length > 0) {
       const readyValues = await redis.mget<unknown[]>(readyOrderedIds.map((id) => `payment:${id}`))
       if (!Array.isArray(readyValues) || readyValues.length !== readyOrderedIds.length) throw new Error("Invalid ordered settlement ready payment telemetry")
@@ -366,24 +376,32 @@ export async function POST(request: NextRequest) {
         const payment = parsePayment(readyValues[index])
         const paymentId = readyOrderedIds[index]
         if (!payment || payment.id !== paymentId) {
-          readyClassInvalid++
+          classInvalid++
         } else if (isPostHorizonEligible(payment, now)) {
-          readyClassPostHorizon++
+          classPostHorizon++
         } else if (isPreparedSubmitEligible(payment)) {
-          readyClassPrepared++
+          classPrepared++
         } else if (isEligible(payment, now)) {
-          readyClassRetryable++
+          classRetryable++
         } else if (isFreshSettlementDispatchCandidate(payment, now)) {
-          readyClassFresh++
+          classFresh++
         } else if (isStage1OnlySettlementDispatchCandidate(payment, now)) {
-          readyClassStage1Only++
+          classStage1Only++
         } else if (isStaleFreshReconcilingCandidate(payment, now) || isStaleRetryReconcilingCandidate(payment, now)) {
-          readyClassReconciling++
+          classReconciling++
         } else {
-          readyClassOther++
+          classOther++
         }
       }
     }
+    readyClassInvalid = classInvalid
+    readyClassPostHorizon = classPostHorizon
+    readyClassPrepared = classPrepared
+    readyClassRetryable = classRetryable
+    readyClassFresh = classFresh
+    readyClassStage1Only = classStage1Only
+    readyClassReconciling = classReconciling
+    readyClassOther = classOther
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
