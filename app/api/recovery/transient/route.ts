@@ -431,6 +431,7 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+    }
     readyClassInvalid = classInvalid
     readyClassPostHorizon = classPostHorizon
     readyClassPrepared = classPrepared
