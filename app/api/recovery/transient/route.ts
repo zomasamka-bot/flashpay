@@ -321,6 +321,8 @@ export async function POST(request: NextRequest) {
   let readyOrderedValid = false
   const readyOrderedIds: string[] = []
   let readyCursorCas: number | null = null
+  let readyShadowStartCursor: string | null = null
+  let readyShadowNextCursor: string | null = null
   try {
     const storedCursor = await redis.get<unknown>("flashpay:settlement:ready:v1:shadow-cursor")
     if (storedCursor !== null && typeof storedCursor !== "string") throw new Error("Invalid settlement ready shadow cursor")
@@ -347,9 +349,8 @@ export async function POST(request: NextRequest) {
       previousScore = score
     }
     const nextCursor = previousScore === null ? "s:0" : `s:${previousScore}`
-    const casResult = await redis.eval<[string, string], number>("local current=redis.call('GET',KEYS[1]); if not current then current='s:0' end; if current==ARGV[1] then return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:shadow-cursor"], [startCursor, nextCursor])
-    if (typeof casResult !== "number" || (casResult !== 0 && casResult !== 1)) throw new Error("Invalid settlement ready cursor CAS")
-    readyCursorCas = casResult
+    readyShadowStartCursor = startCursor
+    readyShadowNextCursor = nextCursor
     readyOrderedIds.push(...orderedIds)
     readyOrderedCount = orderedIds.length
     readyFirstScore = firstScore
@@ -432,6 +433,16 @@ export async function POST(request: NextRequest) {
     readyShadowReconcilingIds = shadowReconcilingIds.slice(0, 1)
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
+  }
+
+  if (readyShadowStartCursor !== null && readyShadowNextCursor !== null && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowReconcilingIds !== null) {
+    try {
+      const casResult = await redis.eval<[string, string], number>("local current=redis.call('GET',KEYS[1]); if not current then current='s:0' end; if current==ARGV[1] then return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:shadow-cursor"], [readyShadowStartCursor, readyShadowNextCursor])
+      if (typeof casResult !== "number" || (casResult !== 0 && casResult !== 1)) throw new Error("Invalid settlement ready cursor CAS")
+      readyCursorCas = casResult
+    } catch {
+      console.warn("[P7H CAPACITY] settlement ready cursor CAS unavailable")
+    }
   }
 
   const discoveryDurationMs = Date.now() - discoveryStartedAt
