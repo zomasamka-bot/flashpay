@@ -294,6 +294,29 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+  const readyCoverageAllIds = [...new Set([...postHorizonIds, ...preparedSubmitIds, ...retryableIds, ...freshDispatchIds, ...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])]
+  const readyCoverageTruncated = readyCoverageAllIds.length > 800
+  let readyCoverageIndexed: number | null = null
+  let readyCoverageMissing: number | null = null
+  if (readyCoverageTruncated) {
+    console.warn("[P7H CAPACITY] settlement ready coverage truncated")
+  } else {
+    try {
+      let indexed = 0
+      let missing = 0
+      for (let batchStart = 0; batchStart < readyCoverageAllIds.length; batchStart += 200) {
+        const batch = readyCoverageAllIds.slice(batchStart, batchStart + 200)
+        const scores = await redis.zmscore("flashpay:settlement:ready:v1", batch)
+        if (!Array.isArray(scores) || scores.length !== batch.length || scores.some((score) => score !== null && (typeof score !== "number" || !Number.isSafeInteger(score) || score < 0))) throw new Error("Invalid settlement ready coverage")
+        indexed += scores.filter((score) => score !== null).length
+        missing += scores.filter((score) => score === null).length
+      }
+      readyCoverageIndexed = indexed
+      readyCoverageMissing = missing
+    } catch {
+      console.warn("[P7H CAPACITY] settlement ready coverage unavailable")
+    }
+  }
   const readySample = freshDispatchIds.slice(0, 200)
   let readySetSize: number | null = null
   let readyIndexed: number | null = null
