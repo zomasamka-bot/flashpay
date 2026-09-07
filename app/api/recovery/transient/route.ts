@@ -318,6 +318,7 @@ export async function POST(request: NextRequest) {
   let readyFirstScore: number | null = null
   let readyLastScore: number | null = null
   let readyStrictlyIncreasing: boolean | null = null
+  const readyOrderedIds: string[] = []
   try {
     const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", 0, 199, { withScores: true })
     if (!Array.isArray(readyOrdered) || readyOrdered.length > 400 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
@@ -333,6 +334,7 @@ export async function POST(request: NextRequest) {
         const member = readyOrdered[index]
         const score = readyOrdered[index + 1]
         if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isFinite(score) || !Number.isSafeInteger(score) || score < 0) throw new Error("Invalid ordered settlement ready telemetry")
+        readyOrderedIds.push(member)
         if (previousScore !== null) {
           if (score < previousScore) throw new Error("Invalid ordered settlement ready telemetry")
           if (score <= previousScore) strictlyIncreasing = false
@@ -346,6 +348,44 @@ export async function POST(request: NextRequest) {
     }
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready telemetry unavailable")
+  }
+
+  let readyClassInvalid = 0
+  let readyClassPostHorizon = 0
+  let readyClassPrepared = 0
+  let readyClassRetryable = 0
+  let readyClassFresh = 0
+  let readyClassStage1Only = 0
+  let readyClassReconciling = 0
+  let readyClassOther = 0
+  try {
+    if (readyOrderedIds.length > 0) {
+      const readyValues = await redis.mget<unknown[]>(readyOrderedIds.map((id) => `payment:${id}`))
+      if (!Array.isArray(readyValues) || readyValues.length !== readyOrderedIds.length) throw new Error("Invalid ordered settlement ready payment telemetry")
+      for (let index = 0; index < readyOrderedIds.length; index += 1) {
+        const payment = parsePayment(readyValues[index])
+        const paymentId = readyOrderedIds[index]
+        if (!payment || payment.id !== paymentId) {
+          readyClassInvalid++
+        } else if (isPostHorizonEligible(payment, now)) {
+          readyClassPostHorizon++
+        } else if (isPreparedSubmitEligible(payment)) {
+          readyClassPrepared++
+        } else if (isEligible(payment, now)) {
+          readyClassRetryable++
+        } else if (isFreshSettlementDispatchCandidate(payment, now)) {
+          readyClassFresh++
+        } else if (isStage1OnlySettlementDispatchCandidate(payment, now)) {
+          readyClassStage1Only++
+        } else if (isStaleFreshReconcilingCandidate(payment, now) || isStaleRetryReconcilingCandidate(payment, now)) {
+          readyClassReconciling++
+        } else {
+          readyClassOther++
+        }
+      }
+    }
+  } catch {
+    console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
 
   const discoveryDurationMs = Date.now() - discoveryStartedAt
@@ -438,7 +478,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
