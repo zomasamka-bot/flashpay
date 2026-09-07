@@ -330,24 +330,33 @@ export async function POST(request: NextRequest) {
     if (!/^s:[0-9]+$/.test(startCursor)) throw new Error("Invalid settlement ready shadow cursor")
     const startScore = Number(startCursor.slice(2))
     if (!Number.isSafeInteger(startScore) || startScore < 0 || startScore >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid settlement ready shadow cursor")
-    const minScore = startScore + 1
-    const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", minScore, "+inf", { byScore: true, withScores: true, offset: 0, count: 200 })
-    if (!Array.isArray(readyOrdered) || readyOrdered.length > 400 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
     const orderedIds: string[] = []
     let firstScore: number | null = null
     let strictlyIncreasing = true
     let previousScore: number | null = null
-    for (let index = 0; index < readyOrdered.length; index += 2) {
-      const member = readyOrdered[index]
-      const score = readyOrdered[index + 1]
-      if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isSafeInteger(score) || score < minScore) throw new Error("Invalid ordered settlement ready telemetry")
-      orderedIds.push(member)
-      if (firstScore === null) firstScore = score
-      if (previousScore !== null) {
-        if (score <= previousScore) throw new Error("Invalid ordered settlement ready telemetry")
+    let pageStartScore = startScore + 1
+    for (let page = 0; page < 4; page += 1) {
+      const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", pageStartScore, "+inf", { byScore: true, withScores: true, offset: 0, count: 201 })
+      if (!Array.isArray(readyOrdered) || readyOrdered.length > 402 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
+      const pairCount = readyOrdered.length / 2
+      for (let index = 0; index < readyOrdered.length; index += 2) {
+        const member = readyOrdered[index]
+        const score = readyOrdered[index + 1]
+        if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isSafeInteger(score) || score < pageStartScore) throw new Error("Invalid ordered settlement ready telemetry")
+        if (previousScore !== null && score <= previousScore) throw new Error("Invalid ordered settlement ready telemetry")
+        if (index / 2 < 200) {
+          orderedIds.push(member)
+          if (firstScore === null) firstScore = score
+          previousScore = score
+        } else if (pairCount < 201 || previousScore === null || score <= previousScore) {
+          throw new Error("Invalid ordered settlement ready telemetry")
+        }
       }
-      previousScore = score
+      if (pairCount <= 200) break
+      if (previousScore === null || previousScore >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid ordered settlement ready telemetry")
+      pageStartScore = previousScore + 1
     }
+    if (orderedIds.length > 800) throw new Error("Invalid ordered settlement ready telemetry")
     const nextCursor = previousScore === null ? "s:0" : `s:${previousScore}`
     readyShadowStartCursor = startCursor
     readyShadowNextCursor = nextCursor
@@ -390,14 +399,16 @@ export async function POST(request: NextRequest) {
       throw new Error("Ordered settlement ready telemetry unavailable")
     }
     if (readyOrderedIds.length > 0) {
-      const readyValues = await redis.mget<unknown[]>(readyOrderedIds.map((id) => `payment:${id}`))
-      if (!Array.isArray(readyValues) || readyValues.length !== readyOrderedIds.length) throw new Error("Invalid ordered settlement ready payment telemetry")
-      for (let index = 0; index < readyOrderedIds.length; index += 1) {
-        const payment = parsePayment(readyValues[index])
-        const paymentId = readyOrderedIds[index]
-        if (!payment || payment.id !== paymentId) {
-          classInvalid++
-        } else if (isPostHorizonEligible(payment, now)) {
+      for (let batchStart = 0; batchStart < readyOrderedIds.length; batchStart += 200) {
+        const batchIds = readyOrderedIds.slice(batchStart, batchStart + 200)
+        const readyValues = await redis.mget<unknown[]>(batchIds.map((id) => `payment:${id}`))
+        if (!Array.isArray(readyValues) || readyValues.length !== batchIds.length) throw new Error("Invalid ordered settlement ready payment telemetry")
+        for (let index = 0; index < batchIds.length; index += 1) {
+          const payment = parsePayment(readyValues[index])
+          const paymentId = batchIds[index]
+          if (!payment || payment.id !== paymentId) {
+            classInvalid++
+          } else if (isPostHorizonEligible(payment, now)) {
           classPostHorizon++
           shadowPostHorizonIds.push(paymentId)
         } else if (isPreparedSubmitEligible(payment)) {
