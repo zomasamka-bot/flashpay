@@ -344,12 +344,11 @@ export async function POST(request: NextRequest) {
   let readyOrderedValid = false
   const readyOrderedIds: string[] = []
   try {
-    const startScore = 0
     const orderedIds: string[] = []
     let firstScore: number | null = null
     let strictlyIncreasing = true
     let previousScore: number | null = null
-    let pageStartScore = startScore + 1
+    let pageStartScore = 0
     for (let page = 0; page < 4; page += 1) {
       const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", pageStartScore, "+inf", { byScore: true, withScores: true, offset: 0, count: 201 })
       if (!Array.isArray(readyOrdered) || readyOrdered.length > 402 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
@@ -357,7 +356,7 @@ export async function POST(request: NextRequest) {
       for (let index = 0; index < readyOrdered.length; index += 2) {
         const member = readyOrdered[index]
         const score = readyOrdered[index + 1]
-        if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isSafeInteger(score) || score < pageStartScore) throw new Error("Invalid ordered settlement ready telemetry")
+        if (typeof member !== "string" || member.length === 0 || member !== member.trim() || typeof score !== "number" || !Number.isSafeInteger(score) || score < 1 || score < pageStartScore) throw new Error("Invalid ordered settlement ready telemetry")
         if (previousScore !== null && score <= previousScore) throw new Error("Invalid ordered settlement ready telemetry")
         if (index / 2 < 200) {
           orderedIds.push(member)
