@@ -457,14 +457,14 @@ export async function POST(request: NextRequest) {
     }
     }
     if (readyHeadTruncated === false && readyCoverageTruncated === false && readyCoverageMissing === 0 && readyCoverageOutsideHead === 0 && classInvalid === 0) {
-      const eligibleSet = new Set([...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS))
-      const shadowEligibleSet = new Set([...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds].slice(0, MAX_ATTEMPTS))
+      const eligibleSet = new Set([...postHorizonIds, ...preparedSubmitIds, ...retryableIds])
+      const shadowEligibleSet = new Set([...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds])
       readyEligibleSetParity = eligibleSet.size === shadowEligibleSet.size && [...eligibleSet].every((id) => shadowEligibleSet.has(id))
       const freshSet = new Set(freshDispatchIds)
-      const shadowFreshSet = new Set(shadowFreshDispatchIds.slice(0, 1))
+      const shadowFreshSet = new Set(shadowFreshDispatchIds)
       readyFreshSetParity = freshSet.size === shadowFreshSet.size && [...freshSet].every((id) => shadowFreshSet.has(id))
       const reconcilingSet = new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])
-      const shadowReconcilingSet = new Set(shadowReconcilingIds.slice(0, 1))
+      const shadowReconcilingSet = new Set(shadowReconcilingIds)
       readyReconcilingSetParity = reconcilingSet.size === shadowReconcilingSet.size && [...reconcilingSet].every((id) => shadowReconcilingSet.has(id))
     }
     readyClassInvalid = classInvalid
