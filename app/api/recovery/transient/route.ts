@@ -493,17 +493,27 @@ export async function POST(request: NextRequest) {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
 
+  let readyResidencyBackfilled: number | null = null
   if (readyResidencySourceValid === true && scanNextToken === "c:0" && Number.isSafeInteger(activeSetSize) && activeSetSize >= 0 && keys.length === activeSetSize) {
     try {
       let missing = 0
+      const missingIds: string[] = []
       for (let batchStart = 0; batchStart < readyResidencyIds.length; batchStart += 200) {
         const batch = readyResidencyIds.slice(batchStart, batchStart + 200)
         const scores = await redis.zmscore("flashpay:settlement:ready:v1", batch)
         if (!Array.isArray(scores) || scores.length !== batch.length || scores.some((score) => score !== null && (typeof score !== "number" || !Number.isSafeInteger(score) || score < 1))) throw new Error("Invalid settlement ready residency telemetry")
+        scores.forEach((score, index) => { if (score === null) missingIds.push(batch[index]) })
         missing += scores.filter((score) => score === null).length
       }
       readyResidencyCount = readyResidencyIds.length
       readyResidencyMissing = missing
+      if (missingIds.length === 0) {
+        readyResidencyBackfilled = 0
+      } else {
+        const backfilled = await redis.eval<string[], number>("local top=redis.call('ZRANGE',KEYS[1],-1,-1,'WITHSCORES'); if #top ~= 0 and #top ~= 2 then return -1 end; local topScore=0; if #top == 2 then topScore=tonumber(top[2]); if not topScore or topScore < 1 or topScore > 9007199254740990 or topScore ~= math.floor(topScore) then return -1 end end; local seq=redis.call('GET',KEYS[2]); local base=topScore; if seq then base=tonumber(seq); if not base or base < 0 or base > 9007199254740990 or base ~= math.floor(base) or base < topScore then return -1 end else redis.call('SET',KEYS[2],base) end; if base + #ARGV > 9007199254740990 then return -1 end; local added=0; for _,id in ipairs(ARGV) do if redis.call('SISMEMBER',KEYS[3],id)==1 and not redis.call('ZSCORE',KEYS[1],id) then local next=redis.call('INCR',KEYS[2]); redis.call('ZADD',KEYS[1],'NX',next,id); added=added+1 end end; return added", ["flashpay:settlement:ready:v1", "flashpay:settlement:ready:v1:sequence", "flashpay:recovery:active-payments:v1"], missingIds)
+        if (!Number.isSafeInteger(backfilled) || backfilled < 0 || backfilled > missingIds.length) throw new Error("Invalid settlement ready residency backfill")
+        readyResidencyBackfilled = backfilled
+      }
     } catch {
       console.warn("[P7H CAPACITY] settlement ready residency telemetry unavailable")
     }
@@ -609,7 +619,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readySchedulerUsable })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readySchedulerUsable })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
