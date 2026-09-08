@@ -90,8 +90,7 @@ export async function ensureAutomaticRefundIntent(paymentId: string): Promise<Au
         isRedisConfigured
       ) {
         try {
-          await redis.srem("flashpay:recovery:active-payments:v1", first.checkpoint.paymentId)
-          await redis.zrem("flashpay:settlement:ready:v1", first.checkpoint.paymentId)
+          await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [first.checkpoint.paymentId])
         } catch (error) {
           console.warn("[refund/orchestrator] Active recovery index cleanup failed", error)
         }
@@ -144,7 +143,12 @@ export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRe
     } else {
       if (!thrown && reason === "refund_cancelled") {
         const manualReview = await markAutomaticRefundManualReview(checkpoint.refundId, checkpoint.stage)
-        if (manualReview?.status === "manual_review_required") {
+        if (manualReview && manualReview.refundId === checkpoint.refundId && manualReview.paymentId === checkpoint.paymentId && manualReview.stage === checkpoint.stage && manualReview.status === "manual_review_required") {
+          try {
+            await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [checkpoint.paymentId])
+          } catch (error) {
+            console.warn("[refund/orchestrator] Active recovery index cleanup failed", error)
+          }
           results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason })
           processed += 1
           continue

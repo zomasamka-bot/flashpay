@@ -254,8 +254,7 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
     const finalized = await finalizeRefundProjectionWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount)
     if (finalized) {
       try {
-        await redis.srem('flashpay:recovery:active-payments:v1', checkpoint.paymentId)
-        await redis.zrem('flashpay:settlement:ready:v1', checkpoint.paymentId)
+        await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ['flashpay:recovery:active-payments:v1', 'flashpay:settlement:ready:v1'], [checkpoint.paymentId])
       } catch (error) {
         console.warn('[refunds/executor] Active recovery index cleanup failed', error)
       }
@@ -273,8 +272,7 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
   const finalized = await finalizeRefundProjectionWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount)
   if (finalized) {
     try {
-      await redis.srem('flashpay:recovery:active-payments:v1', checkpoint.paymentId)
-      await redis.zrem('flashpay:settlement:ready:v1', checkpoint.paymentId)
+      await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ['flashpay:recovery:active-payments:v1', 'flashpay:settlement:ready:v1'], [checkpoint.paymentId])
     } catch (error) {
       console.warn('[refunds/executor] Active recovery index cleanup failed', error)
     }

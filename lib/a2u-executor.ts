@@ -184,6 +184,13 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   // Executor returns ok:true; caller invokes buildA2USuccessResponse() to return final response
   if (ctx.payment.status === "settled_to_merchant") {
     console.log("[A2U Executor] ℹ️ Already settled - skipping execution")
+    if (isPaymentFinal(ctx.payment) === true && isRedisConfigured) {
+      try {
+        await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [ctx.paymentId])
+      } catch (error) {
+        console.warn("[A2U Executor] Active recovery index cleanup failed", error)
+      }
+    }
     return { ok: true, status: "settlement_pending" }
   }
 
@@ -1284,9 +1291,8 @@ export async function persistCheckpointMerged(
     console.log("[A2U Checkpoint] ✓ Strictly monotonic checkpoint persisted successfully")
 
     try {
-      if (isPaymentFinal(merged)) {
-        await redis.srem("flashpay:recovery:active-payments:v1", paymentId)
-        await redis.zrem("flashpay:settlement:ready:v1", paymentId)
+      if (isPaymentFinal(merged) || (merged.status === "paid_to_app" && merged.settlementFailureState === "held" && merged.refundStatus === "manual_review_required")) {
+        await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [paymentId])
       }
     } catch (error) {
       console.warn("[A2U Checkpoint] Active recovery index cleanup failed", error)
