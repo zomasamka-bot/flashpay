@@ -485,7 +485,10 @@ export async function POST(request: NextRequest) {
 
   const discoveryDurationMs = Date.now() - discoveryStartedAt
 
-  const eligibleIds = [...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
+  const readySchedulerUsable = readyStrictlyIncreasing === true && readyClassInvalid === 0 && readyEligibleSetParity === true && readyFreshSetParity === true && readyReconcilingSetParity === true && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowReconcilingIds !== null
+  const eligibleIds = readyShadowEligibleIds !== null && readySchedulerUsable ? readyShadowEligibleIds : [...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
+  const freshExecutionIds = readyShadowFreshIds !== null && readySchedulerUsable ? readyShadowFreshIds : freshDispatchIds.slice(0, 1)
+  const settlementReconcilingExecutionIds = readyShadowReconcilingIds !== null && readySchedulerUsable ? readyShadowReconcilingIds : [...new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])].slice(0, 1)
 
   const workStartedAt = Date.now()
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
@@ -511,9 +514,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
-for (const id of freshDispatchIds.slice(0,1)) { const payment=parsePayment(await redis.get(`payment:${id}`)); if(payment?.id!==id||!(isFreshSettlementDispatchCandidate(payment,Date.now()) || isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) continue; const result=await executeA2URecovery(id); const latest=parsePayment(await redis.get(`payment:${id}`)); results.push({paymentId:id,ok:result.status==="success",status:latest?.status,error:result.details?.error}); }
+for (const id of freshExecutionIds) { const payment=parsePayment(await redis.get(`payment:${id}`)); if(payment?.id!==id||!(isFreshSettlementDispatchCandidate(payment,Date.now()) || isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) continue; const result=await executeA2URecovery(id); const latest=parsePayment(await redis.get(`payment:${id}`)); results.push({paymentId:id,ok:result.status==="success",status:latest?.status,error:result.details?.error}); }
 
-  const settlementReconcilingExecutionIds=[...new Set([...settlementReconcilingDiscoveryIds,...staleRetryReconcilingDiscoveryIds])].slice(0,1)
   for (const id of settlementReconcilingExecutionIds) {
     const payment = parsePayment(await redis.get(`payment:${id}`))
     if (payment?.id !== id || (!isStaleFreshReconcilingCandidate(payment, Date.now()) && !isStaleRetryReconcilingCandidate(payment, Date.now()))) continue
@@ -573,7 +575,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readySchedulerUsable })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
