@@ -86,6 +86,7 @@ export async function buildA2USuccessResponse(
   const payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
 
   // CRITICAL: Verify payment record identity
+  if (payment.id !== paymentId) return null
   const recordId = payment.id || payment.paymentId
   if (!recordId) {
     console.error("[A2UResponse] Payment missing both id and paymentId fields")

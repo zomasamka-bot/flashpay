@@ -167,6 +167,10 @@ export async function executeA2URecovery(
   const payment: Payment =
     typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
 
+  if (payment.id !== paymentId) {
+    return { status: "manual_review_required", state: "payment_identity_mismatch", paymentId, details: { error: "Payment identity mismatch" } }
+  }
+
   console.log("[A2U Recovery] State flags:", {
     status: payment.status,
     requiresDbReconciliation: payment.requiresDbReconciliation,

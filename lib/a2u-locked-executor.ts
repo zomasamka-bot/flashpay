@@ -138,7 +138,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     } catch {
       return { ok: false, status: 409, error: "Payment state could not be verified" }
     }
-    if (!latestPayment || typeof latestPayment !== "object") {
+    if (!latestPayment || typeof latestPayment !== "object" || latestPayment.id !== paymentId) {
       return { ok: false, status: 409, error: "Payment state could not be verified" }
     }
 

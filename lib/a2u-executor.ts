@@ -184,7 +184,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   // Executor returns ok:true; caller invokes buildA2USuccessResponse() to return final response
   if (ctx.payment.status === "settled_to_merchant") {
     console.log("[A2U Executor] ℹ️ Already settled - skipping execution")
-    if (isPaymentFinal(ctx.payment) === true && isRedisConfigured) {
+    if (ctx.payment.id === ctx.paymentId && isPaymentFinal(ctx.payment) === true && isRedisConfigured) {
       try {
         await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [ctx.paymentId])
       } catch (error) {
@@ -1153,6 +1153,8 @@ export async function persistCheckpointMerged(
     }
 
     const latest: Payment = typeof latestData === "string" ? JSON.parse(latestData) : latestData
+    if (latest.id !== paymentId) throw new Error("[A2U Checkpoint] Payment identity mismatch")
+    if (updates.id !== undefined && updates.id !== paymentId) throw new Error("[A2U Checkpoint] Payment identity mismatch")
 
     // STRICT MONOTONICITY: Build merged record preserving all terminal evidence
     const merged: Payment = { ...latest }
