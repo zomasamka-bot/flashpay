@@ -110,8 +110,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
     }
 
-    const preFlashPaymentId = typeof piPayment.metadata?.paymentId === "string" ? piPayment.metadata.paymentId.trim() : ""
-    if (!preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
+    const rawPrePaymentId = piPayment.metadata?.paymentId
+    if (typeof rawPrePaymentId !== "string" || rawPrePaymentId.length === 0 || rawPrePaymentId !== rawPrePaymentId.trim()) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
+    const preFlashPaymentId = rawPrePaymentId
     const preStoredPayment = await redis.get(`payment:${preFlashPaymentId}`)
     if (!preStoredPayment) return NextResponse.json({ error: "Payment not found" }, { status: 404 })
     const prePayment: Payment = typeof preStoredPayment === "string" ? JSON.parse(preStoredPayment) : preStoredPayment
@@ -152,8 +153,8 @@ export async function POST(request: NextRequest) {
 
       finalPiPayment = await refetchResponse.json()
 
-      const refetchedFlashPaymentId = typeof finalPiPayment.metadata?.paymentId === "string" ? finalPiPayment.metadata.paymentId.trim() : ""
-      if (refetchedFlashPaymentId !== preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
+      const refetchedFlashPaymentId = finalPiPayment.metadata?.paymentId
+      if (typeof refetchedFlashPaymentId !== "string" || refetchedFlashPaymentId.length === 0 || refetchedFlashPaymentId !== refetchedFlashPaymentId.trim() || refetchedFlashPaymentId !== preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
 
       // Validate identifier, direction, amount, txid, non-cancelled, developer_completed after refetch
       if (!finalPiPayment.identifier || finalPiPayment.identifier !== piPaymentId) {
@@ -189,7 +190,7 @@ export async function POST(request: NextRequest) {
     console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
 
     // Derive flashPaymentId from metadata BEFORE loading Redis (internal app identifier)
-    const flashPaymentId = finalPiPayment.metadata?.paymentId
+    const flashPaymentId = preFlashPaymentId
     if (!flashPaymentId || typeof flashPaymentId !== "string") {
       console.error("[Pi Complete] Invalid payment metadata - missing paymentId")
       return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })

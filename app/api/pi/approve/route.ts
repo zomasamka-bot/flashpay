@@ -88,14 +88,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Derive paymentId ONLY from canonical metadata
-    const paymentId = typeof canonicalPayment.metadata?.paymentId === "string" ? canonicalPayment.metadata.paymentId.trim() : ""
-    if (!paymentId) {
+    const rawPaymentId = canonicalPayment.metadata?.paymentId
+    if (typeof rawPaymentId !== "string" || rawPaymentId.length === 0 || rawPaymentId !== rawPaymentId.trim()) {
       console.error("[Pi Webhook] Missing paymentId in canonical Pi metadata")
       return new Response(JSON.stringify({ error: "Invalid payment metadata" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       })
     }
+    const paymentId = rawPaymentId
 
     console.log("[Pi Webhook] Our Payment ID:", paymentId)
 
