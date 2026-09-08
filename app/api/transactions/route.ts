@@ -24,9 +24,22 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const merchantId = searchParams.get("merchantId")
-    const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10), 100)
-    const page = Math.max(parseInt(searchParams.get("page") || "1", 10), 1)
+    const rawLimit = searchParams.get("limit")
+    const rawPage = searchParams.get("page")
+    if ((rawLimit !== null && !/^[1-9]\d*$/.test(rawLimit)) || (rawPage !== null && !/^[1-9]\d*$/.test(rawPage))) {
+      return NextResponse.json({ error: "Invalid pagination parameters" }, { status: 400 })
+    }
+    const parsedLimit = rawLimit === null ? 50 : Number(rawLimit)
+    const parsedPage = rawPage === null ? 1 : Number(rawPage)
+    if (!Number.isSafeInteger(parsedLimit) || !Number.isSafeInteger(parsedPage)) {
+      return NextResponse.json({ error: "Invalid pagination parameters" }, { status: 400 })
+    }
+    const limit = Math.min(parsedLimit, 100)
+    const page = parsedPage
     const offset = (page - 1) * limit
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      return NextResponse.json({ error: "Invalid pagination parameters" }, { status: 400 })
+    }
 
     if (!merchantId) {
       return NextResponse.json({ error: "merchantId required" }, { status: 400 })
@@ -61,6 +74,9 @@ export async function GET(request: NextRequest) {
 
     const fromDate = fromDateStr ? new Date(fromDateStr) : undefined
     const toDate = toDateStr ? new Date(toDateStr) : undefined
+    if ((fromDateStr !== null && (!fromDate || !Number.isFinite(fromDate.getTime()))) || (toDateStr !== null && (!toDate || !Number.isFinite(toDate.getTime()))) || (fromDate && toDate && fromDate > toDate)) {
+      return NextResponse.json({ error: "Invalid date range" }, { status: 400 })
+    }
 
     // Query PostgreSQL
     const { transactions, total } = await getTransactionsByMerchant(merchantId, {
@@ -193,11 +209,19 @@ export async function POST(request: NextRequest) {
     }
 
     const offset = (page - 1) * limit
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      return NextResponse.json({ error: "Invalid pagination parameters" }, { status: 400 })
+    }
+    const parsedFromDate = fromDate === undefined ? undefined : typeof fromDate === "string" ? new Date(fromDate) : undefined
+    const parsedToDate = toDate === undefined ? undefined : typeof toDate === "string" ? new Date(toDate) : undefined
+    if ((fromDate !== undefined && (typeof fromDate !== "string" || !Number.isFinite(parsedFromDate?.getTime()))) || (toDate !== undefined && (typeof toDate !== "string" || !Number.isFinite(parsedToDate?.getTime()))) || (parsedFromDate && parsedToDate && parsedFromDate > parsedToDate)) {
+      return NextResponse.json({ error: "Invalid date range" }, { status: 400 })
+    }
 
     // Query with date range
     const { transactions, total } = await getTransactionsByMerchant(merchantId, {
-      fromDate: fromDate ? new Date(fromDate) : undefined,
-      toDate: toDate ? new Date(toDate) : undefined,
+      fromDate: parsedFromDate,
+      toDate: parsedToDate,
       limit,
       offset,
     })
