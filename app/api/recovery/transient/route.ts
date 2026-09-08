@@ -359,6 +359,7 @@ export async function POST(request: NextRequest) {
   let readyRotationStart: string | null = null
   let readyRotationNext: string | null = null
   let readyRotationCas: number | null = null
+  let readyRotationCycleMax: number | null = null
   try {
     const storedRotation = await redis.get<unknown>("flashpay:settlement:ready:v1:authority-cursor")
     if (storedRotation !== null && typeof storedRotation !== "string") throw new Error("Invalid settlement ready authority cursor")
@@ -366,6 +367,11 @@ export async function POST(request: NextRequest) {
     if (!/^r:[0-9]+$/.test(rotationStart)) throw new Error("Invalid settlement ready authority cursor")
     const rotationScore = Number(rotationStart.slice(2))
     if (!Number.isSafeInteger(rotationScore) || rotationScore < 0 || rotationScore >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid settlement ready authority cursor")
+    const cycleMaxResult = await redis.eval<[string], string>("local current=redis.call('GET',KEYS[1]); if current then return current end; if ARGV[1] ~= 'r:0' then return '-1' end; local top=redis.call('ZRANGE',KEYS[2],-1,-1,'WITHSCORES'); if #top ~= 0 and #top ~= 2 then return '-1' end; local base='0'; if #top == 2 then local score=tonumber(top[2]); if not score or score < 0 or score > 9007199254740990 or score ~= math.floor(score) then return '-1' end; base=top[2] end; redis.call('SET',KEYS[1],base); return base", ["flashpay:settlement:ready:v1:authority-cycle-max", "flashpay:settlement:ready:v1"], [rotationStart])
+    if (!/^[0-9]+$/.test(cycleMaxResult)) throw new Error("Invalid settlement ready authority cycle max")
+    const cycleMax = Number(cycleMaxResult)
+    if (!Number.isSafeInteger(cycleMax) || cycleMax < 0 || cycleMax >= Number.MAX_SAFE_INTEGER || (rotationScore !== 0 && cycleMax < rotationScore)) throw new Error("Invalid settlement ready authority cycle max")
+    readyRotationCycleMax = cycleMax
     const orderedIds: string[] = []
     let firstScore: number | null = null
     let strictlyIncreasing = true
@@ -374,7 +380,7 @@ export async function POST(request: NextRequest) {
     let headTruncated = false
     let rotationEnded = false
     for (let page = 0; page < 4; page += 1) {
-      const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", pageStartScore, "+inf", { byScore: true, withScores: true, offset: 0, count: 201 })
+      const readyOrdered = await redis.zrange("flashpay:settlement:ready:v1", pageStartScore, cycleMax, { byScore: true, withScores: true, offset: 0, count: 201 })
       if (!Array.isArray(readyOrdered) || readyOrdered.length > 402 || readyOrdered.length % 2 !== 0) throw new Error("Invalid ordered settlement ready telemetry")
       const pairCount = readyOrdered.length / 2
       if (page === 3 && pairCount === 201) headTruncated = true
@@ -506,9 +512,9 @@ export async function POST(request: NextRequest) {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
 
-  if (readyOrderedValid === true && readyClassInvalid === 0 && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowReconcilingIds !== null && readyRotationStart !== null && readyRotationNext !== null) {
+  if (readyOrderedValid === true && readyClassInvalid === 0 && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowReconcilingIds !== null && readyRotationStart !== null && readyRotationNext !== null && readyRotationCycleMax !== null) {
     try {
-      const rotationCas = await redis.eval<[string, string], number>("local current=redis.call('GET',KEYS[1]); if not current then current='r:0' end; if current==ARGV[1] then return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:authority-cursor"], [readyRotationStart, readyRotationNext])
+      const rotationCas = await redis.eval<[string, string, string], number>("local current=redis.call('GET',KEYS[1]); if not current then current='r:0' end; local cycle=redis.call('GET',KEYS[2]); if current==ARGV[1] and cycle==ARGV[3] then if ARGV[2]=='r:0' then redis.call('SET',KEYS[1],ARGV[2]); redis.call('DEL',KEYS[2]); return 1 end; return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:authority-cursor", "flashpay:settlement:ready:v1:authority-cycle-max"], [readyRotationStart, readyRotationNext, String(readyRotationCycleMax)])
       if (rotationCas !== 0 && rotationCas !== 1) throw new Error("Invalid settlement ready authority cursor CAS")
       readyRotationCas = rotationCas
     } catch {
@@ -656,7 +662,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyWindowCertified })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyWindowCertified })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
