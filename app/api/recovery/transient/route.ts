@@ -252,6 +252,10 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
   }
+  const readyResidencyIds: string[] = []
+  let readyResidencyCount: number | null = null
+  let readyResidencyMissing: number | null = null
+  let readyResidencySourceValid = true
   const postHorizonIds: string[] = []
   const preparedSubmitIds: string[] = []
   const retryableIds: string[] = []
@@ -275,13 +279,20 @@ export async function POST(request: NextRequest) {
     for (let valueIndex = 0; valueIndex < batchKeys.length; valueIndex += 1) {
       const key = batchKeys[valueIndex]
       const payment = parsePayment(values[valueIndex])
-      if (!payment) continue
+      if (!payment) {
+        readyResidencySourceValid = false
+        continue
+      }
 
       const paymentId = key.slice("payment:".length)
       if (payment.id === paymentId && checkRefundEligibility(payment)) {
         refundCandidateIds.push(paymentId)
       }
-      if (payment.id !== paymentId) continue
+      if (payment.id !== paymentId) {
+        readyResidencySourceValid = false
+        continue
+      }
+      if ((payment.status === "paid_to_app" || payment.status === "settlement_pending") && !hasExcludedState(payment)) readyResidencyIds.push(paymentId)
       if (isFreshSettlementDispatchCandidate(payment, now) || isStage1OnlySettlementDispatchCandidate(payment, now)) freshDispatchIds.push(paymentId)
       if (isStaleFreshReconcilingCandidate(payment, now)) settlementReconcilingDiscoveryIds.push(paymentId)
       if (isStaleRetryReconcilingCandidate(payment, now)) staleRetryReconcilingDiscoveryIds.push(paymentId)
@@ -319,9 +330,6 @@ export async function POST(request: NextRequest) {
   }
   let readyHeadTruncated: boolean | null = null
   let readyCoverageOutsideHead: number | null = null
-  const readyResidencyIds: string[] = []
-  let readyResidencyCount: number | null = null
-  let readyResidencyMissing: number | null = null
   const readySample = freshDispatchIds.slice(0, 200)
   let readySetSize: number | null = null
   let readyIndexed: number | null = null
@@ -433,7 +441,6 @@ export async function POST(request: NextRequest) {
         for (let index = 0; index < batchIds.length; index += 1) {
           const payment = parsePayment(readyValues[index])
           const paymentId = batchIds[index]
-          if (payment && payment.id === paymentId && (payment.status === "paid_to_app" || payment.status === "settlement_pending") && !hasExcludedState(payment)) readyResidencyIds.push(paymentId)
           if (!payment || payment.id !== paymentId) {
             classInvalid++
           } else if (isPostHorizonEligible(payment, now)) {
@@ -486,18 +493,16 @@ export async function POST(request: NextRequest) {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
 
-  if (scanNextToken === "c:0" && Number.isSafeInteger(activeSetSize) && activeSetSize >= 0 && keys.length === activeSetSize) {
+  if (readyResidencySourceValid === true && scanNextToken === "c:0" && Number.isSafeInteger(activeSetSize) && activeSetSize >= 0 && keys.length === activeSetSize) {
     try {
-      let indexed = 0
       let missing = 0
       for (let batchStart = 0; batchStart < readyResidencyIds.length; batchStart += 200) {
         const batch = readyResidencyIds.slice(batchStart, batchStart + 200)
         const scores = await redis.zmscore("flashpay:settlement:ready:v1", batch)
         if (!Array.isArray(scores) || scores.length !== batch.length || scores.some((score) => score !== null && (typeof score !== "number" || !Number.isSafeInteger(score) || score < 1))) throw new Error("Invalid settlement ready residency telemetry")
-        indexed += scores.filter((score) => score !== null).length
         missing += scores.filter((score) => score === null).length
       }
-      readyResidencyCount = indexed
+      readyResidencyCount = readyResidencyIds.length
       readyResidencyMissing = missing
     } catch {
       console.warn("[P7H CAPACITY] settlement ready residency telemetry unavailable")
