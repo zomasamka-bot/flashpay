@@ -476,7 +476,7 @@ export async function POST(request: NextRequest) {
     readyClassReconciling = classReconciling
     readyClassOther = classOther
     readyShadowEligibleIds = [...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds].slice(0, MAX_ATTEMPTS)
-    readyShadowFreshIds = shadowFreshDispatchIds.slice(0, 1)
+    readyShadowFreshIds = shadowFreshDispatchIds.slice(0, MAX_ATTEMPTS)
     readyShadowReconcilingIds = shadowReconcilingIds.slice(0, 1)
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
@@ -487,7 +487,7 @@ export async function POST(request: NextRequest) {
 
   const readySchedulerUsable = readyStrictlyIncreasing === true && readyClassInvalid === 0 && readyEligibleSetParity === true && readyFreshSetParity === true && readyReconcilingSetParity === true && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowReconcilingIds !== null
   const eligibleIds = readyShadowEligibleIds !== null && readySchedulerUsable ? readyShadowEligibleIds : [...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
-  const freshExecutionIds = readyShadowFreshIds !== null && readySchedulerUsable ? readyShadowFreshIds : freshDispatchIds.slice(0, 1)
+  const freshExecutionIds = readyShadowFreshIds !== null && readySchedulerUsable ? readyShadowFreshIds : freshDispatchIds.slice(0, MAX_ATTEMPTS)
   const settlementReconcilingExecutionIds = readyShadowReconcilingIds !== null && readySchedulerUsable ? readyShadowReconcilingIds : [...new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])].slice(0, 1)
 
   const workStartedAt = Date.now()
@@ -514,7 +514,14 @@ export async function POST(request: NextRequest) {
     }
   }
 
-for (const id of freshExecutionIds) { const payment=parsePayment(await redis.get(`payment:${id}`)); if(payment?.id!==id||!(isFreshSettlementDispatchCandidate(payment,Date.now()) || isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) continue; const result=await executeA2URecovery(id); const latest=parsePayment(await redis.get(`payment:${id}`)); results.push({paymentId:id,ok:result.status==="success",status:latest?.status,error:result.details?.error}); }
+for (const id of freshExecutionIds) {
+    const payment = parsePayment(await redis.get(`payment:${id}`))
+    if (payment?.id !== id || !(isFreshSettlementDispatchCandidate(payment, Date.now()) || isStage1OnlySettlementDispatchCandidate(payment, Date.now()))) continue
+    const result = await executeA2URecovery(id)
+    const latest = parsePayment(await redis.get(`payment:${id}`))
+    results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
+    if (latest && latest.status === "paid_to_app" && latest.settlementFailureState === "retryable" && isTooManyPayments(latest)) break
+  }
 
   for (const id of settlementReconcilingExecutionIds) {
     const payment = parsePayment(await redis.get(`payment:${id}`))
