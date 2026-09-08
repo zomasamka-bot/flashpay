@@ -110,6 +110,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
     }
 
+    const preFlashPaymentId = typeof piPayment.metadata?.paymentId === "string" ? piPayment.metadata.paymentId.trim() : ""
+    if (!preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
+    const preStoredPayment = await redis.get(`payment:${preFlashPaymentId}`)
+    if (!preStoredPayment) return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+    const prePayment: Payment = typeof preStoredPayment === "string" ? JSON.parse(preStoredPayment) : preStoredPayment
+    if (prePayment.id !== preFlashPaymentId || typeof piPayment.amount !== "number" || !Number.isFinite(piPayment.amount) || piPayment.amount <= 0 || typeof prePayment.amount !== "number" || !Number.isFinite(prePayment.amount) || prePayment.amount <= 0 || piPayment.amount !== prePayment.amount || (prePayment.piPaymentId && prePayment.piPaymentId !== piPayment.identifier)) return NextResponse.json({ error: "Payment validation failed" }, { status: 400 })
+
     // If not developer_completed, call Pi /complete endpoint and refetch
     let finalPiPayment = piPayment
     if (piPayment.status?.developer_completed !== true) {
@@ -144,6 +151,9 @@ export async function POST(request: NextRequest) {
       }
 
       finalPiPayment = await refetchResponse.json()
+
+      const refetchedFlashPaymentId = typeof finalPiPayment.metadata?.paymentId === "string" ? finalPiPayment.metadata.paymentId.trim() : ""
+      if (refetchedFlashPaymentId !== preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
 
       // Validate identifier, direction, amount, txid, non-cancelled, developer_completed after refetch
       if (!finalPiPayment.identifier || finalPiPayment.identifier !== piPaymentId) {

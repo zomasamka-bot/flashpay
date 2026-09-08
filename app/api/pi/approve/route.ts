@@ -82,8 +82,13 @@ export async function POST(request: NextRequest) {
     const canonicalPayment = await piGetResponse.json()
     console.log("[Pi Webhook] Canonical Pi Payment ID:", canonicalPayment.identifier)
 
+    if (canonicalPayment.identifier !== identifier) {
+      console.error("[Pi Webhook] SECURITY: Canonical identifier mismatch")
+      return new Response(JSON.stringify({ error: "Payment validation failed" }), { status: 400, headers: { "Content-Type": "application/json" } })
+    }
+
     // Derive paymentId ONLY from canonical metadata
-    const paymentId = canonicalPayment.metadata?.paymentId
+    const paymentId = typeof canonicalPayment.metadata?.paymentId === "string" ? canonicalPayment.metadata.paymentId.trim() : ""
     if (!paymentId) {
       console.error("[Pi Webhook] Missing paymentId in canonical Pi metadata")
       return new Response(JSON.stringify({ error: "Invalid payment metadata" }), {
@@ -117,8 +122,8 @@ export async function POST(request: NextRequest) {
     }
 
     // FAIL CLOSED: Require Redis payment record to exist before /approve
-    if (!redisPayment) {
-      console.error("[Pi Webhook] SECURITY: No Redis payment record found for", paymentId)
+    if (!redisPayment || redisPayment.id !== paymentId) {
+      console.error("[Pi Webhook] SECURITY: No matching Redis payment record found for", paymentId)
       return new Response(JSON.stringify({ error: "Payment not found in system" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
