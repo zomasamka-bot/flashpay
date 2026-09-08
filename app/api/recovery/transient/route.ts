@@ -319,6 +319,9 @@ export async function POST(request: NextRequest) {
   }
   let readyHeadTruncated: boolean | null = null
   let readyCoverageOutsideHead: number | null = null
+  const readyResidencyIds: string[] = []
+  let readyResidencyCount: number | null = null
+  let readyResidencyMissing: number | null = null
   const readySample = freshDispatchIds.slice(0, 200)
   let readySetSize: number | null = null
   let readyIndexed: number | null = null
@@ -430,6 +433,7 @@ export async function POST(request: NextRequest) {
         for (let index = 0; index < batchIds.length; index += 1) {
           const payment = parsePayment(readyValues[index])
           const paymentId = batchIds[index]
+          if (payment && payment.id === paymentId && (payment.status === "paid_to_app" || payment.status === "settlement_pending") && !hasExcludedState(payment)) readyResidencyIds.push(paymentId)
           if (!payment || payment.id !== paymentId) {
             classInvalid++
           } else if (isPostHorizonEligible(payment, now)) {
@@ -480,6 +484,24 @@ export async function POST(request: NextRequest) {
     readyShadowReconcilingIds = shadowReconcilingIds.slice(0, 1)
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
+  }
+
+  if (scanNextToken === "c:0" && Number.isSafeInteger(activeSetSize) && activeSetSize >= 0 && keys.length === activeSetSize) {
+    try {
+      let indexed = 0
+      let missing = 0
+      for (let batchStart = 0; batchStart < readyResidencyIds.length; batchStart += 200) {
+        const batch = readyResidencyIds.slice(batchStart, batchStart + 200)
+        const scores = await redis.zmscore("flashpay:settlement:ready:v1", batch)
+        if (!Array.isArray(scores) || scores.length !== batch.length || scores.some((score) => score !== null && (typeof score !== "number" || !Number.isSafeInteger(score) || score < 1))) throw new Error("Invalid settlement ready residency telemetry")
+        indexed += scores.filter((score) => score !== null).length
+        missing += scores.filter((score) => score === null).length
+      }
+      readyResidencyCount = indexed
+      readyResidencyMissing = missing
+    } catch {
+      console.warn("[P7H CAPACITY] settlement ready residency telemetry unavailable")
+    }
   }
 
 
@@ -582,7 +604,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readySchedulerUsable })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readySchedulerUsable })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }
