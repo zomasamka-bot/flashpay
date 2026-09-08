@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     console.log("[API] ========================================")
 
     // Validate required fields from client
-    if (typeof amount !== "number" || amount <= 0) {
+    if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || amount > 1000000 || Number(amount.toFixed(7)) !== amount) {
       return NextResponse.json(
         { error: "Invalid amount. Must be a positive number." },
         { status: 400, headers: corsHeaders },
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate note (optional but if provided must be a string)
-    if (note && typeof note !== "string") {
+    if (note !== undefined && (typeof note !== "string" || note.length > 500)) {
       return NextResponse.json(
         { error: "Invalid note. Must be a string." },
         { status: 400, headers: corsHeaders },
