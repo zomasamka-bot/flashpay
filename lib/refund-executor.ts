@@ -178,7 +178,14 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
     const claim = await beginRefundBlockchainSubmissionClaim(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId)
     if (!claim || !claim.startedNow) return { outcome: 'blocked', reason: 'blockchain_claim_conflict' }
     const submission = await import('./refund-blockchain-submit').then(({ submitRefundBlockchainOnce }) => submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment }))
-    if (submission.outcome !== 'CONFIRMED_TX') return { outcome: 'blocked', reason: submission.code }
+    if (submission.outcome !== 'CONFIRMED_TX') {
+      if (submission.code === 'submit_failed') return { outcome: 'blocked', reason: submission.code }
+      const failureIntent = await readPiWalletIntent(refundPayment.from_address)
+      if (failureIntent.state === 'unavailable') return { outcome: 'blocked', reason: 'lock_conflict' }
+      if (failureIntent.state === 'present' && failureIntent.owner.paymentId === checkpoint.paymentId && (failureIntent.owner.kind !== 'refund_claim' || failureIntent.owner.refundId !== refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+      if (failureIntent.state === 'present' && failureIntent.owner.paymentId === checkpoint.paymentId && !await releasePiWalletIntent(refundPayment.from_address, failureIntent.owner)) return { outcome: 'blocked', reason: 'lock_conflict' }
+      return { outcome: 'blocked', reason: submission.code }
+    }
     const persisted = await persistRefundBlockchainTxWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, submission.txid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_confirmed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: submission.txid } })
     if (!persisted) return { outcome: 'blocked', reason: 'tx_persistence_conflict' }
     const postSubmitIntent = await readPiWalletIntent(refundPayment.from_address)
