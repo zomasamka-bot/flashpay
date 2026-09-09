@@ -180,6 +180,25 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       ) {
         return { ok: false, status: 409, error: "Payment state could not be verified" }
       }
+      if (preparedRecoveryException) {
+        const cleanupIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+        if (cleanupIntent.state === "unavailable") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        if (cleanupIntent.state === "present" && cleanupIntent.owner.paymentId !== paymentId) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        if (cleanupIntent.state === "present" && (cleanupIntent.owner.kind !== "settlement_prepared" || cleanupIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || cleanupIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        if (cleanupIntent.state === "present") {
+          const cleanupLock = await acquirePiWalletSubmitLock(latestPayment.a2uFromAddress)
+          if (!cleanupLock) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          try {
+            const lockedIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+            if (lockedIntent.state !== "present" || lockedIntent.owner.kind !== "settlement_prepared" || lockedIntent.owner.paymentId !== paymentId || lockedIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || lockedIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+            const cleanupReplay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
+            if (cleanupReplay.outcome !== "MOVEMENT_VERIFIED" || cleanupReplay.moneyMovementProven !== true || cleanupReplay.authorizesFinancialAction !== false || cleanupReplay.paymentId !== paymentId || cleanupReplay.merchantUid !== latestPayment.merchantUid || cleanupReplay.reference.preparedHash !== latestPayment.a2uPreparedTxHash || cleanupReplay.reference.preparedSequence !== latestPayment.a2uPreparedSequence || cleanupReplay.reference.a2uPaymentId !== latestPayment.a2uPaymentId || cleanupReplay.reference.fromAddress !== latestPayment.a2uFromAddress || cleanupReplay.reference.toAddress !== latestPayment.a2uToAddress || cleanupReplay.reference.amount !== latestPayment.merchantAmount || cleanupReplay.reference.envelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr || !Number.isFinite(cleanupReplay.horizonFeeCharged) || cleanupReplay.horizonFeeCharged < 0) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+            if (!await releasePiWalletIntent(latestPayment.a2uFromAddress, { kind: "settlement_prepared", paymentId, preparedHash: latestPayment.a2uPreparedTxHash, preparedSequence: latestPayment.a2uPreparedSequence })) return { ok: false, status: 500, error: "Settlement wallet intent release failed" }
+          } finally {
+            await cleanupLock.release()
+          }
+        }
+      }
     }
 
     console.log("[A2U Locked Executor] Latest payment status:", latestPayment.status)
