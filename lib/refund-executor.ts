@@ -19,7 +19,7 @@ import { verifyRefundBlockchainEvidence } from './refund-blockchain-evidence'
 import { serverConfig } from './server-config'
 import { query } from './db'
 import { recordRefundAccounting } from './refund-accounting'
-import { acquirePiWalletSubmitLock, readPiWalletIntent } from './pi-wallet-submit-lock'
+import { acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission' | 'found'; refundId: string; paymentId: string; amount: number; refundPaymentId?: string }
@@ -151,7 +151,23 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
   const evidence = await import('./refund-blockchain-evidence').then(({ verifyRefundBlockchainEvidence }) => verifyRefundBlockchainEvidence({ checkpoint, payment: refundPayment }))
   if (evidence.outcome === 'VERIFIED_TX') {
     const persisted = await persistRefundBlockchainTxWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, evidence.txid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_confirmed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid: evidence.txid, recovered: true } })
-    return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId } : { outcome: 'blocked', reason: 'tx_persistence_conflict' }
+    if (!persisted) return { outcome: 'blocked', reason: 'tx_persistence_conflict' }
+    const walletIntent = await readPiWalletIntent(refundPayment.from_address)
+    if (walletIntent.state === 'unavailable') return { outcome: 'blocked', reason: 'lock_conflict' }
+    if (walletIntent.state === 'present' && walletIntent.owner.paymentId === checkpoint.paymentId && (walletIntent.owner.kind !== 'refund_claim' || walletIntent.owner.refundId !== refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+    if (walletIntent.state === 'present' && walletIntent.owner.paymentId === checkpoint.paymentId) {
+      const cleanupLock = await acquirePiWalletSubmitLock(refundPayment.from_address)
+      if (!cleanupLock) return { outcome: 'blocked', reason: 'lock_conflict' }
+      try {
+        const lockedIntent = await readPiWalletIntent(refundPayment.from_address)
+        if (lockedIntent.state === 'unavailable') return { outcome: 'blocked', reason: 'lock_conflict' }
+        if (lockedIntent.state === 'present' && lockedIntent.owner.paymentId === checkpoint.paymentId && (lockedIntent.owner.kind !== 'refund_claim' || lockedIntent.owner.refundId !== refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+        if (lockedIntent.state === 'present' && lockedIntent.owner.paymentId === checkpoint.paymentId && !await releasePiWalletIntent(refundPayment.from_address, lockedIntent.owner)) return { outcome: 'blocked', reason: 'lock_conflict' }
+      } finally {
+        await cleanupLock.release()
+      }
+    }
+    return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId }
   }
   if (evidence.outcome === 'INDETERMINATE') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   const walletLock = await acquirePiWalletSubmitLock(refundPayment.from_address)
