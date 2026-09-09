@@ -122,6 +122,25 @@ export async function releasePiWalletIntent(sourceAddress: unknown, expectedOwne
   }
 }
 
+export async function acquirePiWalletIntentSubmitLock(
+  sourceAddress: unknown,
+  owner: unknown,
+): Promise<{ release: () => Promise<void> } | null> {
+  const submitLock = await acquirePiWalletSubmitLock(sourceAddress)
+  if (submitLock === null) return null
+  let claimed = false
+  try {
+    claimed = await claimPiWalletIntent(sourceAddress, owner)
+  } catch {
+    claimed = false
+  }
+  if (!claimed) {
+    await submitLock.release()
+    return null
+  }
+  return { release: submitLock.release }
+}
+
 export async function acquirePiWalletSubmitLock(
   sourceAddress: unknown,
 ): Promise<{ release: () => Promise<void> } | null> {
