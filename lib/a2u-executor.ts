@@ -3,7 +3,7 @@ import { serverConfig } from "@/lib/server-config"
 import { recordA2UTransactionAtomic } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
-import { acquirePiWalletSubmitLock } from "@/lib/pi-wallet-submit-lock"
+import { acquirePiWalletSubmitLock, readPiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 
 /**
@@ -869,6 +869,12 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
 
     walletLock = await acquirePiWalletSubmitLock(appPublicKey)
     if (!walletLock) return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
+    try {
+      const intent = await readPiWalletIntent(appPublicKey)
+      if (intent.state !== "absent") return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
+    } catch {
+      return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
+    }
 
     console.log("[A2U Stage2] Connecting to Horizon")
     const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", {

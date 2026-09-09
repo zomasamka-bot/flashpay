@@ -6,7 +6,7 @@ import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
-import { acquirePiWalletSubmitLock } from "@/lib/pi-wallet-submit-lock"
+import { acquirePiWalletSubmitLock, readPiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
 
@@ -254,6 +254,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
       }
       try {
+        const intent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+        if (intent.state !== "absent") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
         if (replay.outcome === "MOVEMENT_VERIFIED") {
           if (

@@ -19,7 +19,7 @@ import { verifyRefundBlockchainEvidence } from './refund-blockchain-evidence'
 import { serverConfig } from './server-config'
 import { query } from './db'
 import { recordRefundAccounting } from './refund-accounting'
-import { acquirePiWalletSubmitLock } from './pi-wallet-submit-lock'
+import { acquirePiWalletSubmitLock, readPiWalletIntent } from './pi-wallet-submit-lock'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission' | 'found'; refundId: string; paymentId: string; amount: number; refundPaymentId?: string }
@@ -157,6 +157,8 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
   const walletLock = await acquirePiWalletSubmitLock(refundPayment.from_address)
   if (!walletLock) return { outcome: 'blocked', reason: 'lock_conflict' }
   try {
+    const intent = await readPiWalletIntent(refundPayment.from_address)
+    if (intent.state !== 'absent') return { outcome: 'blocked', reason: 'lock_conflict' }
     const claim = await beginRefundBlockchainSubmissionClaim(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId)
     if (!claim || !claim.startedNow) return { outcome: 'blocked', reason: 'blockchain_claim_conflict' }
     const submission = await import('./refund-blockchain-submit').then(({ submitRefundBlockchainOnce }) => submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment }))
