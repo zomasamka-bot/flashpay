@@ -69,7 +69,7 @@ export async function readPiWalletIntent(sourceAddress: unknown): Promise<{ stat
   const key = intentKey(sourceAddress)
   if (key === null) return { state: "unavailable" }
   try {
-    const stored = await redis.eval<[string], string>(INTENT_READ_SCRIPT, [key], [])
+    const stored = await redis.eval<[], string>(INTENT_READ_SCRIPT, [key], [])
     if (stored === "__MISSING__") return { state: "absent" }
     if (!stored.startsWith("__PRESENT__:")) return { state: "unavailable" }
     const bytes = stored.slice("__PRESENT__:".length)
