@@ -254,8 +254,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
       }
       try {
-        const intent = await readPiWalletIntent(latestPayment.a2uFromAddress)
-        if (intent.state !== "absent") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        const walletIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+        if (walletIntent.state !== "absent") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
         if (replay.outcome === "MOVEMENT_VERIFIED") {
           if (
