@@ -52,12 +52,22 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
     return { outcome: "FAILED", code: "configuration", message: "Refund signing configuration is invalid" }
   }
 
+  let server: Horizon.Server
+  let source: Awaited<ReturnType<Horizon.Server["loadAccount"]>>
+  let baseFee: Awaited<ReturnType<Horizon.Server["fetchBaseFee"]>>
+  let timebounds: Awaited<ReturnType<Horizon.Server["fetchTimebounds"]>>
   try {
-    const server = new Horizon.Server(HORIZON_URL)
-    const source = await server.loadAccount(input.payment.from_address)
-    const baseFee = await server.fetchBaseFee()
-    const timebounds = await server.fetchTimebounds(180)
-    const transaction = new TransactionBuilder(source, {
+    server = new Horizon.Server(HORIZON_URL)
+    source = await server.loadAccount(input.payment.from_address)
+    baseFee = await server.fetchBaseFee()
+    timebounds = await server.fetchTimebounds(180)
+  } catch (error) {
+    return { outcome: "FAILED", code: "source_load_failed", message: error instanceof Error ? error.message : "Refund source loading failed" }
+  }
+
+  let transaction: ReturnType<TransactionBuilder["build"]>
+  try {
+    transaction = new TransactionBuilder(source, {
       fee: baseFee.toString(),
       networkPassphrase: input.payment.network,
     })
@@ -66,6 +76,11 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
       .setTimebounds(timebounds.minTime, timebounds.maxTime)
       .build()
     transaction.sign(keypair)
+  } catch (error) {
+    return { outcome: "FAILED", code: "build_failed", message: error instanceof Error ? error.message : "Refund transaction build failed" }
+  }
+
+  try {
     const result = await server.submitTransaction(transaction)
     if (result.successful !== true || typeof result.hash !== "string" || result.hash.length === 0) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
     return { outcome: "CONFIRMED_TX", txid: result.hash }
