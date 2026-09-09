@@ -6,7 +6,7 @@ import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
-import { acquirePiWalletSubmitLock, readPiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
+import { acquirePiWalletSubmitLock, readPiWalletIntent, replacePiWalletIntent, releasePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
 
@@ -294,6 +294,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           } catch {
             return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }
           }
+          if (walletIntent.state === "present" && !await releasePiWalletIntent(latestPayment.a2uFromAddress, { kind: "settlement_prepared", paymentId, preparedHash: latestPayment.a2uPreparedTxHash, preparedSequence: latestPayment.a2uPreparedSequence })) return { ok: false, status: 500, error: "Settlement wallet intent release failed" }
         return { ok: true, status: 202 }
         }
         if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
@@ -365,6 +366,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         } catch {
           return { ok: false, status: 500, error: "Settlement movement checkpoint persistence failed" }
         }
+        if (walletIntent.state === "present" && !await releasePiWalletIntent(latestPayment.a2uFromAddress, { kind: "settlement_prepared", paymentId, preparedHash: latestPayment.a2uPreparedTxHash, preparedSequence: latestPayment.a2uPreparedSequence })) return { ok: false, status: 500, error: "Settlement wallet intent release failed" }
         return { ok: true, status: 202 }
       } finally {
         await walletLock.release()
