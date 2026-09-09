@@ -180,7 +180,12 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
     const submission = await import('./refund-blockchain-submit').then(({ submitRefundBlockchainOnce }) => submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment }))
     if (submission.outcome !== 'CONFIRMED_TX') return { outcome: 'blocked', reason: submission.code }
     const persisted = await persistRefundBlockchainTxWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, submission.txid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_confirmed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: submission.txid } })
-    return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'tx_persistence_conflict' }
+    if (!persisted) return { outcome: 'blocked', reason: 'tx_persistence_conflict' }
+    const postSubmitIntent = await readPiWalletIntent(refundPayment.from_address)
+    if (postSubmitIntent.state === 'unavailable') return { outcome: 'blocked', reason: 'lock_conflict' }
+    if (postSubmitIntent.state === 'present' && postSubmitIntent.owner.paymentId === checkpoint.paymentId && (postSubmitIntent.owner.kind !== 'refund_claim' || postSubmitIntent.owner.refundId !== refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+    if (postSubmitIntent.state === 'present' && postSubmitIntent.owner.paymentId === checkpoint.paymentId && !await releasePiWalletIntent(refundPayment.from_address, postSubmitIntent.owner)) return { outcome: 'blocked', reason: 'lock_conflict' }
+    return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId }
   } finally {
     await walletLock.release()
   }
