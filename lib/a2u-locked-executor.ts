@@ -6,7 +6,7 @@ import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
-import { acquirePiWalletSubmitLock, readPiWalletIntent } from "@/lib/pi-wallet-submit-lock"
+import { acquirePiWalletSubmitLock, readPiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
 
@@ -256,7 +256,13 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       try {
         const walletIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
         if (walletIntent.state === "unavailable") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
-        if (walletIntent.state === "present" && (walletIntent.owner.kind !== "settlement_prepared" || walletIntent.owner.paymentId !== paymentId || walletIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || walletIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        if (walletIntent.state === "present" && walletIntent.owner.kind === "settlement_prepared" && (walletIntent.owner.paymentId !== paymentId || walletIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || walletIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        if (walletIntent.state === "present" && walletIntent.owner.kind === "settlement_claim") {
+          if (walletIntent.owner.paymentId !== paymentId || typeof latestPayment.a2uPreparedEnvelopeXdr !== "string" || !latestPayment.a2uPreparedEnvelopeXdr.trim() || typeof latestPayment.a2uPreparedTxHash !== "string" || !/^[0-9a-f]{64}$/.test(latestPayment.a2uPreparedTxHash) || typeof latestPayment.a2uPreparedSequence !== "string" || !/^[1-9][0-9]*$/.test(latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          const promoted = await replacePiWalletIntent(latestPayment.a2uFromAddress, walletIntent.owner, { kind: "settlement_prepared", paymentId, preparedHash: latestPayment.a2uPreparedTxHash, preparedSequence: latestPayment.a2uPreparedSequence })
+          if (!promoted) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        }
+        if (walletIntent.state === "present" && walletIntent.owner.kind !== "settlement_prepared" && walletIntent.owner.kind !== "settlement_claim") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
         if (replay.outcome === "MOVEMENT_VERIFIED") {
           if (
