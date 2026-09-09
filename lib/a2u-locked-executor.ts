@@ -183,9 +183,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       if (preparedRecoveryException) {
         const cleanupIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
         if (cleanupIntent.state === "unavailable") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
-        if (cleanupIntent.state === "present" && cleanupIntent.owner.paymentId !== paymentId) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
-        if (cleanupIntent.state === "present" && (cleanupIntent.owner.kind !== "settlement_prepared" || cleanupIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || cleanupIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
-        if (cleanupIntent.state === "present") {
+        if (cleanupIntent.state === "present" && cleanupIntent.owner.paymentId === paymentId && (cleanupIntent.owner.kind !== "settlement_prepared" || cleanupIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || cleanupIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        if (cleanupIntent.state === "present" && cleanupIntent.owner.paymentId === paymentId) {
           const cleanupLock = await acquirePiWalletSubmitLock(latestPayment.a2uFromAddress)
           if (!cleanupLock) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           try {
