@@ -2,6 +2,7 @@ import "server-only"
 
 import type { RefundCheckpoint } from "./types"
 import type { RefundPiPayment } from "./refund-pi-reconciliation"
+import type { SettlementSubmitHorizonReadResult } from "./financial-recovery-settlement-submit-horizon-reader"
 
 export type RefundBlockchainEvidenceResult =
   | { outcome: "VERIFIED_TX"; txid: string }
@@ -41,6 +42,35 @@ function parseStroops(value: unknown): number | null {
   const normalized = `${whole}${fraction.padEnd(7, "0")}`
   const parsed = Number(normalized)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+type RefundPreparedHorizonExpected = {
+  preparedHash: string
+  preparedSequence: string
+  refundPaymentId: string
+  fromAddress: string
+  toAddress: string
+  amount: number
+}
+
+type RefundPreparedHorizonEvaluation =
+  | { outcome: "VERIFIED"; reference: RefundPreparedHorizonExpected; movement: true; fee: number; authorizesFinancialAction: false }
+  | { outcome: "UNRESOLVED"; reference: RefundPreparedHorizonExpected; observedSourceSequence: string; movement: false; authorizesFinancialAction: false }
+  | { outcome: "BLOCKED"; reference: null; movement: false; fee?: never; authorizesFinancialAction: false }
+
+export function evaluateRefundPreparedHorizonBinding(read: SettlementSubmitHorizonReadResult, expected: RefundPreparedHorizonExpected): RefundPreparedHorizonEvaluation {
+  const blocked: RefundPreparedHorizonEvaluation = { outcome: "BLOCKED", reference: null, movement: false, authorizesFinancialAction: false }
+  if (!Number.isFinite(expected.amount) || expected.amount <= 0 || !Number.isSafeInteger(expected.amount * 10_000_000) || !expected.preparedHash || expected.preparedHash !== expected.preparedHash.trim() || !/^[0-9a-f]{64}$/.test(expected.preparedHash) || !expected.preparedSequence || expected.preparedSequence !== expected.preparedSequence.trim() || !/^[1-9][0-9]*$/.test(expected.preparedSequence) || !expected.refundPaymentId || expected.refundPaymentId !== expected.refundPaymentId.trim() || !expected.fromAddress || expected.fromAddress !== expected.fromAddress.trim() || !expected.toAddress || expected.toAddress !== expected.toAddress.trim()) return blocked
+  if (read.outcome === "INDETERMINATE") return blocked
+  if (read.outcome === "HASH_NOT_FOUND") return { outcome: "UNRESOLVED", reference: expected, observedSourceSequence: read.observedSourceSequence, movement: false, authorizesFinancialAction: false }
+  if (read.preparedHash !== expected.preparedHash || read.preparedSequence !== expected.preparedSequence || read.fromAddress !== expected.fromAddress || !isRecord(read.transaction) || read.transaction.hash !== expected.preparedHash || read.transaction.id !== expected.preparedHash || read.transaction.successful !== true || read.transaction.source_account !== expected.fromAddress || read.transaction.source_account_sequence !== expected.preparedSequence || read.transaction.memo !== expected.refundPaymentId || read.transaction.operation_count !== 1 || read.operations.length !== 1 || !isRecord(read.operations[0])) return blocked
+  const transaction = read.transaction
+  const operation = read.operations[0]
+  if (operation.type !== "payment" || operation.transaction_hash !== expected.preparedHash || operation.successful !== true || operation.source_account !== expected.fromAddress || operation.from !== expected.fromAddress || operation.to !== expected.toAddress || operation.asset_type !== "native" || parseStroops(operation.amount) !== stroops(expected.amount)) return blocked
+  const feeValue = transaction.fee_charged
+  if (!((typeof feeValue === "number" && Number.isSafeInteger(feeValue) && feeValue >= 0) || (typeof feeValue === "string" && /^\d+$/.test(feeValue) && Number.isSafeInteger(Number(feeValue))))) return blocked
+  const fee = typeof feeValue === "number" ? feeValue : Number(feeValue)
+  return { outcome: "VERIFIED", reference: expected, movement: true, fee: fee / 10_000_000, authorizesFinancialAction: false }
 }
 
 export async function verifyRefundBlockchainEvidence(input: Input): Promise<RefundBlockchainEvidenceResult> {
