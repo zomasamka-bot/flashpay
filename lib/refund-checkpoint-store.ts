@@ -509,39 +509,45 @@ export async function ensureRefundPreparedSubmit(
   preparedHash: string,
   preparedSequence: string,
 ): Promise<{ checkpoint: RefundCheckpoint; preparedNow: boolean; envelopeXdr: string; preparedHash: string; preparedSequence: string } | null> {
-  if (!(await verifyRefundTables()) || !refundId.trim() || !paymentId.trim() || !idempotencyKey.trim() || !refundPaymentId.trim() || !envelopeXdr.trim() || envelopeXdr !== envelopeXdr.trim() || !/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return null
-  const eventId = `refund:${refundId}:blockchain_submit_prepared`
+  if (!(await verifyRefundTables()) || !refundId || refundId !== refundId.trim() || !paymentId || paymentId !== paymentId.trim() || !idempotencyKey || idempotencyKey !== idempotencyKey.trim() || !refundPaymentId || refundPaymentId !== refundPaymentId.trim() || !envelopeXdr || envelopeXdr !== envelopeXdr.trim() || !/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return null
+  const preparedEventId = `refund:${refundId}:blockchain_submit_prepared`
+  const authorizationEventId = `refund:${refundId}:blockchain_submit_authorized`
+  const blockchainEventId = `refund:${refundId}:blockchain_submission_started`
   const details = { refundPaymentId, envelopeXdr, preparedHash, preparedSequence, phase: 'horizon_prepared' }
   const result = await query(`
     WITH source AS (
       SELECT c.* FROM refund_checkpoints c JOIN refund_audit_events a
-        ON a.event_id=$8 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
+        ON a.event_id=$7 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
        AND a.idempotency_key=c.idempotency_key AND a.actor_type='system'
        AND a.event_type='refund_blockchain_submission_started'
        AND a.details=jsonb_build_object('refundPaymentId',$4,'phase','blockchain_submission')
       WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3
         AND c.refund_payment_id=$4 AND c.stage='wallet_submission_started' AND c.status='pending'
-        AND NOT EXISTS (SELECT 1 FROM refund_audit_events z WHERE z.event_id=$6 AND z.refund_id=c.refund_id AND z.payment_id=c.payment_id AND z.idempotency_key=c.idempotency_key AND z.event_type='refund_blockchain_submit_authorized')
+        AND NOT EXISTS (SELECT 1 FROM refund_audit_events z WHERE z.event_id=$5 AND z.refund_id=c.refund_id AND z.payment_id=c.payment_id AND z.idempotency_key=c.idempotency_key AND z.event_type='refund_blockchain_submit_authorized')
     ), inserted AS (
       INSERT INTO refund_audit_events (event_id,refund_id,payment_id,event_type,actor_type,idempotency_key,created_at,details)
-      SELECT $7,refund_id,payment_id,'refund_blockchain_submit_prepared','system',idempotency_key,NOW(),$9::jsonb FROM source
+      SELECT $6,refund_id,payment_id,'refund_blockchain_submit_prepared','system',idempotency_key,NOW(),$8::jsonb FROM source
       ON CONFLICT (event_id) DO NOTHING RETURNING refund_id
     ) SELECT source.* FROM source JOIN inserted USING (refund_id)`,
-    [refundId, paymentId, idempotencyKey, refundPaymentId, preparedHash, `refund:${refundId}:blockchain_submit_authorized`, eventId, `refund:${refundId}:blockchain_submission_started`, details])
+    [refundId, paymentId, idempotencyKey, refundPaymentId, authorizationEventId, preparedEventId, blockchainEventId, details])
   if (Array.isArray(result) && result.length === 1) {
     const checkpoint = normalizeCheckpoint(result[0])
     return checkpoint ? { checkpoint, preparedNow: true, envelopeXdr, preparedHash, preparedSequence } : null
   }
   const replay = await query(`
     SELECT c.*, a.details AS prepared_details FROM refund_checkpoints c JOIN refund_audit_events a
-      ON a.event_id=$6 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
+      ON a.event_id=$5 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
      AND a.idempotency_key=c.idempotency_key AND a.event_type='refund_blockchain_submit_prepared'
     WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3 AND c.refund_payment_id=$4
-      AND c.stage='wallet_submission_started' AND c.status='pending' AND a.actor_type='system' AND a.details=$7::jsonb
-    LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, preparedHash, eventId, details])
+      AND c.stage='wallet_submission_started' AND c.status='pending' AND a.actor_type='system'
+    LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, preparedEventId])
   if (!Array.isArray(replay) || replay.length !== 1) return null
-  const checkpoint = normalizeCheckpoint(replay[0])
-  return checkpoint ? { checkpoint, preparedNow: false, envelopeXdr, preparedHash, preparedSequence } : null
+  const record = replay[0]
+  if (typeof record.prepared_details !== 'object' || record.prepared_details === null || Array.isArray(record.prepared_details)) return null
+  const storedDetails = record.prepared_details as Record<string, unknown>
+  if (Object.keys(storedDetails).length !== 5 || storedDetails.refundPaymentId !== refundPaymentId || storedDetails.phase !== 'horizon_prepared' || typeof storedDetails.envelopeXdr !== 'string' || !storedDetails.envelopeXdr || storedDetails.envelopeXdr !== storedDetails.envelopeXdr.trim() || typeof storedDetails.preparedHash !== 'string' || !/^[0-9a-f]{64}$/.test(storedDetails.preparedHash) || typeof storedDetails.preparedSequence !== 'string' || !/^[1-9][0-9]*$/.test(storedDetails.preparedSequence)) return null
+  const checkpoint = normalizeCheckpoint(record)
+  return checkpoint ? { checkpoint, preparedNow: false, envelopeXdr: storedDetails.envelopeXdr, preparedHash: storedDetails.preparedHash, preparedSequence: storedDetails.preparedSequence } : null
 }
 
 export async function authorizeRefundBlockchainSubmit(
