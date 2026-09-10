@@ -13,7 +13,8 @@ import {
 import type { RefundCheckpoint } from "./types"
 import type { RefundPiPayment } from "./refund-pi-reconciliation"
 import type { SettlementSubmitHorizonReadResult } from "./financial-recovery-settlement-submit-horizon-reader"
-import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit } from "./refund-checkpoint-store"
+import { readSettlementSubmitHorizonEvidence } from "./financial-recovery-settlement-submit-horizon-reader"
+import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefundPreparedSubmit } from "./refund-checkpoint-store"
 import { classifyRefundPreparedSequence, evaluateRefundPreparedHorizonBinding } from "./refund-blockchain-evidence"
 
 export type RefundBlockchainSubmitResult =
@@ -84,6 +85,19 @@ export function evaluateRefundPreparedRecoveryEvidence(input: { checkpoint: Refu
   const xdr = verifyRefundPreparedSubmitXdr({ envelopeXdr: input.envelopeXdr, preparedHash: input.preparedHash, preparedSequence: input.preparedSequence, refundPaymentId: input.payment.identifier, fromAddress: input.payment.from_address, toAddress: input.payment.to_address, amount: input.payment.amount })
   if (xdr.outcome !== "VERIFIED_INTENT") return { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
   return classifyRefundPreparedSequence(horizon)
+}
+
+export async function readRefundPreparedRecoveryEvidence(input: Input): Promise<ReturnType<typeof evaluateRefundPreparedRecoveryEvidence>> {
+  const blocked: { outcome: "BLOCKED"; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } = { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
+  if (!isExactInput(input)) return blocked
+  try {
+    const prepared = await readRefundPreparedSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier)
+    if (!prepared || !isExactInput({ checkpoint: prepared.checkpoint, payment: input.payment })) return blocked
+    const horizonRead = await readSettlementSubmitHorizonEvidence(prepared.preparedHash, prepared.preparedSequence, input.payment.from_address)
+    return evaluateRefundPreparedRecoveryEvidence({ checkpoint: prepared.checkpoint, payment: input.payment, envelopeXdr: prepared.envelopeXdr, preparedHash: prepared.preparedHash, preparedSequence: prepared.preparedSequence, horizonRead })
+  } catch {
+    return blocked
+  }
 }
 
 export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBlockchainSubmitResult> {
