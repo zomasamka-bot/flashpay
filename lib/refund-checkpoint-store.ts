@@ -500,6 +500,54 @@ export async function beginRefundBlockchainSubmissionClaim(
   return checkpoint ? { checkpoint, startedNow: false } : null
 }
 
+export async function authorizeRefundBlockchainSubmit(
+  refundId: string,
+  paymentId: string,
+  idempotencyKey: string,
+  refundPaymentId: string,
+  actorType: RefundAuditEvent['actorType'] = 'system',
+): Promise<{ checkpoint: RefundCheckpoint; authorizedNow: boolean } | null> {
+  if (!(await verifyRefundTables()) || !refundId || !paymentId || !idempotencyKey || !refundPaymentId) return null
+  const eventId = `refund:${refundId}:blockchain_submit_authorized`
+  const createdAt = new Date().toISOString()
+  const details = { refundPaymentId, phase: 'horizon_submit' }
+  const result = await query(`
+    WITH inserted AS (
+      SELECT c.*
+      FROM refund_checkpoints c
+      JOIN refund_audit_events a
+        ON a.event_id=$8 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
+       AND a.idempotency_key=c.idempotency_key AND a.event_type='refund_blockchain_submission_started'
+       AND a.actor_type=$5 AND a.details=jsonb_build_object('refundPaymentId', $4, 'phase', 'blockchain_submission')
+      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3
+        AND c.refund_payment_id=$4 AND c.stage='wallet_submission_started' AND c.status='pending'
+    ), audited AS (
+      INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+      SELECT $6, refund_id, payment_id, 'refund_blockchain_submit_authorized', $5, idempotency_key, $7, $9::jsonb FROM inserted
+      ON CONFLICT (event_id) DO NOTHING
+      RETURNING refund_id
+    ) SELECT inserted.* FROM inserted JOIN audited USING (refund_id)`,
+    [refundId, paymentId, idempotencyKey, refundPaymentId, actorType, eventId, createdAt, `refund:${refundId}:blockchain_submission_started`, details])
+  if (Array.isArray(result) && result.length === 1) {
+    const checkpoint = normalizeCheckpoint(result[0])
+    if (checkpoint) return { checkpoint, authorizedNow: true }
+    return null
+  }
+  const replay = await query(`
+    SELECT c.*
+    FROM refund_checkpoints c
+    JOIN refund_audit_events a
+      ON a.event_id=$6 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
+     AND a.idempotency_key=c.idempotency_key AND a.event_type='refund_blockchain_submit_authorized'
+    WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3
+      AND c.refund_payment_id=$4 AND c.stage='wallet_submission_started' AND c.status='pending'
+      AND a.actor_type=$5 AND a.details=$7::jsonb
+    LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, actorType, eventId, details])
+  if (!Array.isArray(replay) || replay.length !== 1) return null
+  const checkpoint = normalizeCheckpoint(replay[0])
+  return checkpoint ? { checkpoint, authorizedNow: false } : null
+}
+
 export async function persistRefundPaymentIdWithAudit(refundId: string, paymentId: string, idempotencyKey: string, refundPaymentId: string, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
   if (!(await verifyRefundTables()) || event.refundId !== refundId || event.paymentId !== paymentId || event.idempotencyKey !== idempotencyKey || !refundPaymentId) return null
   const currentResult = await query(`SELECT * FROM refund_checkpoints WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND stage='wallet_submission_started' AND status='pending' LIMIT 1`, [refundId, paymentId, idempotencyKey])
