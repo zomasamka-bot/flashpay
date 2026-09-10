@@ -12,7 +12,9 @@ import {
 } from "@stellar/stellar-sdk"
 import type { RefundCheckpoint } from "./types"
 import type { RefundPiPayment } from "./refund-pi-reconciliation"
+import type { SettlementSubmitHorizonReadResult } from "./financial-recovery-settlement-submit-horizon-reader"
 import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit } from "./refund-checkpoint-store"
+import { classifyRefundPreparedSequence, evaluateRefundPreparedHorizonBinding } from "./refund-blockchain-evidence"
 
 export type RefundBlockchainSubmitResult =
   | { outcome: "CONFIRMED_TX"; txid: string }
@@ -72,6 +74,16 @@ function isExactInput({ checkpoint, payment }: Input): boolean {
     payment.status.cancelled === false && payment.status.user_cancelled === false &&
     typeof payment.from_address === "string" && payment.from_address.length > 0 &&
     typeof payment.to_address === "string" && payment.to_address.length > 0
+}
+
+export function evaluateRefundPreparedRecoveryEvidence(input: { checkpoint: RefundCheckpoint; payment: RefundPiPayment; envelopeXdr: string; preparedHash: string; preparedSequence: string; horizonRead: SettlementSubmitHorizonReadResult }): ReturnType<typeof classifyRefundPreparedSequence> | ReturnType<typeof evaluateRefundPreparedHorizonBinding> {
+  if (!isExactInput({ checkpoint: input.checkpoint, payment: input.payment })) return { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
+  const expected = { preparedHash: input.preparedHash, preparedSequence: input.preparedSequence, refundPaymentId: input.payment.identifier, fromAddress: input.payment.from_address, toAddress: input.payment.to_address, amount: input.payment.amount }
+  const horizon = evaluateRefundPreparedHorizonBinding(input.horizonRead, expected)
+  if (horizon.outcome !== "UNRESOLVED") return horizon
+  const xdr = verifyRefundPreparedSubmitXdr({ envelopeXdr: input.envelopeXdr, preparedHash: input.preparedHash, preparedSequence: input.preparedSequence, refundPaymentId: input.payment.identifier, fromAddress: input.payment.from_address, toAddress: input.payment.to_address, amount: input.payment.amount })
+  if (xdr.outcome !== "VERIFIED_INTENT") return { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
+  return classifyRefundPreparedSequence(horizon)
 }
 
 export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBlockchainSubmitResult> {
