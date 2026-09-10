@@ -649,6 +649,44 @@ export async function readRefundPreparedSubmit(
   return checkpoint ? { checkpoint, envelopeXdr: storedDetails.envelopeXdr, preparedHash: storedDetails.preparedHash, preparedSequence: storedDetails.preparedSequence } : null
 }
 
+export async function readRefundBlockchainSubmissionClaimState(
+  refundId: string,
+  paymentId: string,
+  idempotencyKey: string,
+  refundPaymentId: string,
+): Promise<{ state: 'present'; checkpoint: RefundCheckpoint } | { state: 'absent' } | { state: 'uncertain' }> {
+  const uncertain: { state: 'uncertain' } = { state: 'uncertain' }
+  try {
+    if (!refundId || refundId !== refundId.trim() || !paymentId || paymentId !== paymentId.trim() || !idempotencyKey || idempotencyKey !== idempotencyKey.trim() || !refundPaymentId || refundPaymentId !== refundPaymentId.trim()) return uncertain
+    if (!(await verifyRefundTables())) return uncertain
+    const eventId = `refund:${refundId}:blockchain_submission_started`
+    const checkpointResult = await query(`
+      SELECT c.* FROM refund_checkpoints c
+      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3
+        AND c.refund_payment_id=$4 AND c.stage='wallet_submission_started' AND c.status='pending'
+      LIMIT 2`, [refundId, paymentId, idempotencyKey, refundPaymentId])
+    if (!Array.isArray(checkpointResult) || checkpointResult.length !== 1) return uncertain
+    const checkpointRow = checkpointResult[0]
+    if (typeof checkpointRow !== 'object' || checkpointRow === null || Array.isArray(checkpointRow)) return uncertain
+    const checkpoint = normalizeCheckpoint(checkpointRow)
+    if (!checkpoint || checkpoint.refundId !== refundId || checkpoint.paymentId !== paymentId || checkpoint.idempotencyKey !== idempotencyKey || checkpoint.refundPaymentId !== refundPaymentId || checkpoint.stage !== 'wallet_submission_started' || checkpoint.status !== 'pending') return uncertain
+    const eventResult = await query(`
+      SELECT a.refund_id, a.payment_id, a.idempotency_key, a.event_type, a.actor_type, a.details
+      FROM refund_audit_events a WHERE a.event_id=$1 LIMIT 2`, [eventId])
+    if (!Array.isArray(eventResult)) return uncertain
+    if (eventResult.length === 0) return { state: 'absent' }
+    if (eventResult.length !== 1) return uncertain
+    const eventRow = eventResult[0]
+    if (typeof eventRow !== 'object' || eventRow === null || Array.isArray(eventRow) || !('refund_id' in eventRow) || !('payment_id' in eventRow) || !('idempotency_key' in eventRow) || !('event_type' in eventRow) || !('actor_type' in eventRow) || !('details' in eventRow)) return uncertain
+    if (eventRow.refund_id !== refundId || eventRow.payment_id !== paymentId || eventRow.idempotency_key !== idempotencyKey || eventRow.event_type !== 'refund_blockchain_submission_started' || eventRow.actor_type !== 'system') return uncertain
+    const details = eventRow.details
+    if (typeof details !== 'object' || details === null || Array.isArray(details) || !('refundPaymentId' in details) || !('phase' in details) || Object.keys(details).length !== 2 || details.refundPaymentId !== refundPaymentId || details.phase !== 'blockchain_submission') return uncertain
+    return { state: 'present', checkpoint }
+  } catch {
+    return uncertain
+  }
+}
+
 export async function readRefundPreparedSubmitState(
   refundId: string,
   paymentId: string,
