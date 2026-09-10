@@ -36,17 +36,21 @@ type RefundPreparedSubmitXdrInput = {
 }
 
 export function verifyRefundPreparedSubmitXdr(input: RefundPreparedSubmitXdrInput): { outcome: "VERIFIED_INTENT" | "BLOCKED"; reference: RefundPreparedSubmitXdrInput | null; moneyMovementProven: false; authorizesFinancialAction: false } {
-  const blocked = { outcome: "BLOCKED" as const, reference: null, moneyMovementProven: false as const, authorizesFinancialAction: false as const }
+  const blocked: { outcome: "BLOCKED"; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } = { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
   if (!input.envelopeXdr || input.envelopeXdr !== input.envelopeXdr.trim() || !input.preparedHash || !/^[0-9a-f]{64}$/.test(input.preparedHash) || !input.preparedSequence || !/^[1-9][0-9]*$/.test(input.preparedSequence) || !input.refundPaymentId || input.refundPaymentId !== input.refundPaymentId.trim() || !input.fromAddress || input.fromAddress !== input.fromAddress.trim() || !input.toAddress || input.toAddress !== input.toAddress.trim() || !isValidPositiveAmount(input.amount)) return blocked
   try {
     const transaction = TransactionBuilder.fromXDR(input.envelopeXdr, "Pi Testnet")
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.preparedHash || transaction.sequence !== input.preparedSequence || transaction.source !== input.fromAddress || transaction.timeBounds?.minTime !== "0" || transaction.timeBounds?.maxTime !== "0" || transaction.signatures.length !== 1 || transaction.operations.length !== 1) return blocked
     const operation = transaction.operations[0]
-    if (operation.type !== "payment" || operation.source || operation.asset.type !== "native" || operation.destination !== input.toAddress || operation.amount !== input.amount.toFixed(7)) return blocked
+    if (operation.type !== "payment" || operation.source !== undefined || !operation.asset.isNative() || operation.destination !== input.toAddress || operation.amount !== input.amount.toFixed(7)) return blocked
     const memo = transaction.memo
-    if (memo.type !== "text" || typeof memo.value !== "string" || memo.value.trim() !== input.refundPaymentId) return blocked
+    if (memo.type !== "text") return blocked
+    const memoValue = memo.value
+    const normalizedMemo = typeof memoValue === "string" ? memoValue : Buffer.isBuffer(memoValue) ? memoValue.toString("utf8") : null
+    if (normalizedMemo !== input.refundPaymentId) return blocked
     const keypair = Keypair.fromPublicKey(input.fromAddress)
-    if (!keypair.verify(transaction.hash(), transaction.signatures[0].signature) || !transaction.signatures[0].hint.equals(keypair.signatureHint())) return blocked
+    const signature = transaction.signatures[0]
+    if (!signature.hint().equals(keypair.signatureHint()) || !keypair.verify(transaction.hash(), signature.signature())) return blocked
     return { outcome: "VERIFIED_INTENT", reference: input, moneyMovementProven: false, authorizesFinancialAction: false }
   } catch {
     return blocked
