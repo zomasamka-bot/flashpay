@@ -11,10 +11,11 @@ import {
   TimeoutInfinite,
 } from "@stellar/stellar-sdk"
 import type { RefundCheckpoint } from "./types"
+import { isRefundEligible, type Payment } from "./types"
 import type { RefundPiPayment } from "./refund-pi-reconciliation"
 import type { SettlementSubmitHorizonReadResult } from "./financial-recovery-settlement-submit-horizon-reader"
 import { readSettlementSubmitHorizonEvidence } from "./financial-recovery-settlement-submit-horizon-reader"
-import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefundPreparedSubmit } from "./refund-checkpoint-store"
+import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefundPreparedSubmit, readRefundPreparedSubmitState } from "./refund-checkpoint-store"
 import { classifyRefundPreparedSequence, evaluateRefundPreparedHorizonBinding } from "./refund-blockchain-evidence"
 
 export type RefundBlockchainSubmitResult =
@@ -98,6 +99,12 @@ export async function readRefundPreparedRecoveryEvidence(input: Input): Promise<
   } catch {
     return blocked
   }
+}
+
+export function evaluateRefundPreparedReplayPreGate(input: { sourcePayment: Payment; payment: RefundPiPayment; prepared: Awaited<ReturnType<typeof readRefundPreparedSubmitState>>; evidence: ReturnType<typeof classifyRefundPreparedSequence> }): { outcome: "ELIGIBLE_EXACT_REPLAY" | "BLOCKED"; prepared: Awaited<ReturnType<typeof readRefundPreparedSubmitState>> | null; observedSourceSequence: string | null; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } {
+  const blocked: { outcome: "BLOCKED"; prepared: null; observedSourceSequence: null; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } = { outcome: "BLOCKED", prepared: null, observedSourceSequence: null, reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
+  if (input.prepared.state !== "present" || !isExactInput({ checkpoint: input.prepared.checkpoint, payment: input.payment }) || input.prepared.checkpoint.sourcePaymentStatus !== "settlement_failed" || input.prepared.checkpoint.sourceSettlementState !== "refund_pending" || input.sourcePayment.id !== input.prepared.checkpoint.paymentId || input.sourcePayment.payerUid !== input.prepared.checkpoint.payerUid || input.sourcePayment.customerAmount !== input.prepared.checkpoint.amount || input.payment.status.refund !== "pending" || !isRefundEligible(input.sourcePayment) || input.evidence.outcome !== "PREPARED_IS_NEXT" || input.evidence.reference.preparedHash !== input.prepared.preparedHash || input.evidence.reference.preparedSequence !== input.prepared.preparedSequence || input.evidence.reference.refundPaymentId !== input.payment.identifier || input.evidence.reference.fromAddress !== input.payment.from_address || input.evidence.reference.toAddress !== input.payment.to_address || input.evidence.reference.amount !== input.payment.amount) return blocked
+  return { outcome: "ELIGIBLE_EXACT_REPLAY", prepared: input.prepared, observedSourceSequence: input.evidence.observedSourceSequence, reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
 }
 
 export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBlockchainSubmitResult> {
