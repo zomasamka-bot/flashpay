@@ -2,6 +2,9 @@ import { redis, isRedisConfigured } from './redis'
 import {
   ensurePaymentOperationLock,
   getRefundCheckpointAuthoritative,
+  getRefundCheckpointReadOnly,
+  readRefundBlockchainSubmissionClaimState,
+  readRefundPreparedSubmitState,
   persistRefundPaymentIdWithAudit,
   refundPreflight,
   beginRefundSubmissionAttempt,
@@ -15,11 +18,12 @@ import {
 } from './refund-checkpoint-store'
 import { isRefundEligible, type Payment, type RefundAuditEvent, type RefundCheckpoint } from './types'
 import { reconcileRefundWithPi } from './refund-pi-reconciliation'
+import { reconcileIncompleteA2UPayment } from './pi-reconciliation'
 import { verifyRefundBlockchainEvidence } from './refund-blockchain-evidence'
 import { serverConfig } from './server-config'
 import { query } from './db'
 import { recordRefundAccounting } from './refund-accounting'
-import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
+import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, acquirePiWalletExistingIntentSubmitLock, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission' | 'found'; refundId: string; paymentId: string; amount: number; refundPaymentId?: string }
@@ -131,6 +135,42 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
   const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, body.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: body.identifier } })
   if (!persisted) return { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
   return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: body.identifier }
+}
+
+export async function readRefundPreparedReplayUnderExistingOwner(refundId: string): Promise<Awaited<ReturnType<typeof import('./refund-blockchain-submit').evaluateRefundPreparedReplayPreGate>>> {
+  const blocked: Awaited<ReturnType<typeof import('./refund-blockchain-submit').evaluateRefundPreparedReplayPreGate>> = { outcome: 'BLOCKED', prepared: null, observedSourceSequence: null, reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
+  try {
+    const initial = await getRefundCheckpointReadOnly(refundId)
+    if (initial.state !== 'present' || initial.checkpoint.stage !== 'wallet_submission_started' || initial.checkpoint.status !== 'pending' || typeof initial.checkpoint.refundPaymentId !== 'string' || !initial.checkpoint.refundPaymentId) return blocked
+    const rawSourcePayment = await redis.get(`payment:${initial.checkpoint.paymentId}`)
+    const sourcePayment = paymentFromRedis(rawSourcePayment)
+    if (!sourcePayment || typeof sourcePayment.merchantUid !== 'string' || !sourcePayment.merchantUid.trim() || !Number.isFinite(sourcePayment.customerAmount) || sourcePayment.customerAmount <= 0 || sourcePayment.id !== initial.checkpoint.paymentId || sourcePayment.payerUid !== initial.checkpoint.payerUid || sourcePayment.status !== 'settlement_failed' || sourcePayment.settlementFailureState !== 'refund_pending' || sourcePayment.a2uPaymentId || sourcePayment.a2uTxid || sourcePayment.horizonSuccessFlag === true || sourcePayment.refundPaymentId || sourcePayment.refundTxid || sourcePayment.refundStatus === 'completed' || !isRefundEligible(sourcePayment)) return blocked
+    const a2u = await reconcileIncompleteA2UPayment(sourcePayment.id, sourcePayment.customerAmount, sourcePayment.merchantUid)
+    if (a2u.outcome !== 'CONFIRMED_NONE') return blocked
+    const refund = await reconcileRefundWithPi({ paymentId: sourcePayment.id, refundId, idempotencyKey: initial.checkpoint.idempotencyKey, payerUid: initial.checkpoint.payerUid, amount: sourcePayment.customerAmount, refundPaymentId: initial.checkpoint.refundPaymentId })
+    if (refund.outcome !== 'FOUND' || !refund.payment || refund.payment.identifier !== initial.checkpoint.refundPaymentId || refund.payment.status.cancelled || refund.payment.status.user_cancelled) return blocked
+    const walletLock = await acquirePiWalletExistingIntentSubmitLock(refund.payment.from_address, { kind: 'refund_claim', paymentId: sourcePayment.id, refundId })
+    if (!walletLock) return blocked
+    try {
+      const lockedCheckpoint = await getRefundCheckpointReadOnly(refundId)
+      const lockedRawSource = await redis.get(`payment:${initial.checkpoint.paymentId}`)
+      const lockedSourcePayment = paymentFromRedis(lockedRawSource)
+      const lockedRefund = await reconcileRefundWithPi({ paymentId: initial.checkpoint.paymentId, refundId, idempotencyKey: initial.checkpoint.idempotencyKey, payerUid: initial.checkpoint.payerUid, amount: initial.checkpoint.amount, refundPaymentId: initial.checkpoint.refundPaymentId })
+      const claim = await readRefundBlockchainSubmissionClaimState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, initial.checkpoint.refundPaymentId)
+      const prepared = await readRefundPreparedSubmitState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, initial.checkpoint.refundPaymentId)
+      if (lockedCheckpoint.state !== 'present' || lockedCheckpoint.checkpoint.stage !== 'wallet_submission_started' || lockedCheckpoint.checkpoint.status !== 'pending' || lockedSourcePayment === null || typeof lockedSourcePayment.merchantUid !== 'string' || !lockedSourcePayment.merchantUid.trim() || !Number.isFinite(lockedSourcePayment.customerAmount) || lockedSourcePayment.customerAmount <= 0 || lockedSourcePayment.id !== initial.checkpoint.paymentId || lockedSourcePayment.payerUid !== initial.checkpoint.payerUid || lockedSourcePayment.customerAmount !== initial.checkpoint.amount || lockedSourcePayment.status !== 'settlement_failed' || lockedSourcePayment.settlementFailureState !== 'refund_pending' || lockedSourcePayment.a2uPaymentId || lockedSourcePayment.a2uTxid || lockedSourcePayment.horizonSuccessFlag === true || lockedSourcePayment.refundPaymentId || lockedSourcePayment.refundTxid || lockedSourcePayment.refundStatus === 'completed' || !isRefundEligible(lockedSourcePayment) || claim.state !== 'present' || prepared.state !== 'present' || lockedRefund.outcome !== 'FOUND' || !lockedRefund.payment || lockedRefund.payment.identifier !== initial.checkpoint.refundPaymentId || lockedRefund.payment.from_address !== refund.payment.from_address || lockedRefund.payment.to_address !== refund.payment.to_address || lockedRefund.payment.amount !== refund.payment.amount || lockedRefund.payment.status.cancelled || lockedRefund.payment.status.user_cancelled) return blocked
+      const lockedA2u = await reconcileIncompleteA2UPayment(lockedSourcePayment.id, lockedSourcePayment.customerAmount, lockedSourcePayment.merchantUid)
+      if (lockedA2u.outcome !== 'CONFIRMED_NONE') return blocked
+      const evidence = await import('./refund-blockchain-submit').then(({ readRefundPreparedRecoveryEvidence }) => readRefundPreparedRecoveryEvidence({ checkpoint: prepared.checkpoint, payment: lockedRefund.payment }))
+      if (evidence.outcome === 'VERIFIED') return evidence
+      if (evidence.outcome !== 'PREPARED_IS_NEXT') return blocked
+      return await import('./refund-blockchain-submit').then(({ evaluateRefundPreparedReplayPreGate }) => evaluateRefundPreparedReplayPreGate({ sourcePayment: lockedSourcePayment, payment: lockedRefund.payment, prepared, evidence }))
+    } finally {
+      await walletLock.release()
+    }
+  } catch {
+    return blocked
+  }
 }
 
 export async function executeRefundBlockchain(refundId: string): Promise<RefundExecutionResult> {
