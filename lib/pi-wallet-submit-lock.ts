@@ -141,6 +141,27 @@ export async function acquirePiWalletIntentSubmitLock(
   return { release: submitLock.release }
 }
 
+export async function acquirePiWalletExistingIntentSubmitLock(
+  sourceAddress: unknown,
+  expectedOwner: unknown,
+): Promise<{ release: () => Promise<void> } | null> {
+  const expected = canonicalIntentOwner(expectedOwner)
+  if (expected === null) return null
+  const submitLock = await acquirePiWalletSubmitLock(sourceAddress)
+  if (submitLock === null) return null
+  try {
+    const current = await readPiWalletIntent(sourceAddress)
+    if (current.state !== "present" || canonicalIntentJson(current.owner) !== canonicalIntentJson(expected)) {
+      await submitLock.release()
+      return null
+    }
+    return { release: submitLock.release }
+  } catch {
+    await submitLock.release()
+    return null
+  }
+}
+
 export async function acquirePiWalletSubmitLock(
   sourceAddress: unknown,
 ): Promise<{ release: () => Promise<void> } | null> {
