@@ -7,6 +7,7 @@ import {
   Keypair,
   Operation,
   TransactionBuilder,
+  TimeoutInfinite,
 } from "@stellar/stellar-sdk"
 import type { RefundCheckpoint } from "./types"
 import type { RefundPiPayment } from "./refund-pi-reconciliation"
@@ -56,12 +57,10 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   let server: Horizon.Server
   let source: Awaited<ReturnType<Horizon.Server["loadAccount"]>>
   let baseFee: Awaited<ReturnType<Horizon.Server["fetchBaseFee"]>>
-  let timebounds: Awaited<ReturnType<Horizon.Server["fetchTimebounds"]>>
   try {
     server = new Horizon.Server(HORIZON_URL)
     source = await server.loadAccount(input.payment.from_address)
     baseFee = await server.fetchBaseFee()
-    timebounds = await server.fetchTimebounds(180)
   } catch (error) {
     return { outcome: "FAILED", code: "source_load_failed", message: error instanceof Error ? error.message : "Refund source loading failed" }
   }
@@ -74,7 +73,7 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
     })
       .addOperation(Operation.payment({ destination: input.payment.to_address, asset: Asset.native(), amount: input.payment.amount.toFixed(7) }))
       .addMemo(Memo.text(input.payment.identifier))
-      .setTimebounds(timebounds.minTime, timebounds.maxTime)
+      .setTimeout(TimeoutInfinite)
       .build()
     transaction.sign(keypair)
   } catch (error) {
@@ -92,7 +91,7 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
 
   try {
     const result = await server.submitTransaction(transaction)
-    if (result.successful !== true || typeof result.hash !== "string" || result.hash.length === 0) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+    if (result.successful !== true || result.hash !== preparedHash) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
     return { outcome: "CONFIRMED_TX", txid: result.hash }
   } catch (error) {
     return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
