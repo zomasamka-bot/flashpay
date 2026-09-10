@@ -86,7 +86,7 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   const prepared = await ensureRefundPreparedSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence)
   if (!prepared || prepared.preparedNow !== true || prepared.envelopeXdr !== envelopeXdr || prepared.preparedHash !== preparedHash || prepared.preparedSequence !== preparedSequence) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
 
-  const authorization = await authorizeRefundBlockchainSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, "system")
+  const authorization = await authorizeRefundBlockchainSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence, "system")
   if (!authorization || authorization.authorizedNow !== true) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
 
   try {
