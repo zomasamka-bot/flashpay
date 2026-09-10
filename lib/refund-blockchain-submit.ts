@@ -10,6 +10,7 @@ import {
 } from "@stellar/stellar-sdk"
 import type { RefundCheckpoint } from "./types"
 import type { RefundPiPayment } from "./refund-pi-reconciliation"
+import { authorizeRefundBlockchainSubmit } from "./refund-checkpoint-store"
 
 export type RefundBlockchainSubmitResult =
   | { outcome: "CONFIRMED_TX"; txid: string }
@@ -79,6 +80,9 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   } catch (error) {
     return { outcome: "FAILED", code: "build_failed", message: error instanceof Error ? error.message : "Refund transaction build failed" }
   }
+
+  const authorization = await authorizeRefundBlockchainSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, "system")
+  if (!authorization || authorization.authorizedNow !== true) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
 
   try {
     const result = await server.submitTransaction(transaction)
