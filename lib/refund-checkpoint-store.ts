@@ -543,8 +543,9 @@ export async function ensureRefundPreparedSubmit(
     LIMIT 1`, [refundId, paymentId, idempotencyKey, refundPaymentId, preparedEventId])
   if (!Array.isArray(replay) || replay.length !== 1) return null
   const record = replay[0]
-  if (typeof record.prepared_details !== 'object' || record.prepared_details === null || Array.isArray(record.prepared_details)) return null
-  const storedDetails = record.prepared_details as Record<string, unknown>
+  if (typeof record !== 'object' || record === null || Array.isArray(record) || !('prepared_details' in record)) return null
+  const storedDetails = record.prepared_details
+  if (typeof storedDetails !== 'object' || storedDetails === null || Array.isArray(storedDetails) || !('refundPaymentId' in storedDetails) || !('phase' in storedDetails) || !('envelopeXdr' in storedDetails) || !('preparedHash' in storedDetails) || !('preparedSequence' in storedDetails)) return null
   if (Object.keys(storedDetails).length !== 5 || storedDetails.refundPaymentId !== refundPaymentId || storedDetails.phase !== 'horizon_prepared' || typeof storedDetails.envelopeXdr !== 'string' || !storedDetails.envelopeXdr || storedDetails.envelopeXdr !== storedDetails.envelopeXdr.trim() || typeof storedDetails.preparedHash !== 'string' || !/^[0-9a-f]{64}$/.test(storedDetails.preparedHash) || typeof storedDetails.preparedSequence !== 'string' || !/^[1-9][0-9]*$/.test(storedDetails.preparedSequence)) return null
   const checkpoint = normalizeCheckpoint(record)
   return checkpoint ? { checkpoint, preparedNow: false, envelopeXdr: storedDetails.envelopeXdr, preparedHash: storedDetails.preparedHash, preparedSequence: storedDetails.preparedSequence } : null
