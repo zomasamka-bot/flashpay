@@ -327,6 +327,21 @@ export async function executeRefundCompletion(refundId: string): Promise<RefundE
   if (reconciliation.outcome !== 'FOUND' || !reconciliation.payment || reconciliation.payment.identifier !== refundPaymentId || reconciliation.payment.status.cancelled || reconciliation.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'pi_evidence_uncertain' }
   const blockchainEvidence = await verifyRefundBlockchainEvidence({ checkpoint, payment: reconciliation.payment })
   if (blockchainEvidence.outcome !== 'VERIFIED_TX' || blockchainEvidence.txid !== refundTxid) return { outcome: 'blocked', reason: 'blockchain_evidence_uncertain' }
+  const completionIntent = await readPiWalletIntent(reconciliation.payment.from_address)
+  if (completionIntent.state === 'unavailable') return { outcome: 'blocked', reason: 'lock_conflict' }
+  if (completionIntent.state === 'present' && completionIntent.owner.paymentId === checkpoint.paymentId && (completionIntent.owner.kind !== 'refund_claim' || completionIntent.owner.refundId !== refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+  if (completionIntent.state === 'present' && completionIntent.owner.paymentId === checkpoint.paymentId) {
+    const completionLock = await acquirePiWalletSubmitLock(reconciliation.payment.from_address)
+    if (!completionLock) return { outcome: 'blocked', reason: 'lock_conflict' }
+    try {
+      const lockedCompletionIntent = await readPiWalletIntent(reconciliation.payment.from_address)
+      if (lockedCompletionIntent.state === 'unavailable') return { outcome: 'blocked', reason: 'lock_conflict' }
+      if (lockedCompletionIntent.state === 'present' && lockedCompletionIntent.owner.paymentId === checkpoint.paymentId && (lockedCompletionIntent.owner.kind !== 'refund_claim' || lockedCompletionIntent.owner.refundId !== refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
+      if (lockedCompletionIntent.state === 'present' && lockedCompletionIntent.owner.paymentId === checkpoint.paymentId && !await releasePiWalletIntent(reconciliation.payment.from_address, lockedCompletionIntent.owner)) return { outcome: 'blocked', reason: 'lock_conflict' }
+    } finally {
+      await completionLock.release()
+    }
+  }
   const needsCompletion = reconciliation.payment.status.developer_completed !== true
   if (needsCompletion) {
     const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(refundPaymentId)}/complete`, { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ txid: refundTxid }) }).catch(() => null)
