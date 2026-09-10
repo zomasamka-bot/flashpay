@@ -124,7 +124,11 @@ export async function verifyRefundBlockchainEvidence(input: Input): Promise<Refu
   const transaction = payment.transaction
   let txid: string
   if (checkpoint.stage === "wallet_submission_started") {
-    if (transaction === null || typeof transaction.txid !== "string" || transaction.txid.length === 0) return { outcome: "NO_TX" }
+    if (transaction === null) {
+      if (payment.status.transaction_verified !== false || payment.status.developer_completed !== false) return { outcome: "INDETERMINATE" }
+      return { outcome: "NO_TX" }
+    }
+    if (typeof transaction.txid !== "string" || transaction.txid.length === 0) return { outcome: "INDETERMINATE" }
     txid = transaction.txid
   } else {
     const confirmedTxid = checkpoint.refundTxid
