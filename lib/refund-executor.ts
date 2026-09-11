@@ -200,9 +200,8 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
   if (reconciliation.outcome === 'INDETERMINATE' || !reconciliation.payment) return { outcome: 'blocked', reason: 'reconciliation_uncertain' }
   const refundPayment = reconciliation.payment
   if (refundPayment.status.cancelled || refundPayment.status.user_cancelled) return { outcome: 'blocked', reason: 'refund_cancelled' }
-  const evidence = await import('./refund-blockchain-evidence').then(({ verifyRefundBlockchainEvidence }) => verifyRefundBlockchainEvidence({ checkpoint, payment: refundPayment }))
-  if (evidence.outcome === 'VERIFIED_TX') {
-    const persisted = await persistRefundBlockchainTxWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, evidence.txid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_confirmed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid: evidence.txid, recovered: true } })
+  const persistRecoveredConfirmation = async (txid: string): Promise<RefundExecutionResult> => {
+    const persisted = await persistRefundBlockchainTxWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, txid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_confirmed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid: txid, recovered: true } })
     if (!persisted) return { outcome: 'blocked', reason: 'tx_persistence_conflict' }
     const walletIntent = await readPiWalletIntent(refundPayment.from_address)
     if (walletIntent.state === 'unavailable') return { outcome: 'blocked', reason: 'lock_conflict' }
@@ -220,6 +219,18 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
       }
     }
     return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId }
+  }
+  const evidence = await import('./refund-blockchain-evidence').then(({ verifyRefundBlockchainEvidence }) => verifyRefundBlockchainEvidence({ checkpoint, payment: refundPayment }))
+  if (evidence.outcome === 'VERIFIED_TX') return persistRecoveredConfirmation(evidence.txid)
+  const claim = await readRefundBlockchainSubmissionClaimState(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId)
+  if (claim.state === 'uncertain') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
+  const prepared = claim.state === 'present' ? await readRefundPreparedSubmitState(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId) : null
+  if (prepared?.state === 'uncertain') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
+  if (prepared?.state === 'present') {
+    const replay = await readRefundPreparedReplayUnderExistingOwner(refundId)
+    if (replay.outcome === 'VERIFIED' && replay.moneyMovementProven === true && replay.authorizesFinancialAction === false && replay.reference?.preparedHash === prepared.preparedHash && replay.reference?.preparedSequence === prepared.preparedSequence && replay.reference?.refundPaymentId === refundPaymentId && replay.reference?.fromAddress === refundPayment.from_address && replay.reference?.toAddress === refundPayment.to_address && replay.reference?.amount === refundPayment.amount) return persistRecoveredConfirmation(prepared.preparedHash)
+    if (replay.outcome === 'CONFIRMED_TX' && replay.txid === prepared.preparedHash) return persistRecoveredConfirmation(replay.txid)
+    return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   }
   if (evidence.outcome === 'INDETERMINATE') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   const walletLock = await acquirePiWalletIntentSubmitLock(refundPayment.from_address, { kind: 'refund_claim', paymentId: checkpoint.paymentId, refundId })
