@@ -15,7 +15,8 @@ import { isRefundEligible, type Payment } from "./types"
 import type { RefundPiPayment } from "./refund-pi-reconciliation"
 import type { SettlementSubmitHorizonReadResult } from "./financial-recovery-settlement-submit-horizon-reader"
 import { readSettlementSubmitHorizonEvidence } from "./financial-recovery-settlement-submit-horizon-reader"
-import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefundPreparedSubmit, readRefundPreparedSubmitState } from "./refund-checkpoint-store"
+import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefundPreparedSubmit, readRefundPreparedSubmitState, readRefundBlockchainSubmitAuthorizationState } from "./refund-checkpoint-store"
+import { readPiWalletIntent } from "./pi-wallet-submit-lock"
 import { classifyRefundPreparedSequence, evaluateRefundPreparedHorizonBinding } from "./refund-blockchain-evidence"
 
 export type RefundBlockchainSubmitResult =
@@ -105,6 +106,37 @@ export function evaluateRefundPreparedReplayPreGate(input: { sourcePayment: Paym
   const blocked: { outcome: "BLOCKED"; prepared: null; observedSourceSequence: null; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } = { outcome: "BLOCKED", prepared: null, observedSourceSequence: null, reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
   if (input.prepared.state !== "present" || !isExactInput({ checkpoint: input.prepared.checkpoint, payment: input.payment }) || input.payment.status.transaction_verified !== false || input.payment.status.developer_completed !== false || input.prepared.checkpoint.sourcePaymentStatus !== "settlement_failed" || input.prepared.checkpoint.sourceSettlementState !== "refund_pending" || input.sourcePayment.id !== input.prepared.checkpoint.paymentId || input.sourcePayment.payerUid !== input.prepared.checkpoint.payerUid || input.sourcePayment.customerAmount !== input.prepared.checkpoint.amount || input.sourcePayment.refundStatus !== "pending" || !isRefundEligible(input.sourcePayment) || input.evidence.outcome !== "PREPARED_IS_NEXT" || input.evidence.reference.preparedHash !== input.prepared.preparedHash || input.evidence.reference.preparedSequence !== input.prepared.preparedSequence || input.evidence.reference.refundPaymentId !== input.payment.identifier || input.evidence.reference.fromAddress !== input.payment.from_address || input.evidence.reference.toAddress !== input.payment.to_address || input.evidence.reference.amount !== input.payment.amount) return blocked
   return { outcome: "ELIGIBLE_EXACT_REPLAY", prepared: input.prepared, observedSourceSequence: input.evidence.observedSourceSequence, reference: input.evidence.reference, moneyMovementProven: false, authorizesFinancialAction: false }
+}
+
+export async function submitRefundPreparedStoredXdrOnce(input: { payment: RefundPiPayment; gate: ReturnType<typeof evaluateRefundPreparedReplayPreGate> }): Promise<RefundBlockchainSubmitResult> {
+  const blocked: RefundBlockchainSubmitResult = { outcome: "FAILED", code: "invalid_input", message: "Refund transaction is not an eligible exact replay" }
+  if (input.gate.outcome !== "ELIGIBLE_EXACT_REPLAY" || input.payment.status.transaction_verified !== false || input.payment.status.developer_completed !== false || input.gate.prepared.state !== "present" || input.gate.reference.preparedHash !== input.gate.prepared.preparedHash || input.gate.reference.preparedSequence !== input.gate.prepared.preparedSequence || input.gate.reference.refundPaymentId !== input.payment.identifier || input.gate.reference.fromAddress !== input.payment.from_address || input.gate.reference.toAddress !== input.payment.to_address || input.gate.reference.amount !== input.payment.amount) return blocked
+  try {
+    const recovery = await readRefundPreparedRecoveryEvidence({ checkpoint: input.gate.prepared.checkpoint, payment: input.payment })
+    if (recovery.outcome === "VERIFIED") return { outcome: "CONFIRMED_TX", txid: input.gate.prepared.preparedHash }
+    if (recovery.outcome !== "PREPARED_IS_NEXT") return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction evidence is not ready" }
+    const intent = await readPiWalletIntent(input.payment.from_address)
+    if (intent.state !== "present" || intent.owner.kind !== "refund_claim" || intent.owner.refundId !== input.gate.prepared.checkpoint.refundId || intent.owner.paymentId !== input.gate.prepared.checkpoint.paymentId) return blocked
+    const authorization = await readRefundBlockchainSubmitAuthorizationState(input.gate.prepared.checkpoint.refundId, input.gate.prepared.checkpoint.paymentId, input.gate.prepared.checkpoint.idempotencyKey, input.payment.identifier, input.gate.prepared.envelopeXdr, input.gate.prepared.preparedHash, input.gate.prepared.preparedSequence)
+    if (authorization.state !== "present") return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction authorization is not confirmed" }
+    const xdr = verifyRefundPreparedSubmitXdr({ envelopeXdr: input.gate.prepared.envelopeXdr, preparedHash: input.gate.prepared.preparedHash, preparedSequence: input.gate.prepared.preparedSequence, refundPaymentId: input.payment.identifier, fromAddress: input.payment.from_address, toAddress: input.payment.to_address, amount: input.payment.amount })
+    if (xdr.outcome !== "VERIFIED_INTENT") return blocked
+    const transaction = TransactionBuilder.fromXDR(input.gate.prepared.envelopeXdr, "Pi Testnet")
+    if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.gate.prepared.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.gate.prepared.preparedHash || transaction.sequence !== input.gate.prepared.preparedSequence || transaction.source !== input.payment.from_address) return blocked
+    const server = new Horizon.Server(HORIZON_URL)
+    const result = await server.submitTransaction(transaction)
+    if (result.successful !== true || result.hash !== input.gate.prepared.preparedHash) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+    const after = await readRefundPreparedRecoveryEvidence({ checkpoint: input.gate.prepared.checkpoint, payment: input.payment })
+    return after.outcome === "VERIFIED" ? { outcome: "CONFIRMED_TX", txid: input.gate.prepared.preparedHash } : { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+  } catch (error) {
+    try {
+      const after = await readRefundPreparedRecoveryEvidence({ checkpoint: input.gate.prepared.checkpoint, payment: input.payment })
+      if (after.outcome === "VERIFIED") return { outcome: "CONFIRMED_TX", txid: input.gate.prepared.preparedHash }
+    } catch {
+      return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
+    }
+    return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
+  }
 }
 
 export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBlockchainSubmitResult> {
