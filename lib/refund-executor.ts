@@ -174,10 +174,10 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
         await authorizeRefundBlockchainSubmit(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence, 'system')
         const rereadAuthorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
         if (rereadAuthorization.state !== 'present') return blocked
-      }
-      if (process.env.FLASHPAY_REFUND_CRASH_TEST === "2" && lockedRefund.payment.network === "Pi Testnet" && lockedRefund.payment.amount === 0.1) {
-        console.log("[P7 TEST] Refund auth-before-submit 0.10")
-        return blocked
+        if (process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && lockedRefund.payment.network === "Pi Testnet" && lockedRefund.payment.amount === 0.1) {
+          console.log("[P7 TEST] Refund auth-before-submit 0.10")
+          return blocked
+        }
       }
       const replay = await submit.submitRefundPreparedStoredXdrOnce({ payment: lockedRefund.payment, gate })
       return replay
