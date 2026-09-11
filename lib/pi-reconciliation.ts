@@ -2,6 +2,7 @@ import "server-only"
 
 import { serverConfig } from "@/lib/server-config"
 import { evaluateFinancialRecoveryPiCandidates } from "@/lib/financial-recovery-pi-candidate-rules"
+import type { RefundPiPayment } from "./refund-pi-reconciliation"
 
 export type PiReconciliationOutcome = "FOUND" | "CONFIRMED_NONE" | "INDETERMINATE"
 
@@ -11,6 +12,7 @@ export interface PiReconciliationResult {
   reason: string
   dto?: Record<string, unknown>
 }
+
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -93,7 +95,7 @@ export async function reconcilePiPayment(paymentId: string): Promise<PiReconcili
   }
 }
 
-export async function reconcileIncompleteA2UPayment(paymentId: string, amount: number, merchantUid: string): Promise<PiReconciliationResult> {
+export async function reconcileIncompleteA2UPayment(paymentId: string, amount: number, merchantUid: string, knownRefund?: RefundPiPayment): Promise<PiReconciliationResult> {
   if (!serverConfig.isPiApiKeyConfigured) return { outcome: "INDETERMINATE", paymentId, reason: "Pi API key is not configured" }
   try {
     const response = await fetch("https://api.minepi.com/v2/payments/incomplete_server_payments", {
@@ -107,9 +109,25 @@ export async function reconcileIncompleteA2UPayment(paymentId: string, amount: n
         ? payload.incomplete_server_payments
         : null
     if (!candidates) return { outcome: "INDETERMINATE", paymentId, reason: "Pi returned invalid incomplete-payments payload" }
+    let filteredCandidates = candidates
+    if (knownRefund !== undefined) {
+      if (!knownRefund.identifier || !knownRefund.user_uid || !Number.isFinite(knownRefund.amount) || knownRefund.amount <= 0 || !knownRefund.direction || !knownRefund.from_address || !knownRefund.to_address || !knownRefund.metadata.paymentId || !knownRefund.metadata.refundId || !knownRefund.metadata.idempotencyKey) return { outcome: "INDETERMINATE", paymentId, reason: "Invalid known refund" }
+      const matches = candidates.filter((candidate) => isRecord(candidate) && candidate.identifier === knownRefund.identifier && candidate.payment_id === knownRefund.metadata.paymentId && candidate.refund_id === knownRefund.metadata.refundId && candidate.idempotency_key === knownRefund.metadata.idempotencyKey && candidate.user_uid === knownRefund.user_uid && candidate.amount === knownRefund.amount && candidate.direction === knownRefund.direction && candidate.from_address === knownRefund.from_address && candidate.to_address === knownRefund.to_address)
+      if (matches.length > 1) return { outcome: "INDETERMINATE", paymentId, reason: "Multiple matching known refunds" }
+      if (matches.length === 1) {
+        let removed = false
+        filteredCandidates = candidates.filter((candidate) => {
+          if (!removed && candidate === matches[0]) {
+            removed = true
+            return false
+          }
+          return true
+        })
+      }
+    }
     const evaluation = evaluateFinancialRecoveryPiCandidates({
       source: "PI_INCOMPLETE_SERVER_PAYMENTS",
-      candidates,
+      candidates: filteredCandidates,
       expected: { branch: "SETTLEMENT", paymentId, amount, merchantUid },
     })
     if (evaluation.outcome === "FOUND") {
