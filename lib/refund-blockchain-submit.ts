@@ -125,6 +125,10 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.gate.prepared.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.gate.prepared.preparedHash || transaction.sequence !== input.gate.prepared.preparedSequence || transaction.source !== input.payment.from_address) return blocked
     const server = new Horizon.Server(HORIZON_URL)
     await server.submitTransaction(transaction)
+    if (process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
+      console.log("[P7 TEST] Refund post-replay-submit 0.10")
+      return { outcome: "FAILED", code: "submit_failed", message: "P7 refund post-replay-submit test" }
+    }
     const after = await readRefundPreparedRecoveryEvidence({ checkpoint: input.gate.prepared.checkpoint, payment: input.payment })
     return after.outcome === "VERIFIED" && after.reference.preparedHash === input.gate.prepared.preparedHash && after.reference.preparedSequence === input.gate.prepared.preparedSequence && after.reference.refundPaymentId === input.payment.identifier && after.reference.fromAddress === input.payment.from_address && after.reference.toAddress === input.payment.to_address && after.reference.amount === input.payment.amount ? { outcome: "CONFIRMED_TX", txid: input.gate.prepared.preparedHash } : { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
   } catch (error) {
@@ -182,6 +186,11 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   const preparedSequence = transaction.sequence
   const prepared = await ensureRefundPreparedSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence)
   if (!prepared || prepared.preparedNow !== true || prepared.envelopeXdr !== envelopeXdr || prepared.preparedHash !== preparedHash || prepared.preparedSequence !== preparedSequence) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+
+  if (process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
+    console.log("[P7 TEST] Refund prepared-before-auth 0.10")
+    return { outcome: "FAILED", code: "submit_failed", message: "P7 refund prepared-before-auth test" }
+  }
 
   const authorization = await authorizeRefundBlockchainSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence, "system")
   if (!authorization || authorization.authorizedNow !== true) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
