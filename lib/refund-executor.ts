@@ -5,6 +5,8 @@ import {
   getRefundCheckpointReadOnly,
   readRefundBlockchainSubmissionClaimState,
   readRefundPreparedSubmitState,
+  readRefundBlockchainSubmitAuthorizationState,
+  authorizeRefundBlockchainSubmit,
   persistRefundPaymentIdWithAudit,
   refundPreflight,
   beginRefundSubmissionAttempt,
@@ -164,7 +166,14 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
       if (lockedSourcePayment === null || typeof lockedSourcePayment.merchantUid !== "string" || lockedSourcePayment.merchantUid.length === 0 || lockedSourcePayment.merchantUid !== lockedSourcePayment.merchantUid.trim() || typeof lockedSourcePayment.customerAmount !== 'number' || !Number.isFinite(lockedSourcePayment.customerAmount) || lockedSourcePayment.customerAmount <= 0 || lockedSourcePayment.id !== initial.checkpoint.paymentId || lockedSourcePayment.payerUid !== initial.checkpoint.payerUid || lockedSourcePayment.customerAmount !== initial.checkpoint.amount || lockedSourcePayment.status !== 'settlement_failed' || lockedSourcePayment.settlementFailureState !== 'refund_pending' || lockedSourcePayment.a2uPaymentId || lockedSourcePayment.a2uTxid || lockedSourcePayment.a2uPreparedTxHash || lockedSourcePayment.a2uPreparedSequence || lockedSourcePayment.a2uPreparedEnvelopeXdr || lockedSourcePayment.refundPaymentId || lockedSourcePayment.refundTxid || lockedSourcePayment.horizonSuccessFlag === true || lockedSourcePayment.refundStatus === 'completed' || !isRefundEligible(lockedSourcePayment)) return blocked
       const lockedA2u = await reconcileIncompleteA2UPayment(lockedSourcePayment.id, lockedSourcePayment.customerAmount, lockedSourcePayment.merchantUid)
       if (lockedA2u.outcome !== 'CONFIRMED_NONE') return blocked
-      return submit.evaluateRefundPreparedReplayPreGate({ sourcePayment: lockedSourcePayment, payment: lockedRefund.payment, prepared, evidence })
+      const gate = submit.evaluateRefundPreparedReplayPreGate({ sourcePayment: lockedSourcePayment, payment: lockedRefund.payment, prepared, evidence })
+      if (gate.outcome !== 'ELIGIBLE_EXACT_REPLAY') return gate
+      const authorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
+      if (authorization.state === 'present') return gate
+      if (authorization.state === 'uncertain') return blocked
+      await authorizeRefundBlockchainSubmit(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence, 'system')
+      const rereadAuthorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
+      return rereadAuthorization.state === 'present' ? gate : blocked
     } finally {
       await walletLock.release()
     }
