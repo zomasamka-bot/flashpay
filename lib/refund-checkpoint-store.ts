@@ -758,8 +758,8 @@ export async function readRefundBlockchainSubmitAuthorizationState(
     if (eventResult.length === 0) return { state: 'absent' }
     if (eventResult.length !== 1) return uncertain
     const eventRow = eventResult[0]
-    if (typeof eventRow !== 'object' || eventRow === null || Array.isArray(eventRow) || !('refund_id' in eventRow) || !('payment_id' in eventRow) || !('idempotency_key' in eventRow) || !('event_type' in eventRow) || !('actor_type' in eventRow) || !('details' in eventRow)) return uncertain
-    if (eventRow.refund_id !== refundId || eventRow.payment_id !== paymentId || eventRow.idempotency_key !== idempotencyKey || eventRow.event_type !== 'refund_blockchain_submit_authorized' || eventRow.actor_type !== 'system') return uncertain
+    if (typeof eventRow !== 'object' || eventRow === null || Array.isArray(eventRow) || !('event_id' in eventRow) || !('refund_id' in eventRow) || !('payment_id' in eventRow) || !('idempotency_key' in eventRow) || !('event_type' in eventRow) || !('actor_type' in eventRow) || !('details' in eventRow)) return uncertain
+    if (eventRow.event_id !== authorizationEventId || eventRow.refund_id !== refundId || eventRow.payment_id !== paymentId || eventRow.idempotency_key !== idempotencyKey || eventRow.event_type !== 'refund_blockchain_submit_authorized' || eventRow.actor_type !== 'system') return uncertain
     const details = eventRow.details
     if (typeof details !== 'object' || details === null || Array.isArray(details) || !('refundPaymentId' in details) || !('preparedHash' in details) || !('preparedSequence' in details) || !('phase' in details) || Object.keys(details).length !== 4 || details.refundPaymentId !== refundPaymentId || details.preparedHash !== preparedHash || details.preparedSequence !== preparedSequence || details.phase !== 'horizon_submit') return uncertain
     return { state: 'present', checkpoint: prepared.checkpoint }
