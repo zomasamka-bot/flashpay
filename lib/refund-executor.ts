@@ -169,11 +169,14 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
       const gate = submit.evaluateRefundPreparedReplayPreGate({ sourcePayment: lockedSourcePayment, payment: lockedRefund.payment, prepared, evidence })
       if (gate.outcome !== 'ELIGIBLE_EXACT_REPLAY') return gate
       const authorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
-      if (authorization.state === 'present') return gate
       if (authorization.state === 'uncertain') return blocked
-      await authorizeRefundBlockchainSubmit(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence, 'system')
-      const rereadAuthorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
-      return rereadAuthorization.state === 'present' ? gate : blocked
+      if (authorization.state === 'absent') {
+        await authorizeRefundBlockchainSubmit(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence, 'system')
+        const rereadAuthorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
+        if (rereadAuthorization.state !== 'present') return blocked
+      }
+      const replay = await submit.submitRefundPreparedStoredXdrOnce({ payment: lockedRefund.payment, gate })
+      return replay
     } finally {
       await walletLock.release()
     }
