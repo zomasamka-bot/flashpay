@@ -229,7 +229,12 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
   if (prepared?.state === 'present') {
     const replay = await readRefundPreparedReplayUnderExistingOwner(refundId)
     if (replay.outcome === 'VERIFIED' && replay.moneyMovementProven === true && replay.authorizesFinancialAction === false && replay.reference?.preparedHash === prepared.preparedHash && replay.reference?.preparedSequence === prepared.preparedSequence && replay.reference?.refundPaymentId === refundPaymentId && replay.reference?.fromAddress === refundPayment.from_address && replay.reference?.toAddress === refundPayment.to_address && replay.reference?.amount === refundPayment.amount) return persistRecoveredConfirmation(prepared.preparedHash)
-    if (replay.outcome === 'CONFIRMED_TX' && replay.txid === prepared.preparedHash) return persistRecoveredConfirmation(replay.txid)
+    if (replay.outcome === 'CONFIRMED_TX') {
+      if (replay.txid !== prepared.preparedHash) return { outcome: 'blocked', reason: 'blockchain_uncertain' }
+      const replayEvidence = await import('./refund-blockchain-submit').then(({ readRefundPreparedRecoveryEvidence }) => readRefundPreparedRecoveryEvidence({ checkpoint: prepared.checkpoint, payment: refundPayment }))
+      if (replayEvidence.outcome !== 'VERIFIED' || replayEvidence.moneyMovementProven !== true || replayEvidence.authorizesFinancialAction !== false || replayEvidence.reference?.preparedHash !== prepared.preparedHash || replayEvidence.reference?.preparedSequence !== prepared.preparedSequence || replayEvidence.reference?.refundPaymentId !== refundPayment.identifier || replayEvidence.reference?.fromAddress !== refundPayment.from_address || replayEvidence.reference?.toAddress !== refundPayment.to_address || replayEvidence.reference?.amount !== refundPayment.amount) return { outcome: 'blocked', reason: 'blockchain_uncertain' }
+      return persistRecoveredConfirmation(replay.txid)
+    }
     return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   }
   if (evidence.outcome === 'INDETERMINATE') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
