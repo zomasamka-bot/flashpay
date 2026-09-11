@@ -751,11 +751,9 @@ export async function readRefundBlockchainSubmitAuthorizationState(
     const claim = await readRefundBlockchainSubmissionClaimState(refundId, paymentId, idempotencyKey, refundPaymentId)
     const prepared = await readRefundPreparedSubmitState(refundId, paymentId, idempotencyKey, refundPaymentId)
     if (claim.state !== 'present' || prepared.state !== 'present' || prepared.envelopeXdr !== envelopeXdr || prepared.preparedHash !== preparedHash || prepared.preparedSequence !== preparedSequence) return uncertain
+    const authorizationEventId = `refund:${refundId}:blockchain_submit_authorized`
     const eventResult = await query(`
-      SELECT a.refund_id, a.payment_id, a.idempotency_key, a.event_type, a.actor_type, a.details
-      FROM refund_audit_events a
-      WHERE a.event_id=$1
-      LIMIT 2`, [`refund:${refundId}:blockchain_submit_authorized`])
+      SELECT event_id,refund_id,payment_id,idempotency_key,event_type,actor_type,details FROM refund_audit_events WHERE event_id=$1 OR (refund_id=$2 AND event_type='refund_blockchain_submit_authorized') LIMIT 3`, [authorizationEventId, refundId])
     if (!Array.isArray(eventResult)) return uncertain
     if (eventResult.length === 0) return { state: 'absent' }
     if (eventResult.length !== 1) return uncertain
