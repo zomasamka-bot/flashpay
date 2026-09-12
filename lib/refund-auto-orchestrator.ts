@@ -110,6 +110,27 @@ export async function ensureAutomaticRefundIntent(paymentId: string): Promise<Au
   return { outcome: "blocked", paymentId, reason: `intent_${intent.status}` }
 }
 
+export type AutomaticRefundDrainClassification =
+  | { state: "ok"; refundDrainCount: number; refundDrainHeadPaymentId: string | null; refundDrainHeadRefundId: string | null }
+  | { state: "blocked" }
+
+export function classifyAutomaticRefundDrain(checkpoints: RefundCheckpoint[]): AutomaticRefundDrainClassification {
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.status !== "pending" || checkpoint.stage !== "wallet_submission_started") continue
+    if (typeof checkpoint.paymentId !== "string" || checkpoint.paymentId.length === 0 || checkpoint.paymentId !== checkpoint.paymentId.trim() || typeof checkpoint.refundId !== "string" || checkpoint.refundId.length === 0 || checkpoint.refundId !== checkpoint.refundId.trim()) return { state: "blocked" }
+    if (checkpoint.refundPaymentId !== undefined && (typeof checkpoint.refundPaymentId !== "string" || checkpoint.refundPaymentId.length === 0 || checkpoint.refundPaymentId !== checkpoint.refundPaymentId.trim())) return { state: "blocked" }
+    if (checkpoint.refundTxid !== undefined && (typeof checkpoint.refundTxid !== "string" || checkpoint.refundTxid.length === 0 || checkpoint.refundTxid !== checkpoint.refundTxid.trim())) return { state: "blocked" }
+  }
+  const candidates = checkpoints.filter((checkpoint) => checkpoint.status === "pending" && checkpoint.stage === "wallet_submission_started" && typeof checkpoint.refundPaymentId === "string" && checkpoint.refundPaymentId.length > 0 && checkpoint.refundPaymentId === checkpoint.refundPaymentId.trim() && checkpoint.refundTxid === undefined)
+  return { state: "ok", refundDrainCount: candidates.length, refundDrainHeadPaymentId: candidates[0]?.paymentId ?? null, refundDrainHeadRefundId: candidates[0]?.refundId ?? null }
+}
+
+export async function readAutomaticRefundDrainHead(limit: number): Promise<AutomaticRefundDrainClassification> {
+  const queued = await listAutomaticRefundCheckpoints(Math.min(limit, 20))
+  if (queued.state !== "ok") return { state: "blocked" }
+  return classifyAutomaticRefundDrain(queued.checkpoints)
+}
+
 export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRefundPassResult> {
   if (!Number.isInteger(limit) || limit <= 0) return { state: "blocked" }
   const queued = await listAutomaticRefundCheckpoints(Math.min(limit, 20))
@@ -160,12 +181,7 @@ export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRe
     processed += 1
   }
   if (processed !== results.length) return { state: "blocked" }
-  for (const checkpoint of queued.checkpoints) {
-    if (checkpoint.status !== "pending" || checkpoint.stage !== "wallet_submission_started") continue
-    if (typeof checkpoint.paymentId !== "string" || checkpoint.paymentId.length === 0 || checkpoint.paymentId !== checkpoint.paymentId.trim() || typeof checkpoint.refundId !== "string" || checkpoint.refundId.length === 0 || checkpoint.refundId !== checkpoint.refundId.trim()) return { state: "blocked" }
-    if (checkpoint.refundPaymentId !== undefined && (typeof checkpoint.refundPaymentId !== "string" || checkpoint.refundPaymentId.length === 0 || checkpoint.refundPaymentId !== checkpoint.refundPaymentId.trim())) return { state: "blocked" }
-    if (checkpoint.refundTxid !== undefined && (typeof checkpoint.refundTxid !== "string" || checkpoint.refundTxid.length === 0 || checkpoint.refundTxid !== checkpoint.refundTxid.trim())) return { state: "blocked" }
-  }
-  const refundDrainCheckpoints = queued.checkpoints.filter((checkpoint) => checkpoint.status === "pending" && checkpoint.stage === "wallet_submission_started" && typeof checkpoint.refundPaymentId === "string" && checkpoint.refundPaymentId.length > 0 && checkpoint.refundPaymentId === checkpoint.refundPaymentId.trim() && checkpoint.refundTxid === undefined)
-  return { state: "ok", processed, results, refundDrainCount: refundDrainCheckpoints.length, refundDrainHeadPaymentId: refundDrainCheckpoints[0]?.paymentId ?? null, refundDrainHeadRefundId: refundDrainCheckpoints[0]?.refundId ?? null }
+  const refundDrain = classifyAutomaticRefundDrain(queued.checkpoints)
+  if (refundDrain.state !== "ok") return { state: "blocked" }
+  return { state: "ok", processed, results, refundDrainCount: refundDrain.refundDrainCount, refundDrainHeadPaymentId: refundDrain.refundDrainHeadPaymentId, refundDrainHeadRefundId: refundDrain.refundDrainHeadRefundId }
 }
