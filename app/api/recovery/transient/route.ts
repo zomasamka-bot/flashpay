@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 const MAX_ATTEMPTS = 5
+const BOUNDED_PIPELINE_CONCURRENCY = 2
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
 const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
 const DRAIN_LEASE_TTL_SECONDS = 900
@@ -33,6 +34,46 @@ type DrainLease = {
   renew: () => Promise<boolean>
   release: () => Promise<boolean>
 } | { state: "busy" } | { state: "unavailable" }
+
+type BoundedPipelineTaskResult<T> = { value?: T; stop?: boolean }
+
+async function runBoundedOrderedPipeline<T>(items: string[], handler: (id: string) => Promise<BoundedPipelineTaskResult<T>>): Promise<{ values: T[]; peakInFlight: number }> {
+  if (items.length === 0) return { values: [], peakInFlight: 0 }
+
+  const ordered: Array<T | undefined> = new Array(items.length)
+  let nextIndex = 0
+  let stopped = false
+  let inFlight = 0
+  let peakInFlight = 0
+
+  const runWorker = async () => {
+    while (true) {
+      if (stopped) return
+      const index = nextIndex
+      if (index >= items.length) return
+      nextIndex++
+      inFlight++
+      peakInFlight = Math.max(peakInFlight, inFlight)
+      try {
+        const result = await handler(items[index])
+        if (result.value !== undefined) ordered[index] = result.value
+        if (result.stop === true) stopped = true
+      } finally {
+        inFlight--
+      }
+    }
+  }
+
+  const workers: Promise<void>[] = []
+  const workerCount = Math.min(BOUNDED_PIPELINE_CONCURRENCY, items.length)
+  for (let workerIndex = 0; workerIndex < workerCount; workerIndex++) workers.push(runWorker())
+  const outcomes = await Promise.allSettled(workers)
+  for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason
+
+  const values: T[] = []
+  for (const value of ordered) if (value !== undefined) values.push(value)
+  return { values, peakInFlight }
+}
 
 async function acquireTransientDrainLease(): Promise<DrainLease> {
   const token = randomUUID()
@@ -688,43 +729,37 @@ export async function POST(request: NextRequest) {
   const workStartedAt = Date.now()
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
 
-  for (const paymentId of eligibleIds) {
+  const eligiblePipeline = await runBoundedOrderedPipeline(eligibleIds, async (paymentId) => {
     const result = await executeA2URecovery(paymentId, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${paymentId}`))
-
-    results.push({
-      paymentId,
-      ok: result.status === "success" || result.status === "db_reconciled",
-      status: latest?.status,
-      error: result.details?.error,
-    })
-
-    if (
-      latest &&
-      latest.status === "paid_to_app" &&
-      latest.settlementFailureState === "retryable" &&
-      isTooManyPayments(latest)
-    ) {
-      break
+    return {
+      value: { paymentId, ok: result.status === "success" || result.status === "db_reconciled", status: latest?.status, error: result.details?.error },
+      stop: latest?.status === "paid_to_app" && latest.settlementFailureState === "retryable" && isTooManyPayments(latest),
     }
-  }
+  })
+  results.push(...eligiblePipeline.values)
 
-for (const id of freshExecutionIds) {
+  const freshPipeline = await runBoundedOrderedPipeline(freshExecutionIds, async (id) => {
     const payment = parsePayment(await redis.get(`payment:${id}`))
-    if (payment?.id !== id || !(isFreshSettlementDispatchCandidate(payment, Date.now()) || isStage1OnlySettlementDispatchCandidate(payment, Date.now()))) continue
+    if (payment?.id !== id || !(isFreshSettlementDispatchCandidate(payment, Date.now()) || isStage1OnlySettlementDispatchCandidate(payment, Date.now()))) return {}
     const result = await executeA2URecovery(id, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${id}`))
-    results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
-    if (latest && latest.status === "paid_to_app" && latest.settlementFailureState === "retryable" && isTooManyPayments(latest)) break
-  }
+    return {
+      value: { paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error },
+      stop: latest?.status === "paid_to_app" && latest.settlementFailureState === "retryable" && isTooManyPayments(latest),
+    }
+  })
+  results.push(...freshPipeline.values)
 
-  for (const id of settlementReconcilingExecutionIds) {
+  const reconcilingPipeline = await runBoundedOrderedPipeline(settlementReconcilingExecutionIds, async (id) => {
     const payment = parsePayment(await redis.get(`payment:${id}`))
-    if (payment?.id !== id || (!isStaleFreshReconcilingCandidate(payment, Date.now()) && !isStaleRetryReconcilingCandidate(payment, Date.now()))) continue
+    if (payment?.id !== id || (!isStaleFreshReconcilingCandidate(payment, Date.now()) && !isStaleRetryReconcilingCandidate(payment, Date.now()))) return {}
     const result = await executeA2URecovery(id, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${id}`))
-    results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
-  }
+    return { value: { paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error } }
+  })
+  results.push(...reconcilingPipeline.values)
+  const settlementPipelinePeakInFlight = Math.max(eligiblePipeline.peakInFlight, freshPipeline.peakInFlight, reconcilingPipeline.peakInFlight)
 
   if (!await drainLease.renew()) return NextResponse.json({ error: "Transient drain lease ownership lost" }, { status: 503 })
   console.log("[P7J5 LEASE] renewed before refund drain")
@@ -732,6 +767,7 @@ for (const id of freshExecutionIds) {
   const refundAccountingReady = (await query("SELECT 1 FROM refund_accounting_records LIMIT 0")) !== null
   let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
   const refundResults = []
+  let refundIntakePeakInFlight = 0
   if (refundAccountingReady) {
     try {
       refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS, refundAuthority)
@@ -739,13 +775,15 @@ for (const id of freshExecutionIds) {
       refundPass = { state: "blocked" }
     }
 
-    for (const paymentId of refundCandidateIds.slice(0, MAX_ATTEMPTS)) {
+    const refundIntakePipeline = await runBoundedOrderedPipeline(refundCandidateIds.slice(0, MAX_ATTEMPTS), async (paymentId) => {
       try {
-        refundResults.push(await ensureAutomaticRefundIntent(paymentId))
+        return { value: await ensureAutomaticRefundIntent(paymentId) }
       } catch {
-        refundResults.push({ outcome: "blocked", paymentId, reason: "intake_exception" })
+        return { value: { outcome: "blocked" as const, paymentId, reason: "intake_exception" } }
       }
-    }
+    })
+    refundResults.push(...refundIntakePipeline.values)
+    refundIntakePeakInFlight = refundIntakePipeline.peakInFlight
   } else {
     refundPass = { state: "blocked" }
   }
@@ -823,9 +861,9 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, drainLease: "acquired" })
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, drainLease: "acquired" })
   } finally {
     const released = await drainLease.release()
     if (released) console.log("[P7J5 LEASE] released")
