@@ -69,7 +69,7 @@ interface PiA2UPayment {
  */
 type Stage1Result =
   | { ok: true; data: { a2uPaymentId: string; a2uPayment: PiA2UPayment } }
-  | { ok: false; error: string; userFacingStatus: string; retryable?: boolean; errorCode?: string; errorBody?: string }
+  | { ok: false; error: string; userFacingStatus: string; retryable?: boolean; retryAfterMs?: number; errorCode?: string; errorBody?: string }
 
 type Stage2Result = 
   | { ok: true; data: { txidFromHorizon: string; horizonFeeCharged: number } }
@@ -239,8 +239,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         }
       }
       const retryCount = ctx.payment.retryCount || 1
+      const exponentialBackoffMs = Math.min(30 * 60_000, 5_000 * 2 ** Math.max(0, retryCount - 1))
       const nextRetryAt = retryable
-        ? new Date(Date.now() + Math.min(30 * 60_000, 5_000 * 2 ** Math.max(0, retryCount - 1))).toISOString()
+        ? new Date(Date.now() + Math.max(exponentialBackoffMs, stageResult.retryAfterMs ?? 0)).toISOString()
         : undefined
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
         ...failedPayment,
@@ -606,6 +607,19 @@ function codeIsTooManyPayments(errorData: unknown, errorText: string): boolean {
   return code === "too_many_payments" || /too_many_payments/i.test(errorText)
 }
 
+function parseRetryAfterMs(value: string | null, now: number): number | undefined {
+  if (value === null) return undefined
+  const trimmed = value.trim()
+  if (/^[0-9]+$/.test(trimmed)) {
+    const seconds = Number(trimmed)
+    if (Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 86_400) return seconds * 1000
+    return undefined
+  }
+  const retryAt = Date.parse(trimmed)
+  const delay = retryAt - now
+  return Number.isFinite(retryAt) && delay >= 0 && delay <= 86_400_000 ? delay : undefined
+}
+
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
   try {
     // Verify UID with Pi /v2/me
@@ -619,8 +633,10 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
 
     if (!verifyResponse.ok) {
       const error = await verifyResponse.text()
+      const retryable = responseStatusRetryable(verifyResponse.status)
+      const retryAfterMs = retryable ? parseRetryAfterMs(verifyResponse.headers.get("retry-after"), Date.now()) : undefined
       console.error("[A2U Stage1] UID verification failed:", error)
-      return { ok: false, error: "UID verification failed", userFacingStatus: "error", retryable: responseStatusRetryable(verifyResponse.status), errorCode: `uid_verification_${verifyResponse.status}`, errorBody: error.slice(0, 2000) }
+      return { ok: false, error: "UID verification failed", userFacingStatus: "error", retryable, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}), errorCode: `uid_verification_${verifyResponse.status}`, errorBody: error.slice(0, 2000) }
     }
 
     const verifiedUser = await verifyResponse.json()
@@ -732,13 +748,16 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       }
 
       console.error("[A2U Stage1] A2U creation failed:", errorData)
-      const retryable = responseStatusRetryable(createResponse.status) || errorCode === "too_many_payments"
+      const rateLimited = createResponse.status === 429 || codeIsTooManyPayments(errorData, errorText)
+      const retryable = responseStatusRetryable(createResponse.status) || rateLimited
+      const retryAfterMs = retryable ? parseRetryAfterMs(createResponse.headers.get("retry-after"), Date.now()) : undefined
       return {
         ok: false,
         error: errorMessage,
         userFacingStatus: "error",
         retryable,
-        errorCode,
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+        errorCode: rateLimited ? "too_many_payments" : errorCode,
         errorBody: errorText.slice(0, 2000),
       }
     }

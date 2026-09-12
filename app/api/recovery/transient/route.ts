@@ -18,6 +18,8 @@ const BOUNDED_PIPELINE_CONCURRENCY = 2
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
 const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
 const DRAIN_LEASE_TTL_SECONDS = 900
+const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
+const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
 if current == ARGV[1] then return redis.call("DEL", KEYS[1]) end
@@ -36,6 +38,7 @@ type DrainLease = {
 } | { state: "busy" } | { state: "unavailable" }
 
 type BoundedPipelineTaskResult<T> = { value?: T; stop?: boolean }
+type RecoveryPipelineValue = { paymentId: string; ok: boolean; status?: string; error?: string }
 
 async function runBoundedOrderedPipeline<T>(items: string[], handler: (id: string) => Promise<BoundedPipelineTaskResult<T>>): Promise<{ values: T[]; peakInFlight: number }> {
   if (items.length === 0) return { values: [], peakInFlight: 0 }
@@ -73,6 +76,53 @@ async function runBoundedOrderedPipeline<T>(items: string[], handler: (id: strin
   const values: T[] = []
   for (const value of ordered) if (value !== undefined) values.push(value)
   return { values, peakInFlight }
+}
+
+type PiCreateBackpressureState =
+  | { state: "inactive" }
+  | { state: "active"; untilMs: number }
+  | { state: "unavailable" }
+
+async function readPiCreateBackpressure(now: number): Promise<PiCreateBackpressureState> {
+  try {
+    const value = await redis.get<unknown>(PI_CREATE_BACKPRESSURE_KEY)
+    if (value === null) return { state: "inactive" }
+    if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return { state: "unavailable" }
+    const untilMs = Number(value)
+    if (!Number.isSafeInteger(untilMs) || untilMs < 0) return { state: "unavailable" }
+    return untilMs > now ? { state: "active", untilMs } : { state: "inactive" }
+  } catch {
+    return { state: "unavailable" }
+  }
+}
+
+async function extendPiCreateBackpressure(nextRetryAt: string | undefined, now: number): Promise<number | null> {
+  const parsedRetryAt = typeof nextRetryAt === "string" && nextRetryAt.trim() !== "" && nextRetryAt === nextRetryAt.trim() ? Date.parse(nextRetryAt) : NaN
+  const candidateUntilMs = Math.max(now + PI_CREATE_BACKPRESSURE_FALLBACK_MS, Number.isFinite(parsedRetryAt) && parsedRetryAt > now ? parsedRetryAt : 0)
+  try {
+    const result = await redis.eval<[string, string], number>(`
+local candidate=tonumber(ARGV[1])
+local now=tonumber(ARGV[2])
+if not candidate or not now or candidate <= now then return -1 end
+local current=redis.call("GET",KEYS[1])
+if current then
+  local currentNumber=tonumber(current)
+  if not currentNumber then return -1 end
+  if currentNumber > candidate then candidate=currentNumber end
+end
+local ttl=math.ceil((candidate-now)/1000)
+if ttl < 1 then ttl=1 end
+redis.call("SET",KEYS[1],tostring(candidate),"EX",ttl)
+return candidate
+`, [PI_CREATE_BACKPRESSURE_KEY], [String(candidateUntilMs), String(now)])
+    return Number.isSafeInteger(result) && result > now ? result : null
+  } catch {
+    return null
+  }
+}
+
+function isPiCreateBackpressureSignal(payment: Payment): boolean {
+  return payment.a2uErrorCode === "too_many_payments" || payment.a2uErrorCode === "uid_verification_429"
 }
 
 async function acquireTransientDrainLease(): Promise<DrainLease> {
@@ -291,10 +341,6 @@ function isPostHorizonEligible(payment: Payment, now: number): boolean {
   )
 }
 
-function isTooManyPayments(payment: Payment): boolean {
-  return payment.a2uErrorCode === "too_many_payments"
-}
-
 export async function POST(request: NextRequest) {
   if (!hasValidSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
@@ -313,6 +359,24 @@ export async function POST(request: NextRequest) {
 
   console.log("[P7J5 LEASE] acquired")
   try {
+  const initialPiCreateBackpressure = await readPiCreateBackpressure(Date.now())
+  let piCreateBackpressureUnavailable = initialPiCreateBackpressure.state === "unavailable"
+  let piCreateBackpressureUntilMs = initialPiCreateBackpressure.state === "active" ? initialPiCreateBackpressure.untilMs : null
+  const piCreateBackpressureActive = () => piCreateBackpressureUnavailable || (piCreateBackpressureUntilMs !== null && piCreateBackpressureUntilMs > Date.now())
+  const registerPiCreateBackpressure = async (payment: Payment) => {
+    if (!isPiCreateBackpressureSignal(payment)) return false
+    const observedAt = Date.now()
+    const parsedRetryAt = typeof payment.nextRetryAt === "string" && payment.nextRetryAt.trim() !== "" && payment.nextRetryAt === payment.nextRetryAt.trim() ? Date.parse(payment.nextRetryAt) : NaN
+    const localUntil = Math.max(observedAt + PI_CREATE_BACKPRESSURE_FALLBACK_MS, Number.isFinite(parsedRetryAt) && parsedRetryAt > observedAt ? parsedRetryAt : 0)
+    piCreateBackpressureUntilMs = piCreateBackpressureUntilMs === null ? localUntil : Math.max(piCreateBackpressureUntilMs, localUntil)
+    const extended = await extendPiCreateBackpressure(payment.nextRetryAt, observedAt)
+    if (extended === null) {
+      piCreateBackpressureUnavailable = true
+    } else {
+      piCreateBackpressureUntilMs = Math.max(piCreateBackpressureUntilMs, extended)
+    }
+    return true
+  }
   const wakeStartedAt = Date.now()
   const discoveryStartedAt = Date.now()
   let keys: string[]
@@ -695,6 +759,7 @@ export async function POST(request: NextRequest) {
   const eligibleIds = readyShadowEligibleIds !== null && useReadyExecution ? readyShadowEligibleIds : [...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
   const freshExecutionIds = readyShadowFreshIds !== null && useReadyExecution ? readyShadowFreshIds : freshDispatchIds.slice(0, MAX_ATTEMPTS)
   const settlementReconcilingExecutionIds = readyShadowReconcilingIds !== null && useReadyExecution ? readyShadowReconcilingIds : [...new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])].slice(0, 1)
+  const retryableIdSet = new Set(retryableIds)
 
   const selectWalletDrainHead = (preparedIds: string[], eligibleIds: string[], freshIds: string[], reconcilingIds: string[], refundPaymentId: string | null, refundId: string | null): { kind: "settlement" | "refund" | null; paymentId: string | null; refundId: string | null } => {
     const preparedHead = eligibleIds.find((id) => preparedIds.includes(id))
@@ -729,29 +794,37 @@ export async function POST(request: NextRequest) {
   const workStartedAt = Date.now()
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
 
-  const eligiblePipeline = await runBoundedOrderedPipeline(eligibleIds, async (paymentId) => {
+  const eligiblePipeline = await runBoundedOrderedPipeline<RecoveryPipelineValue>(eligibleIds, async (paymentId) => {
+    if (retryableIdSet.has(paymentId) && piCreateBackpressureActive()) return { value: { paymentId, ok: false, error: "pi_create_backpressure" } }
     const result = await executeA2URecovery(paymentId, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${paymentId}`))
+    const backpressureTriggered = retryableIdSet.has(paymentId) && latest !== null ? await registerPiCreateBackpressure(latest) : false
     return {
       value: { paymentId, ok: result.status === "success" || result.status === "db_reconciled", status: latest?.status, error: result.details?.error },
-      stop: latest?.status === "paid_to_app" && latest.settlementFailureState === "retryable" && isTooManyPayments(latest),
+      stop: backpressureTriggered,
     }
   })
   results.push(...eligiblePipeline.values)
 
-  const freshPipeline = await runBoundedOrderedPipeline(freshExecutionIds, async (id) => {
+  const freshPipeline = await runBoundedOrderedPipeline<RecoveryPipelineValue>(freshExecutionIds, async (id) => {
     const payment = parsePayment(await redis.get(`payment:${id}`))
-    if (payment?.id !== id || !(isFreshSettlementDispatchCandidate(payment, Date.now()) || isStage1OnlySettlementDispatchCandidate(payment, Date.now()))) return {}
+    if (payment?.id !== id) return {}
+    const handlerNow = Date.now()
+    const freshCreate = isFreshSettlementDispatchCandidate(payment, handlerNow)
+    const stage1Only = isStage1OnlySettlementDispatchCandidate(payment, handlerNow)
+    if (!freshCreate && !stage1Only) return {}
+    if (freshCreate && piCreateBackpressureActive()) return { value: { paymentId: id, ok: false, status: payment.status, error: "pi_create_backpressure" } }
     const result = await executeA2URecovery(id, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${id}`))
+    const backpressureTriggered = freshCreate && latest !== null ? await registerPiCreateBackpressure(latest) : false
     return {
       value: { paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error },
-      stop: latest?.status === "paid_to_app" && latest.settlementFailureState === "retryable" && isTooManyPayments(latest),
+      stop: backpressureTriggered,
     }
   })
   results.push(...freshPipeline.values)
 
-  const reconcilingPipeline = await runBoundedOrderedPipeline(settlementReconcilingExecutionIds, async (id) => {
+  const reconcilingPipeline = await runBoundedOrderedPipeline<RecoveryPipelineValue>(settlementReconcilingExecutionIds, async (id) => {
     const payment = parsePayment(await redis.get(`payment:${id}`))
     if (payment?.id !== id || (!isStaleFreshReconcilingCandidate(payment, Date.now()) && !isStaleRetryReconcilingCandidate(payment, Date.now()))) return {}
     const result = await executeA2URecovery(id, schedulerWalletPaymentId)
@@ -861,9 +934,9 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, drainLease: "acquired" })
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, drainLease: "acquired" })
   } finally {
     const released = await drainLease.release()
     if (released) console.log("[P7J5 LEASE] released")
