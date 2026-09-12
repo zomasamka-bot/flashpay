@@ -318,7 +318,6 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           if (walletIntent.state === "present" && !await releasePiWalletIntent(latestPayment.a2uFromAddress, { kind: "settlement_prepared", paymentId, preparedHash: latestPayment.a2uPreparedTxHash, preparedSequence: latestPayment.a2uPreparedSequence })) return { ok: false, status: 500, error: "Settlement wallet intent release failed" }
         return { ok: true, status: 202 }
         }
-        if (params.schedulerWalletPaymentId !== undefined && params.schedulerWalletPaymentId !== paymentId) return { ok: false, status: 409, error: "wallet_drain_not_selected" }
         if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
@@ -348,6 +347,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           ) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           }
+          if (params.schedulerWalletPaymentId !== undefined && params.schedulerWalletPaymentId !== paymentId) return { ok: false, status: 409, error: "wallet_drain_not_selected" }
           const horizon = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
           const submitted = await horizon.submitTransaction(transaction)
           if (submitted.hash !== latestPayment.a2uPreparedTxHash) {

@@ -156,10 +156,7 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
       if (lockedCheckpoint.state !== 'present' || lockedCheckpoint.checkpoint.stage !== 'wallet_submission_started' || lockedCheckpoint.checkpoint.status !== 'pending' || claim.state !== 'present' || prepared.state !== 'present' || lockedRefund.outcome !== 'FOUND' || !lockedRefund.payment || lockedRefund.payment.identifier !== initial.checkpoint.refundPaymentId || lockedRefund.payment.from_address !== refund.payment.from_address || lockedRefund.payment.to_address !== refund.payment.to_address || lockedRefund.payment.amount !== refund.payment.amount || lockedRefund.payment.status.cancelled || lockedRefund.payment.status.user_cancelled) return blocked
       const submit = await import('./refund-blockchain-submit')
       const evidence = await submit.readRefundPreparedRecoveryEvidence({ checkpoint: prepared.checkpoint, payment: lockedRefund.payment })
-      if (evidence.outcome === 'VERIFIED') {
-        if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== initial.checkpoint.paymentId || refundAuthority.refundId !== refundId)) return blocked
-        return evidence
-      }
+      if (evidence.outcome === 'VERIFIED') return evidence
       if (evidence.outcome !== 'PREPARED_IS_NEXT') return blocked
       const lockedRawSource = await redis.get(`flashpay:payment:operation:${initial.checkpoint.paymentId}`)
       if (lockedRawSource !== refundId) return blocked
@@ -171,6 +168,7 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
       if (lockedA2u.outcome !== 'CONFIRMED_NONE') return blocked
       const gate = submit.evaluateRefundPreparedReplayPreGate({ sourcePayment: lockedSourcePayment, payment: lockedRefund.payment, prepared, evidence })
       if (gate.outcome !== 'ELIGIBLE_EXACT_REPLAY') return gate
+      if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== initial.checkpoint.paymentId || refundAuthority.refundId !== refundId)) return { outcome: 'blocked', reason: 'wallet_drain_not_selected' }
       const authorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
       if (authorization.state === 'uncertain') return blocked
       if (authorization.state === 'absent') {
@@ -234,6 +232,9 @@ export async function executeRefundBlockchain(refundId: string, refundAuthority?
   const prepared = claim.state === 'present' ? await readRefundPreparedSubmitState(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId) : null
   if (prepared?.state === 'uncertain') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   if (prepared?.state === 'present') {
+    const preparedEvidence = await import('./refund-blockchain-submit').then(({ readRefundPreparedRecoveryEvidence }) => readRefundPreparedRecoveryEvidence({ checkpoint: prepared.checkpoint, payment: refundPayment }))
+    if (preparedEvidence.outcome === 'VERIFIED') return persistRecoveredConfirmation(prepared.preparedHash)
+    if (preparedEvidence.outcome !== 'PREPARED_IS_NEXT') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
     const preparedAuthorityMismatch = refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== checkpoint.paymentId || refundAuthority.refundId !== refundId)
     if (preparedAuthorityMismatch) return { outcome: 'blocked', reason: 'wallet_drain_not_selected' }
     const replay = await readRefundPreparedReplayUnderExistingOwner(refundId, refundAuthority)
