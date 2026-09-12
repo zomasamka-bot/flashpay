@@ -2,7 +2,6 @@ import { type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -18,14 +17,12 @@ export const runtime = "nodejs"
  * 1. Verify U2A payment from Pi API (validation only)
  * 2. If not developer_completed, call Pi /v2/payments/{piPaymentId}/complete, then refetch and validate
  * 3. Load and validate all required fields (merchantUid validated before any A2U execution)
- * 4. Persist status = paid_to_app to Redis (never overwrites settlement_pending or settled_to_merchant)
- * 5. Call unified executor once to handle all A2U settlement stages
- * 6. Re-read latest payment state from Redis
- * 7. Return canonical response (final state)
+ * 4. Atomically persist verified U2A state and durable ready/active recovery indexing
+ * 5. Return canonical processing/final response from authoritative Redis state
  * 
- * All settlement, financial, and DB logic delegated to lib/a2u-executor.ts
- * Never returns early on a2uTxid - executor handles resumption
- * Never overwrites stale payment state over newer checkpoint
+ * Settlement execution is intentionally decoupled from U2A ingress.
+ * The transient drain/recovery worker owns asynchronous A2U settlement execution.
+ * Never overwrites stale payment state over newer checkpoint.
  */
 export async function POST(request: NextRequest) {
   const completeTimingStartedAt = Date.now()
@@ -374,37 +371,8 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
     if(currentStatus==="pending"&&payment.merchantId==="hazemaboria"&&merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"&&finalPiAmount===0.13){console.log("[P7 TEST] Fresh dispatch interruption 0.13");const r=await buildA2USuccessResponse(flashPaymentId);if(!r)return NextResponse.json({error:"Response building failed"},{status:500});return NextResponse.json(r,{status:200})}
 
-    // === STAGE 4: Call unified executor with ONE concurrency boundary ===
-    console.log("[Pi Complete] === STAGE 4: Call unified executor ===")
-
-    const lockedExecutorTimingStartedAt = Date.now()
-    const executorResult = await executeA2ULocked({
-      paymentId: flashPaymentId,
-      isRecovery: false,
-    })
-    console.log("[P7B TIMING] executeA2ULocked", { paymentId: flashPaymentId, durationMs: Date.now() - lockedExecutorTimingStartedAt })
-
-    if (!executorResult.ok) {
-      console.warn("[Pi Complete] Executor failed - status:", executorResult.status, "error:", executorResult.error)
-      // Still return success for client - settlement is async
-    } else {
-      console.log("[Pi Complete] ✓ Executor succeeded - status:", executorResult.status)
-    }
-
-    // === STAGE 5: Re-read latest checkpoint from Redis ===
-    console.log("[Pi Complete] === STAGE 5: Re-read latest checkpoint ===")
-
-    const latestCheckpoint = await redis.get(`payment:${flashPaymentId}`)
-    if (!latestCheckpoint) {
-      console.error("[Pi Complete] Payment disappeared from Redis after executor")
-      return NextResponse.json({ error: "Payment state lost" }, { status: 500 })
-    }
-
-    const latestPayment: Payment = typeof latestCheckpoint === "string" ? JSON.parse(latestCheckpoint) : latestCheckpoint
-    console.log("[Pi Complete] ✓ Re-read latest checkpoint - status:", latestPayment.status)
-
-    // === STAGE 6: Return canonical response (final state, invoked once) ===
-    console.log("[Pi Complete] === STAGE 6: Return canonical response ===")
+    // === STAGE 4: Return canonical response without waiting for settlement drain ===
+    console.log("[Pi Complete] === STAGE 4: Return canonical asynchronous-settlement response ===")
 
     const canonicalResponse = await buildA2USuccessResponse(flashPaymentId)
     if (!canonicalResponse) {
@@ -412,7 +380,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Response building failed" }, { status: 500 })
     }
 
-    console.log("[Pi Complete] ✅ Returning canonical response - final status:", latestPayment.status)
+    console.log("[Pi Complete] ✅ U2A ingress committed; settlement queued - status:", canonicalResponse.status)
     console.log("[P7B TIMING] /complete total", { paymentId: flashPaymentId, durationMs: Date.now() - completeTimingStartedAt })
     return NextResponse.json(canonicalResponse, { status: 200 })
   } catch (error) {
