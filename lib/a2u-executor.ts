@@ -1004,7 +1004,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
         if (currentIntent.state === "present" && currentIntent.owner.kind === "settlement_claim" && currentIntent.owner.paymentId === ctx.paymentId) {
           const rawPayment = await redis.get(`payment:${ctx.paymentId}`)
           const parsed = typeof rawPayment === "string" ? JSON.parse(rawPayment) : rawPayment
-          if (isRecord(parsed) && parsed.id === ctx.paymentId && parsed.a2uFromAddress === ctx.payment.a2uFromAddress && parsed.a2uPreparedEnvelopeXdr === undefined && parsed.a2uPreparedTxHash === undefined && parsed.a2uPreparedSequence === undefined) {
+          if (isRecord(parsed) && !Array.isArray(parsed) && parsed.id === ctx.paymentId && parsed.a2uFromAddress === ctx.payment.a2uFromAddress && parsed.a2uPreparedEnvelopeXdr === undefined && parsed.a2uPreparedTxHash === undefined && parsed.a2uPreparedSequence === undefined) {
             await releasePiWalletIntent(ctx.payment.a2uFromAddress, { kind: "settlement_claim", paymentId: ctx.paymentId })
           }
         }
