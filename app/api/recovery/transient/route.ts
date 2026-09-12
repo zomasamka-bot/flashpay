@@ -525,7 +525,7 @@ export async function POST(request: NextRequest) {
     readyShadowReconcilingIds = shadowReconcilingIds.slice(0, 1)
     if (classInvalid === 0) {
       walletDrainShadowCount = classPrepared + classFresh + classStage1Only + classReconciling
-      walletDrainShadowHeadPaymentId = shadowPreparedIds[0] ?? shadowFreshDispatchIds[0] ?? shadowReconcilingIds[0] ?? null
+      walletDrainShadowHeadPaymentId = readyShadowEligibleIds.find((id) => shadowPreparedIds.includes(id)) ?? readyShadowFreshIds[0] ?? readyShadowReconcilingIds[0] ?? null
     }
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
