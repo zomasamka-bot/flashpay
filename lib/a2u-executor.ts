@@ -3,7 +3,7 @@ import { serverConfig } from "@/lib/server-config"
 import { recordA2UTransactionAtomic } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
-import { acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
+import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 
 /**
@@ -882,14 +882,8 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Private seed does not match app wallet address", userFacingStatus: "error" }
     }
 
-    walletLock = await acquirePiWalletSubmitLock(appPublicKey)
+    walletLock = await acquirePiWalletIntentSubmitLock(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId })
     if (!walletLock) return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
-    try {
-      const intent = await readPiWalletIntent(appPublicKey)
-      if (intent.state !== "absent") return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
-    } catch {
-      return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
-    }
 
     console.log("[A2U Stage2] Connecting to Horizon")
     const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", {
@@ -950,6 +944,11 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       status: "settlement_pending" as const,
     })
 
+    const preparedOwnerReplaced = await replacePiWalletIntent(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId }, { kind: "settlement_prepared", paymentId: ctx.paymentId, preparedHash, preparedSequence })
+    if (!preparedOwnerReplaced) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
+    const preparedOwner = await readPiWalletIntent(appPublicKey)
+    if (preparedOwner.state !== "present" || preparedOwner.owner.kind !== "settlement_prepared" || preparedOwner.owner.paymentId !== ctx.paymentId || preparedOwner.owner.preparedHash !== preparedHash || preparedOwner.owner.preparedSequence !== preparedSequence) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
+
     if (ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
       console.log("[A2U TEST] Stage2 prepared checkpoint fault point 0.11")
       return { ok: false, error: "Temporary Stage2 prepared checkpoint fault", userFacingStatus: "settlement_pending" }
@@ -999,7 +998,21 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     console.error("[A2U Stage2] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }
   } finally {
-    if (walletLock) await walletLock.release()
+    if (walletLock) {
+      const currentIntent = await readPiWalletIntent(ctx.payment.a2uFromAddress)
+      if (currentIntent.state === "present" && currentIntent.owner.kind === "settlement_claim" && currentIntent.owner.paymentId === ctx.paymentId) {
+        const rawPayment = await redis.get(`payment:${ctx.paymentId}`)
+        let paymentRecord: Record<string, unknown> | null = null
+        try {
+          const parsed = typeof rawPayment === "string" ? JSON.parse(rawPayment) : rawPayment
+          paymentRecord = isRecord(parsed) ? parsed : null
+        } catch {
+          paymentRecord = null
+        }
+        if (paymentRecord !== null && paymentRecord.a2uPreparedTxHash === undefined && paymentRecord.a2uPreparedSequence === undefined && paymentRecord.a2uPreparedEnvelopeXdr === undefined) await releasePiWalletIntent(ctx.payment.a2uFromAddress, { kind: "settlement_claim", paymentId: ctx.paymentId })
+      }
+      await walletLock.release()
+    }
   }
 }
 
