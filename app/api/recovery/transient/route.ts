@@ -697,8 +697,10 @@ for (const id of freshExecutionIds) {
   const shadowHeadValid = (walletDrainShadowHeadKind === "settlement" && walletDrainShadowHeadPaymentId !== null && walletDrainShadowHeadRefundId === null) || (walletDrainShadowHeadKind === "refund" && walletDrainShadowHeadPaymentId !== null && walletDrainShadowHeadRefundId !== null)
   const selectedHeadValid = (walletDrainSelectedHeadKind === "settlement" && walletDrainSelectedHeadPaymentId !== null && walletDrainSelectedHeadRefundId === null) || (walletDrainSelectedHeadKind === "refund" && walletDrainSelectedHeadPaymentId !== null && walletDrainSelectedHeadRefundId !== null)
   if (walletDrainShadowCount !== null && walletDrainShadowCount > 0 && walletDrainSelectedHeadParity !== null && shadowHeadValid && selectedHeadValid) walletDrainNonEmptyParity = walletDrainSelectedHeadParity
-  const certificationHead = selectWalletDrainHead(useReadyExecution && readyShadowPreparedIds !== null ? readyShadowPreparedIds : preparedSubmitIds, eligibleIds, freshExecutionIds, settlementReconcilingExecutionIds, refundPass.state === "ok" ? refundPass.refundDrainHeadPaymentId : null, refundPass.state === "ok" ? refundPass.refundDrainHeadRefundId : null)
-  walletDrainNonMoneyCertification = certificationHead.kind !== null && certificationHead.paymentId !== null && (certificationHead.kind === "settlement" ? certificationHead.refundId === null : certificationHead.refundId !== null)
+  const certificationA = selectWalletDrainHead(["p"], ["p"], [], [], null, null)
+  const certificationB = selectWalletDrainHead(["p"], [], ["f"], [], null, null)
+  const certificationC = selectWalletDrainHead([], [], [], [], "rp", "r")
+  walletDrainNonMoneyCertification = certificationA.kind === "settlement" && certificationA.paymentId === "p" && certificationA.refundId === null && certificationB.kind === "settlement" && certificationB.paymentId === "f" && certificationB.refundId === null && certificationC.kind === "refund" && certificationC.paymentId === "rp" && certificationC.refundId === "r"
 
   const settlementReconcilingEvidence = { FOUND: 0, CONFIRMED_NONE: 0, INDETERMINATE: 0, skipped: 0 }
   const settlementReconcilingEvidenceIds = [...new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])].slice(0, 1)
