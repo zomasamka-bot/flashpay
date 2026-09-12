@@ -999,19 +999,20 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     return { ok: false, error: String(error), userFacingStatus: "error" }
   } finally {
     if (walletLock) {
-      const currentIntent = await readPiWalletIntent(ctx.payment.a2uFromAddress)
-      if (currentIntent.state === "present" && currentIntent.owner.kind === "settlement_claim" && currentIntent.owner.paymentId === ctx.paymentId) {
-        const rawPayment = await redis.get(`payment:${ctx.paymentId}`)
-        let paymentRecord: Record<string, unknown> | null = null
-        try {
+      try {
+        const currentIntent = await readPiWalletIntent(ctx.payment.a2uFromAddress)
+        if (currentIntent.state === "present" && currentIntent.owner.kind === "settlement_claim" && currentIntent.owner.paymentId === ctx.paymentId) {
+          const rawPayment = await redis.get(`payment:${ctx.paymentId}`)
           const parsed = typeof rawPayment === "string" ? JSON.parse(rawPayment) : rawPayment
-          paymentRecord = isRecord(parsed) ? parsed : null
-        } catch {
-          paymentRecord = null
+          if (isRecord(parsed) && parsed.id === ctx.paymentId && parsed.a2uFromAddress === ctx.payment.a2uFromAddress && parsed.a2uPreparedEnvelopeXdr === undefined && parsed.a2uPreparedTxHash === undefined && parsed.a2uPreparedSequence === undefined) {
+            await releasePiWalletIntent(ctx.payment.a2uFromAddress, { kind: "settlement_claim", paymentId: ctx.paymentId })
+          }
         }
-        if (paymentRecord !== null && paymentRecord.a2uPreparedTxHash === undefined && paymentRecord.a2uPreparedSequence === undefined && paymentRecord.a2uPreparedEnvelopeXdr === undefined) await releasePiWalletIntent(ctx.payment.a2uFromAddress, { kind: "settlement_claim", paymentId: ctx.paymentId })
+      } catch {
+        // Keep the durable claim when cleanup reads, parsing, or release are uncertain.
+      } finally {
+        await walletLock.release()
       }
-      await walletLock.release()
     }
   }
 }
