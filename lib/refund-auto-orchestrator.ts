@@ -131,7 +131,7 @@ export async function readAutomaticRefundDrainHead(limit: number): Promise<Autom
   return classifyAutomaticRefundDrain(queued.checkpoints)
 }
 
-export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRefundPassResult> {
+export async function runAutomaticRefundPass(limit: number, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<AutomaticRefundPassResult> {
   if (!Number.isInteger(limit) || limit <= 0) return { state: "blocked" }
   const queued = await listAutomaticRefundCheckpoints(Math.min(limit, 20))
   if (queued.state !== "ok") return { state: "blocked" }

@@ -611,11 +611,16 @@ export async function POST(request: NextRequest) {
     walletDrainPreExecutionHeadRefundId = preHead.refundId
   }
 
+  const ready = useReadyExecution && readyShadowPreparedIds !== null && preRefundDrain.state === "ok"
+  const preHead = ready ? selectWalletDrainHead(readyShadowPreparedIds, eligibleIds, freshExecutionIds, settlementReconcilingExecutionIds, preRefundDrain.refundDrainHeadPaymentId, preRefundDrain.refundDrainHeadRefundId) : { kind: null, paymentId: null, refundId: null }
+  const schedulerWalletPaymentId = preHead.kind === "settlement" ? preHead.paymentId : null
+  console.log("[transient-wake] scheduler wallet authority", { ready, schedulerWalletPaymentId, refundPaymentId: preHead.kind === "refund" ? preHead.paymentId : null, refundId: preHead.kind === "refund" ? preHead.refundId : null })
+
   const workStartedAt = Date.now()
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
 
   for (const paymentId of eligibleIds) {
-    const result = await executeA2URecovery(paymentId)
+    const result = await executeA2URecovery(paymentId, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${paymentId}`))
 
     results.push({
@@ -638,7 +643,7 @@ export async function POST(request: NextRequest) {
 for (const id of freshExecutionIds) {
     const payment = parsePayment(await redis.get(`payment:${id}`))
     if (payment?.id !== id || !(isFreshSettlementDispatchCandidate(payment, Date.now()) || isStage1OnlySettlementDispatchCandidate(payment, Date.now()))) continue
-    const result = await executeA2URecovery(id)
+    const result = await executeA2URecovery(id, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${id}`))
     results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
     if (latest && latest.status === "paid_to_app" && latest.settlementFailureState === "retryable" && isTooManyPayments(latest)) break
@@ -647,7 +652,7 @@ for (const id of freshExecutionIds) {
   for (const id of settlementReconcilingExecutionIds) {
     const payment = parsePayment(await redis.get(`payment:${id}`))
     if (payment?.id !== id || (!isStaleFreshReconcilingCandidate(payment, Date.now()) && !isStaleRetryReconcilingCandidate(payment, Date.now()))) continue
-    const result = await executeA2URecovery(id)
+    const result = await executeA2URecovery(id, schedulerWalletPaymentId)
     const latest = parsePayment(await redis.get(`payment:${id}`))
     results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
   }
@@ -657,7 +662,7 @@ for (const id of freshExecutionIds) {
   const refundResults = []
   if (refundAccountingReady) {
     try {
-      refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS)
+      refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS, preHead.kind === "refund" && preHead.paymentId !== null && preHead.refundId !== null ? { paymentId: preHead.paymentId, refundId: preHead.refundId } : null)
     } catch {
       refundPass = { state: "blocked" }
     }

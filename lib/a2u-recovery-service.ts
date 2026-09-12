@@ -143,7 +143,8 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
  * Returns unified response via buildA2USuccessResponse (never marks success here)
  */
 export async function executeA2URecovery(
-  paymentId: string
+  paymentId: string,
+  schedulerWalletPaymentId?: string | null
 ): Promise<RecoveryResult> {
   console.log("[A2U Recovery] 🔍 Starting orchestrator for:", paymentId)
 
@@ -196,7 +197,9 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      isRecovery: true,
+        isRecovery: true,
+        ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}),
+
     })
 
     if (!result.ok) {
@@ -243,7 +246,9 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      isRecovery: true,
+        isRecovery: true,
+        ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}),
+
     })
 
     if (!result.ok) {
@@ -299,7 +304,9 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      isRecovery: true,
+        isRecovery: true,
+        ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}),
+
     })
 
     if (!result.ok) {
@@ -347,7 +354,9 @@ export async function executeA2URecovery(
 
     const result = await executeA2ULocked({
       paymentId,
-      isRecovery: true,
+        isRecovery: true,
+        ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}),
+
     })
 
     if (!result.ok) {

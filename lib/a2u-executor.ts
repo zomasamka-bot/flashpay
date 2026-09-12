@@ -135,6 +135,7 @@ export interface ExecutorContext {
   piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
   isRecovery: boolean
   recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
+  schedulerWalletPaymentId?: string | null
 }
 
 /**
@@ -382,6 +383,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   }
 
   // STAGE 2: Sign (skip if already have a2uTxid)
+  if (ctx.schedulerWalletPaymentId !== undefined && ctx.schedulerWalletPaymentId !== ctx.paymentId) return { ok: false, status: "settlement_pending", error: "wallet_drain_not_selected" }
   let txidFromHorizon = ctx.payment.a2uTxid
 
   if (!txidFromHorizon) {

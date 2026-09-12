@@ -32,6 +32,7 @@ interface LockedExecutorParams {
   paymentId: string
   isRecovery: boolean
   recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
+  schedulerWalletPaymentId?: string | null
 }
 
 function isSettlementDispatchCandidate(payment: Payment, now: number): boolean {
@@ -454,6 +455,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         piPaymentId: latestPayment.piPaymentId,
         isRecovery: params.isRecovery,
         ...(params.recoveryOperation ? { recoveryOperation: params.recoveryOperation } : {}),
+        ...(params.schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId: params.schedulerWalletPaymentId } : {}),
       })
 
       // Map executor result string status to numeric HTTP status code
