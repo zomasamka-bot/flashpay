@@ -846,10 +846,7 @@ type Stage2PreparedResult =
   | { ok: true; transaction: StellarSDK.Transaction; preparedHash: string; preparedSequence: string }
   | { ok: false; error: string; userFacingStatus: string }
 
-async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair: StellarSDK.Keypair, appPublicKey: string, horizonServer: StellarSDK.Horizon.Server): Promise<Stage2PreparedResult> {
-  const toAddress = ctx.payment.a2uToAddress
-  const amount = ctx.payment.merchantAmount
-  const a2uPaymentId = ctx.payment.a2uPaymentId
+async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair: StellarSDK.Keypair, appPublicKey: string, horizonServer: StellarSDK.Horizon.Server, toAddress: string, amount: number, a2uPaymentId: string): Promise<Stage2PreparedResult> {
   const sourceAccount = await horizonServer.loadAccount(appPublicKey)
   let feeCharged: number
   try {
@@ -929,7 +926,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
 
     console.log("[A2U Stage2] Connecting to Horizon")
     const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
-    const prepared = await prepareStage2UnderHeldWalletLock(ctx, appKeypair, appPublicKey, horizonServer)
+    const prepared = await prepareStage2UnderHeldWalletLock(ctx, appKeypair, appPublicKey, horizonServer, toAddress, amount, a2uPaymentId)
     if (!prepared.ok) return prepared
     const { transaction, preparedHash } = prepared
 
