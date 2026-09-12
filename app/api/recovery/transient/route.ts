@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "crypto"
+import { randomUUID, timingSafeEqual } from "crypto"
 import { type NextRequest, NextResponse } from "next/server"
 
 import { redis, isRedisConfigured } from "@/lib/redis"
@@ -15,6 +15,58 @@ export const runtime = "nodejs"
 
 const MAX_ATTEMPTS = 5
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
+const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
+const DRAIN_LEASE_TTL_SECONDS = 900
+const DRAIN_LEASE_RELEASE_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+if current == ARGV[1] then return redis.call("DEL", KEYS[1]) end
+return 0
+`
+const DRAIN_LEASE_RENEW_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+if current ~= ARGV[1] then return 0 end
+return redis.call("EXPIRE", KEYS[1], ARGV[2])
+`
+
+type DrainLease = {
+  state: "acquired"
+  renew: () => Promise<boolean>
+  release: () => Promise<boolean>
+} | { state: "busy" } | { state: "unavailable" }
+
+async function acquireTransientDrainLease(): Promise<DrainLease> {
+  const token = randomUUID()
+  try {
+    const acquired = await redis.set(DRAIN_LEASE_KEY, token, { nx: true, ex: DRAIN_LEASE_TTL_SECONDS })
+    if (acquired !== "OK") return { state: "busy" }
+  } catch {
+    return { state: "unavailable" }
+  }
+
+  let released = false
+  return {
+    state: "acquired",
+    renew: async () => {
+      if (released) return false
+      try {
+        const result = await redis.eval<[string, string], number>(DRAIN_LEASE_RENEW_SCRIPT, [DRAIN_LEASE_KEY], [token, String(DRAIN_LEASE_TTL_SECONDS)])
+        return result === 1
+      } catch {
+        return false
+      }
+    },
+    release: async () => {
+      if (released) return true
+      released = true
+      try {
+        const result = await redis.eval<[string], number>(DRAIN_LEASE_RELEASE_SCRIPT, [DRAIN_LEASE_KEY], [token])
+        return result === 1
+      } catch {
+        return false
+      }
+    },
+  }
+}
 
 function hasValidSecret(request: NextRequest): boolean {
   const expected = process.env[RECOVERY_SECRET_ENV]
@@ -211,6 +263,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
 
+  const drainLease = await acquireTransientDrainLease()
+  if (drainLease.state === "unavailable") return NextResponse.json({ error: "Transient drain lease unavailable" }, { status: 503 })
+  if (drainLease.state === "busy") {
+    console.log("[P7J5 LEASE] overlap blocked")
+    return NextResponse.json({ processed: 0, state: "overlap_blocked" })
+  }
+
+  console.log("[P7J5 LEASE] acquired")
+  try {
   const wakeStartedAt = Date.now()
   const discoveryStartedAt = Date.now()
   let keys: string[]
@@ -621,6 +682,9 @@ export async function POST(request: NextRequest) {
   }
   console.log("[transient-wake] scheduler wallet authority", { ready: preHead !== null, schedulerWalletPaymentId, refundPaymentId: preHead?.kind === "refund" ? preHead.paymentId : null, refundId: preHead?.kind === "refund" ? preHead.refundId : null })
 
+  if (!await drainLease.renew()) return NextResponse.json({ error: "Transient drain lease ownership lost" }, { status: 503 })
+  console.log("[P7J5 LEASE] renewed before work")
+
   const workStartedAt = Date.now()
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
 
@@ -661,6 +725,9 @@ for (const id of freshExecutionIds) {
     const latest = parsePayment(await redis.get(`payment:${id}`))
     results.push({ paymentId: id, ok: result.status === "success", status: latest?.status, error: result.details?.error })
   }
+
+  if (!await drainLease.renew()) return NextResponse.json({ error: "Transient drain lease ownership lost" }, { status: 503 })
+  console.log("[P7J5 LEASE] renewed before refund drain")
 
   const refundAccountingReady = (await query("SELECT 1 FROM refund_accounting_records LIMIT 0")) !== null
   let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
@@ -741,6 +808,9 @@ for (const id of freshExecutionIds) {
     settlementReconcilingEvidence[evidence.outcome]++
   }
 
+  if (!await drainLease.renew()) return NextResponse.json({ error: "Transient drain lease ownership lost" }, { status: 503 })
+  console.log("[P7J5 LEASE] renewed before cursor handoff")
+
   try {
     const cursorCasResult = await redis.eval<[string, string], number>(`local current = redis.call('GET', KEYS[1]) or 'c:0'
 if current ~= ARGV[1] then return 0 end
@@ -755,5 +825,10 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   const wakeDurationMs = Date.now() - wakeStartedAt
   console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, drainLease: "acquired" })
+  } finally {
+    const released = await drainLease.release()
+    if (released) console.log("[P7J5 LEASE] released")
+    else console.warn("[P7J5 LEASE] release skipped or ownership changed")
+  }
 }
