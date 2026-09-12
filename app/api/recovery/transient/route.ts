@@ -605,15 +605,20 @@ export async function POST(request: NextRequest) {
 
   const preRefundDrain = await readAutomaticRefundDrainHead(MAX_ATTEMPTS)
   if (preRefundDrain.state === "ok") {
-    const preHead = selectWalletDrainHead(useReadyExecution && readyShadowPreparedIds !== null ? readyShadowPreparedIds : preparedSubmitIds, eligibleIds, freshExecutionIds, settlementReconcilingExecutionIds, preRefundDrain.refundDrainHeadPaymentId, preRefundDrain.refundDrainHeadRefundId)
-    walletDrainPreExecutionHeadKind = preHead.kind
-    walletDrainPreExecutionHeadPaymentId = preHead.paymentId
-    walletDrainPreExecutionHeadRefundId = preHead.refundId
+    const preTelemetryHead = selectWalletDrainHead(useReadyExecution && readyShadowPreparedIds !== null ? readyShadowPreparedIds : preparedSubmitIds, eligibleIds, freshExecutionIds, settlementReconcilingExecutionIds, preRefundDrain.refundDrainHeadPaymentId, preRefundDrain.refundDrainHeadRefundId)
+    walletDrainPreExecutionHeadKind = preTelemetryHead.kind
+    walletDrainPreExecutionHeadPaymentId = preTelemetryHead.paymentId
+    walletDrainPreExecutionHeadRefundId = preTelemetryHead.refundId
   }
 
   const ready = useReadyExecution && readyShadowPreparedIds !== null && preRefundDrain.state === "ok"
   const preHead = ready ? selectWalletDrainHead(readyShadowPreparedIds, eligibleIds, freshExecutionIds, settlementReconcilingExecutionIds, preRefundDrain.refundDrainHeadPaymentId, preRefundDrain.refundDrainHeadRefundId) : { kind: null, paymentId: null, refundId: null }
-  const schedulerWalletPaymentId = preHead.kind === "settlement" ? preHead.paymentId : null
+  let schedulerWalletPaymentId: string | null = null
+  let refundAuthority: { paymentId: string; refundId: string } | null = null
+  if (ready) {
+    if (preHead.kind === "settlement") schedulerWalletPaymentId = preHead.paymentId
+    if (preHead.kind === "refund" && preHead.paymentId !== null && preHead.refundId !== null) refundAuthority = { paymentId: preHead.paymentId, refundId: preHead.refundId }
+  }
   console.log("[transient-wake] scheduler wallet authority", { ready, schedulerWalletPaymentId, refundPaymentId: preHead.kind === "refund" ? preHead.paymentId : null, refundId: preHead.kind === "refund" ? preHead.refundId : null })
 
   const workStartedAt = Date.now()
@@ -662,7 +667,7 @@ for (const id of freshExecutionIds) {
   const refundResults = []
   if (refundAccountingReady) {
     try {
-      refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS, preHead.kind === "refund" && preHead.paymentId !== null && preHead.refundId !== null ? { paymentId: preHead.paymentId, refundId: preHead.refundId } : null)
+      refundPass = await runAutomaticRefundPass(MAX_ATTEMPTS, refundAuthority)
     } catch {
       refundPass = { state: "blocked" }
     }

@@ -148,7 +148,7 @@ export async function runAutomaticRefundPass(limit: number, refundAuthority?: { 
         successful = isIntentSuccess(result)
         if (!successful) reason = `intent_${String((result as Record<string, unknown>)?.status ?? "blocked")}`
       } else {
-        const result = await executeRefundNextStep(checkpoint.refundId)
+        const result = await executeRefundNextStep(checkpoint.refundId, refundAuthority)
         successful = isExecutorSuccess(result)
         if (!successful) reason = failureReason(result)
       }

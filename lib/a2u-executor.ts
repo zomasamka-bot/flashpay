@@ -383,10 +383,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   }
 
   // STAGE 2: Sign (skip if already have a2uTxid)
-  if (ctx.schedulerWalletPaymentId !== undefined && ctx.schedulerWalletPaymentId !== ctx.paymentId) return { ok: false, status: "settlement_pending", error: "wallet_drain_not_selected" }
   let txidFromHorizon = ctx.payment.a2uTxid
 
   if (!txidFromHorizon) {
+    if (ctx.schedulerWalletPaymentId !== undefined && ctx.schedulerWalletPaymentId !== ctx.paymentId) return { ok: false, status: "settlement_pending", error: "wallet_drain_not_selected" }
     console.log("[A2U Executor] STAGE 2: Signing transaction")
     const stage2TimingStartedAt = Date.now()
     const signResult = await stage2SignAndSubmit(ctx)

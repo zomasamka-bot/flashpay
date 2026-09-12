@@ -46,7 +46,7 @@ function guarded(checkpoint: RefundCheckpoint, payment: Payment): boolean {
   return !merchant && !refund && isRefundEligible(payment) && refundPreflight(checkpoint, payment, { paymentId: checkpoint.paymentId, payerUid: checkpoint.payerUid, amount: checkpoint.amount })
 }
 
-export async function executeRefundNextStep(refundId: string): Promise<RefundExecutionResult> {
+export async function executeRefundNextStep(refundId: string, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<RefundExecutionResult> {
   const checkpoint = await getRefundCheckpointAuthoritative(refundId)
   if (!checkpoint || checkpoint.status !== 'pending' && !(checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed')) return { outcome: 'blocked', reason: 'invalid_stage' }
   const ids = ['wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded'].includes(checkpoint.stage)
@@ -54,7 +54,7 @@ export async function executeRefundNextStep(refundId: string): Promise<RefundExe
     : true
   if (!ids) return { outcome: 'blocked', reason: 'invalid_stage' }
   if (checkpoint.stage === 'intent_created' && checkpoint.status === 'pending' && !checkpoint.refundPaymentId && !checkpoint.refundTxid) return executeRefundCreation(refundId)
-  if (checkpoint.stage === 'wallet_submission_started' && checkpoint.status === 'pending' && !checkpoint.refundTxid) return checkpoint.refundPaymentId ? executeRefundBlockchain(refundId) : executeRefundCreation(refundId)
+  if (checkpoint.stage === 'wallet_submission_started' && checkpoint.status === 'pending' && !checkpoint.refundTxid) return checkpoint.refundPaymentId ? executeRefundBlockchain(refundId, refundAuthority) : executeRefundCreation(refundId, refundAuthority)
   if (checkpoint.stage === 'wallet_submission_confirmed' && checkpoint.status === 'pending') return executeRefundCompletion(refundId)
   if (checkpoint.stage === 'payment_checkpoint_updated' && checkpoint.status === 'pending') return executeRefundAccounting(refundId)
   if (checkpoint.stage === 'accounting_recorded' && checkpoint.status === 'pending') return executeRefundAudit(refundId)
@@ -63,7 +63,7 @@ export async function executeRefundNextStep(refundId: string): Promise<RefundExe
   return { outcome: 'blocked', reason: 'invalid_stage' }
 }
 
-export async function executeRefundCreation(refundId: string): Promise<RefundExecutionResult> {
+export async function executeRefundCreation(refundId: string, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<RefundExecutionResult> {
   if (!isRedisConfigured || !serverConfig.piApiKey) return { outcome: 'blocked', reason: 'unavailable' }
   let checkpoint = await getRefundCheckpointAuthoritative(refundId)
   if (!checkpoint) return { outcome: 'blocked', reason: 'not_found' }
@@ -139,11 +139,12 @@ export async function executeRefundCreation(refundId: string): Promise<RefundExe
   return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: body.identifier }
 }
 
-export async function readRefundPreparedReplayUnderExistingOwner(refundId: string) {
+export async function readRefundPreparedReplayUnderExistingOwner(refundId: string, refundAuthority?: { paymentId: string; refundId: string } | null) {
   const blocked: Awaited<ReturnType<typeof import('./refund-blockchain-submit').evaluateRefundPreparedReplayPreGate>> = { outcome: 'BLOCKED', prepared: null, observedSourceSequence: null, reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
   try {
     const initial = await getRefundCheckpointReadOnly(refundId)
     if (initial.state !== 'present' || initial.checkpoint.stage !== 'wallet_submission_started' || initial.checkpoint.status !== 'pending' || typeof initial.checkpoint.refundPaymentId !== 'string' || !initial.checkpoint.refundPaymentId) return blocked
+    if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== initial.checkpoint.paymentId || refundAuthority.refundId !== refundId)) return blocked
     const refund = await reconcileRefundWithPi({ paymentId: initial.checkpoint.paymentId, refundId, idempotencyKey: initial.checkpoint.idempotencyKey, payerUid: initial.checkpoint.payerUid, amount: initial.checkpoint.amount, refundPaymentId: initial.checkpoint.refundPaymentId })
     if (refund.outcome !== 'FOUND' || !refund.payment || refund.payment.identifier !== initial.checkpoint.refundPaymentId || refund.payment.status.cancelled || refund.payment.status.user_cancelled) return blocked
     const walletLock = await acquirePiWalletExistingIntentSubmitLock(refund.payment.from_address, { kind: 'refund_claim', paymentId: initial.checkpoint.paymentId, refundId })
@@ -189,7 +190,7 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
   }
 }
 
-export async function executeRefundBlockchain(refundId: string): Promise<RefundExecutionResult> {
+export async function executeRefundBlockchain(refundId: string, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<RefundExecutionResult> {
   if (!isRedisConfigured || !serverConfig.piApiKey) return { outcome: 'blocked', reason: 'unavailable' }
   let checkpoint = await getRefundCheckpointAuthoritative(refundId)
   if (!checkpoint || checkpoint.stage !== 'wallet_submission_started' || checkpoint.status !== 'pending' || !checkpoint.refundPaymentId) return { outcome: 'blocked', reason: 'invalid_stage' }
@@ -199,6 +200,7 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
   const merchant = payment?.a2uPaymentId || payment?.a2uTxid || payment?.horizonSuccessFlag === true || payment?.status === 'settled_to_merchant'
   const refund = payment?.refundPaymentId || payment?.refundTxid || payment?.refundStatus === 'completed'
   if (!checkpoint || !payment || checkpoint.stage !== 'wallet_submission_started' || checkpoint.status !== 'pending' || checkpoint.refundPaymentId === undefined || checkpoint.paymentId !== payment.id || checkpoint.payerUid !== payment.payerUid || checkpoint.amount !== payment.customerAmount || merchant || refund) return { outcome: 'blocked', reason: 'preflight_failed' }
+  if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== checkpoint.paymentId || refundAuthority.refundId !== refundId)) return { outcome: 'blocked', reason: 'wallet_drain_not_selected' }
   const refundPaymentId = checkpoint.refundPaymentId
   const reconciliation = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
   if (reconciliation.outcome === 'INDETERMINATE' || !reconciliation.payment) return { outcome: 'blocked', reason: 'reconciliation_uncertain' }
@@ -231,7 +233,7 @@ export async function executeRefundBlockchain(refundId: string): Promise<RefundE
   const prepared = claim.state === 'present' ? await readRefundPreparedSubmitState(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId) : null
   if (prepared?.state === 'uncertain') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   if (prepared?.state === 'present') {
-    const replay = await readRefundPreparedReplayUnderExistingOwner(refundId)
+    const replay = await readRefundPreparedReplayUnderExistingOwner(refundId, refundAuthority)
     if (replay.outcome === 'VERIFIED' && replay.moneyMovementProven === true && replay.authorizesFinancialAction === false && replay.reference?.preparedHash === prepared.preparedHash && replay.reference?.preparedSequence === prepared.preparedSequence && replay.reference?.refundPaymentId === refundPaymentId && replay.reference?.fromAddress === refundPayment.from_address && replay.reference?.toAddress === refundPayment.to_address && replay.reference?.amount === refundPayment.amount) return persistRecoveredConfirmation(prepared.preparedHash)
     if (replay.outcome === 'CONFIRMED_TX') {
       if (replay.txid !== prepared.preparedHash) return { outcome: 'blocked', reason: 'blockchain_uncertain' }

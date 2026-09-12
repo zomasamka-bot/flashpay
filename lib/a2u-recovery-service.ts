@@ -405,7 +405,7 @@ export async function executeA2URecovery(
     payment.refundPaymentId === undefined && payment.refundTxid === undefined &&
     (payment.refundStatus === undefined || payment.refundStatus === "not_started")
   ) {
-    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_SUBMIT" })
+    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_SUBMIT", ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}) })
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_submit_recovery_failed", paymentId, details: { error: result.error } }
     }
@@ -433,7 +433,7 @@ export async function executeA2URecovery(
   }
 
   if(payment.status==="paid_to_app"&&(payment.settlementFailureState===undefined&&typeof payment.settlementDispatchRequestedAt==="string"||isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) {
-    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_DISPATCH" })
+    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_DISPATCH", ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}) })
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_dispatch_failed", paymentId, details: { error: result.error } }
     }
@@ -445,7 +445,7 @@ export async function executeA2URecovery(
   }
 
   if (payment.status === "paid_to_app" && payment.settlementFailureState === "reconciling") {
-    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_RECONCILE" })
+    const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_RECONCILE", ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}) })
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_reconcile_failed", paymentId, details: { error: result.error } }
     }
