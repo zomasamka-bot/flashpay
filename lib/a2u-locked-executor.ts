@@ -281,6 +281,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           if (!promoted) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         if (walletIntent.state === "present" && walletIntent.owner.kind !== "settlement_prepared" && walletIntent.owner.kind !== "settlement_claim") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+        const preparedIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+        if (preparedIntent.state !== "present" || preparedIntent.owner.kind !== "settlement_prepared" || preparedIntent.owner.paymentId !== paymentId || preparedIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || preparedIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
         if (replay.outcome === "MOVEMENT_VERIFIED") {
           if (
