@@ -438,6 +438,8 @@ export async function POST(request: NextRequest) {
   let readyShadowReconcilingIds: string[] | null = null
   let walletDrainShadowCount: number | null = null
   let walletDrainShadowHeadPaymentId: string | null = null
+  let walletDrainShadowHeadRefundId: string | null = null
+  let walletDrainShadowHeadKind: "settlement" | "refund" | null = null
   let readyEligibleSetParity: boolean | null = null
   let readyFreshSetParity: boolean | null = null
   let readyReconcilingSetParity: boolean | null = null
@@ -514,8 +516,10 @@ export async function POST(request: NextRequest) {
     readyShadowEligibleIds = [...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds].slice(0, MAX_ATTEMPTS)
     readyShadowFreshIds = shadowFreshDispatchIds.slice(0, MAX_ATTEMPTS)
     readyShadowReconcilingIds = shadowReconcilingIds.slice(0, 1)
-    walletDrainShadowCount = classPrepared + classFresh + classStage1Only + classReconciling
-    walletDrainShadowHeadPaymentId = shadowPreparedIds[0] ?? shadowFreshDispatchIds[0] ?? shadowReconcilingIds[0] ?? null
+    if (classInvalid === 0) {
+      walletDrainShadowCount = classPrepared + classFresh + classStage1Only + classReconciling
+      walletDrainShadowHeadPaymentId = shadowPreparedIds[0] ?? shadowFreshDispatchIds[0] ?? shadowReconcilingIds[0] ?? null
+    }
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
@@ -641,6 +645,24 @@ for (const id of freshExecutionIds) {
     refundPass = { state: "blocked" }
   }
 
+  if (walletDrainShadowCount !== null && refundPass.state === "ok") {
+    const settlementHeadPaymentId = walletDrainShadowHeadPaymentId
+    walletDrainShadowCount += refundPass.refundDrainCount
+    if (settlementHeadPaymentId !== null) {
+      walletDrainShadowHeadKind = "settlement"
+      walletDrainShadowHeadRefundId = null
+    } else {
+      walletDrainShadowHeadPaymentId = refundPass.refundDrainHeadPaymentId
+      walletDrainShadowHeadRefundId = refundPass.refundDrainHeadRefundId
+      walletDrainShadowHeadKind = refundPass.refundDrainHeadPaymentId === null ? null : "refund"
+    }
+  } else {
+    walletDrainShadowCount = null
+    walletDrainShadowHeadPaymentId = null
+    walletDrainShadowHeadRefundId = null
+    walletDrainShadowHeadKind = null
+  }
+
   const settlementReconcilingEvidence = { FOUND: 0, CONFIRMED_NONE: 0, INDETERMINATE: 0, skipped: 0 }
   const settlementReconcilingEvidenceIds = [...new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])].slice(0, 1)
   for (const id of settlementReconcilingEvidenceIds) {
@@ -671,7 +693,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence })
 }

@@ -15,7 +15,7 @@ import type { RefundCheckpoint } from "@/lib/types"
 
 export type AutomaticRefundPassResult =
   | { state: "blocked" }
-  | { state: "ok"; processed: number; results: Array<{ refundId: string; paymentId: string; action: "intent" | "execute"; outcome: "success" | "deferred" | "blocked"; reason?: string }> }
+  | { state: "ok"; processed: number; results: Array<{ refundId: string; paymentId: string; action: "intent" | "execute"; outcome: "success" | "deferred" | "blocked"; reason?: string }>; refundDrainCount: number; refundDrainHeadPaymentId: string | null; refundDrainHeadRefundId: string | null }
 
 const SHORT_RETRY_REASONS = new Set([
   "unavailable",
@@ -160,5 +160,6 @@ export async function runAutomaticRefundPass(limit: number): Promise<AutomaticRe
     processed += 1
   }
   if (processed !== results.length) return { state: "blocked" }
-  return { state: "ok", processed, results }
+  const refundDrainCheckpoints = queued.checkpoints.filter((checkpoint) => checkpoint.status === "pending" && checkpoint.stage === "wallet_submission_started" && typeof checkpoint.refundPaymentId === "string" && checkpoint.refundPaymentId.trim().length > 0 && checkpoint.refundTxid === undefined)
+  return { state: "ok", processed, results, refundDrainCount: refundDrainCheckpoints.length, refundDrainHeadPaymentId: refundDrainCheckpoints[0]?.paymentId ?? null, refundDrainHeadRefundId: refundDrainCheckpoints[0]?.refundId ?? null }
 }
