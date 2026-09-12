@@ -879,6 +879,17 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   return { ok: true, transaction, preparedHash, preparedSequence }
 }
 
+type Stage2MoveResult =
+  | { ok: true; txidFromHorizon: string }
+  | { ok: false; error: string; userFacingStatus: string }
+
+async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.Server, transaction: StellarSDK.Transaction, preparedHash: string): Promise<Stage2MoveResult> {
+  const submitResult = await horizonServer.submitTransaction(transaction)
+  const txidFromHorizon = submitResult.hash
+  if (txidFromHorizon !== preparedHash) return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
+  return { ok: true, txidFromHorizon }
+}
+
 /**
  * STAGE 2: Sign and submit to Horizon - TYPED DISCRIMINATED UNION
  * Returns { txidFromHorizon, horizonFeeCharged } on success or error with userFacingStatus
@@ -936,12 +947,9 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     }
 
     console.log("[A2U Stage2] Submitting to Horizon")
-    const submitResult = await horizonServer.submitTransaction(transaction)
-
-    const txidFromHorizon = submitResult.hash
-    if (txidFromHorizon !== preparedHash) {
-      return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
-    }
+    const moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)
+    if (!moved.ok) return moved
+    const txidFromHorizon = moved.txidFromHorizon
     if (ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
       console.log("[A2U TEST] Stage2 post-submit fault point 0.12")
       return { ok: false, error: "Temporary Stage2 post-submit fault", userFacingStatus: "settlement_pending" }
