@@ -168,7 +168,7 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
       if (lockedA2u.outcome !== 'CONFIRMED_NONE') return blocked
       const gate = submit.evaluateRefundPreparedReplayPreGate({ sourcePayment: lockedSourcePayment, payment: lockedRefund.payment, prepared, evidence })
       if (gate.outcome !== 'ELIGIBLE_EXACT_REPLAY') return gate
-      if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== initial.checkpoint.paymentId || refundAuthority.refundId !== refundId)) return { outcome: 'blocked', reason: 'wallet_drain_not_selected' }
+      if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== initial.checkpoint.paymentId || refundAuthority.refundId !== refundId)) return blocked
       const authorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
       if (authorization.state === 'uncertain') return blocked
       if (authorization.state === 'absent') {
