@@ -651,6 +651,24 @@ for (const id of freshExecutionIds) {
     refundPass = { state: "blocked" }
   }
 
+  if (walletDrainShadowCount !== null && refundPass.state === "ok") {
+    const settlementHeadPaymentId = walletDrainShadowHeadPaymentId
+    walletDrainShadowCount += refundPass.refundDrainCount
+    if (settlementHeadPaymentId !== null) {
+      walletDrainShadowHeadKind = "settlement"
+      walletDrainShadowHeadRefundId = null
+    } else {
+      walletDrainShadowHeadPaymentId = refundPass.refundDrainHeadPaymentId
+      walletDrainShadowHeadRefundId = refundPass.refundDrainHeadRefundId
+      walletDrainShadowHeadKind = refundPass.refundDrainHeadPaymentId === null ? null : "refund"
+    }
+  } else {
+    walletDrainShadowCount = null
+    walletDrainShadowHeadPaymentId = null
+    walletDrainShadowHeadRefundId = null
+    walletDrainShadowHeadKind = null
+  }
+
   if (walletDrainShadowCount !== null && refundPass.state === "ok" && (!useReadyExecution || readyShadowPreparedIds !== null)) {
     const preparedIds = useReadyExecution && readyShadowPreparedIds !== null ? readyShadowPreparedIds : preparedSubmitIds
     const preparedHeadPaymentId = eligibleIds.find((id) => preparedIds.includes(id)) ?? null
@@ -677,24 +695,6 @@ for (const id of freshExecutionIds) {
     walletDrainSelectedHeadPaymentId = null
     walletDrainSelectedHeadRefundId = null
     walletDrainSelectedHeadParity = null
-  }
-
-  if (walletDrainShadowCount !== null && refundPass.state === "ok") {
-    const settlementHeadPaymentId = walletDrainShadowHeadPaymentId
-    walletDrainShadowCount += refundPass.refundDrainCount
-    if (settlementHeadPaymentId !== null) {
-      walletDrainShadowHeadKind = "settlement"
-      walletDrainShadowHeadRefundId = null
-    } else {
-      walletDrainShadowHeadPaymentId = refundPass.refundDrainHeadPaymentId
-      walletDrainShadowHeadRefundId = refundPass.refundDrainHeadRefundId
-      walletDrainShadowHeadKind = refundPass.refundDrainHeadPaymentId === null ? null : "refund"
-    }
-  } else {
-    walletDrainShadowCount = null
-    walletDrainShadowHeadPaymentId = null
-    walletDrainShadowHeadRefundId = null
-    walletDrainShadowHeadKind = null
   }
 
   const settlementReconcilingEvidence = { FOUND: 0, CONFIRMED_NONE: 0, INDETERMINATE: 0, skipped: 0 }
