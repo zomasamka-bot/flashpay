@@ -405,6 +405,7 @@ export async function executeA2URecovery(
     payment.refundPaymentId === undefined && payment.refundTxid === undefined &&
     (payment.refundStatus === undefined || payment.refundStatus === "not_started")
   ) {
+    if (schedulerWalletPaymentId !== undefined && schedulerWalletPaymentId !== paymentId) return { status: "pending_pi_complete", state: "wallet_drain_not_selected", paymentId, details: { error: "wallet_drain_not_selected" } }
     const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_SUBMIT", ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}) })
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_submit_recovery_failed", paymentId, details: { error: result.error } }
@@ -433,6 +434,7 @@ export async function executeA2URecovery(
   }
 
   if(payment.status==="paid_to_app"&&(payment.settlementFailureState===undefined&&typeof payment.settlementDispatchRequestedAt==="string"||isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) {
+    if (schedulerWalletPaymentId !== undefined && schedulerWalletPaymentId !== paymentId) return { status: "pending_pi_complete", state: "wallet_drain_not_selected", paymentId, details: { error: "wallet_drain_not_selected" } }
     const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_DISPATCH", ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}) })
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_dispatch_failed", paymentId, details: { error: result.error } }
@@ -445,6 +447,7 @@ export async function executeA2URecovery(
   }
 
   if (payment.status === "paid_to_app" && payment.settlementFailureState === "reconciling") {
+    if (schedulerWalletPaymentId !== undefined && schedulerWalletPaymentId !== paymentId) return { status: "pending_pi_complete", state: "wallet_drain_not_selected", paymentId, details: { error: "wallet_drain_not_selected" } }
     const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_RECONCILE", ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}) })
     if (!result.ok) {
       return { status: "manual_review_required", state: "settlement_reconcile_failed", paymentId, details: { error: result.error } }

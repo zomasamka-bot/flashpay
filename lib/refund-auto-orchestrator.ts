@@ -148,9 +148,13 @@ export async function runAutomaticRefundPass(limit: number, refundAuthority?: { 
         successful = isIntentSuccess(result)
         if (!successful) reason = `intent_${String((result as Record<string, unknown>)?.status ?? "blocked")}`
       } else {
-        const result = await executeRefundNextStep(checkpoint.refundId, refundAuthority)
-        successful = isExecutorSuccess(result)
-        if (!successful) reason = failureReason(result)
+        if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== checkpoint.paymentId || refundAuthority.refundId !== checkpoint.refundId)) {
+          reason = "wallet_drain_not_selected"
+        } else {
+          const result = await executeRefundNextStep(checkpoint.refundId, refundAuthority)
+          successful = isExecutorSuccess(result)
+          if (!successful) reason = failureReason(result)
+        }
       }
     } catch (error) {
       thrown = true
@@ -162,6 +166,11 @@ export async function runAutomaticRefundPass(limit: number, refundAuthority?: { 
       await clearAutomaticRefundDeferral(checkpoint.refundId)
       results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "success" })
     } else {
+      if (!thrown && reason === "wallet_drain_not_selected") {
+        results.push({ refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason })
+        processed += 1
+        continue
+      }
       if (!thrown && reason === "refund_cancelled") {
         const manualReview = await markAutomaticRefundManualReview(checkpoint.refundId, checkpoint.stage)
         if (manualReview && manualReview.refundId === checkpoint.refundId && manualReview.paymentId === checkpoint.paymentId && manualReview.stage === checkpoint.stage && manualReview.status === "manual_review_required") {
