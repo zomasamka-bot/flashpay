@@ -401,34 +401,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // Discriminated union: ok: true includes txidFromHorizon and horizonFeeCharged
     txidFromHorizon = signResult.data.txidFromHorizon
 
-    // Persist Stage 2: a2uTxid, horizonSuccessFlag, horizonSuccessAt after confirmed Horizon success (crash-safe merge)
-    const stage2Updates = {
-      status: "settlement_pending" as const,
-      a2uTxid: txidFromHorizon,
-      customerAmount: ctx.customerAmount,
-      horizonFeeCharged: signResult.data.horizonFeeCharged,
-      horizonSuccessFlag: true,
-      horizonSuccessAt: new Date().toISOString(),
-      piCompletionPending: true,
-      piCompleted: false,
-    }
-    // Replace ctx.payment with fully merged record
-    ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage2Updates)
-    const walletIntent = await readPiWalletIntent(ctx.payment.a2uFromAddress)
-    if (walletIntent.state === "unavailable") return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
-    if (walletIntent.state === "present" && walletIntent.owner.paymentId === ctx.paymentId && (walletIntent.owner.kind !== "settlement_prepared" || walletIntent.owner.preparedHash !== ctx.payment.a2uPreparedTxHash || walletIntent.owner.preparedSequence !== ctx.payment.a2uPreparedSequence)) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
-    if (walletIntent.state === "present" && walletIntent.owner.paymentId === ctx.paymentId) {
-      const cleanupLock = await acquirePiWalletSubmitLock(ctx.payment.a2uFromAddress)
-      if (!cleanupLock) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
-      try {
-        const lockedIntent = await readPiWalletIntent(ctx.payment.a2uFromAddress)
-        if (lockedIntent.state === "unavailable") return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
-        if (lockedIntent.state === "present" && lockedIntent.owner.paymentId === ctx.paymentId && (lockedIntent.owner.kind !== "settlement_prepared" || lockedIntent.owner.preparedHash !== ctx.payment.a2uPreparedTxHash || lockedIntent.owner.preparedSequence !== ctx.payment.a2uPreparedSequence)) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
-        if (lockedIntent.state === "present" && lockedIntent.owner.paymentId === ctx.paymentId && !await releasePiWalletIntent(ctx.payment.a2uFromAddress, lockedIntent.owner)) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
-      } finally {
-        await cleanupLock.release()
-      }
-    }
+    // Persist Stage 2 and release the exact prepared wallet intent after confirmed Horizon success.
+    const finalized = await finalizeStage2AfterMove(ctx, txidFromHorizon, signResult.data.horizonFeeCharged)
+    if (!finalized.ok) return finalized
     console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged)
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
@@ -888,6 +863,40 @@ async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.S
   const txidFromHorizon = submitResult.hash
   if (txidFromHorizon !== preparedHash) return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
   return { ok: true, txidFromHorizon }
+}
+
+type Stage2FinalizeResult =
+  | { ok: true }
+  | { ok: false; status: "settlement_pending"; error: string }
+
+async function finalizeStage2AfterMove(ctx: ExecutorContext, txidFromHorizon: string, horizonFeeCharged: number): Promise<Stage2FinalizeResult> {
+  const stage2Updates = {
+    status: "settlement_pending" as const,
+    a2uTxid: txidFromHorizon,
+    customerAmount: ctx.customerAmount,
+    horizonFeeCharged,
+    horizonSuccessFlag: true,
+    horizonSuccessAt: new Date().toISOString(),
+    piCompletionPending: true,
+    piCompleted: false,
+  }
+  ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage2Updates)
+  const walletIntent = await readPiWalletIntent(ctx.payment.a2uFromAddress)
+  if (walletIntent.state === "unavailable") return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
+  if (walletIntent.state === "present" && walletIntent.owner.paymentId === ctx.paymentId && (walletIntent.owner.kind !== "settlement_prepared" || walletIntent.owner.preparedHash !== ctx.payment.a2uPreparedTxHash || walletIntent.owner.preparedSequence !== ctx.payment.a2uPreparedSequence)) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
+  if (walletIntent.state === "present" && walletIntent.owner.paymentId === ctx.paymentId) {
+    const cleanupLock = await acquirePiWalletSubmitLock(ctx.payment.a2uFromAddress)
+    if (!cleanupLock) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
+    try {
+      const lockedIntent = await readPiWalletIntent(ctx.payment.a2uFromAddress)
+      if (lockedIntent.state === "unavailable") return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
+      if (lockedIntent.state === "present" && lockedIntent.owner.paymentId === ctx.paymentId && (lockedIntent.owner.kind !== "settlement_prepared" || lockedIntent.owner.preparedHash !== ctx.payment.a2uPreparedTxHash || lockedIntent.owner.preparedSequence !== ctx.payment.a2uPreparedSequence)) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
+      if (lockedIntent.state === "present" && lockedIntent.owner.paymentId === ctx.paymentId && !await releasePiWalletIntent(ctx.payment.a2uFromAddress, lockedIntent.owner)) return { ok: false, status: "settlement_pending", error: "Wallet intent cleanup pending" }
+    } finally {
+      await cleanupLock.release()
+    }
+  }
+  return { ok: true }
 }
 
 /**
