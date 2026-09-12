@@ -148,13 +148,9 @@ export async function runAutomaticRefundPass(limit: number, refundAuthority?: { 
         successful = isIntentSuccess(result)
         if (!successful) reason = `intent_${String((result as Record<string, unknown>)?.status ?? "blocked")}`
       } else {
-        if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== checkpoint.paymentId || refundAuthority.refundId !== checkpoint.refundId)) {
-          reason = "wallet_drain_not_selected"
-        } else {
-          const result = await executeRefundNextStep(checkpoint.refundId, refundAuthority)
-          successful = isExecutorSuccess(result)
-          if (!successful) reason = failureReason(result)
-        }
+        const result = await executeRefundNextStep(checkpoint.refundId, refundAuthority)
+        successful = isExecutorSuccess(result)
+        if (!successful) reason = failureReason(result)
       }
     } catch (error) {
       thrown = true
