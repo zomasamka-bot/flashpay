@@ -611,15 +611,15 @@ export async function POST(request: NextRequest) {
     walletDrainPreExecutionHeadRefundId = preTelemetryHead.refundId
   }
 
-  const ready = useReadyExecution && readyShadowPreparedIds !== null && preRefundDrain.state === "ok"
-  const preHead = ready ? selectWalletDrainHead(readyShadowPreparedIds, eligibleIds, freshExecutionIds, settlementReconcilingExecutionIds, preRefundDrain.refundDrainHeadPaymentId, preRefundDrain.refundDrainHeadRefundId) : { kind: null, paymentId: null, refundId: null }
+  let preHead: ReturnType<typeof selectWalletDrainHead> | null = null
   let schedulerWalletPaymentId: string | null = null
   let refundAuthority: { paymentId: string; refundId: string } | null = null
-  if (ready) {
+  if (useReadyExecution && readyShadowPreparedIds !== null && preRefundDrain.state === "ok") {
+    preHead = selectWalletDrainHead(readyShadowPreparedIds, eligibleIds, freshExecutionIds, settlementReconcilingExecutionIds, preRefundDrain.refundDrainHeadPaymentId, preRefundDrain.refundDrainHeadRefundId)
     if (preHead.kind === "settlement") schedulerWalletPaymentId = preHead.paymentId
     if (preHead.kind === "refund" && preHead.paymentId !== null && preHead.refundId !== null) refundAuthority = { paymentId: preHead.paymentId, refundId: preHead.refundId }
   }
-  console.log("[transient-wake] scheduler wallet authority", { ready, schedulerWalletPaymentId, refundPaymentId: preHead.kind === "refund" ? preHead.paymentId : null, refundId: preHead.kind === "refund" ? preHead.refundId : null })
+  console.log("[transient-wake] scheduler wallet authority", { ready: preHead !== null, schedulerWalletPaymentId, refundPaymentId: preHead?.kind === "refund" ? preHead.paymentId : null, refundId: preHead?.kind === "refund" ? preHead.refundId : null })
 
   const workStartedAt = Date.now()
   const results: Array<{ paymentId: string; ok: boolean; status?: string; error?: string }> = []
