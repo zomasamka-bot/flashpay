@@ -842,6 +842,46 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
   }
 }
 
+type Stage2PreparedResult =
+  | { ok: true; transaction: StellarSDK.Transaction; preparedHash: string; preparedSequence: string }
+  | { ok: false; error: string; userFacingStatus: string }
+
+async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair: StellarSDK.Keypair, appPublicKey: string, horizonServer: StellarSDK.Horizon.Server): Promise<Stage2PreparedResult> {
+  const toAddress = ctx.payment.a2uToAddress
+  const amount = ctx.payment.merchantAmount
+  const a2uPaymentId = ctx.payment.a2uPaymentId
+  const sourceAccount = await horizonServer.loadAccount(appPublicKey)
+  let feeCharged: number
+  try {
+    const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
+    const baseFeeNumber = Number(baseFeeFromHorizon)
+    if (!Number.isFinite(baseFeeNumber) || baseFeeNumber <= 0) return { ok: false, error: "Horizon baseFee is not a valid positive number", userFacingStatus: "error" }
+    feeCharged = baseFeeNumber * 2
+  } catch (feeError) {
+    console.error("[A2U Stage2] Failed to fetch Horizon baseFee:", feeError)
+    return { ok: false, error: "Failed to fetch Horizon baseFee", userFacingStatus: "error" }
+  }
+  const feeAsString = String(Math.floor(feeCharged))
+  console.log("[A2U Stage2] Building transaction")
+  const builder = new StellarSDK.TransactionBuilder(sourceAccount, { fee: feeAsString, networkPassphrase: "Pi Testnet" })
+  builder.addOperation(StellarSDK.Operation.payment({ destination: toAddress, asset: StellarSDK.Asset.native(), amount: amount.toString() }))
+  builder.addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0, 28)))
+  builder.setTimeout(StellarSDK.TimeoutInfinite)
+  const transaction = builder.build()
+  transaction.sign(appKeypair)
+  const preparedEnvelopeXdr = transaction.toXDR()
+  if (typeof preparedEnvelopeXdr !== "string" || !preparedEnvelopeXdr.trim() || preparedEnvelopeXdr !== preparedEnvelopeXdr.trim()) return { ok: false, error: "Prepared A2U envelope is invalid", userFacingStatus: "error" }
+  const preparedHash = Buffer.from(transaction.hash()).toString("hex")
+  const preparedSequence = transaction.sequence
+  if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
+  ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr, a2uPreparedTxHash: preparedHash, a2uPreparedSequence: preparedSequence, status: "settlement_pending" as const })
+  const preparedOwnerReplaced = await replacePiWalletIntent(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId }, { kind: "settlement_prepared", paymentId: ctx.paymentId, preparedHash, preparedSequence })
+  if (!preparedOwnerReplaced) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
+  const preparedOwner = await readPiWalletIntent(appPublicKey)
+  if (preparedOwner.state !== "present" || preparedOwner.owner.kind !== "settlement_prepared" || preparedOwner.owner.paymentId !== ctx.paymentId || preparedOwner.owner.preparedHash !== preparedHash || preparedOwner.owner.preparedSequence !== preparedSequence) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
+  return { ok: true, transaction, preparedHash, preparedSequence }
+}
+
 /**
  * STAGE 2: Sign and submit to Horizon - TYPED DISCRIMINATED UNION
  * Returns { txidFromHorizon, horizonFeeCharged } on success or error with userFacingStatus
@@ -888,68 +928,10 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     if (!walletLock) return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
 
     console.log("[A2U Stage2] Connecting to Horizon")
-    const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", {
-      allowHttp: false,
-    })
-
-    const sourceAccount = await horizonServer.loadAccount(appPublicKey)
-    
-    let feeCharged: number
-    try {
-      const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
-      const baseFeeNumber = Number(baseFeeFromHorizon)
-      if (!Number.isFinite(baseFeeNumber) || baseFeeNumber <= 0) {
-        return { ok: false, error: "Horizon baseFee is not a valid positive number", userFacingStatus: "error" }
-      }
-      feeCharged = baseFeeNumber * 2
-    } catch (feeError) {
-      console.error("[A2U Stage2] Failed to fetch Horizon baseFee:", feeError)
-      return { ok: false, error: "Failed to fetch Horizon baseFee", userFacingStatus: "error" }
-    }
-
-    // Stellar SDK TransactionBuilder requires fee as string
-    const feeAsString = String(Math.floor(feeCharged))
-
-    console.log("[A2U Stage2] Building transaction")
-    const builder = new StellarSDK.TransactionBuilder(sourceAccount, {
-      fee: feeAsString,
-      networkPassphrase: "Pi Testnet",
-    })
-
-    builder.addOperation(
-      StellarSDK.Operation.payment({
-        destination: toAddress,
-        asset: StellarSDK.Asset.native(),
-        amount: amount.toString(),
-      })
-    )
-
-    builder.addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0, 28)))
-    builder.setTimeout(StellarSDK.TimeoutInfinite)
-
-    const transaction = builder.build()
-    transaction.sign(appKeypair)
-
-    const preparedEnvelopeXdr = transaction.toXDR()
-    if (typeof preparedEnvelopeXdr !== "string" || !preparedEnvelopeXdr.trim() || preparedEnvelopeXdr !== preparedEnvelopeXdr.trim()) {
-      return { ok: false, error: "Prepared A2U envelope is invalid", userFacingStatus: "error" }
-    }
-    const preparedHash = Buffer.from(transaction.hash()).toString("hex")
-    const preparedSequence = transaction.sequence
-    if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) {
-      return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
-    }
-    ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
-      a2uPreparedEnvelopeXdr: preparedEnvelopeXdr,
-      a2uPreparedTxHash: preparedHash,
-      a2uPreparedSequence: preparedSequence,
-      status: "settlement_pending" as const,
-    })
-
-    const preparedOwnerReplaced = await replacePiWalletIntent(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId }, { kind: "settlement_prepared", paymentId: ctx.paymentId, preparedHash, preparedSequence })
-    if (!preparedOwnerReplaced) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
-    const preparedOwner = await readPiWalletIntent(appPublicKey)
-    if (preparedOwner.state !== "present" || preparedOwner.owner.kind !== "settlement_prepared" || preparedOwner.owner.paymentId !== ctx.paymentId || preparedOwner.owner.preparedHash !== preparedHash || preparedOwner.owner.preparedSequence !== preparedSequence) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
+    const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
+    const prepared = await prepareStage2UnderHeldWalletLock(ctx, appKeypair, appPublicKey, horizonServer)
+    if (!prepared.ok) return prepared
+    const { transaction, preparedHash } = prepared
 
     if (ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
       console.log("[A2U TEST] Stage2 prepared checkpoint fault point 0.11")
