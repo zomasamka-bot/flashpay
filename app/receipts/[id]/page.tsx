@@ -62,7 +62,7 @@ export default function ReceiptPage() {
             <BackButton />
           </div>
         </div>
-        <FlashPayReceiptCard receipt={receipt} />
+        <FlashPayReceiptCard receipt={receipt} accessToken={merchant?.accessToken ?? null} />
       </div>
     </main>
   )

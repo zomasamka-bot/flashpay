@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import type { FlashPayReceiptView } from "@/lib/types"
 import { Check, Copy, Download, Loader2, Share2 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -24,8 +24,10 @@ const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
   cancelled: "Cancelled", needs_attention: "Needs attention",
 }
 
-type PiShareFileBridge = {
+type PiNativeBridge = {
   shareFile?: (payload: { file: File; title?: string; text?: string }) => Promise<unknown> | unknown
+  openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
+  openUrlInSystemBrowser?: (url: string) => Promise<unknown> | unknown
 }
 
 type ReceiptPdfTools = typeof import("@/lib/receipt-pdf")
@@ -34,10 +36,10 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError"
 }
 
-function getPiFileShareBridge(): PiShareFileBridge | null {
+function getPiNativeBridge(): PiNativeBridge | null {
   if (typeof window === "undefined") return null
-  const pi = window.Pi as (typeof window.Pi & PiShareFileBridge) | undefined
-  return pi && typeof pi.shareFile === "function" ? pi : null
+  const pi = window.Pi as (typeof window.Pi & PiNativeBridge) | undefined
+  return pi ?? null
 }
 
 function webFileShareSupport(file: File): "supported" | "unknown" | "unsupported" {
@@ -50,13 +52,14 @@ function webFileShareSupport(file: File): "supported" | "unknown" | "unsupported
   }
 }
 
-export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView }) {
+export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPayReceiptView; accessToken?: string | null }) {
   const [copied, setCopied] = useState(false)
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [pdfTools, setPdfTools] = useState<ReceiptPdfTools | null>(null)
   const [pdfFailed, setPdfFailed] = useState(false)
   const [sharing, setSharing] = useState(false)
-  const [pdfMessage, setPdfMessage] = useState<string | null>(null)
+  const sharedPdfUrlRef = useRef<string | null>(null)
+  const sharedPdfPromiseRef = useRef<Promise<string> | null>(null)
   useEffect(() => {
     let cancelled = false
     const receiptSnapshot: FlashPayReceiptView = {
@@ -73,7 +76,8 @@ export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView 
     setPdfFile(null)
     setPdfTools(null)
     setPdfFailed(false)
-    setPdfMessage(null)
+    sharedPdfUrlRef.current = null
+    sharedPdfPromiseRef.current = null
     void import("@/lib/receipt-pdf")
       .then(async (tools) => {
         const file = await tools.createReceiptPdfFile(receiptSnapshot)
@@ -104,55 +108,140 @@ export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView 
     } catch {}
   }
 
+  const ensureSharedPdfUrl = async (): Promise<string> => {
+    if (sharedPdfUrlRef.current) return sharedPdfUrlRef.current
+    if (sharedPdfPromiseRef.current) return sharedPdfPromiseRef.current
+    if (!pdfFile || !accessToken) throw new Error("Authenticated PDF link unavailable")
+
+    const promise = fetch("/api/receipt-files", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/pdf",
+        "X-FlashPay-Payment-Id": receipt.flashPayPaymentId,
+      },
+      body: pdfFile,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`Receipt PDF link failed: ${response.status}`)
+      const payload = await response.json() as { url?: unknown }
+      if (typeof payload.url !== "string" || !payload.url.startsWith("https://")) {
+        throw new Error("Receipt PDF link missing")
+      }
+      sharedPdfUrlRef.current = payload.url
+      return payload.url
+    }).finally(() => {
+      sharedPdfPromiseRef.current = null
+    })
+
+    sharedPdfPromiseRef.current = promise
+    return promise
+  }
+
   const downloadPdf = async () => {
     if (!pdfFile || !pdfTools) return
-    setPdfMessage(null)
-    const result = await pdfTools.downloadReceiptPdfFile(pdfFile)
-    if (result === "opened") setPdfMessage("PDF opened. Use your device's Save/Download control.")
+    let url: string
+    try {
+      url = await ensureSharedPdfUrl()
+    } catch {
+      // iOS can still save the actual PDF through its native file share sheet
+      // when an authenticated HTTPS link cannot be created.
+      if (webFileShareSupport(pdfFile) === "supported" && typeof navigator.share === "function") {
+        try {
+          await navigator.share({ files: [pdfFile], title: "Save FlashPay Receipt" })
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+        }
+      }
+      pdfTools.downloadReceiptPdfFile(pdfFile)
+      return
+    }
+
+    const downloadUrl = `${url}?download=1`
+    const pi = getPiNativeBridge()
+    if (typeof pi?.openUrlInSystemBrowser === "function") {
+      try {
+        await pi.openUrlInSystemBrowser(downloadUrl)
+        return
+      } catch {
+        // Continue to a normal HTTPS navigation if this Pi Browser build does
+        // not expose the native system-browser bridge.
+      }
+    }
+    pdfTools.openHttpsPdfUrl(downloadUrl)
   }
 
   const sharePdf = async () => {
     if (!pdfFile || !pdfTools || sharing) return
     setSharing(true)
-    setPdfMessage(null)
     try {
       const title = receipt.transactionType === "refund" ? "FlashPay Refund Receipt" : "FlashPay Payment Receipt"
       const text = `FlashPay receipt ${receipt.flashPayPaymentId}`
       const webSupport = webFileShareSupport(pdfFile)
-      const piBridge = getPiFileShareBridge()
+      const pi = getPiNativeBridge()
 
-      // Standard Web Share stays first where the browser explicitly supports
-      // PDF files (the working iPhone path). If support is missing, Pi
-      // Browser's native shareFile bridge handles the PDF directly on devices
-      // that expose the new Pi file-sharing capability.
+      // Preserve the proven iPhone/native browser path: share the actual PDF
+      // file when the browser explicitly supports file sharing.
       if (webSupport !== "unsupported" && typeof navigator.share === "function") {
         try {
           await navigator.share({ files: [pdfFile], title, text })
           return
         } catch (error) {
           if (isAbortError(error)) return
-          // A WebView may advertise share but reject files; continue to Pi.
         }
       }
 
-      if (piBridge?.shareFile) {
+      // Newer Pi Browser builds may expose direct file sharing.
+      if (typeof pi?.shareFile === "function") {
         try {
-          await piBridge.shareFile({ file: pdfFile, title, text })
+          await pi.shareFile({ file: pdfFile, title, text })
           return
         } catch (error) {
           if (isAbortError(error)) return
         }
       }
 
-      // No native file bridge is available. Open the actual PDF rather than
-      // silently doing nothing; restrictive WebViews can then use their own
-      // PDF viewer Share control.
-      pdfTools.openReceiptPdfFile(pdfFile)
-      setPdfMessage("Direct PDF sharing is unavailable in this browser. The PDF was opened so you can use its Share control.")
+      // Cross-device Pi Browser path: share a short-lived HTTPS PDF URL via
+      // the OS share sheet instead of an inaccessible blob: URL.
+      let url: string
+      try {
+        url = await ensureSharedPdfUrl()
+      } catch {
+        return
+      }
+
+      // Android/Pi WebViews commonly support native URL sharing even when
+      // they reject File objects. Use that standard path before Pi-specific fallback.
+      if (typeof navigator.share === "function") {
+        try {
+          await navigator.share({ title, text, url })
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+        }
+      }
+
+      if (typeof pi?.openShareDialog === "function") {
+        try {
+          await pi.openShareDialog(title, `${text}
+${url}`)
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+        }
+      }
+
+      if (typeof navigator.clipboard?.writeText === "function") {
+        await navigator.clipboard.writeText(url)
+        return
+      }
+
+      pdfTools.openHttpsPdfUrl(url)
     } finally {
       setSharing(false)
     }
   }
+
 
   return (
     <Card className="print:shadow-none">
@@ -203,7 +292,6 @@ export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView 
             <Download className="mr-2 h-4 w-4" /> Download PDF
           </Button>
         </div>
-        {pdfMessage && <p className="print:hidden text-center text-xs text-muted-foreground">{pdfMessage}</p>}
 
         <div className="border-t pt-4 text-center text-xs text-muted-foreground">Verified transaction record by FlashPay</div>
       </CardContent>

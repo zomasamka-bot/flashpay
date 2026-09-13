@@ -686,7 +686,7 @@ export default function PaymentContentWithId({
         </div>
 
         {isPaid ? (
-          <FlashPayReceiptCard receipt={{
+          <FlashPayReceiptCard accessToken={receiptIdentityRef.current?.accessToken ?? null} receipt={{
             flashPayPaymentId: paymentId,
             merchantName: payment.merchantId,
             customerName: customerReceiptName,
