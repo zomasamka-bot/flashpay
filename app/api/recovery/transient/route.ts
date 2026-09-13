@@ -386,7 +386,7 @@ async function repairLegacyReadyCandidate(paymentId: string): Promise<boolean> {
     typeof payerUid === "string" && payerUid.trim() !== "" && payerUid === payerUid.trim()
   if (!authoritative || payerUid === null) return false
   const capturedAt = new Date().toISOString()
-  const result = await redis.eval<[string], number>(`
+  const result = await redis.eval<[string, string, string, string, string, string], number>(`
 local latest=redis.call('GET',KEYS[1]); if not latest then return 0 end
 local ok,current=pcall(cjson.decode,latest); if not ok or type(current)~='table' then return 0 end
 if current.id~=ARGV[1] or current.status~='paid_to_app' then return 0 end
