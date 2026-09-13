@@ -492,6 +492,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   // before DB reconciliation. The durable checkpoint keeps DB work recoverable via State 2.
   if (
     ctx.schedulerWalletPaymentId === ctx.paymentId &&
+    ctx.payment.requiresDbReconciliation !== true &&
     ctx.payment.dbRecorded !== true &&
     ctx.payment.piCompleted === true &&
     ctx.payment.piCompletionPending === false
