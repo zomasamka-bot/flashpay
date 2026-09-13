@@ -878,7 +878,7 @@ export async function POST(request: NextRequest) {
         const existingIndex = results.findIndex((item) => item.paymentId === attemptHead.paymentId)
         if (existingIndex >= 0) results[existingIndex] = value
         else results.push(value)
-        const settlementSafeToContinue = result.status === "success" || result.status === "db_reconciled" || result.state === "settlement_submit_movement_checkpointed"
+        const settlementSafeToContinue = result.status === "success" || result.status === "db_reconciled"
         if (!settlementSafeToContinue) {
           walletDrainBurstStopReason = `settlement_${result.state}`
           break
