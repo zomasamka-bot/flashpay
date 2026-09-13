@@ -25,9 +25,8 @@ const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
 }
 
 type PiNativeBridge = {
-  shareFile?: (payload: { file: File; title?: string; text?: string }) => Promise<unknown> | unknown
+  shareFile?: (payload: { filename: string; file: File; title?: string; text?: string }) => Promise<unknown> | unknown
   nativeFeaturesList?: () => Promise<unknown> | unknown
-  openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
   openUrlInSystemBrowser?: (url: string) => Promise<unknown> | unknown
 }
 
@@ -243,7 +242,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       if (typeof pi?.shareFile === "function") {
         diagnostic.piShareFileAttempted = true
         try {
-          await pi.shareFile({ file: pdfFile, title, text })
+          await pi.shareFile({ filename: pdfFile.name, file: pdfFile, title, text })
           return
         } catch (error) {
           if (isAbortError(error)) return
@@ -252,8 +251,8 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       }
 
       // Direct file sharing failed or is unavailable. Capture the exact
-      // runtime capabilities before the existing URL fallback so Vercel logs
-      // tell us why Samsung/Pi Browser rejected the attachment path.
+      // runtime capabilities so Vercel logs can identify any remaining
+      // Samsung/Pi Browser attachment blocker without sharing a URL.
       if (typeof pi?.nativeFeaturesList === "function") {
         try {
           diagnostic.piNativeFeatures = await pi.nativeFeaturesList()
@@ -276,42 +275,10 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         }).catch(() => {})
       }
 
-      // Cross-device Pi Browser path: share a short-lived HTTPS PDF URL via
-      // the OS share sheet instead of an inaccessible blob: URL.
-      let url: string
-      try {
-        url = await ensureSharedPdfUrl()
-      } catch {
-        return
-      }
-
-      // Android/Pi WebViews commonly support native URL sharing even when
-      // they reject File objects. Use that standard path before Pi-specific fallback.
-      if (typeof navigator.share === "function") {
-        try {
-          await navigator.share({ title, text, url })
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-        }
-      }
-
-      if (typeof pi?.openShareDialog === "function") {
-        try {
-          await pi.openShareDialog(title, `${text}
-${url}`)
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-        }
-      }
-
-      if (typeof navigator.clipboard?.writeText === "function") {
-        await navigator.clipboard.writeText(url)
-        return
-      }
-
-      pdfTools.openHttpsPdfUrl(url)
+      // Share PDF must never silently downgrade to a URL. If neither the
+      // standard Web Share file path nor Pi's native file_share path works,
+      // leave the separate Download PDF action as the fallback.
+      return
     } finally {
       setSharing(false)
     }
