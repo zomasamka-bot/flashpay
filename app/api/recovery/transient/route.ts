@@ -337,26 +337,65 @@ function readyOtherFreshPrerequisiteFingerprint(payment: Payment, now: number): 
 }
 
 
-const LEGACY_READY_REPAIR_LIMIT = 5
+const LEGACY_READY_QUARANTINE_LIMIT = 5
+const LEGACY_READY_CAPTURE_LAG_MS = 5 * 60_000
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
 
-function isLegacyReadyRepairCandidate(payment: Payment, now: number): boolean {
-  return payment.status === "paid_to_app" &&
-    readyOtherFreshPrerequisiteFingerprint(payment, now) === "dispatch,payerUid,payerSource,payerAt" &&
-    payment.a2uPaymentId === undefined && payment.a2uTxid === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined &&
+function hasNoSettlementOrRefundMovementEvidence(payment: Payment): boolean {
+  return payment.a2uPaymentId === undefined && payment.a2uTxid === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined &&
     payment.horizonSuccessFlag !== true && payment.piCompletionPending !== true && payment.piCompleted !== true && payment.requiresDbReconciliation !== true && payment.dbRecorded !== true &&
     payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundProof === undefined
 }
 
-async function repairLegacyReadyCandidate(paymentId: string): Promise<boolean> {
+function isLegacyReadyUnrepairedCandidate(payment: Payment, now: number): boolean {
+  return payment.status === "paid_to_app" &&
+    readyOtherFreshPrerequisiteFingerprint(payment, now) === "dispatch,payerUid,payerSource,payerAt" &&
+    payment.settlementFailureState === undefined && payment.refundStatus === undefined &&
+    hasNoSettlementOrRefundMovementEvidence(payment)
+}
+
+function isLegacyReadyPreviouslyRepairedCandidate(payment: Payment, now: number): boolean {
+  const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
+  const capturedAt = typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() ? Date.parse(payment.payerUidCapturedAt) : NaN
+  return payment.status === "paid_to_app" &&
+    typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt === payment.paidAt &&
+    typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" &&
+    Number.isFinite(paidAt) && Number.isFinite(capturedAt) && capturedAt <= now && capturedAt - paidAt >= LEGACY_READY_CAPTURE_LAG_MS &&
+    payment.settlementFailureState === undefined && payment.refundStatus === undefined && payment.retryCount === undefined && payment.lastAttemptAt === undefined && payment.nextRetryAt === undefined &&
+    hasNoSettlementOrRefundMovementEvidence(payment)
+}
+
+async function quarantinePreviouslyRepairedLegacyReadyCandidate(paymentId: string): Promise<boolean> {
+  const raw = await redis.get(`payment:${paymentId}`)
+  const payment = parsePayment(raw)
+  const now = Date.now()
+  if (!payment || payment.id !== paymentId || !isLegacyReadyPreviouslyRepairedCandidate(payment, now)) return false
+  const result = await redis.eval<[string], number>(`
+local latest=redis.call('GET',KEYS[1]); if not latest then return 0 end
+local ok,current=pcall(cjson.decode,latest); if not ok or type(current)~='table' then return 0 end
+if current.id~=ARGV[1] or current.status~='paid_to_app' then return 0 end
+if current.settlementFailureState~=nil or current.refundStatus~=nil or current.retryCount~=nil or current.lastAttemptAt~=nil or current.nextRetryAt~=nil then return 0 end
+if current.payerUidSource~='verified_u2a' or current.payerUid==nil or current.payerUidCapturedAt==nil or current.paidAt==nil or current.settlementDispatchRequestedAt~=current.paidAt then return 0 end
+if current.a2uPaymentId~=nil or current.a2uTxid~=nil or current.a2uPreparedEnvelopeXdr~=nil or current.a2uPreparedTxHash~=nil or current.a2uPreparedSequence~=nil then return 0 end
+if current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return 0 end
+if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundProof~=nil then return 0 end
+current.settlementDispatchRequestedAt=nil; current.settlementFailureState='held'; current.refundStatus='manual_review_required'; current.a2uErrorCode='legacy_merchant_authority_reverification_required'; current.a2uErrorMessage='Legacy merchant authorization must be reverified before settlement'
+redis.call('SET',KEYS[1],cjson.encode(current)); redis.call('SREM',KEYS[2],ARGV[1]); redis.call('ZREM',KEYS[3],ARGV[1]); return 1
+`, [`payment:${paymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [paymentId])
+  return result === 1
+}
+
+async function quarantineLegacyReadyCandidate(paymentId: string): Promise<boolean> {
+  const alreadyRepaired = await quarantinePreviouslyRepairedLegacyReadyCandidate(paymentId)
+  if (alreadyRepaired) return true
   if (!serverConfig.isPiApiKeyConfigured) return false
   const raw = await redis.get(`payment:${paymentId}`)
   const payment = parsePayment(raw)
   const now = Date.now()
-  if (!payment || payment.id !== paymentId || !isLegacyReadyRepairCandidate(payment, now)) return false
+  if (!payment || payment.id !== paymentId || !isLegacyReadyUnrepairedCandidate(payment, now)) return false
   const piPaymentId = payment.piPaymentId
   const u2aTxid = payment.u2aTxid
   const paidAt = payment.paidAt
@@ -392,12 +431,13 @@ local ok,current=pcall(cjson.decode,latest); if not ok or type(current)~='table'
 if current.id~=ARGV[1] or current.status~='paid_to_app' then return 0 end
 if current.piPaymentId~=ARGV[2] or current.u2aTxid~=ARGV[3] or current.paidAt~=ARGV[4] then return 0 end
 if current.payerUid~=nil or current.payerUidSource~=nil or current.payerUidCapturedAt~=nil or current.settlementDispatchRequestedAt~=nil then return 0 end
+if current.settlementFailureState~=nil or current.refundStatus~=nil then return 0 end
 if current.a2uPaymentId~=nil or current.a2uTxid~=nil or current.a2uPreparedEnvelopeXdr~=nil or current.a2uPreparedTxHash~=nil or current.a2uPreparedSequence~=nil then return 0 end
 if current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return 0 end
 if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundProof~=nil then return 0 end
-current.payerUid=ARGV[5]; current.payerUidSource='verified_u2a'; current.payerUidCapturedAt=ARGV[6]; current.settlementDispatchRequestedAt=current.paidAt
-redis.call('SET',KEYS[1],cjson.encode(current)); return 1
-`, [`payment:${paymentId}`], [paymentId, piPaymentId, u2aTxid, paidAt, payerUid, capturedAt])
+current.payerUid=ARGV[5]; current.payerUidSource='verified_u2a'; current.payerUidCapturedAt=ARGV[6]; current.settlementFailureState='held'; current.refundStatus='manual_review_required'; current.a2uErrorCode='legacy_merchant_authority_reverification_required'; current.a2uErrorMessage='Legacy merchant authorization must be reverified before settlement'
+redis.call('SET',KEYS[1],cjson.encode(current)); redis.call('SREM',KEYS[2],ARGV[1]); redis.call('ZREM',KEYS[3],ARGV[1]); return 1
+`, [`payment:${paymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [paymentId, piPaymentId, u2aTxid, paidAt, payerUid, capturedAt])
   return result === 1
 }
 
@@ -412,6 +452,7 @@ function isPiA2USlotReleasedForDbPending(payment: Payment | null): payment is Pa
 }
 
 function isFreshSettlementDispatchCandidate(payment: Payment, now: number): boolean {
+  if (isLegacyReadyPreviouslyRepairedCandidate(payment, now)) return false
   const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
   const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
   const u2aTxid = payment.u2aTxid
@@ -829,7 +870,7 @@ export async function POST(request: NextRequest) {
   let readyClassOther: number | null = null
   let readyOtherDiagnosticPatterns: Record<string, number> | null = null
   let readyOtherFreshMissingPatterns: Record<string, number> | null = null
-  let readyLegacyRepairIds: string[] = []
+  let readyLegacyQuarantineIds: string[] = []
   let readyShadowEligibleIds: string[] | null = null
   let readyShadowPostHorizonIds: string[] | null = null
   let readyShadowPreparedIds: string[] | null = null
@@ -876,7 +917,7 @@ export async function POST(request: NextRequest) {
     let classOther = 0
     const otherDiagnosticPatterns: Record<string, number> = {}
     const otherFreshMissingPatterns: Record<string, number> = {}
-    const legacyRepairIds: string[] = []
+    const legacyQuarantineIds: string[] = []
     if (!readyOrderedValid) {
       throw new Error("Ordered settlement ready telemetry unavailable")
     }
@@ -927,7 +968,7 @@ export async function POST(request: NextRequest) {
             otherDiagnosticPatterns.overflow = (otherDiagnosticPatterns.overflow ?? 0) + 1
           }
           const freshMissing = readyOtherFreshPrerequisiteFingerprint(payment, now)
-          if (isLegacyReadyRepairCandidate(payment, now) && legacyRepairIds.length < LEGACY_READY_REPAIR_LIMIT) legacyRepairIds.push(paymentId)
+          if ((isLegacyReadyUnrepairedCandidate(payment, now) || isLegacyReadyPreviouslyRepairedCandidate(payment, now)) && legacyQuarantineIds.length < LEGACY_READY_QUARANTINE_LIMIT) legacyQuarantineIds.push(paymentId)
           if (otherFreshMissingPatterns[freshMissing] !== undefined) otherFreshMissingPatterns[freshMissing] += 1
           else if (Object.keys(otherFreshMissingPatterns).length < 16) otherFreshMissingPatterns[freshMissing] = 1
           else otherFreshMissingPatterns.overflow = (otherFreshMissingPatterns.overflow ?? 0) + 1
@@ -956,7 +997,7 @@ export async function POST(request: NextRequest) {
     readyClassOther = classOther
     readyOtherDiagnosticPatterns = otherDiagnosticPatterns
     readyOtherFreshMissingPatterns = otherFreshMissingPatterns
-    readyLegacyRepairIds = legacyRepairIds
+    readyLegacyQuarantineIds = legacyQuarantineIds
     readyTerminalEgressIds = terminalEgressIds
     readyClassTerminalEgress = classTerminalEgress
     readyReadyOnlyEgressIds = readyOnlyEgressIds
@@ -1012,11 +1053,11 @@ export async function POST(request: NextRequest) {
   }
 
 
-  let readyLegacyRepairAttempted = 0
-  let readyLegacyRepairSucceeded = 0
-  for (const paymentId of readyLegacyRepairIds) {
-    readyLegacyRepairAttempted += 1
-    try { if (await repairLegacyReadyCandidate(paymentId)) readyLegacyRepairSucceeded += 1 } catch { /* fail closed; leave canonical state unchanged */ }
+  let readyLegacyQuarantineAttempted = 0
+  let readyLegacyQuarantineSucceeded = 0
+  for (const paymentId of readyLegacyQuarantineIds) {
+    readyLegacyQuarantineAttempted += 1
+    try { if (await quarantineLegacyReadyCandidate(paymentId)) readyLegacyQuarantineSucceeded += 1 } catch { /* fail closed; leave canonical state unchanged */ }
   }
 
   const discoveryDurationMs = Date.now() - discoveryStartedAt
@@ -1344,7 +1385,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   let walletDrainKickGateReleased = false
   let walletDrainKickGateReleaseDeferred = false
   const periodicFreshCreateDetected = !immediateDrainMode && useReadyExecution && !piCreateBackpressureActive() && ((readyShadowFreshCreateIds?.length ?? 0) > 0 || (readyShadowRetryableIds?.length ?? 0) > 0)
-  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (readyLegacyRepairSucceeded > 0 || periodicFreshCreateDetected || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
+  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (readyLegacyQuarantineSucceeded > 0 || periodicFreshCreateDetected || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
   if (continuationNeeded) {
     walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
   } else if (useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive()) {
@@ -1369,10 +1410,10 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7J12 OTHER PREREQ]", { readyClassOther, readyOtherFreshMissingPatterns, readyLegacyRepairAttempted, readyLegacyRepairSucceeded })
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, walletDrainDeferredDbCount, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, walletDrainBurstLanes, walletDrainContinuationScheduled, walletDrainKickGateReleased, walletDrainKickGateReleaseDeferred, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassTerminalEgress, readyTerminalEgressPrunedCount, readyClassReadyOnlyEgress, readyReadyOnlyEgressPrunedCount, readyClassOther, readyOtherDiagnosticPatterns, readyOtherFreshMissingPatterns, readyLegacyRepairAttempted, readyLegacyRepairSucceeded, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
+  console.log("[P7J12 OTHER PREREQ]", { readyClassOther, readyOtherFreshMissingPatterns, readyLegacyQuarantineAttempted, readyLegacyQuarantineSucceeded })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, walletDrainDeferredDbCount, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, walletDrainBurstLanes, walletDrainContinuationScheduled, walletDrainKickGateReleased, walletDrainKickGateReleaseDeferred, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassTerminalEgress, readyTerminalEgressPrunedCount, readyClassReadyOnlyEgress, readyReadyOnlyEgressPrunedCount, readyClassOther, readyOtherDiagnosticPatterns, readyOtherFreshMissingPatterns, readyLegacyQuarantineAttempted, readyLegacyQuarantineSucceeded, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, readyHygiene: { terminalEgressClassified: readyClassTerminalEgress, terminalEgressPruned: readyTerminalEgressPrunedCount, readyOnlyEgressClassified: readyClassReadyOnlyEgress, readyOnlyEgressPruned: readyReadyOnlyEgressPrunedCount, other: readyClassOther, otherDiagnosticPatterns: readyOtherDiagnosticPatterns, otherFreshMissingPatterns: readyOtherFreshMissingPatterns, legacyRepairAttempted: readyLegacyRepairAttempted, legacyRepairSucceeded: readyLegacyRepairSucceeded }, walletDrainFairness: { class: walletDrainFairnessClass, selectedLane: preHead?.lane ?? null, preparedOverride: preHead?.lane === "prepared", freshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0 }, walletDrainBurst: { limit: WALLET_DRAIN_BURST_LIMIT, budgetMs: WALLET_DRAIN_BURST_BUDGET_MS, durationMs: walletDrainBurstDurationMs, budgetExhausted: walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, deferredDbCount: walletDrainDeferredDbCount, settlementAttempts: walletDrainBurstSettlementAttempts, refundAttempts: walletDrainBurstRefundAttempts, stopReason: walletDrainBurstStopReason, lanes: walletDrainBurstLanes, continuationScheduled: walletDrainContinuationScheduled, kickGateReleased: walletDrainKickGateReleased, kickGateReleaseDeferred: walletDrainKickGateReleaseDeferred }, drainLease: "acquired" })
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, readyHygiene: { terminalEgressClassified: readyClassTerminalEgress, terminalEgressPruned: readyTerminalEgressPrunedCount, readyOnlyEgressClassified: readyClassReadyOnlyEgress, readyOnlyEgressPruned: readyReadyOnlyEgressPrunedCount, other: readyClassOther, otherDiagnosticPatterns: readyOtherDiagnosticPatterns, otherFreshMissingPatterns: readyOtherFreshMissingPatterns, legacyQuarantineAttempted: readyLegacyQuarantineAttempted, legacyQuarantineSucceeded: readyLegacyQuarantineSucceeded }, walletDrainFairness: { class: walletDrainFairnessClass, selectedLane: preHead?.lane ?? null, preparedOverride: preHead?.lane === "prepared", freshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0 }, walletDrainBurst: { limit: WALLET_DRAIN_BURST_LIMIT, budgetMs: WALLET_DRAIN_BURST_BUDGET_MS, durationMs: walletDrainBurstDurationMs, budgetExhausted: walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, deferredDbCount: walletDrainDeferredDbCount, settlementAttempts: walletDrainBurstSettlementAttempts, refundAttempts: walletDrainBurstRefundAttempts, stopReason: walletDrainBurstStopReason, lanes: walletDrainBurstLanes, continuationScheduled: walletDrainContinuationScheduled, kickGateReleased: walletDrainKickGateReleased, kickGateReleaseDeferred: walletDrainKickGateReleaseDeferred }, drainLease: "acquired" })
   } finally {
     const released = await drainLease.release()
     if (released) console.log("[P7J5 LEASE] released")
