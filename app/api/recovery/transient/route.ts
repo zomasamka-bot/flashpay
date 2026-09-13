@@ -8,6 +8,7 @@ import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomatic
 import { query } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
+import { isPaymentFinal } from "@/lib/payment-status"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -922,11 +923,12 @@ export async function POST(request: NextRequest) {
         const result = await executeA2URecovery(attemptHead.paymentId, attemptHead.paymentId)
         const latest = parsePayment(await redis.get(`payment:${attemptHead.paymentId}`))
         if (selectedNeedsPiCreateBackpressureObservation && latest !== null) await registerPiCreateBackpressure(latest)
-        const value: RecoveryPipelineValue = { paymentId: attemptHead.paymentId, ok: result.status === "success" || result.status === "db_reconciled", status: latest?.status, error: result.details?.error }
+        const canonicalFinal = latest !== null && isPaymentFinal(latest)
+        const value: RecoveryPipelineValue = { paymentId: attemptHead.paymentId, ok: canonicalFinal, status: latest?.status, error: result.details?.error }
         const existingIndex = results.findIndex((item) => item.paymentId === attemptHead.paymentId)
         if (existingIndex >= 0) results[existingIndex] = value
         else results.push(value)
-        const settlementSafeToContinue = result.status === "success" || result.status === "db_reconciled"
+        const settlementSafeToContinue = canonicalFinal
         if (!settlementSafeToContinue) {
           walletDrainBurstStopReason = `settlement_${result.state}`
           break
