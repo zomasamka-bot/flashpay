@@ -1109,7 +1109,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   let walletDrainContinuationScheduled = false
   let walletDrainKickGateReleased = false
   let walletDrainKickGateReleaseDeferred = false
-  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive() && (walletDrainDeferredDbCount > 0 || walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))
+  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
   if (continuationNeeded) {
     walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
   } else if (useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive()) {
