@@ -25,12 +25,50 @@ async function loadCanonicalPayment(flashPayPaymentId: string, merchantUsername:
   }
 }
 
+async function resolveFromMerchantHistory(piPaymentId: string, merchantUsername: string): Promise<string | null> {
+  if (!isRedisConfigured) return null
+  try {
+    const historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${merchantUsername}:payments:v1`, 0, 999, { rev: true })
+    if (!Array.isArray(historyIds) || historyIds.length > 1000) return null
+
+    let matchedId: string | null = null
+    for (let index = 0; index < historyIds.length; index += 200) {
+      const batch = historyIds.slice(index, index + 200)
+      if (batch.some((id) => typeof id !== "string" || !id || id !== id.trim())) return null
+      const ids = batch as string[]
+      const values = await redis.mget<unknown[]>(ids.map((id) => `payment:${id}`))
+      if (!Array.isArray(values) || values.length !== ids.length) return null
+
+      for (let valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
+        const raw = values[valueIndex]
+        const payment = asRecord(typeof raw === "string" ? JSON.parse(raw) : raw)
+        if (!payment || payment.id !== ids[valueIndex] || payment.merchantId !== merchantUsername) continue
+        if (payment.piPaymentId !== piPaymentId) continue
+        if (matchedId !== null && matchedId !== ids[valueIndex]) return null
+        matchedId = ids[valueIndex]
+      }
+    }
+    return matchedId
+  } catch {
+    return null
+  }
+}
+
 async function resolveLegacyFlashPayId(receipt: ReceiptRow, merchantUsername: string): Promise<string | null> {
-  if (!isRedisConfigured || !serverConfig.isPiApiKeyConfigured || typeof receipt.u2a_identifier !== "string" || !receipt.u2a_identifier) return null
+  const piPaymentId = typeof receipt.u2a_identifier === "string" ? receipt.u2a_identifier.trim() : ""
+  if (!piPaymentId) return null
+
+  // First use FlashPay's own bounded merchant history projection. The candidate
+  // is accepted only when the canonical payment matches merchant + exact Pi U2A ID.
+  const historyCandidate = await resolveFromMerchantHistory(piPaymentId, merchantUsername)
+  if (historyCandidate) return historyCandidate
+
+  // Compatibility fallback for older records outside the bounded merchant history window.
+  if (!serverConfig.isPiApiKeyConfigured) return null
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 5000)
   try {
-    const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(receipt.u2a_identifier)}`, {
+    const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(piPaymentId)}`, {
       headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" },
       cache: "no-store",
       signal: controller.signal,
@@ -41,7 +79,7 @@ async function resolveLegacyFlashPayId(receipt: ReceiptRow, merchantUsername: st
     const candidate = typeof metadata?.paymentId === "string" ? metadata.paymentId.trim() : ""
     if (!candidate) return null
     const canonical = await loadCanonicalPayment(candidate, merchantUsername)
-    if (!canonical || canonical.piPaymentId !== receipt.u2a_identifier) return null
+    if (!canonical || canonical.piPaymentId !== piPaymentId) return null
     return candidate
   } catch {
     return null
@@ -50,10 +88,21 @@ async function resolveLegacyFlashPayId(receipt: ReceiptRow, merchantUsername: st
   }
 }
 
+function normalizeReceiptTimestamp(value: unknown): string | null {
+  if (value instanceof Date) {
+    const time = value.getTime()
+    return Number.isFinite(time) ? value.toISOString() : null
+  }
+  if (typeof value !== "string" || !value.trim()) return null
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? new Date(time).toISOString() : null
+}
+
 function buildReceiptView(receipt: ReceiptRow, flashPayPaymentId: string, merchantName: string, customerName: string | null): FlashPayReceiptView | null {
   const amount = Number(receipt.customer_amount ?? receipt.amount)
-  const occurredAt = receipt.timestamp || receipt.created_at
-  if (!Number.isFinite(amount) || amount <= 0 || typeof occurredAt !== "string" || !Number.isFinite(new Date(occurredAt).getTime())) return null
+  const receiptRecord = receipt as unknown as Record<string, unknown>
+  const occurredAt = normalizeReceiptTimestamp(receiptRecord.timestamp) ?? normalizeReceiptTimestamp(receiptRecord.created_at)
+  if (!Number.isFinite(amount) || amount <= 0 || occurredAt === null) return null
   return {
     flashPayPaymentId,
     merchantName,
