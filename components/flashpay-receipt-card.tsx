@@ -24,11 +24,39 @@ const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
   cancelled: "Cancelled", needs_attention: "Needs attention",
 }
 
+type PiShareFileBridge = {
+  shareFile?: (payload: { file: File; title?: string; text?: string }) => Promise<unknown> | unknown
+}
+
+type ReceiptPdfTools = typeof import("@/lib/receipt-pdf")
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
+}
+
+function getPiFileShareBridge(): PiShareFileBridge | null {
+  if (typeof window === "undefined") return null
+  const pi = window.Pi as (typeof window.Pi & PiShareFileBridge) | undefined
+  return pi && typeof pi.shareFile === "function" ? pi : null
+}
+
+function webFileShareSupport(file: File): "supported" | "unknown" | "unsupported" {
+  if (typeof navigator === "undefined" || typeof navigator.share !== "function") return "unsupported"
+  if (typeof navigator.canShare !== "function") return "unknown"
+  try {
+    return navigator.canShare({ files: [file] }) ? "supported" : "unsupported"
+  } catch {
+    return "unknown"
+  }
+}
+
 export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView }) {
   const [copied, setCopied] = useState(false)
   const [pdfFile, setPdfFile] = useState<File | null>(null)
+  const [pdfTools, setPdfTools] = useState<ReceiptPdfTools | null>(null)
   const [pdfFailed, setPdfFailed] = useState(false)
   const [sharing, setSharing] = useState(false)
+  const [pdfMessage, setPdfMessage] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
     const receiptSnapshot: FlashPayReceiptView = {
@@ -43,10 +71,17 @@ export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView 
       note: receipt.note,
     }
     setPdfFile(null)
+    setPdfTools(null)
     setPdfFailed(false)
+    setPdfMessage(null)
     void import("@/lib/receipt-pdf")
-      .then(({ createReceiptPdfFile }) => createReceiptPdfFile(receiptSnapshot))
-      .then((file) => { if (!cancelled) setPdfFile(file) })
+      .then(async (tools) => {
+        const file = await tools.createReceiptPdfFile(receiptSnapshot)
+        if (!cancelled) {
+          setPdfTools(tools)
+          setPdfFile(file)
+        }
+      })
       .catch(() => { if (!cancelled) setPdfFailed(true) })
     return () => { cancelled = true }
   }, [
@@ -70,38 +105,50 @@ export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView 
   }
 
   const downloadPdf = async () => {
-    if (!pdfFile) return
-    const { downloadReceiptPdfFile } = await import("@/lib/receipt-pdf")
-    downloadReceiptPdfFile(pdfFile)
+    if (!pdfFile || !pdfTools) return
+    setPdfMessage(null)
+    const result = await pdfTools.downloadReceiptPdfFile(pdfFile)
+    if (result === "opened") setPdfMessage("PDF opened. Use your device's Save/Download control.")
   }
 
   const sharePdf = async () => {
-    if (!pdfFile || sharing) return
+    if (!pdfFile || !pdfTools || sharing) return
     setSharing(true)
+    setPdfMessage(null)
     try {
-      const sharePayload = {
-        files: [pdfFile],
-        title: receipt.transactionType === "refund" ? "FlashPay Refund Receipt" : "FlashPay Payment Receipt",
-        text: `FlashPay receipt ${receipt.flashPayPaymentId}`,
-      }
-      if (typeof navigator.share === "function" && typeof navigator.canShare === "function") {
-        let canShareFile = false
+      const title = receipt.transactionType === "refund" ? "FlashPay Refund Receipt" : "FlashPay Payment Receipt"
+      const text = `FlashPay receipt ${receipt.flashPayPaymentId}`
+      const webSupport = webFileShareSupport(pdfFile)
+      const piBridge = getPiFileShareBridge()
+
+      // Standard Web Share stays first where the browser explicitly supports
+      // PDF files (the working iPhone path). If support is missing, Pi
+      // Browser's native shareFile bridge handles the PDF directly on devices
+      // that expose the new Pi file-sharing capability.
+      if (webSupport !== "unsupported" && typeof navigator.share === "function") {
         try {
-          canShareFile = navigator.canShare({ files: [pdfFile] })
-        } catch {
-          canShareFile = false
-        }
-        if (canShareFile) {
-          try {
-            await navigator.share(sharePayload)
-            return
-          } catch (error) {
-            if (error instanceof DOMException && error.name === "AbortError") return
-          }
+          await navigator.share({ files: [pdfFile], title, text })
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+          // A WebView may advertise share but reject files; continue to Pi.
         }
       }
-      const { downloadReceiptPdfFile } = await import("@/lib/receipt-pdf")
-      downloadReceiptPdfFile(pdfFile)
+
+      if (piBridge?.shareFile) {
+        try {
+          await piBridge.shareFile({ file: pdfFile, title, text })
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+        }
+      }
+
+      // No native file bridge is available. Open the actual PDF rather than
+      // silently doing nothing; restrictive WebViews can then use their own
+      // PDF viewer Share control.
+      pdfTools.openReceiptPdfFile(pdfFile)
+      setPdfMessage("Direct PDF sharing is unavailable in this browser. The PDF was opened so you can use its Share control.")
     } finally {
       setSharing(false)
     }
@@ -148,14 +195,15 @@ export function FlashPayReceiptCard({ receipt }: { receipt: FlashPayReceiptView 
         </div>
 
         <div className="print:hidden grid grid-cols-1 gap-3 border-t pt-4 sm:grid-cols-2">
-          <Button type="button" variant="outline" onClick={sharePdf} disabled={!pdfFile || sharing || pdfFailed}>
+          <Button type="button" variant="outline" onClick={sharePdf} disabled={!pdfFile || !pdfTools || sharing || pdfFailed}>
             {sharing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Share2 className="mr-2 h-4 w-4" />}
             {pdfFailed ? "PDF unavailable" : pdfFile ? "Share PDF" : "Preparing PDF…"}
           </Button>
-          <Button type="button" variant="outline" onClick={downloadPdf} disabled={!pdfFile || pdfFailed}>
+          <Button type="button" variant="outline" onClick={downloadPdf} disabled={!pdfFile || !pdfTools || pdfFailed}>
             <Download className="mr-2 h-4 w-4" /> Download PDF
           </Button>
         </div>
+        {pdfMessage && <p className="print:hidden text-center text-xs text-muted-foreground">{pdfMessage}</p>}
 
         <div className="border-t pt-4 text-center text-xs text-muted-foreground">Verified transaction record by FlashPay</div>
       </CardContent>

@@ -307,13 +307,75 @@ export async function createReceiptPdfFile(receipt: FlashPayReceiptView): Promis
   return new File([pdfBuffer], `FlashPay-Receipt-${safeId}.pdf`, { type: "application/pdf" })
 }
 
-export function downloadReceiptPdfFile(file: File): void {
+type SavePickerWritable = {
+  write: (data: Blob) => Promise<void>
+  close: () => Promise<void>
+}
+
+type SavePickerHandle = {
+  createWritable: () => Promise<SavePickerWritable>
+}
+
+type SaveFilePicker = (options: {
+  suggestedName: string
+  types: Array<{ description: string; accept: Record<string, string[]> }>
+}) => Promise<SavePickerHandle>
+
+function isMobileBrowser(): boolean {
+  return typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+export function openReceiptPdfFile(file: File): void {
+  const url = URL.createObjectURL(file)
+  const opened = window.open(url, "_blank")
+  if (opened) {
+    try { opened.opener = null } catch {}
+  } else {
+    // Same-window blob navigation does not rely on popup permission and is the
+    // final compatibility path for restrictive mobile WebViews.
+    window.location.assign(url)
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+/**
+ * Save/download with progressive browser support. Desktop browsers use the
+ * File System Access API when available, then the normal download attribute.
+ * Mobile/WebView browsers get the PDF viewer instead of relying on blob
+ * downloads that are frequently ignored; the viewer exposes the device's
+ * native Save/Download control.
+ */
+export async function downloadReceiptPdfFile(file: File): Promise<"saved" | "downloaded" | "opened" | "cancelled"> {
+  const picker = (window as unknown as { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker
+  if (typeof picker === "function") {
+    try {
+      const handle = await picker.call(window, {
+        suggestedName: file.name,
+        types: [{ description: "PDF document", accept: { "application/pdf": [".pdf"] } }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(file)
+      await writable.close()
+      return "saved"
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return "cancelled"
+      // Fall through to browser-safe paths below.
+    }
+  }
+
+  if (isMobileBrowser()) {
+    openReceiptPdfFile(file)
+    return "opened"
+  }
+
   const url = URL.createObjectURL(file)
   const link = document.createElement("a")
   link.href = url
   link.download = file.name
+  link.rel = "noopener"
   document.body.appendChild(link)
   link.click()
   link.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1500)
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  return "downloaded"
 }
