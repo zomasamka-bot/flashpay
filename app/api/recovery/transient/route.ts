@@ -21,6 +21,7 @@ const WALLET_DRAIN_BURST_BUDGET_MS = 60_000
 const IMMEDIATE_DRAIN_KICK_KEY = "flashpay:settlement:immediate-drain-kick:v1"
 const READY_SEQUENCE_KEY = "flashpay:settlement:ready:v1:sequence"
 const CONTINUATION_MODE = "continuation-kick"
+const IMMEDIATE_DRAIN_MODE = "immediate-drain"
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
 const runtimeEnv = process.env
 const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
@@ -197,6 +198,7 @@ function scheduleTrustedTransientRequest(target: "drain" | "continuation-kick"):
       try {
         const url = new URL("/api/recovery/transient", `https://${productionHost}`)
         if (target === "continuation-kick") url.searchParams.set("mode", CONTINUATION_MODE)
+        else url.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
         const response = await fetch(url.toString(), {
           method: "POST",
           headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
@@ -236,6 +238,11 @@ function hasExcludedState(payment: Payment): boolean {
     payment.refundStatus === "completed" ||
     payment.refundStatus === "manual_review_required"
   )
+}
+
+function isReadyIndexTerminalEgressCandidate(payment: Payment): boolean {
+  if (isPaymentFinal(payment)) return true
+  return payment.status === "paid_to_app" && payment.settlementFailureState === "held" && payment.refundStatus === "manual_review_required"
 }
 
 function isPiA2USlotReleasedForDbPending(payment: Payment | null): payment is Payment {
@@ -404,11 +411,12 @@ export async function POST(request: NextRequest) {
   }
 
   const requestedMode = new URL(request.url).searchParams.get("mode")
-  if (requestedMode !== null) {
-    if (requestedMode !== CONTINUATION_MODE) return NextResponse.json({ error: "Invalid transient recovery mode" }, { status: 400 })
+  if (requestedMode === CONTINUATION_MODE) {
     const scheduled = scheduleTrustedTransientRequest("drain")
     return NextResponse.json({ state: scheduled ? "continuation_scheduled" : "continuation_unavailable" }, { status: scheduled ? 202 : 503 })
   }
+  if (requestedMode !== null && requestedMode !== IMMEDIATE_DRAIN_MODE) return NextResponse.json({ error: "Invalid transient recovery mode" }, { status: 400 })
+  const immediateDrainMode = requestedMode === IMMEDIATE_DRAIN_MODE
 
   const drainLease = await acquireTransientDrainLease()
   if (drainLease.state === "unavailable") return NextResponse.json({ error: "Transient drain lease unavailable" }, { status: 503 })
@@ -658,6 +666,8 @@ export async function POST(request: NextRequest) {
   let readyClassFresh: number | null = null
   let readyClassStage1Only: number | null = null
   let readyClassReconciling: number | null = null
+  let readyClassTerminalEgress: number | null = null
+  let readyTerminalEgressIds: string[] = []
   let readyClassOther: number | null = null
   let readyShadowEligibleIds: string[] | null = null
   let readyShadowPostHorizonIds: string[] | null = null
@@ -698,6 +708,8 @@ export async function POST(request: NextRequest) {
     let classFresh = 0
     let classStage1Only = 0
     let classReconciling = 0
+    let classTerminalEgress = 0
+    const terminalEgressIds: string[] = []
     let classOther = 0
     if (!readyOrderedValid) {
       throw new Error("Ordered settlement ready telemetry unavailable")
@@ -712,6 +724,9 @@ export async function POST(request: NextRequest) {
           const paymentId = batchIds[index]
           if (!payment || payment.id !== paymentId) {
             classInvalid++
+          } else if (isReadyIndexTerminalEgressCandidate(payment)) {
+            classTerminalEgress++
+            terminalEgressIds.push(paymentId)
           } else if (isPostHorizonEligible(payment, now)) {
           classPostHorizon++
           shadowPostHorizonIds.push(paymentId)
@@ -757,6 +772,8 @@ export async function POST(request: NextRequest) {
     readyClassStage1Only = classStage1Only
     readyClassReconciling = classReconciling
     readyClassOther = classOther
+    readyTerminalEgressIds = terminalEgressIds
+    readyClassTerminalEgress = classTerminalEgress
     readyShadowEligibleIds = classInvalid === 0 ? [...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds] : null
     readyShadowPostHorizonIds = classInvalid === 0 ? shadowPostHorizonIds.slice(0, MAX_ATTEMPTS) : null
     readyShadowPreparedIds = classInvalid === 0 ? shadowPreparedIds : null
@@ -832,7 +849,9 @@ export async function POST(request: NextRequest) {
   const retryableIdSet = new Set(retryableIds)
   const walletDrainFairnessClass = useReadyExecution ? walletDrainFairnessClassForGeneration(readyRotationCycleGeneration) : null
   const walletFreshExecutionIds = useReadyExecution && readyShadowRetryableIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null
-    ? (piCreateBackpressureActive() ? readyShadowStage1OnlyIds : [...readyShadowRetryableIds, ...readyShadowFreshIds])
+    ? immediateDrainMode
+      ? (piCreateBackpressureActive() ? readyShadowStage1OnlyIds : [...readyShadowRetryableIds, ...readyShadowFreshIds])
+      : readyShadowStage1OnlyIds
     : []
 
   const selectWalletDrainHead = (preparedIds: string[], eligibleIds: string[], freshIds: string[], reconcilingIds: string[], refundPaymentId: string | null, refundId: string | null, fairnessClass: WalletDrainFairnessClass | null): { kind: "settlement" | "refund" | null; paymentId: string | null; refundId: string | null; lane: WalletDrainLane | null } => {
@@ -1096,6 +1115,17 @@ export async function POST(request: NextRequest) {
   if (!await drainLease.renew()) return NextResponse.json({ error: "Transient drain lease ownership lost" }, { status: 503 })
   console.log("[P7J5 LEASE] renewed before cursor handoff")
 
+  let readyTerminalEgressPrunedCount = 0
+  if (readyTerminalEgressIds.length > 0) {
+    try {
+      const pruned = await redis.eval<string[], number>("local removed=0; for _,id in ipairs(ARGV) do local a=redis.call('SREM',KEYS[1],id); local r=redis.call('ZREM',KEYS[2],id); if a==1 or r==1 then removed=removed+1 end end; return removed", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], readyTerminalEgressIds)
+      if (!Number.isSafeInteger(pruned) || pruned < 0 || pruned > readyTerminalEgressIds.length) throw new Error("Invalid terminal egress prune result")
+      readyTerminalEgressPrunedCount = pruned
+    } catch (error) {
+      console.warn("[P7J12K HYGIENE] terminal ready/active prune unavailable", error)
+    }
+  }
+
   try {
     const cursorCasResult = await redis.eval<[string, string], number>(`local current = redis.call('GET', KEYS[1]) or 'c:0'
 if current ~= ARGV[1] then return 0 end
@@ -1109,7 +1139,8 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   let walletDrainContinuationScheduled = false
   let walletDrainKickGateReleased = false
   let walletDrainKickGateReleaseDeferred = false
-  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
+  const periodicFreshCreateDetected = !immediateDrainMode && useReadyExecution && !piCreateBackpressureActive() && ((readyShadowFreshCreateIds?.length ?? 0) > 0 || (readyShadowRetryableIds?.length ?? 0) > 0)
+  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (periodicFreshCreateDetected || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
   if (continuationNeeded) {
     walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
   } else if (useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive()) {
@@ -1134,9 +1165,9 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
 
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBudgetExhausted, walletDrainDeferredDbCount, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, walletDrainBurstLanes, walletDrainContinuationScheduled, walletDrainKickGateReleased, walletDrainKickGateReleaseDeferred, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, walletDrainDeferredDbCount, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, walletDrainBurstLanes, walletDrainContinuationScheduled, walletDrainKickGateReleased, walletDrainKickGateReleaseDeferred, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassTerminalEgress, readyTerminalEgressPrunedCount, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, walletDrainFairness: { class: walletDrainFairnessClass, selectedLane: preHead?.lane ?? null, preparedOverride: preHead?.lane === "prepared", freshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0 }, walletDrainBurst: { limit: WALLET_DRAIN_BURST_LIMIT, budgetMs: WALLET_DRAIN_BURST_BUDGET_MS, durationMs: walletDrainBurstDurationMs, budgetExhausted: walletDrainBudgetExhausted, deferredDbCount: walletDrainDeferredDbCount, settlementAttempts: walletDrainBurstSettlementAttempts, refundAttempts: walletDrainBurstRefundAttempts, stopReason: walletDrainBurstStopReason, lanes: walletDrainBurstLanes, continuationScheduled: walletDrainContinuationScheduled, kickGateReleased: walletDrainKickGateReleased, kickGateReleaseDeferred: walletDrainKickGateReleaseDeferred }, drainLease: "acquired" })
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, readyHygiene: { terminalEgressClassified: readyClassTerminalEgress, terminalEgressPruned: readyTerminalEgressPrunedCount, other: readyClassOther }, walletDrainFairness: { class: walletDrainFairnessClass, selectedLane: preHead?.lane ?? null, preparedOverride: preHead?.lane === "prepared", freshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0 }, walletDrainBurst: { limit: WALLET_DRAIN_BURST_LIMIT, budgetMs: WALLET_DRAIN_BURST_BUDGET_MS, durationMs: walletDrainBurstDurationMs, budgetExhausted: walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, deferredDbCount: walletDrainDeferredDbCount, settlementAttempts: walletDrainBurstSettlementAttempts, refundAttempts: walletDrainBurstRefundAttempts, stopReason: walletDrainBurstStopReason, lanes: walletDrainBurstLanes, continuationScheduled: walletDrainContinuationScheduled, kickGateReleased: walletDrainKickGateReleased, kickGateReleaseDeferred: walletDrainKickGateReleaseDeferred }, drainLease: "acquired" })
   } finally {
     const released = await drainLease.release()
     if (released) console.log("[P7J5 LEASE] released")

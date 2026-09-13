@@ -9,6 +9,7 @@ export const runtime = "nodejs"
 
 const IMMEDIATE_DRAIN_KICK_KEY = "flashpay:settlement:immediate-drain-kick:v1"
 const IMMEDIATE_DRAIN_KICK_TTL_SECONDS = 90
+const IMMEDIATE_DRAIN_MODE = "immediate-drain"
 
 /**
  * POST /api/pi/complete
@@ -384,7 +385,9 @@ export async function POST(request: NextRequest) {
         try {
           after(async () => {
             try {
-              const immediateDrainUrl = new URL("/api/recovery/transient", `https://${productionHost}`).toString()
+              const immediateDrainRequestUrl = new URL("/api/recovery/transient", `https://${productionHost}`)
+              immediateDrainRequestUrl.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
+              const immediateDrainUrl = immediateDrainRequestUrl.toString()
               const response = await fetch(immediateDrainUrl, {
                 method: "POST",
                 headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
