@@ -27,6 +27,7 @@ const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
 type PiNativeBridge = {
   shareFile?: (payload: { filename: string; file: File; title?: string; text?: string }) => Promise<unknown> | unknown
   nativeFeaturesList?: () => Promise<unknown> | unknown
+  openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
   openUrlInSystemBrowser?: (url: string) => Promise<unknown> | unknown
 }
 
@@ -238,7 +239,10 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         }
       }
 
-      // Newer Pi Browser builds may expose direct file sharing.
+      // Newer Pi Browser builds may expose direct file sharing. Samsung/Pi
+      // Browser 1.17.1 advertises file_share but rejects application/pdf, so
+      // retry the same PDF bytes/name as generic binary only for that exact
+      // MIME rejection. This does not change the PDF payload or extension.
       if (typeof pi?.shareFile === "function") {
         diagnostic.piShareFileAttempted = true
         try {
@@ -246,7 +250,22 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
           return
         } catch (error) {
           if (isAbortError(error)) return
-          diagnostic.piShareFileError = diagnosticError(error)
+          const firstPiShareError = diagnosticError(error)
+          diagnostic.piShareFileError = firstPiShareError
+
+          if (firstPiShareError.toLowerCase().includes("unsupported mime type")) {
+            const genericPdfFile = new File([pdfFile], pdfFile.name, {
+              type: "application/octet-stream",
+              lastModified: pdfFile.lastModified,
+            })
+            try {
+              await pi.shareFile({ filename: genericPdfFile.name, file: genericPdfFile, title, text })
+              return
+            } catch (retryError) {
+              if (isAbortError(retryError)) return
+              diagnostic.piShareFileError = `${firstPiShareError} | octet-stream retry: ${diagnosticError(retryError)}`.slice(0, 500)
+            }
+          }
         }
       }
 
@@ -275,10 +294,40 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         }).catch(() => {})
       }
 
-      // Share PDF must never silently downgrade to a URL. If neither the
-      // standard Web Share file path nor Pi's native file_share path works,
-      // leave the separate Download PDF action as the fallback.
-      return
+      // Keep Samsung's previously working share sheet as the final fallback.
+      // The native attachment paths above are always attempted first; this URL
+      // path exists only so a Pi Browser MIME limitation never makes Share dead.
+      let url: string
+      try {
+        url = await ensureSharedPdfUrl()
+      } catch {
+        return
+      }
+
+      if (typeof navigator.share === "function") {
+        try {
+          await navigator.share({ title, text, url })
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+        }
+      }
+
+      if (typeof pi?.openShareDialog === "function") {
+        try {
+          await pi.openShareDialog(title, `${text}\n${url}`)
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+        }
+      }
+
+      if (typeof navigator.clipboard?.writeText === "function") {
+        await navigator.clipboard.writeText(url)
+        return
+      }
+
+      pdfTools.openHttpsPdfUrl(url)
     } finally {
       setSharing(false)
     }
