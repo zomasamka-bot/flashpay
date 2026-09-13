@@ -301,8 +301,10 @@ export async function createReceiptPdfFile(receipt: FlashPayReceiptView): Promis
   const canvas = createReceiptCanvas(receipt)
   const jpeg = await canvasToJpegBytes(canvas)
   const pdf = jpegToPdf(jpeg, canvas.width, canvas.height)
+  const pdfBuffer = new ArrayBuffer(pdf.byteLength)
+  new Uint8Array(pdfBuffer).set(pdf)
   const safeId = receipt.flashPayPaymentId.replace(/[^a-zA-Z0-9_-]/g, "-")
-  return new File([pdf], `FlashPay-Receipt-${safeId}.pdf`, { type: "application/pdf" })
+  return new File([pdfBuffer], `FlashPay-Receipt-${safeId}.pdf`, { type: "application/pdf" })
 }
 
 export function downloadReceiptPdfFile(file: File): void {
