@@ -1,4 +1,4 @@
-import { type NextRequest, NextResponse } from "next/server"
+import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
@@ -6,6 +6,9 @@ import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+
+const IMMEDIATE_DRAIN_KICK_KEY = "flashpay:settlement:immediate-drain-kick:v1"
+const IMMEDIATE_DRAIN_KICK_TTL_SECONDS = 90
 
 /**
  * POST /api/pi/complete
@@ -345,10 +348,12 @@ export async function POST(request: NextRequest) {
       if current.paidAt == nil then current.paidAt = incoming.paidAt end
       if transitioningToPaidToApp and current.settlementDispatchRequestedAt == nil then current.settlementDispatchRequestedAt = incoming.settlementDispatchRequestedAt end
       if incoming.payerUid ~= nil then current.payerUid = incoming.payerUid; current.payerUidSource = incoming.payerUidSource; if current.payerUidCapturedAt == nil then current.payerUidCapturedAt = incoming.payerUidCapturedAt end end
-      if transitioningToPaidToApp then local seq=redis.call('GET',KEYS[4]); if not seq then local top=redis.call('ZRANGE',KEYS[3],-1,-1,'WITHSCORES'); if #top ~= 0 and #top ~= 2 then return 0 end; local base=0; if #top == 2 then base=tonumber(top[2]); if not base or base < 0 or base ~= math.floor(base) then return 0 end end; redis.call('SET',KEYS[4],base) end; local readySequence=redis.call('INCR',KEYS[4]); redis.call('SADD', KEYS[2], ARGV[2]); redis.call('ZADD', KEYS[3], 'NX', readySequence, ARGV[2]) end
+      local immediateDrainKickOwned = 0
+      if transitioningToPaidToApp then local seq=redis.call('GET',KEYS[4]); if not seq then local top=redis.call('ZRANGE',KEYS[3],-1,-1,'WITHSCORES'); if #top ~= 0 and #top ~= 2 then return 0 end; local base=0; if #top == 2 then base=tonumber(top[2]); if not base or base < 0 or base ~= math.floor(base) then return 0 end end; redis.call('SET',KEYS[4],base) end; local readySequence=redis.call('INCR',KEYS[4]); redis.call('SADD', KEYS[2], ARGV[2]); redis.call('ZADD', KEYS[3], 'NX', readySequence, ARGV[2]); local kick=redis.call('SET',KEYS[5],ARGV[3],'NX','EX',ARGV[4]); if kick then immediateDrainKickOwned=1 end end
       redis.call('SET', KEYS[1], cjson.encode(current))
+      if immediateDrainKickOwned == 1 then return 2 end
       return 1
-    `, [`payment:${flashPaymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1", "flashpay:settlement:ready:v1:sequence"], [JSON.stringify({
+    `, [`payment:${flashPaymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1", "flashpay:settlement:ready:v1:sequence", IMMEDIATE_DRAIN_KICK_KEY], [JSON.stringify({
       id: flashPaymentId,
       amount: payment.amount,
       customerAmount: payment.customerAmount,
@@ -362,13 +367,47 @@ export async function POST(request: NextRequest) {
       payerUidCapturedAt: payment.payerUidCapturedAt,
       paidAt: payment.paidAt,
       settlementDispatchRequestedAt: payment.paidAt,
-    }), flashPaymentId])
+    }), flashPaymentId, flashPaymentId, String(IMMEDIATE_DRAIN_KICK_TTL_SECONDS)])
     console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
-    if (Number(atomicU2AResult) !== 1) {
+    const atomicU2AResultNumber = Number(atomicU2AResult)
+    if (atomicU2AResultNumber !== 1 && atomicU2AResultNumber !== 2) {
       console.error("[Pi Complete] Atomic U2A persistence rejected")
       return NextResponse.json({ error: "Payment state conflict" }, { status: 409 })
     }
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
+
+    if (atomicU2AResultNumber === 2) {
+      const recoverySecret = process.env.FLASHPAY_TRANSIENT_RECOVERY_SECRET
+      const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL
+      const isProductionVercel = process.env.VERCEL_ENV === "production"
+      if (isProductionVercel && recoverySecret && productionHost) {
+        try {
+          after(async () => {
+            try {
+              const immediateDrainUrl = new URL("/api/recovery/transient", `https://${productionHost}`).toString()
+              const response = await fetch(immediateDrainUrl, {
+                method: "POST",
+                headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
+                cache: "no-store",
+                redirect: "error",
+              })
+              if (!response.ok) console.warn("[P7J12C KICK] immediate drain returned non-OK", { status: response.status })
+            } catch (error) {
+              console.warn("[P7J12C KICK] immediate drain dispatch failed", error instanceof Error ? error.message : String(error))
+            }
+          })
+          console.log("[P7J12C KICK] coalesced immediate drain scheduled", { paymentId: flashPaymentId, ttlSeconds: IMMEDIATE_DRAIN_KICK_TTL_SECONDS })
+        } catch (error) {
+          console.warn("[P7J12C KICK] immediate drain scheduling failed; durable queue remains authoritative", error instanceof Error ? error.message : String(error))
+        }
+      } else {
+        console.warn("[P7J12C KICK] immediate drain not scheduled; durable queue remains authoritative", {
+          production: isProductionVercel,
+          recoverySecretConfigured: Boolean(recoverySecret),
+          productionUrlConfigured: Boolean(productionHost),
+        })
+      }
+    }
     if(currentStatus==="pending"&&payment.merchantId==="hazemaboria"&&merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"&&finalPiAmount===0.13){console.log("[P7 TEST] Fresh dispatch interruption 0.13");const r=await buildA2USuccessResponse(flashPaymentId);if(!r)return NextResponse.json({error:"Response building failed"},{status:500});return NextResponse.json(r,{status:200})}
 
     // === STAGE 4: Return canonical response without waiting for settlement drain ===
