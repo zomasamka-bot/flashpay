@@ -26,8 +26,37 @@ const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
 
 type PiNativeBridge = {
   shareFile?: (payload: { file: File; title?: string; text?: string }) => Promise<unknown> | unknown
+  nativeFeaturesList?: () => Promise<unknown> | unknown
   openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
   openUrlInSystemBrowser?: (url: string) => Promise<unknown> | unknown
+}
+
+type ShareAttemptDiagnostic = {
+  version: "k5-share-diag-v1"
+  userAgent: string
+  secureContext: boolean
+  fileName: string
+  fileType: string
+  fileSize: number
+  navigatorShare: boolean
+  navigatorCanShare: boolean
+  navigatorCanShareFile: boolean | null
+  navigatorCanShareError?: string
+  webFileShareAttempted: boolean
+  webFileShareError?: string
+  piPresent: boolean
+  piShareFile: boolean
+  piShareFileArity: number | null
+  piShareFileAttempted: boolean
+  piShareFileError?: string
+  piNativeFeaturesList: boolean
+  piNativeFeatures?: unknown
+  piNativeFeaturesError?: string
+}
+
+function diagnosticError(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`.slice(0, 500)
+  return String(error).slice(0, 500)
 }
 
 type ReceiptPdfTools = typeof import("@/lib/receipt-pdf")
@@ -179,26 +208,72 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       const text = `FlashPay receipt ${receipt.flashPayPaymentId}`
       const webSupport = webFileShareSupport(pdfFile)
       const pi = getPiNativeBridge()
+      const diagnostic: ShareAttemptDiagnostic = {
+        version: "k5-share-diag-v1",
+        userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent.slice(0, 500),
+        secureContext: window.isSecureContext === true,
+        fileName: pdfFile.name,
+        fileType: pdfFile.type,
+        fileSize: pdfFile.size,
+        navigatorShare: typeof navigator.share === "function",
+        navigatorCanShare: typeof navigator.canShare === "function",
+        navigatorCanShareFile: webSupport === "supported" ? true : webSupport === "unsupported" ? false : null,
+        webFileShareAttempted: false,
+        piPresent: !!pi,
+        piShareFile: typeof pi?.shareFile === "function",
+        piShareFileArity: typeof pi?.shareFile === "function" ? pi.shareFile.length : null,
+        piShareFileAttempted: false,
+        piNativeFeaturesList: typeof pi?.nativeFeaturesList === "function",
+      }
 
       // Preserve the proven iPhone/native browser path: share the actual PDF
       // file when the browser explicitly supports file sharing.
       if (webSupport !== "unsupported" && typeof navigator.share === "function") {
+        diagnostic.webFileShareAttempted = true
         try {
           await navigator.share({ files: [pdfFile], title, text })
           return
         } catch (error) {
           if (isAbortError(error)) return
+          diagnostic.webFileShareError = diagnosticError(error)
         }
       }
 
       // Newer Pi Browser builds may expose direct file sharing.
       if (typeof pi?.shareFile === "function") {
+        diagnostic.piShareFileAttempted = true
         try {
           await pi.shareFile({ file: pdfFile, title, text })
           return
         } catch (error) {
           if (isAbortError(error)) return
+          diagnostic.piShareFileError = diagnosticError(error)
         }
+      }
+
+      // Direct file sharing failed or is unavailable. Capture the exact
+      // runtime capabilities before the existing URL fallback so Vercel logs
+      // tell us why Samsung/Pi Browser rejected the attachment path.
+      if (typeof pi?.nativeFeaturesList === "function") {
+        try {
+          diagnostic.piNativeFeatures = await pi.nativeFeaturesList()
+        } catch (error) {
+          diagnostic.piNativeFeaturesError = diagnosticError(error)
+        }
+      }
+      if (accessToken) {
+        void fetch("/api/receipt-share-diagnostics", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            paymentId: receipt.flashPayPaymentId,
+            diagnostic,
+          }),
+          keepalive: true,
+        }).catch(() => {})
       }
 
       // Cross-device Pi Browser path: share a short-lived HTTPS PDF URL via
