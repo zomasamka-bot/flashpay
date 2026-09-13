@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "crypto"
-import { type NextRequest, NextResponse } from "next/server"
+import { after, type NextRequest, NextResponse } from "next/server"
 
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
@@ -15,9 +15,13 @@ export const runtime = "nodejs"
 
 const MAX_ATTEMPTS = 5
 const BOUNDED_PIPELINE_CONCURRENCY = 2
-const WALLET_DRAIN_BURST_LIMIT = 5
+const WALLET_DRAIN_BURST_LIMIT: number | null = null
 const WALLET_DRAIN_BURST_BUDGET_MS = 60_000
+const IMMEDIATE_DRAIN_KICK_KEY = "flashpay:settlement:immediate-drain-kick:v1"
+const READY_SEQUENCE_KEY = "flashpay:settlement:ready:v1:sequence"
+const CONTINUATION_MODE = "continuation-kick"
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
+const runtimeEnv = process.env
 const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
 const DRAIN_LEASE_TTL_SECONDS = 900
 const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
@@ -171,7 +175,7 @@ async function acquireTransientDrainLease(): Promise<DrainLease> {
 }
 
 function hasValidSecret(request: NextRequest): boolean {
-  const expected = process.env[RECOVERY_SECRET_ENV]
+  const expected = runtimeEnv[RECOVERY_SECRET_ENV]
   const provided = request.headers.get("x-flashpay-transient-recovery-secret")
 
   if (!expected || !provided) return false
@@ -181,6 +185,33 @@ function hasValidSecret(request: NextRequest): boolean {
   if (expectedBuffer.length !== providedBuffer.length) return false
 
   return timingSafeEqual(expectedBuffer, providedBuffer)
+}
+
+function scheduleTrustedTransientRequest(target: "drain" | "continuation-kick"): boolean {
+  const recoverySecret = runtimeEnv[RECOVERY_SECRET_ENV]
+  const productionHost = runtimeEnv.VERCEL_PROJECT_PRODUCTION_URL || runtimeEnv.VERCEL_URL
+  if (runtimeEnv.VERCEL_ENV !== "production" || !recoverySecret || !productionHost || !/^[A-Za-z0-9.-]+$/.test(productionHost)) return false
+  try {
+    after(async () => {
+      try {
+        const url = new URL("/api/recovery/transient", `https://${productionHost}`)
+        if (target === "continuation-kick") url.searchParams.set("mode", CONTINUATION_MODE)
+        const response = await fetch(url.toString(), {
+          method: "POST",
+          headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
+          cache: "no-store",
+          redirect: "error",
+        })
+        if (!response.ok) console.warn("[P7J12D CONTINUATION] transient request returned non-OK", { target, status: response.status })
+      } catch (error) {
+        console.warn("[P7J12D CONTINUATION] transient request failed", { target, error: error instanceof Error ? error.message : String(error) })
+      }
+    })
+    return true
+  } catch (error) {
+    console.warn("[P7J12D CONTINUATION] scheduling failed", { target, error: error instanceof Error ? error.message : String(error) })
+    return false
+  }
 }
 
 function parsePayment(value: unknown): Payment | null {
@@ -359,6 +390,13 @@ export async function POST(request: NextRequest) {
 
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
+  }
+
+  const requestedMode = new URL(request.url).searchParams.get("mode")
+  if (requestedMode !== null) {
+    if (requestedMode !== CONTINUATION_MODE) return NextResponse.json({ error: "Invalid transient recovery mode" }, { status: 400 })
+    const scheduled = scheduleTrustedTransientRequest("drain")
+    return NextResponse.json({ state: scheduled ? "continuation_scheduled" : "continuation_unavailable" }, { status: scheduled ? 202 : 503 })
   }
 
   const drainLease = await acquireTransientDrainLease()
@@ -611,7 +649,9 @@ export async function POST(request: NextRequest) {
   let readyClassReconciling: number | null = null
   let readyClassOther: number | null = null
   let readyShadowEligibleIds: string[] | null = null
+  let readyShadowPostHorizonIds: string[] | null = null
   let readyShadowPreparedIds: string[] | null = null
+  let readyShadowRetryableIds: string[] | null = null
   let readyShadowFreshIds: string[] | null = null
   let readyShadowFreshCreateIds: string[] | null = null
   let readyShadowStage1OnlyIds: string[] | null = null
@@ -706,19 +746,21 @@ export async function POST(request: NextRequest) {
     readyClassStage1Only = classStage1Only
     readyClassReconciling = classReconciling
     readyClassOther = classOther
-    readyShadowEligibleIds = [...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds].slice(0, MAX_ATTEMPTS)
+    readyShadowEligibleIds = classInvalid === 0 ? [...shadowPostHorizonIds, ...shadowPreparedIds, ...shadowRetryableIds] : null
+    readyShadowPostHorizonIds = classInvalid === 0 ? shadowPostHorizonIds.slice(0, MAX_ATTEMPTS) : null
     readyShadowPreparedIds = classInvalid === 0 ? shadowPreparedIds : null
-    readyShadowFreshIds = shadowFreshDispatchIds.slice(0, MAX_ATTEMPTS)
+    readyShadowRetryableIds = classInvalid === 0 ? shadowRetryableIds : null
+    readyShadowFreshIds = shadowFreshDispatchIds
     const readyFreshWindow = new Set(readyShadowFreshIds)
     readyShadowFreshCreateIds = classInvalid === 0 ? shadowFreshCreateIds.filter((id) => readyFreshWindow.has(id)) : null
     readyShadowStage1OnlyIds = classInvalid === 0 ? shadowStage1OnlyIds.filter((id) => readyFreshWindow.has(id)) : null
     readyShadowReconcilingIds = shadowReconcilingIds.slice(0, 1)
-    if (classInvalid === 0) walletDrainShadowCount = classPrepared + classFresh + classStage1Only + classReconciling
+    if (classInvalid === 0) walletDrainShadowCount = classPrepared + classRetryable + classFresh + classStage1Only + classReconciling
   } catch {
     console.warn("[P7H CAPACITY] ordered settlement ready classification unavailable")
   }
 
-  if (readyOrderedValid === true && readyClassInvalid === 0 && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null && readyShadowReconcilingIds !== null && readyRotationStart !== null && readyRotationNext !== null && readyRotationCycleMax !== null && readyRotationCycleGeneration !== null) {
+  if (readyOrderedValid === true && readyClassInvalid === 0 && readyShadowEligibleIds !== null && readyShadowPostHorizonIds !== null && readyShadowRetryableIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null && readyShadowReconcilingIds !== null && readyRotationStart !== null && readyRotationNext !== null && readyRotationCycleMax !== null && readyRotationCycleGeneration !== null) {
     try {
       const rotationCas = await redis.eval<[string, string, string, string], number>("local current=redis.call('GET',KEYS[1]); if not current then current='r:0' end; local cycle=redis.call('GET',KEYS[2]); local generation=redis.call('GET',KEYS[3]); if current==ARGV[1] and cycle==ARGV[3] and generation==ARGV[4] then if ARGV[2]=='r:0' then redis.call('SET',KEYS[1],ARGV[2]); redis.call('DEL',KEYS[2]); return 1 end; return redis.call('SET',KEYS[1],ARGV[2]) and 1 or 0 end; return 0", ["flashpay:settlement:ready:v1:authority-cursor", "flashpay:settlement:ready:v1:authority-cycle-max", "flashpay:settlement:ready:v1:authority-cycle-generation"], [readyRotationStart, readyRotationNext, String(readyRotationCycleMax), String(readyRotationCycleGeneration)])
       if (rotationCas !== 0 && rotationCas !== 1) throw new Error("Invalid settlement ready authority cursor CAS")
@@ -758,7 +800,7 @@ export async function POST(request: NextRequest) {
   const discoveryDurationMs = Date.now() - discoveryStartedAt
 
   const readyAuthorityCertified = readyResidencySourceValid === true && scanNextToken === "c:0" && Number.isSafeInteger(activeSetSize) && activeSetSize >= 0 && keys.length === activeSetSize && readyResidencyMissing === 0 && readyResidencyBackfilled === 0
-  const readySchedulerUsable = readyAuthorityCertified && readyRotationStart === "r:0" && readyStrictlyIncreasing === true && readyClassInvalid === 0 && readyEligibleSetParity === true && readyFreshSetParity === true && readyReconcilingSetParity === true && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null && readyShadowReconcilingIds !== null
+  const readySchedulerUsable = readyAuthorityCertified && readyRotationStart === "r:0" && readyStrictlyIncreasing === true && readyClassInvalid === 0 && readyEligibleSetParity === true && readyFreshSetParity === true && readyReconcilingSetParity === true && readyShadowEligibleIds !== null && readyShadowPostHorizonIds !== null && readyShadowRetryableIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null && readyShadowReconcilingIds !== null
   let readyBaselineCertified: boolean | null = null
   try {
     const baselineResult = await redis.eval<[string], number>("local current=redis.call('GET',KEYS[1]); if current=='done' then return 1 end; if current then return -1 end; if ARGV[1]=='1' then redis.call('SET',KEYS[1],'done'); return 1 end; return 0", ["flashpay:settlement:ready:v1:authority-baseline"], [readySchedulerUsable ? "1" : "0"])
@@ -771,16 +813,16 @@ export async function POST(request: NextRequest) {
   } catch {
     console.warn("[P7H CAPACITY] settlement ready authority baseline unavailable")
   }
-  const readyWindowCertified = readyBaselineCertified === true && readyRotationCas === 1 && readyOrderedValid === true && readyStrictlyIncreasing === true && readyClassInvalid === 0 && readyResidencySourceValid === true && readyResidencyMissing === 0 && readyResidencyBackfilled === 0 && readyShadowEligibleIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null && readyShadowReconcilingIds !== null
+  const readyWindowCertified = readyBaselineCertified === true && readyRotationCas === 1 && readyOrderedValid === true && readyStrictlyIncreasing === true && readyClassInvalid === 0 && readyResidencySourceValid === true && readyResidencyMissing === 0 && readyResidencyBackfilled === 0 && readyShadowEligibleIds !== null && readyShadowPostHorizonIds !== null && readyShadowRetryableIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null && readyShadowReconcilingIds !== null
   const useReadyExecution = readyWindowCertified === true
   const eligibleIds = readyShadowEligibleIds !== null && useReadyExecution ? readyShadowEligibleIds : [...postHorizonIds, ...preparedSubmitIds, ...retryableIds].slice(0, MAX_ATTEMPTS)
   const freshExecutionIds = readyShadowFreshIds !== null && useReadyExecution ? readyShadowFreshIds : freshDispatchIds.slice(0, MAX_ATTEMPTS)
   const settlementReconcilingExecutionIds = readyShadowReconcilingIds !== null && useReadyExecution ? readyShadowReconcilingIds : [...new Set([...settlementReconcilingDiscoveryIds, ...staleRetryReconcilingDiscoveryIds])].slice(0, 1)
   const retryableIdSet = new Set(retryableIds)
   const walletDrainFairnessClass = useReadyExecution ? walletDrainFairnessClassForGeneration(readyRotationCycleGeneration) : null
-  const walletFreshExecutionIds = useReadyExecution && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null
-    ? (piCreateBackpressureActive() ? readyShadowStage1OnlyIds : readyShadowFreshIds)
-    : freshExecutionIds
+  const walletFreshExecutionIds = useReadyExecution && readyShadowRetryableIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null
+    ? (piCreateBackpressureActive() ? readyShadowStage1OnlyIds : [...readyShadowRetryableIds, ...readyShadowFreshIds])
+    : []
 
   const selectWalletDrainHead = (preparedIds: string[], eligibleIds: string[], freshIds: string[], reconcilingIds: string[], refundPaymentId: string | null, refundId: string | null, fairnessClass: WalletDrainFairnessClass | null): { kind: "settlement" | "refund" | null; paymentId: string | null; refundId: string | null; lane: WalletDrainLane | null } => {
     const preparedHead = eligibleIds.find((id) => preparedIds.includes(id))
@@ -823,8 +865,10 @@ export async function POST(request: NextRequest) {
   const preparedExecutionIds = useReadyExecution && readyShadowPreparedIds !== null ? readyShadowPreparedIds : preparedSubmitIds
   const preparedExecutionSet = new Set(useReadyExecution ? preparedExecutionIds : [])
 
-  const eligiblePipeline = await runBoundedOrderedPipeline<RecoveryPipelineValue>(eligibleIds.filter((paymentId) => !preparedExecutionSet.has(paymentId)), async (paymentId) => {
-    if (retryableIdSet.has(paymentId) && piCreateBackpressureActive()) return { value: { paymentId, ok: false, error: "pi_create_backpressure" } }
+  const nonAuthoritativeEligibleIds = useReadyExecution && readyShadowPostHorizonIds !== null
+    ? readyShadowPostHorizonIds
+    : eligibleIds.filter((paymentId) => !preparedExecutionSet.has(paymentId) && !retryableIdSet.has(paymentId))
+  const eligiblePipeline = await runBoundedOrderedPipeline<RecoveryPipelineValue>(nonAuthoritativeEligibleIds, async (paymentId) => {
     const result = await executeA2URecovery(paymentId, null)
     const latest = parsePayment(await redis.get(`payment:${paymentId}`))
     const backpressureTriggered = retryableIdSet.has(paymentId) && latest !== null ? await registerPiCreateBackpressure(latest) : false
@@ -843,13 +887,17 @@ export async function POST(request: NextRequest) {
   let walletDrainBurstRefundAttempts = 0
   let walletDrainBurstStopReason: string | null = null
   let walletDrainFairnessOffset = 0
+  let walletDrainBudgetExhausted = false
   let currentRefundDrain = preRefundDrain
   const walletDrainBurstStartedAt = Date.now()
 
   if (useReadyExecution && readyShadowPreparedIds !== null && readyShadowFreshIds !== null && readyShadowStage1OnlyIds !== null && walletDrainFairnessClass !== null && currentRefundDrain.state === "ok") {
     const fairnessStartIndex = WALLET_DRAIN_FAIRNESS_ORDER.indexOf(walletDrainFairnessClass)
-    for (let attempt = 0; attempt < WALLET_DRAIN_BURST_LIMIT; attempt += 1) {
-      if (Date.now() - walletDrainBurstStartedAt >= WALLET_DRAIN_BURST_BUDGET_MS) break
+    while (true) {
+      if (Date.now() - walletDrainBurstStartedAt >= WALLET_DRAIN_BURST_BUDGET_MS) {
+        walletDrainBudgetExhausted = true
+        break
+      }
       if (!await drainLease.renew()) return NextResponse.json({ error: "Transient drain lease ownership lost" }, { status: 503 })
       if (currentRefundDrain.state !== "ok") break
 
@@ -870,10 +918,10 @@ export async function POST(request: NextRequest) {
       if (attemptHead.kind === "settlement" && attemptHead.paymentId !== null) {
         walletDrainAttemptedSettlementIds.add(attemptHead.paymentId)
         walletDrainBurstSettlementAttempts += 1
-        const selectedWasFreshCreate = readyShadowFreshCreateIds?.includes(attemptHead.paymentId) === true
+        const selectedNeedsPiCreateBackpressureObservation = readyShadowFreshCreateIds?.includes(attemptHead.paymentId) === true || readyShadowRetryableIds?.includes(attemptHead.paymentId) === true
         const result = await executeA2URecovery(attemptHead.paymentId, attemptHead.paymentId)
         const latest = parsePayment(await redis.get(`payment:${attemptHead.paymentId}`))
-        if (selectedWasFreshCreate && latest !== null) await registerPiCreateBackpressure(latest)
+        if (selectedNeedsPiCreateBackpressureObservation && latest !== null) await registerPiCreateBackpressure(latest)
         const value: RecoveryPipelineValue = { paymentId: attemptHead.paymentId, ok: result.status === "success" || result.status === "db_reconciled", status: latest?.status, error: result.details?.error }
         const existingIndex = results.findIndex((item) => item.paymentId === attemptHead.paymentId)
         if (existingIndex >= 0) results[existingIndex] = value
@@ -918,7 +966,8 @@ export async function POST(request: NextRequest) {
   }
   const walletDrainBurstDurationMs = Date.now() - walletDrainBurstStartedAt
 
-  const freshPipeline = await runBoundedOrderedPipeline<RecoveryPipelineValue>(freshExecutionIds.filter((id) => !walletDrainAttemptedSettlementIds.has(id)), async (id) => {
+  const nonAuthoritativeFreshExecutionIds: string[] = []
+  const freshPipeline = await runBoundedOrderedPipeline<RecoveryPipelineValue>(nonAuthoritativeFreshExecutionIds, async (id) => {
     const payment = parsePayment(await redis.get(`payment:${id}`))
     if (payment?.id !== id) return {}
     const handlerNow = Date.now()
@@ -1042,11 +1091,37 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
     return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
   }
 
+  let walletDrainContinuationScheduled = false
+  let walletDrainKickGateReleased = false
+  let walletDrainKickGateReleaseDeferred = false
+  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))
+  if (continuationNeeded) {
+    walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
+  } else if (useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive()) {
+    try {
+      const sequenceValue = await redis.get<unknown>(READY_SEQUENCE_KEY)
+      const sequenceText = typeof sequenceValue === "number" && Number.isSafeInteger(sequenceValue) && sequenceValue >= 0 ? String(sequenceValue) : typeof sequenceValue === "string" && /^[0-9]+$/.test(sequenceValue) ? sequenceValue : null
+      if (sequenceText !== null) {
+        const gateReleaseResult = await redis.eval<[string], number>("local current=redis.call('GET',KEYS[2]); if current ~= ARGV[1] then return 0 end; redis.call('DEL',KEYS[1]); return 1", [IMMEDIATE_DRAIN_KICK_KEY, READY_SEQUENCE_KEY], [sequenceText])
+        if (gateReleaseResult === 1) {
+          walletDrainKickGateReleased = true
+        } else if (gateReleaseResult === 0) {
+          walletDrainKickGateReleaseDeferred = true
+          walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
+        } else {
+          throw new Error("Invalid immediate drain gate release result")
+        }
+      }
+    } catch {
+      console.warn("[P7J12D CONTINUATION] immediate drain kick gate cleanup unavailable; TTL safety retained")
+    }
+  }
+
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, walletDrainBurstLanes, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBudgetExhausted, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, walletDrainBurstLanes, walletDrainContinuationScheduled, walletDrainKickGateReleased, walletDrainKickGateReleaseDeferred, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassOther, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
-  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, walletDrainFairness: { class: walletDrainFairnessClass, selectedLane: preHead?.lane ?? null, preparedOverride: preHead?.lane === "prepared", freshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0 }, walletDrainBurst: { limit: WALLET_DRAIN_BURST_LIMIT, budgetMs: WALLET_DRAIN_BURST_BUDGET_MS, durationMs: walletDrainBurstDurationMs, settlementAttempts: walletDrainBurstSettlementAttempts, refundAttempts: walletDrainBurstRefundAttempts, stopReason: walletDrainBurstStopReason, lanes: walletDrainBurstLanes }, drainLease: "acquired" })
+  return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, walletDrainFairness: { class: walletDrainFairnessClass, selectedLane: preHead?.lane ?? null, preparedOverride: preHead?.lane === "prepared", freshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0 }, walletDrainBurst: { limit: WALLET_DRAIN_BURST_LIMIT, budgetMs: WALLET_DRAIN_BURST_BUDGET_MS, durationMs: walletDrainBurstDurationMs, budgetExhausted: walletDrainBudgetExhausted, settlementAttempts: walletDrainBurstSettlementAttempts, refundAttempts: walletDrainBurstRefundAttempts, stopReason: walletDrainBurstStopReason, lanes: walletDrainBurstLanes, continuationScheduled: walletDrainContinuationScheduled, kickGateReleased: walletDrainKickGateReleased, kickGateReleaseDeferred: walletDrainKickGateReleaseDeferred }, drainLease: "acquired" })
   } finally {
     const released = await drainLease.release()
     if (released) console.log("[P7J5 LEASE] released")
