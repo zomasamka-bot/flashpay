@@ -690,12 +690,12 @@ export default function PaymentContentWithId({
             flashPayPaymentId: paymentId,
             merchantName: payment.merchantId,
             customerName: customerReceiptName,
-            amount: payment.amount,
+            amount: payment.customerAmount ?? payment.amount,
             currency: "π",
             transactionType: "payment",
             status: toReceiptStatus(payment.status, payment),
-            occurredAt: payment.settledAt || payment.paidAt || payment.createdAt,
-            note: payment.note || null,
+            occurredAt: payment.paidAt || payment.createdAt,
+            note: payment.note?.trim() || null,
           }} />
         ) : (
         <Card>

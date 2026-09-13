@@ -52,7 +52,7 @@ export default function ReceiptPage() {
 
   return (
     <main className="min-h-screen bg-background pb-20 print:bg-white">
-      <div className="max-w-2xl mx-auto p-4 space-y-5 print:p-0">
+      <div className="max-w-2xl mx-auto px-4 pb-4 pt-12 space-y-5 print:p-0">
         <div className="flex items-center justify-between print:hidden">
           <h1 className="text-2xl font-bold">Receipt</h1>
           <div className="flex gap-2">

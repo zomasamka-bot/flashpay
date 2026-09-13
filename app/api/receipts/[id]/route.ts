@@ -98,11 +98,27 @@ function normalizeReceiptTimestamp(value: unknown): string | null {
   return Number.isFinite(time) ? new Date(time).toISOString() : null
 }
 
-function buildReceiptView(receipt: ReceiptRow, flashPayPaymentId: string, merchantName: string, customerName: string | null): FlashPayReceiptView | null {
-  const amount = Number(receipt.customer_amount ?? receipt.amount)
-  const receiptRecord = receipt as unknown as Record<string, unknown>
-  const occurredAt = normalizeReceiptTimestamp(receiptRecord.timestamp) ?? normalizeReceiptTimestamp(receiptRecord.created_at)
+function normalizeReceiptNote(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
+}
+
+function buildReceiptView(
+  receipt: ReceiptRow,
+  canonicalPayment: Record<string, unknown>,
+  flashPayPaymentId: string,
+  merchantName: string,
+  customerName: string | null,
+): FlashPayReceiptView | null {
+  // The PostgreSQL receipt proves the durable settlement record exists, but all
+  // user-facing payment facts come from the canonical FlashPay payment so the
+  // merchant and customer see the same receipt projection.
+  const amount = Number(canonicalPayment.customerAmount ?? canonicalPayment.amount)
+  const occurredAt = normalizeReceiptTimestamp(canonicalPayment.paidAt)
+    ?? normalizeReceiptTimestamp(canonicalPayment.createdAt)
   if (!Number.isFinite(amount) || amount <= 0 || occurredAt === null) return null
+
   return {
     flashPayPaymentId,
     merchantName,
@@ -112,7 +128,7 @@ function buildReceiptView(receipt: ReceiptRow, flashPayPaymentId: string, mercha
     transactionType: "payment",
     status: toReceiptStatus(receipt.settlement_status),
     occurredAt,
-    note: receipt.description || null,
+    note: normalizeReceiptNote(canonicalPayment.note),
   }
 }
 
@@ -141,6 +157,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (receipt.merchant_id !== verifiedMerchant.username) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
       const view = buildReceiptView(
         receipt,
+        canonicalPayment,
         id,
         verifiedMerchant.username,
         normalizeReceiptName(canonicalPayment.payerUsername) ?? normalizeReceiptName(receipt.payer_username),
@@ -157,11 +174,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const flashPayPaymentId = await resolveLegacyFlashPayId(legacyReceipt, verifiedMerchant.username)
     if (!flashPayPaymentId) return NextResponse.json({ error: "Canonical FlashPay ID unavailable" }, { status: 503 })
     const canonicalLegacyPayment = await loadCanonicalPayment(flashPayPaymentId, verifiedMerchant.username)
+    if (!canonicalLegacyPayment) return NextResponse.json({ error: "Canonical payment unavailable" }, { status: 503 })
     const view = buildReceiptView(
       legacyReceipt,
+      canonicalLegacyPayment,
       flashPayPaymentId,
       verifiedMerchant.username,
-      normalizeReceiptName(canonicalLegacyPayment?.payerUsername) ?? normalizeReceiptName(legacyReceipt.payer_username),
+      normalizeReceiptName(canonicalLegacyPayment.payerUsername) ?? normalizeReceiptName(legacyReceipt.payer_username),
     )
     if (!view) return NextResponse.json({ error: "Receipt presentation unavailable" }, { status: 503 })
     return NextResponse.json(view)
