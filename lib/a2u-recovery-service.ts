@@ -73,6 +73,7 @@ interface RecoveryResult {
   status:
     | "success"
     | "db_reconciled"
+    | "pi_completed_db_pending"
     | "pending_pi_complete"
     | "irreversible"
     | "manual_review_required"
@@ -83,6 +84,16 @@ interface RecoveryResult {
     a2uTxid?: string
     error?: string
   }
+}
+
+function isPiCompletedDbPendingCheckpoint(payment: Payment | null): payment is Payment {
+  if (payment === null) return false
+  const a2uPaymentIdValid = typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim()
+  const a2uTxidValid = typeof payment.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(payment.a2uTxid)
+  const amountsValid = typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === payment.customerAmount
+  const feeValid = typeof payment.horizonFeeCharged === "number" && Number.isFinite(payment.horizonFeeCharged) && payment.horizonFeeCharged >= 0
+  const netValid = payment.appCommission === 0 && typeof payment.appNetImpact === "number" && Number.isFinite(payment.appNetImpact) && amountsValid && feeValid && payment.appNetImpact === payment.customerAmount! - payment.merchantAmount! - payment.horizonFeeCharged!
+  return payment.status === "settlement_pending" && payment.piCompleted === true && payment.piCompletionPending === false && payment.horizonSuccessFlag === true && payment.requiresDbReconciliation === true && payment.dbRecorded !== true && a2uPaymentIdValid && a2uTxidValid && amountsValid && feeValid && netValid
 }
 
 async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customerAmount: number, merchantUid: string): Promise<"FOUND" | "CONFIRMED_NONE" | "INDETERMINATE" | "MANUAL_REVIEW"> {
@@ -439,6 +450,11 @@ export async function executeA2URecovery(
       if (result.error === "wallet_drain_not_selected") return { status: "pending_pi_complete", state: "wallet_drain_not_selected", paymentId, details: { error: result.error } }
       return { status: "manual_review_required", state: "settlement_dispatch_failed", paymentId, details: { error: result.error } }
     }
+    const rereadData = await redis.get(paymentKey)
+    const rereadPayment: Payment | null = rereadData ? (typeof rereadData === "string" ? JSON.parse(rereadData) : rereadData) : null
+    if (isPiCompletedDbPendingCheckpoint(rereadPayment)) {
+      return { status: "pi_completed_db_pending", state: "settlement_dispatch_pi_complete_db_deferred", paymentId, details: { a2uTxid: rereadPayment.a2uTxid } }
+    }
     const response = await buildA2USuccessResponse(paymentId)
     if (response?.success === true && response.status === "settled_to_merchant") {
       return { status: "success", state: "settlement_dispatch_completed", paymentId, details: { u2aTxid: response.u2aTxid, a2uTxid: response.a2uTxid } }
@@ -451,6 +467,11 @@ export async function executeA2URecovery(
     if (!result.ok) {
       if (result.error === "wallet_drain_not_selected") return { status: "pending_pi_complete", state: "wallet_drain_not_selected", paymentId, details: { error: result.error } }
       return { status: "manual_review_required", state: "settlement_reconcile_failed", paymentId, details: { error: result.error } }
+    }
+    const rereadData = await redis.get(paymentKey)
+    const rereadPayment: Payment | null = rereadData ? (typeof rereadData === "string" ? JSON.parse(rereadData) : rereadData) : null
+    if (isPiCompletedDbPendingCheckpoint(rereadPayment)) {
+      return { status: "pi_completed_db_pending", state: "settlement_reconcile_pi_complete_db_deferred", paymentId, details: { a2uTxid: rereadPayment.a2uTxid } }
     }
     const response = await buildA2USuccessResponse(paymentId)
     if (response?.success === true && response.status === "settled_to_merchant") {

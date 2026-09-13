@@ -488,6 +488,35 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] Accounting checkpoint: Fields already present, skipping")
   }
 
+  // J12-G: Once the scheduler-selected A2U is Pi-complete, release the Pi A2U slot
+  // before DB reconciliation. The durable checkpoint keeps DB work recoverable via State 2.
+  if (
+    ctx.schedulerWalletPaymentId === ctx.paymentId &&
+    ctx.payment.dbRecorded !== true &&
+    ctx.payment.piCompleted === true &&
+    ctx.payment.piCompletionPending === false
+  ) {
+    const canonicalA2UTxid = typeof ctx.payment.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(ctx.payment.a2uTxid)
+    const canonicalA2UPaymentId = typeof ctx.payment.a2uPaymentId === "string" && ctx.payment.a2uPaymentId.trim() !== "" && ctx.payment.a2uPaymentId === ctx.payment.a2uPaymentId.trim()
+    const accountingComplete =
+      typeof ctx.payment.customerAmount === "number" && Number.isFinite(ctx.payment.customerAmount) && ctx.payment.customerAmount > 0 &&
+      typeof ctx.payment.merchantAmount === "number" && Number.isFinite(ctx.payment.merchantAmount) && ctx.payment.merchantAmount === ctx.payment.customerAmount &&
+      typeof ctx.payment.horizonFeeCharged === "number" && Number.isFinite(ctx.payment.horizonFeeCharged) && ctx.payment.horizonFeeCharged >= 0 &&
+      ctx.payment.appCommission === 0 &&
+      typeof ctx.payment.appNetImpact === "number" && Number.isFinite(ctx.payment.appNetImpact) &&
+      ctx.payment.appNetImpact === ctx.payment.customerAmount - ctx.payment.merchantAmount - ctx.payment.horizonFeeCharged
+    if (!canonicalA2UTxid || !canonicalA2UPaymentId || ctx.payment.horizonSuccessFlag !== true || !accountingComplete) {
+      return { ok: false, status: "settlement_pending", error: "Pi-complete DB deferral checkpoint could not be verified" }
+    }
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+      status: "settlement_pending",
+      requiresDbReconciliation: true,
+      dbRecorded: false,
+    })
+    console.log("[P7J12G] Pi A2U slot released; DB reconciliation deferred", { paymentId: ctx.paymentId })
+    return { ok: true, status: "settlement_pending" }
+  }
+
   // STAGE 4: DB Reconciliation (skip if already dbRecorded)
   if (!ctx.payment.dbRecorded) {
     console.log("[A2U Executor] STAGE 4: Reconciling in database")
