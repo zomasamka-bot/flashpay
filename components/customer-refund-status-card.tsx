@@ -83,15 +83,10 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
 
   const receiptFields = [
     ["Amount", `${presentation.amount} ${presentation.currency}`],
-    ["Payment ID", presentation.paymentId],
-    ["Refund ID", presentation.refundId],
-    ["Refund payment ID", presentation.refundPaymentId],
-    ["Refund transaction ID", presentation.refundTxid],
-    ["Network", presentation.blockchain.network],
+    ["FlashPay ID", presentation.paymentId],
+    ["Status", statusLabel],
     ["Requested at", formatLocalDateTime(presentation.requestedAt)],
-    ["Blockchain transaction at", formatLocalDateTime(presentation.blockchain.transactionAt)],
     ["Completed at", formatLocalDateTime(presentation.finalization.completedAt)],
-    ["Finalized at", formatLocalDateTime(presentation.finalization.finalizedAt)],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "")
 
   const copyReceipt = () =>
@@ -107,18 +102,13 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
           className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
           onClick={copyReceipt}
         >
-          Copy receipt
+          Copy refund status
         </button>
       </header>
       <dl className="mt-2">
         <Detail label="Amount" value={`${presentation.amount} ${presentation.currency}`} />
-        <Detail label="Payment ID" value={presentation.paymentId} copyable />
-        <Detail label="Refund ID" value={presentation.refundId} copyable />
-        <Detail label="Refund payment ID" value={presentation.refundPaymentId} copyable />
-        <Detail label="Refund transaction ID" value={presentation.refundTxid} copyable />
-        <Detail label="Network" value={presentation.blockchain.network} />
+        <Detail label="FlashPay ID" value={presentation.paymentId} copyable />
         <Detail label="Requested at" value={formatLocalDateTime(presentation.requestedAt)} />
-        <Detail label="Blockchain transaction at" value={formatLocalDateTime(presentation.blockchain.transactionAt)} />
         <Detail label="Completed at" value={formatLocalDateTime(presentation.finalization.completedAt)} />
         <Detail label="Finalized at" value={formatLocalDateTime(presentation.finalization.finalizedAt)} />
       </dl>

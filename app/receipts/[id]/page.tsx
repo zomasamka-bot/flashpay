@@ -2,159 +2,49 @@
 
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { BackButton } from "@/components/back-button"
 import { Spinner } from "@/components/ui/spinner"
-import { Badge } from "@/components/ui/badge"
+import { FlashPayReceiptCard } from "@/components/flashpay-receipt-card"
 import { config } from "@/lib/config"
-import type { MerchantReceiptResponse } from "@/lib/types"
-import { Download, Copy, Check } from "lucide-react"
+import type { FlashPayReceiptView } from "@/lib/types"
+import { Printer } from "lucide-react"
 import { useUnifiedStore } from "@/lib/unified-store"
-
-const receiptDateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23",
-  numberingSystem: "latn",
-})
-
-function formatReceiptDateTime(timestamp?: string): string {
-  if (!timestamp) return "Unavailable"
-  const date = new Date(timestamp)
-  if (!Number.isFinite(date.getTime())) {
-    return "Unavailable"
-  }
-  const parts = Object.fromEntries(receiptDateTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value]))
-  return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
-}
-
-type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
-
-function mapSettlementStatus(status: SettlementStatus): string {
-  if (status === "settled_to_merchant") return "Settled"
-  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "Processing"
-  if (status === "failed" || status === "settlement_failed") return "Failed"
-  if (status === "cancelled") return "Cancelled"
-  if (status === "completed") return "Legacy Completed"
-  return "Other"
-}
 
 export default function ReceiptPage() {
   const params = useParams()
   const receiptId = params.id as string
-  const [receipt, setReceipt] = useState<MerchantReceiptResponse | null>(null)
+  const [receipt, setReceipt] = useState<FlashPayReceiptView | null>(null)
   const [loading, setLoading] = useState(true)
-  const [copied, setCopied] = useState(false)
-  const [isIOS, setIsIOS] = useState(false)
   const store = useUnifiedStore()
   const merchant = store.getMerchantState()
-  const canonicalPaymentId = receipt?.paymentId
-
-  // Detect iOS only on client-side to avoid SSR issues
-  useEffect(() => {
-    setIsIOS(/iPad|iPhone|iPod/.test(navigator.userAgent))
-  }, [])
 
   useEffect(() => {
     const fetchReceipt = async () => {
       try {
         setLoading(true)
-        
-        // Get accessToken from unified store merchant state
-        const accessToken = merchant?.accessToken
-        const headers: HeadersInit = {
-          "Content-Type": "application/json",
-        }
-        
-        if (accessToken) {
-          headers["Authorization"] = `Bearer ${accessToken}`
-        }
-        
-        const response = await fetch(`${config.appUrl}/api/receipts/${receiptId}`, {
-          headers,
-        })
-        if (response.ok) {
-          const data = await response.json()
-          setReceipt(data)
-        }
-      } catch (error) {
-        console.error("Error fetching receipt:", error)
+        const headers: HeadersInit = { "Content-Type": "application/json" }
+        if (merchant?.accessToken) headers.Authorization = `Bearer ${merchant.accessToken}`
+        const response = await fetch(`${config.appUrl}/api/receipts/${encodeURIComponent(receiptId)}`, { headers })
+        if (response.ok) setReceipt(await response.json())
+        else setReceipt(null)
+      } catch {
+        setReceipt(null)
       } finally {
         setLoading(false)
       }
     }
+    if (receiptId) void fetchReceipt()
+  }, [receiptId, merchant?.accessToken])
 
-    if (receiptId) {
-      fetchReceipt()
-    }
-  }, [receiptId])
-
-  const handleCopyReference = () => {
-    if (receipt?.reference) {
-      navigator.clipboard.writeText(receipt.reference)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }
-
-  const handleCopyTxid = () => {
-    if (receipt?.txid) {
-      navigator.clipboard.writeText(receipt.txid)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }
-
-  const handlePrint = async () => {
-    if (isIOS) {
-      // On iOS, use navigator.share to share the receipt
-      if (typeof navigator.share !== "function") {
-        console.error("Receipt sharing is unavailable")
-        return
-      }
-
-      try {
-        await navigator.share({
-          title: `FlashPay Receipt ${receipt?.reference || ""}`,
-          url: window.location.href,
-        })
-      } catch (error) {
-        // Silently ignore AbortError (user cancelled share)
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return
-        }
-        // Log other failures but don't block
-        console.error("Share failed:", error)
-      }
-    } else {
-      // On non-iOS, use native print
-      window.print()
-    }
-  }
-
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-background flex justify-center items-center">
-        <Spinner />
-      </main>
-    )
-  }
+  if (loading) return <main className="min-h-screen bg-background flex items-center justify-center"><Spinner /></main>
 
   if (!receipt) {
     return (
       <main className="min-h-screen bg-background pb-20">
         <div className="max-w-2xl mx-auto p-4">
           <BackButton />
-          <Card className="mt-6">
-            <CardContent className="pt-6">
-              <p className="text-center text-muted-foreground">Receipt not found</p>
-            </CardContent>
-          </Card>
+          <div className="mt-6 rounded-lg border p-6 text-center text-muted-foreground">Receipt not found or not available yet.</div>
         </div>
       </main>
     )
@@ -162,193 +52,17 @@ export default function ReceiptPage() {
 
   return (
     <main className="min-h-screen bg-background pb-20 print:bg-white">
-      <div className="max-w-2xl mx-auto p-4 space-y-6 print:p-0">
+      <div className="max-w-2xl mx-auto p-4 space-y-5 print:p-0">
         <div className="flex items-center justify-between print:hidden">
-          <h1 className="text-3xl font-bold text-foreground">Receipt</h1>
+          <h1 className="text-2xl font-bold">Receipt</h1>
           <div className="flex gap-2">
-            <Button onClick={handlePrint} variant="outline" size="sm">
-              <Download className="h-4 w-4 mr-2" />
-              {isIOS ? "Share Receipt" : "Print"}
+            <Button type="button" variant="outline" size="sm" onClick={() => window.print()}>
+              <Printer className="mr-2 h-4 w-4" /> Print
             </Button>
             <BackButton />
           </div>
         </div>
-
-        {/* Receipt Card */}
-        <Card className="print:shadow-none">
-          <CardHeader className="border-b print:border-b">
-            <div className="flex items-start justify-between">
-              <div>
-                <CardTitle className="text-2xl">FlashPay Receipt</CardTitle>
-                <p className="text-sm text-muted-foreground mt-2">{receipt.merchant.name}</p>
-              </div>
-              <Badge variant="default">{receipt.reference}</Badge>
-            </div>
-          </CardHeader>
-
-          <CardContent className="space-y-6 pt-6">
-            {/* Transaction Details */}
-            <div className="grid grid-cols-2 gap-6 print:grid-cols-2">
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Date & Time</p>
-                <p className="font-semibold" dir="ltr" lang="en">
-                  {formatReceiptDateTime(receipt.timestamp)}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Status</p>
-                {receipt.settlementStatus && (
-                  <Badge variant="default" className="mt-1">
-                    {mapSettlementStatus(receipt.settlementStatus)}
-                  </Badge>
-                )}
-              </div>
-            </div>
-
-            {canonicalPaymentId && (
-              <div className="p-4 bg-muted rounded-lg print:bg-gray-100">
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">FlashPay Payment ID</p>
-                <p className="font-mono text-sm break-all">{canonicalPaymentId}</p>
-              </div>
-            )}
-
-            {/* Transaction ID */}
-            <div className="p-4 bg-muted rounded-lg print:bg-gray-100">
-              <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Transaction ID</p>
-              <div className="flex items-center gap-2">
-                <p className="font-mono text-sm break-all flex-1">{receipt.transactionId}</p>
-                <Button
-                  onClick={() => {
-                    navigator.clipboard.writeText(receipt.transactionId)
-                    setCopied(true)
-                    setTimeout(() => setCopied(false), 2000)
-                  }}
-                  variant="ghost"
-                  size="sm"
-                  className="print:hidden"
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            {/* Amount */}
-            <div className="py-4 border-y border-border">
-              <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Amount</p>
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-bold text-foreground">{receipt.amount}</span>
-                <span className="text-2xl text-muted-foreground">{receipt.currency}</span>
-              </div>
-            </div>
-
-            {/* Description */}
-            {receipt.description && (
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Description</p>
-                <p className="text-foreground">{receipt.description}</p>
-              </div>
-            )}
-
-            {/* Merchant Info */}
-            <div className="grid grid-cols-2 gap-6 p-4 bg-muted rounded-lg print:bg-gray-100">
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Merchant</p>
-                <p className="font-semibold">{receipt.merchant.name}</p>
-                <p className="text-xs text-muted-foreground font-mono mt-1">{receipt.merchant.id}</p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Payer</p>
-                <p className="font-semibold">{receipt.payer.username || "Customer"}</p>
-                {receipt.payer.address && (
-                  <p className="text-xs text-muted-foreground font-mono mt-1">{receipt.payer.address}</p>
-                )}
-              </div>
-            </div>
-
-            {/* Blockchain Details */}
-            {receipt.txid && (
-              <div className="p-4 bg-muted rounded-lg print:bg-gray-100">
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Blockchain Transaction (TXID)</p>
-                <div className="flex items-center gap-2">
-                  <p className="text-xs font-mono break-all flex-1 text-muted-foreground">{receipt.txid}</p>
-                  <Button
-                    onClick={handleCopyTxid}
-                    variant="ghost"
-                    size="sm"
-                    className="print:hidden"
-                  >
-                    {copied ? (
-                      <Check className="h-4 w-4 text-green-600" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Reference */}
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-lg print:bg-gray-100">
-              <span className="text-xs font-semibold text-muted-foreground uppercase">Reference:</span>
-              <span className="font-mono font-bold flex-1">{receipt.reference}</span>
-              <Button
-                onClick={handleCopyReference}
-                variant="ghost"
-                size="sm"
-                className="print:hidden"
-              >
-                {copied ? (
-                  <Check className="h-4 w-4 text-green-600" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-
-            {/* Payment Trace - Conditional rendering when at least one canonical value exists */}
-            {(receipt.piPaymentId || receipt.u2aTxid || receipt.a2uPaymentId || receipt.a2uTxid) && (
-              <div className="p-4 bg-muted rounded-lg print:bg-gray-100">
-                <p className="text-xs font-semibold text-muted-foreground uppercase mb-3">Payment Trace</p>
-                <div className="space-y-2 text-sm">
-                  {receipt.piPaymentId && (
-                    <div>
-                      <p className="text-xs font-semibold text-muted-foreground">Pi Payment ID</p>
-                      <p className="font-mono text-muted-foreground break-all">{receipt.piPaymentId}</p>
-                    </div>
-                  )}
-                  {receipt.u2aTxid && (
-                    <div>
-                      <p className="text-xs font-semibold text-muted-foreground">U2A TXID</p>
-                      <p className="font-mono text-muted-foreground break-all">{receipt.u2aTxid}</p>
-                    </div>
-                  )}
-                  {receipt.a2uPaymentId && (
-                    <div>
-                      <p className="text-xs font-semibold text-muted-foreground">A2U Payment ID</p>
-                      <p className="font-mono text-muted-foreground break-all">{receipt.a2uPaymentId}</p>
-                    </div>
-                  )}
-                  {receipt.a2uTxid && (
-                    <div>
-                      <p className="text-xs font-semibold text-muted-foreground">A2U TXID</p>
-                      <p className="font-mono text-muted-foreground break-all">{receipt.a2uTxid}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Footer */}
-            <div className="text-center pt-4 border-t border-border text-xs text-muted-foreground">
-              <p>This receipt is a record of your transaction on FlashPay</p>
-              <p className="mt-2">flashpay.pi</p>
-            </div>
-          </CardContent>
-        </Card>
+        <FlashPayReceiptCard receipt={receipt} />
       </div>
     </main>
   )

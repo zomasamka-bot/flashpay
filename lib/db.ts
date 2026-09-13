@@ -513,7 +513,8 @@ export async function getReceipt(transactionId: string): Promise<ReceiptRow | nu
         r.*,
         t.reference,
         t.description,
-        t.merchant_id
+        t.merchant_id,
+        t.payment_id
       FROM receipts r
       LEFT JOIN transactions t ON r.transaction_id = t.id
       WHERE r.transaction_id = $1`,
@@ -525,6 +526,37 @@ export async function getReceipt(transactionId: string): Promise<ReceiptRow | nu
     return row as ReceiptRow
   } catch (error) {
     console.error('[DB] getReceipt failed:', error)
+    return null
+  }
+}
+
+/**
+ * Get receipt by verified Pi U2A payment identifier.
+ * This is an internal linkage helper only; the public/user-facing identifier
+ * remains the FlashPay application payment ID.
+ */
+export async function getReceiptByU2AIdentifier(u2aIdentifier: string): Promise<ReceiptRow | null> {
+  if (!process.env.DATABASE_URL) return null
+
+  try {
+    const result = await query(
+      `SELECT
+        r.*,
+        t.reference,
+        t.description,
+        t.merchant_id,
+        t.payment_id
+      FROM transactions t
+      INNER JOIN receipts r ON r.transaction_id = t.id
+      WHERE t.payment_id = $1`,
+      [u2aIdentifier]
+    )
+    if (!Array.isArray(result) || result.length === 0) return null
+    const row = result[0]
+    if (typeof row !== 'object' || row === null) return null
+    return row as ReceiptRow
+  } catch (error) {
+    console.error('[DB] getReceiptByU2AIdentifier failed:', error)
     return null
   }
 }

@@ -56,6 +56,8 @@ export interface Payment {
   payerUid?: string
   payerUidSource?: "verified_u2a" | "pi_payment" | "manual_review"
   payerUidCapturedAt?: string
+  // Presentation-only verified Pi username; never used as financial authority.
+  payerUsername?: string
   payerRefundEligible?: boolean
   refundPaymentId?: string
   refundTxid?: string
@@ -104,6 +106,36 @@ export interface Transaction {
   a2uPaymentId?: string
   a2uIdentifier?: string
   a2uTxid?: string
+}
+
+/**
+ * Canonical user-facing receipt contract.
+ *
+ * IMPORTANT: This is a presentation/read-model contract only. It must never
+ * become financial truth and intentionally carries no Pi/Horizon/DB/internal
+ * transaction identifiers. The single public support/search identifier is
+ * flashPayPaymentId.
+ */
+export type FlashPayReceiptKind = "payment" | "refund"
+
+export type FlashPayReceiptStatus =
+  | "successful"
+  | "processing"
+  | "refunded"
+  | "failed"
+  | "cancelled"
+  | "needs_attention"
+
+export interface FlashPayReceiptView {
+  flashPayPaymentId: string
+  merchantName: string
+  customerName: string | null
+  amount: number
+  currency: "π"
+  transactionType: FlashPayReceiptKind
+  status: FlashPayReceiptStatus
+  occurredAt: string
+  note?: string | null
 }
 
 export interface MerchantReceiptResponse {
@@ -251,12 +283,14 @@ export interface ReceiptRow {
   receipt_id?: string
   id?: string
   transaction_id: string
+  payment_id?: string
   merchant_id: string
   merchant_name?: string
   merchant_wallet_address?: string
   payer_username?: string | null
   payer_address?: string
   amount: number
+  customer_amount?: number | string | null
   currency: string | null
   description: string | null
   reference: string

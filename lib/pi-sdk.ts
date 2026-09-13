@@ -293,6 +293,9 @@ export const createPiPayment = async (
 
 export const authenticateCustomer = async (): Promise<{
   success: boolean
+  accessToken?: string
+  uid?: string
+  username?: string
   error?: string
 }> => {
   console.log("[CUSTOMER-AUTH] authenticateCustomer() started")
@@ -311,10 +314,10 @@ export const authenticateCustomer = async (): Promise<{
   }
 
   try {
-    console.log("[CUSTOMER-AUTH] Requesting ['payments','wallet_address'] scopes from Pi.authenticate()...")
-    CoreLogger.operation("Authenticating customer with Pi SDK (payments + wallet_address scopes)")
+    console.log("[CUSTOMER-AUTH] Requesting ['username','payments','wallet_address'] scopes from Pi.authenticate()...")
+    CoreLogger.operation("Authenticating customer with Pi SDK (username + payments + wallet_address scopes)")
 
-    const authPromise = window.Pi.authenticate(["payments","wallet_address"], async (payment: any) => {
+    const authPromise = window.Pi.authenticate(["username","payments","wallet_address"], async (payment: any) => {
       // Handle incomplete payment from Pi Network
       console.log("[CUSTOMER-AUTH] Incomplete payment callback triggered")
       
@@ -397,8 +400,17 @@ export const authenticateCustomer = async (): Promise<{
       lastChecked: new Date(),
     })
 
+    const accessToken = typeof authResult.accessToken === "string" ? authResult.accessToken.trim() : ""
+    const uid = typeof authResult.user.uid === "string" ? authResult.user.uid.trim() : ""
+    const username = typeof authResult.user.username === "string" ? authResult.user.username.trim() : ""
+
     console.log("[CUSTOMER-AUTH] ✅ Authentication successful")
-    return { success: true }
+    return {
+      success: true,
+      accessToken: accessToken || undefined,
+      uid: uid || undefined,
+      username: username || undefined,
+    }
     
   } catch (error) {
     const isTimeout = error instanceof Error && error.message.includes("timeout")

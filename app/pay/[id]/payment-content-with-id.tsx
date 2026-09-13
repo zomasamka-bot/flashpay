@@ -5,45 +5,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { ExternalLink, Copy } from "lucide-react"
+import { ExternalLink } from "lucide-react"
 import { initializePiSDK, authenticateCustomer, authenticateCustomerForRefundRead } from "@/lib/pi-sdk"
 import { readCustomerRefundPresentationClient } from "@/lib/customer-refund-presentation-client"
 import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
+import { FlashPayReceiptCard } from "@/components/flashpay-receipt-card"
+import { toReceiptStatus } from "@/lib/receipt-presentation"
 import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
 import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/operations"
 import { getPiNetUrl } from "@/lib/router"
 import { unifiedStore } from "@/lib/unified-store"
 import type { Payment, RefundPresentation } from "@/lib/types"
-
-// UI-only mapper for settlement status display
-const paymentDateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23",
-  numberingSystem: "latn",
-})
-
-function formatPaymentDateTime(timestamp?: string): string {
-  if (!timestamp) return "Unavailable"
-  const date = new Date(timestamp)
-  if (!Number.isFinite(date.getTime())) return "Unavailable"
-  const parts = Object.fromEntries(paymentDateTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value]))
-  return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
-}
-
-function mapSettlementStatusForDisplay(status: string): string {
-  const lowerStatus = status.toLowerCase()
-  if (lowerStatus === "settled_to_merchant") return "Settled"
-  if (lowerStatus === "pending" || lowerStatus === "paid_to_app" || lowerStatus === "settlement_pending") return "Processing"
-  if (lowerStatus === "failed" || lowerStatus === "settlement_failed") return "Failed"
-  if (lowerStatus === "cancelled") return "Cancelled"
-  return "Other"
-}
 
 export default function PaymentContentWithId({ 
   paymentId, 
@@ -73,6 +46,21 @@ export default function PaymentContentWithId({
   const refundAccessTokenRef = useRef<string | null>(null)
   const refundFlowActiveRef = useRef(false)
   const refundAbortRef = useRef<AbortController | null>(null)
+  const receiptIdentityRef = useRef<{ accessToken: string; uid: string; username: string } | null>(null)
+  const [customerReceiptName, setCustomerReceiptName] = useState<string | null>(null)
+
+  const persistReceiptIdentity = async () => {
+    const identity = receiptIdentityRef.current
+    if (!identity) return
+    try {
+      await fetch(`/api/payments/${encodeURIComponent(paymentId)}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${identity.accessToken}` },
+      })
+    } catch {
+      // Presentation projection must never affect payment completion.
+    }
+  }
 
   const addDiagnostic = (message: string) => {
     const timestamp = new Date().toLocaleTimeString()
@@ -444,7 +432,7 @@ export default function PaymentContentWithId({
           console.log("[v0] ✅ Payment confirmed and settled to merchant!")
           setPayment(updated)
           setIsPaying(false)
-          toast({ title: "Payment Successful", description: `Transaction ID: ${updated.u2aTxid || updated.a2uTxid || txid}` })
+          toast({ title: "Payment Successful", description: "Your payment was completed successfully" })
         }
       }
       } finally {
@@ -501,6 +489,10 @@ export default function PaymentContentWithId({
         return
       }
       
+      if (authResult.accessToken && authResult.uid && authResult.username) {
+        receiptIdentityRef.current = { accessToken: authResult.accessToken, uid: authResult.uid, username: authResult.username }
+        setCustomerReceiptName(authResult.username)
+      }
       addDiagnostic("Authentication successful")
       setAuthStatus("authenticated")
     }
@@ -513,9 +505,10 @@ export default function PaymentContentWithId({
       async (txid) => {
         setPayment((current) => current ? { ...current, status: "settled_to_merchant" } : current)
         setIsPaying(false)
+        void persistReceiptIdentity()
         toast({
           title: "Payment Successful",
-          description: `Transaction ID: ${txid}`,
+          description: "Your payment was completed successfully",
         })
         try {
           const updated = await getPaymentFromServer(paymentId, true)
@@ -547,6 +540,7 @@ export default function PaymentContentWithId({
       },
       (status) => {
         setPayment((current) => current ? { ...current, status } : current)
+        void persistReceiptIdentity()
         startPostSubmitPolling("", status)
       },
     )
@@ -659,56 +653,6 @@ export default function PaymentContentWithId({
     )
   }
 
-  const copyToClipboard = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      toast({
-        title: "Copied",
-        description: `${label} copied to clipboard`,
-      })
-    } catch {
-      toast({
-        title: "Copy Failed",
-        description: "Could not copy to clipboard",
-        variant: "destructive",
-      })
-    }
-  }
-
-  const shareReceipt = async () => {
-    const receiptText = `FlashPay Receipt\nAmount: ${payment.amount.toFixed(2)}π\nStatus: ${mapSettlementStatusForDisplay(payment.status)}\nDate & Time: ${formatPaymentDateTime(payment.paidAt)}\nMerchant ID: ${payment.merchantId}\n${payment.note ? `Note: ${payment.note}\n` : ""}Payment ID: ${paymentId}`
-    
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: "FlashPay Receipt",
-          text: receiptText,
-        })
-      } catch (error) {
-        if (String(error).includes("AbortError")) return
-        copyToClipboard(receiptText, "Receipt")
-      }
-    } else {
-      copyToClipboard(receiptText, "Receipt")
-    }
-  }
-
-  const sharePaymentId = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: "FlashPay Payment ID",
-          text: paymentId,
-        })
-      } catch (error) {
-        if (String(error).includes("AbortError")) return
-        copyToClipboard(paymentId, "Payment ID")
-      }
-    } else {
-      copyToClipboard(paymentId, "Payment ID")
-    }
-  }
-  
   // CRITICAL: Log the origin context to diagnose app_id mismatches
   if (typeof window !== "undefined") {
     console.log("[v0][QR-Generation] ===== QR CODE GENERATION CONTEXT =====")
@@ -741,18 +685,25 @@ export default function PaymentContentWithId({
           <h1 className="text-2xl font-bold mb-2">FlashPay Request</h1>
         </div>
 
+        {isPaid ? (
+          <FlashPayReceiptCard receipt={{
+            flashPayPaymentId: paymentId,
+            merchantName: payment.merchantId,
+            customerName: customerReceiptName,
+            amount: payment.amount,
+            currency: "π",
+            transactionType: "payment",
+            status: toReceiptStatus(payment.status, payment),
+            occurredAt: payment.settledAt || payment.paidAt || payment.createdAt,
+            note: payment.note || null,
+          }} />
+        ) : (
         <Card>
           <CardHeader>
-            {isPaid ? (
-              <CardTitle className="text-center">FlashPay Receipt</CardTitle>
-            ) : (
-              <div className="flex items-center justify-between">
-                <CardTitle>Payment Details</CardTitle>
-                <Badge variant="secondary">
-                  {payment.status}
-                </Badge>
-              </div>
-            )}
+            <div className="flex items-center justify-between">
+              <CardTitle>Payment Details</CardTitle>
+              <Badge variant="secondary">{payment.status}</Badge>
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="text-center py-4">
@@ -760,43 +711,6 @@ export default function PaymentContentWithId({
               {payment.note && <p className="text-sm text-muted-foreground mt-2">{payment.note}</p>}
             </div>
 
-            {isPaid ? (
-              <>
-                <div className="p-4 bg-accent/10 text-accent rounded-lg space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium">Status</span>
-                    <Badge variant="default">{mapSettlementStatusForDisplay(payment.status)}</Badge>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium">Merchant</span>
-                    <span className="text-sm font-mono">{payment.merchantId}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium">Date & Time</span>
-                    <span className="text-sm font-mono">{formatPaymentDateTime(payment.paidAt)}</span>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Button
-                    onClick={shareReceipt}
-                    variant="outline"
-                    className="w-full gap-2"
-                  >
-                    <Copy className="h-4 w-4" />
-                    Copy Receipt
-                  </Button>
-                  <Button
-                    onClick={() => copyToClipboard(paymentId, "Payment ID")}
-                    variant="outline"
-                    className="w-full gap-2"
-                  >
-                    <Copy className="h-4 w-4" />
-                    Copy Payment ID
-                  </Button>
-                </div>
-              </>
-            ) : (
               <>
                 <div className="flex items-center justify-center">
                   <QRCode value={paymentQR} size={240} />
@@ -841,9 +755,9 @@ export default function PaymentContentWithId({
                   </p>
                 )}
               </>
-            )}
           </CardContent>
         </Card>
+        )}
 
 
       </div>

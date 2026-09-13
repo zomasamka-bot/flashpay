@@ -1,158 +1,121 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getReceipt } from "@/lib/db"
+import { getReceipt, getReceiptByU2AIdentifier } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import type { MerchantReceiptResponse, ReceiptRow } from "@/lib/types"
+import { normalizeReceiptName, toReceiptStatus } from "@/lib/receipt-presentation"
+import type { FlashPayReceiptView, ReceiptRow } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+async function loadCanonicalPayment(flashPayPaymentId: string, merchantUsername: string): Promise<Record<string, unknown> | null> {
+  if (!isRedisConfigured) return null
+  try {
+    const raw = await redis.get(`payment:${flashPayPaymentId}`)
+    const payment = asRecord(typeof raw === "string" ? JSON.parse(raw) : raw)
+    if (!payment || payment.id !== flashPayPaymentId || payment.merchantId !== merchantUsername) return null
+    return payment
+  } catch {
+    return null
+  }
+}
+
+async function resolveLegacyFlashPayId(receipt: ReceiptRow, merchantUsername: string): Promise<string | null> {
+  if (!isRedisConfigured || !serverConfig.isPiApiKeyConfigured || typeof receipt.u2a_identifier !== "string" || !receipt.u2a_identifier) return null
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 5000)
+  try {
+    const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(receipt.u2a_identifier)}`, {
+      headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    const payment = asRecord(await response.json())
+    const metadata = payment ? asRecord(payment.metadata) : null
+    const candidate = typeof metadata?.paymentId === "string" ? metadata.paymentId.trim() : ""
+    if (!candidate) return null
+    const canonical = await loadCanonicalPayment(candidate, merchantUsername)
+    if (!canonical || canonical.piPaymentId !== receipt.u2a_identifier) return null
+    return candidate
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function buildReceiptView(receipt: ReceiptRow, flashPayPaymentId: string, merchantName: string, customerName: string | null): FlashPayReceiptView | null {
+  const amount = Number(receipt.customer_amount ?? receipt.amount)
+  const occurredAt = receipt.timestamp || receipt.created_at
+  if (!Number.isFinite(amount) || amount <= 0 || typeof occurredAt !== "string" || !Number.isFinite(new Date(occurredAt).getTime())) return null
+  return {
+    flashPayPaymentId,
+    merchantName,
+    customerName,
+    amount,
+    currency: "π",
+    transactionType: "payment",
+    status: toReceiptStatus(receipt.settlement_status),
+    occurredAt,
+    note: receipt.description || null,
+  }
+}
+
 /**
- * GET /api/receipts/[transactionId]
- * Returns complete receipt details from PostgreSQL
- * Receipt includes: amount, date, merchant, payer, transaction ID, blockchain txid
- * SECURITY: Requires Bearer token with verified Pi identity matching merchant_id
+ * GET /api/receipts/[id]
+ * Preferred lookup: FlashPay application payment ID -> canonical Redis payment -> verified Pi U2A identifier -> PostgreSQL receipt.
+ * Compatibility fallback: legacy transaction ID, but still resolves and returns the canonical FlashPay ID before presentation.
  */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const isConfigured = !!process.env.DATABASE_URL
-  if (!isConfigured) {
-    return NextResponse.json(
-      { error: "Transaction storage not configured" },
-      { status: 503 }
-    )
-  }
+  if (!process.env.DATABASE_URL) return NextResponse.json({ error: "Transaction storage not configured" }, { status: 503 })
 
   try {
-    const { id: transactionId } = await params
+    const { id } = await params
+    if (!id) return NextResponse.json({ error: "FlashPay ID required" }, { status: 400 })
 
-    if (!transactionId) {
-      return NextResponse.json({ error: "Transaction ID required" }, { status: 400 })
-    }
+    const verifiedMerchant = await authorizeFromHeader(request.headers.get("authorization"))
+    if (!verifiedMerchant) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-    // SECURITY: Verify merchant identity matches receipt owner (do this first)
-    const authHeader = request.headers.get("authorization")
-    const verifiedMerchant = await authorizeFromHeader(authHeader)
-    
-    if (!verifiedMerchant) {
-      console.warn("[Receipts API] Missing or invalid authorization header")
-      return NextResponse.json(
-        { error: "Unauthorized - missing authorization" },
-        { status: 401 }
+    // Normal K3/K4 path: user-facing FlashPay ID first.
+    const canonicalPayment = await loadCanonicalPayment(id, verifiedMerchant.username)
+    if (canonicalPayment) {
+      const piPaymentId = typeof canonicalPayment.piPaymentId === "string" ? canonicalPayment.piPaymentId.trim() : ""
+      if (!piPaymentId) return NextResponse.json({ error: "Receipt not available yet" }, { status: 404 })
+      const receipt = await getReceiptByU2AIdentifier(piPaymentId)
+      if (!receipt) return NextResponse.json({ error: "Receipt not found" }, { status: 404 })
+      if (receipt.merchant_id !== verifiedMerchant.username) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      const view = buildReceiptView(
+        receipt,
+        id,
+        verifiedMerchant.username,
+        normalizeReceiptName(canonicalPayment.payerUsername) ?? normalizeReceiptName(receipt.payer_username),
       )
+      if (!view) return NextResponse.json({ error: "Receipt presentation unavailable" }, { status: 503 })
+      return NextResponse.json(view)
     }
 
-    const receipt = await getReceipt(transactionId)
+    // Legacy links/bookmarks may still contain the internal transaction ID.
+    const legacyReceipt = await getReceipt(id)
+    if (!legacyReceipt) return NextResponse.json({ error: "Receipt not found" }, { status: 404 })
+    if (legacyReceipt.merchant_id !== verifiedMerchant.username) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
-    if (!receipt) {
-      return NextResponse.json({ error: "Receipt not found" }, { status: 404 })
-    }
-
-    // Verify merchant owns this receipt
-    if (verifiedMerchant.username !== receipt.merchant_id) {
-      console.warn("[Receipts API] Unauthorized access attempt - username mismatch:", {
-        verifiedUsername: verifiedMerchant.username,
-        receiptMerchantId: receipt.merchant_id,
-      })
-      return NextResponse.json(
-        { error: "Unauthorized - merchant identity verification failed" },
-        { status: 403 }
-      )
-    }
-
-    let canonicalPaymentId: string | undefined
-    if (
-      isRedisConfigured &&
-      serverConfig.isPiApiKeyConfigured &&
-      typeof receipt.u2a_identifier === "string" &&
-      receipt.u2a_identifier.length > 0
-    ) {
-      try {
-        const piLookupController = new AbortController()
-        const piLookupTimeout = setTimeout(() => piLookupController.abort(), 5000)
-        try {
-          const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(receipt.u2a_identifier)}`, {
-            method: "GET",
-            headers: {
-              Authorization: `Key ${serverConfig.piApiKey}`,
-              "Content-Type": "application/json",
-            },
-            cache: "no-store",
-            signal: piLookupController.signal,
-          })
-          if (piResponse.ok) {
-            const piValue: unknown = await piResponse.json()
-            if (typeof piValue === "object" && piValue !== null && !Array.isArray(piValue)) {
-              const piPayment = piValue as Record<string, unknown>
-              const metadataValue: unknown = piPayment.metadata
-              if (typeof metadataValue === "object" && metadataValue !== null && !Array.isArray(metadataValue)) {
-                const metadata = metadataValue as Record<string, unknown>
-                const metadataPaymentId = metadata.paymentId
-                if (typeof metadataPaymentId === "string" && metadataPaymentId.length > 0) {
-                  let redisLookupReject: (reason?: unknown) => void = () => {}
-                  const redisLookupTimeout = setTimeout(() => redisLookupReject(new Error("Redis lookup timed out")), 2000)
-                  try {
-                    const raw = await Promise.race([
-                      redis.get(`payment:${metadataPaymentId}`),
-                      new Promise<never>((_, reject) => {
-                        redisLookupReject = reject
-                      }),
-                    ])
-                    const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
-                    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-                      const payment = value as Record<string, unknown>
-                      if (
-                        payment.id === metadataPaymentId &&
-                        payment.piPaymentId === receipt.u2a_identifier &&
-                        payment.merchantId === receipt.merchant_id
-                      ) canonicalPaymentId = metadataPaymentId
-                    }
-                  } finally {
-                    clearTimeout(redisLookupTimeout)
-                  }
-                }
-              }
-            }
-          }
-        } finally {
-          clearTimeout(piLookupTimeout)
-        }
-      } catch (lookupError) {
-        console.warn("[Receipts API] Canonical payment lookup unavailable", lookupError)
-      }
-    }
-
-    // Transform receipt to exact expected shape with nested data
-    const transformedReceipt: MerchantReceiptResponse = {
-      id: receipt.id,
-      transactionId: receipt.transaction_id,
-      paymentId: canonicalPaymentId,
-      reference: receipt.reference,
-      amount: Number(receipt.amount),
-      currency: receipt.currency || 'π',
-      timestamp: receipt.timestamp,
-      txid: receipt.txid,
-      status: 'COMPLETED',
-      description: receipt.description,
-      merchant: {
-        name: verifiedMerchant.username,
-        id: receipt.merchant_id,
-      },
-      payer: {
-        username: receipt.payer_username,
-        address: receipt.payer_address,
-      },
-      settlementStatus: receipt.settlement_status,
-      u2aIdentifier: receipt.u2a_identifier,
-      u2aTxid: receipt.u2a_txid,
-      piPaymentId: receipt.u2a_identifier,
-      a2uIdentifier: receipt.a2u_identifier,
-      a2uTxid: receipt.a2u_txid,
-      a2uPaymentId: receipt.a2u_identifier,
-      createdAt: receipt.created_at,
-    }
-
-    return NextResponse.json(transformedReceipt)
+    const flashPayPaymentId = await resolveLegacyFlashPayId(legacyReceipt, verifiedMerchant.username)
+    if (!flashPayPaymentId) return NextResponse.json({ error: "Canonical FlashPay ID unavailable" }, { status: 503 })
+    const canonicalLegacyPayment = await loadCanonicalPayment(flashPayPaymentId, verifiedMerchant.username)
+    const view = buildReceiptView(
+      legacyReceipt,
+      flashPayPaymentId,
+      verifiedMerchant.username,
+      normalizeReceiptName(canonicalLegacyPayment?.payerUsername) ?? normalizeReceiptName(legacyReceipt.payer_username),
+    )
+    if (!view) return NextResponse.json({ error: "Receipt presentation unavailable" }, { status: 503 })
+    return NextResponse.json(view)
   } catch (error) {
     console.error("[Receipts API] Error:", error)
     return NextResponse.json({ error: "Failed to fetch receipt" }, { status: 500 })

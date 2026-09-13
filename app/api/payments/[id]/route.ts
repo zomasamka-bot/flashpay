@@ -6,6 +6,7 @@ export const runtime = 'nodejs'
 
 import { redis, isRedisConfigured as isKvConfigured } from "@/lib/redis"
 import { isPaymentFinal } from "@/lib/payment-status"
+import { authorizeFromHeader } from "@/lib/merchant-auth"
 
 // Helper: Check if origin is allowed for CORS
 function isOriginAllowed(origin: string | null): boolean {
@@ -131,6 +132,37 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
 }
 
-export async function PATCH() {
-  return NextResponse.json({ error: "Method not allowed" }, { status: 405 })
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  if (!isKvConfigured) return NextResponse.json({ error: "Redis not configured" }, { status: 503 })
+
+  const { id } = await params
+  const verifiedPayer = await authorizeFromHeader(request.headers.get("authorization"))
+  if (!verifiedPayer) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  const raw = await redis.get(`payment:${id}`)
+  const payment: any = raw ? (typeof raw === "string" ? JSON.parse(raw) : raw) : null
+  if (!payment) return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+  if (payment.id !== id) return NextResponse.json({ error: "Payment identity conflict" }, { status: 409 })
+
+  // Presentation identity can be projected only after authoritative U2A identity capture.
+  // It never changes payment status, settlement authority, refund eligibility, or accounting.
+  if (payment.payerUidSource !== "verified_u2a" || payment.payerUid !== verifiedPayer.uid) {
+    return NextResponse.json({ error: "Payer identity not verified for this payment" }, { status: 403 })
+  }
+
+  const username = verifiedPayer.username.trim()
+  if (!username) return NextResponse.json({ error: "Verified username unavailable" }, { status: 409 })
+
+  const updated = await redis.eval<[string, string, string], number>(`
+local latest=redis.call('GET',KEYS[1]); if not latest then return 0 end
+local ok,current=pcall(cjson.decode,latest); if not ok or type(current)~='table' then return 0 end
+if current.id~=ARGV[1] or current.payerUidSource~='verified_u2a' or current.payerUid~=ARGV[2] then return 0 end
+if current.payerUsername~=nil and current.payerUsername~=ARGV[3] then return -1 end
+current.payerUsername=ARGV[3]
+redis.call('SET',KEYS[1],cjson.encode(current)); return 1
+`, [`payment:${id}`], [id, verifiedPayer.uid, username])
+
+  if (updated === -1) return NextResponse.json({ error: "Payer username conflict" }, { status: 409 })
+  if (updated !== 1) return NextResponse.json({ error: "Payer identity projection unavailable" }, { status: 409 })
+  return NextResponse.json({ success: true })
 }
