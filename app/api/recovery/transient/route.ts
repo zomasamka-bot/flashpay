@@ -4,7 +4,7 @@ import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
-import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass } from "@/lib/refund-auto-orchestrator"
+import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass, runAutomaticRefundPreparationStep, runAutomaticRefundFinalizationStep } from "@/lib/refund-auto-orchestrator"
 import { query } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
@@ -608,10 +608,12 @@ export async function POST(request: NextRequest) {
   }
 
   const requestedMode = new URL(request.url).searchParams.get("mode")
-  if (requestedMode !== null && requestedMode !== IMMEDIATE_DRAIN_MODE && requestedMode !== CONTINUATION_MODE) return NextResponse.json({ error: "Invalid transient recovery mode" }, { status: 400 })
-  // A continuation request is already the trusted follow-up wake. Execute the drain in this
-  // request instead of scheduling a second self-request, which Vercel rejects as a loop.
-  const immediateDrainMode = requestedMode === IMMEDIATE_DRAIN_MODE || requestedMode === CONTINUATION_MODE
+  if (requestedMode === CONTINUATION_MODE) {
+    const scheduled = scheduleTrustedTransientRequest("drain")
+    return NextResponse.json({ state: scheduled ? "continuation_scheduled" : "continuation_unavailable" }, { status: scheduled ? 202 : 503 })
+  }
+  if (requestedMode !== null && requestedMode !== IMMEDIATE_DRAIN_MODE) return NextResponse.json({ error: "Invalid transient recovery mode" }, { status: 400 })
+  const immediateDrainMode = requestedMode === IMMEDIATE_DRAIN_MODE
 
   const drainLease = await acquireTransientDrainLease()
   if (drainLease.state === "unavailable") return NextResponse.json({ error: "Transient drain lease unavailable" }, { status: 503 })
@@ -1106,6 +1108,44 @@ export async function POST(request: NextRequest) {
     return { kind: null, paymentId: null, refundId: null, lane: null }
   }
 
+  let refundAccountingReady: boolean | null = null
+  const refundResults: Array<Awaited<ReturnType<typeof ensureAutomaticRefundIntent>>> = []
+  let refundIntakePeakInFlight = 0
+
+  // Prepare newly eligible automatic refunds before wallet-head selection. These steps may
+  // create/recover the Pi refund payment identifier, but are hard-gated from blockchain
+  // submission. The existing wallet scheduler remains the sole authority for money movement.
+  if (refundCandidateIds.length > 0) {
+    refundAccountingReady = (await query("SELECT 1 FROM refund_accounting_records LIMIT 0")) !== null
+    if (refundAccountingReady) {
+      for (const paymentId of refundCandidateIds.slice(0, MAX_ATTEMPTS)) {
+        let intake: Awaited<ReturnType<typeof ensureAutomaticRefundIntent>>
+        try {
+          intake = await ensureAutomaticRefundIntent(paymentId)
+        } catch {
+          intake = { outcome: "blocked", paymentId, reason: "intake_exception" }
+        }
+        refundResults.push(intake)
+        refundIntakePeakInFlight = 1
+        if (intake.outcome === "blocked" || typeof intake.refundId !== "string") continue
+
+        for (let prepareStep = 0; prepareStep < 3; prepareStep += 1) {
+          const prepared = await runAutomaticRefundPreparationStep(paymentId, intake.refundId)
+          if (prepared.state !== "ok" || prepared.result.outcome !== "success") break
+        }
+
+        // A prior wake may already have blockchain-confirmed this refund. If so, complete
+        // only its non-wallet checkpoints now; this helper refuses all pre-confirmation stages.
+        for (let finalizeStep = 0; finalizeStep < 5; finalizeStep += 1) {
+          const latestRefundPayment = parsePayment(await redis.get(`payment:${paymentId}`))
+          if (latestRefundPayment?.id === paymentId && latestRefundPayment.status === "refunded" && latestRefundPayment.refundStatus === "completed" && latestRefundPayment.settlementFailureState === "refunded") break
+          const finalized = await runAutomaticRefundFinalizationStep(paymentId, intake.refundId)
+          if (finalized.state !== "ok" || finalized.result.outcome !== "success") break
+        }
+      }
+    }
+  }
+
   const preRefundDrain = await readAutomaticRefundDrainHead(MAX_ATTEMPTS)
   if (preRefundDrain.state === "ok") {
     const preTelemetryHead = selectWalletDrainHead(useReadyExecution && readyShadowPreparedIds !== null ? readyShadowPreparedIds : preparedSubmitIds, eligibleIds, walletFreshExecutionIds, settlementReconcilingExecutionIds, preRefundDrain.refundDrainHeadPaymentId, preRefundDrain.refundDrainHeadRefundId, walletDrainFairnessClass)
@@ -1142,15 +1182,12 @@ export async function POST(request: NextRequest) {
   })
   results.push(...eligiblePipeline.values)
 
-  let refundAccountingReady: boolean | null = null
   const walletDrainAttemptedSettlementIds = new Set<string>()
   const walletDrainAttemptedRefundIds = new Set<string>()
   const walletDrainBurstLanes: WalletDrainLane[] = []
   let walletDrainBurstSettlementAttempts = 0
   let walletDrainBurstRefundAttempts = 0
   let walletDrainBurstStopReason: string | null = null
-  let refundHandoffReady = false
-  let refundHandoffPaymentId: string | null = null
   let walletDrainFairnessOffset = 0
   let walletDrainBudgetExhausted = false
   let walletDrainDeferredDbCount = 0
@@ -1197,21 +1234,6 @@ export async function POST(request: NextRequest) {
         if (piSlotReleasedDbPending) walletDrainDeferredDbCount += 1
         const settlementSafeToContinue = canonicalFinal || piSlotReleasedDbPending
         if (!settlementSafeToContinue) {
-          // Discovery happened before this settlement attempt. If the canonical executor has
-          // just moved the payment into the existing, strict refund-eligible state, create or
-          // re-read the durable refund intent now using the same authoritative gates as the
-          // periodic intake. No refund rule is relaxed and no financial action happens here.
-          if (latest !== null && latest.id === attemptHead.paymentId && checkRefundEligibility(latest)) {
-            try {
-              const handoff = await ensureAutomaticRefundIntent(attemptHead.paymentId)
-              if (handoff.outcome === "created" || handoff.outcome === "existing") {
-                refundHandoffReady = true
-                refundHandoffPaymentId = attemptHead.paymentId
-              }
-            } catch {
-              // Fail closed: the periodic durable intake remains authoritative.
-            }
-          }
           walletDrainBurstStopReason = `settlement_${result.state}`
           break
         }
@@ -1235,6 +1257,22 @@ export async function POST(request: NextRequest) {
           walletDrainBurstStopReason = `refund_${authorizedRefundResult?.reason ?? authorizedRefundResult?.outcome ?? "unresolved"}`
           break
         }
+
+        // Once the wallet-authorized refund movement has durably succeeded, finish only this
+        // refund's non-wallet checkpoints in the same wake. Every step re-reads the canonical
+        // checkpoint and uses the existing executor/accounting guards. Any uncertainty stops
+        // immediately and leaves the durable checkpoint for the next external wake.
+        for (let finalizeStep = 0; finalizeStep < 5; finalizeStep += 1) {
+          const latestRefundPayment = parsePayment(await redis.get(`payment:${attemptHead.paymentId}`))
+          if (latestRefundPayment?.id === attemptHead.paymentId && latestRefundPayment.status === "refunded" && latestRefundPayment.refundStatus === "completed" && latestRefundPayment.settlementFailureState === "refunded") break
+          if (Date.now() - walletDrainBurstStartedAt >= WALLET_DRAIN_BURST_BUDGET_MS) break
+          const targeted = await runAutomaticRefundFinalizationStep(attemptHead.paymentId, attemptHead.refundId)
+          if (targeted.state !== "ok" || targeted.result.outcome !== "success") {
+            walletDrainBurstStopReason = `refund_finalize_${targeted.state === "ok" ? targeted.result.reason ?? targeted.result.outcome : "blocked"}`
+            break
+          }
+        }
+        if (walletDrainBurstStopReason !== null) break
         currentRefundDrain = await readAutomaticRefundDrainHead(MAX_ATTEMPTS)
         if (currentRefundDrain.state !== "ok") {
           walletDrainBurstStopReason = "refund_head_unavailable"
@@ -1283,10 +1321,6 @@ export async function POST(request: NextRequest) {
   console.log("[P7J5 LEASE] renewed before refund drain")
 
   let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
-  const refundResults = []
-  let refundIntakePeakInFlight = 0
-  let refundPostWalletBurstPasses = 0
-  let refundPostWalletBurstProgressed = false
   if (refundAccountingReady === null) refundAccountingReady = (await query("SELECT 1 FROM refund_accounting_records LIMIT 0")) !== null
   if (refundAccountingReady) {
     try {
@@ -1294,45 +1328,6 @@ export async function POST(request: NextRequest) {
     } catch {
       refundPass = { state: "blocked" }
     }
-
-    // When this continuation has just completed the selected refund wallet movement, finish
-    // the remaining durable non-wallet checkpoints in the same wake. Each pass re-reads the
-    // authoritative checkpoint and the loop stops before any new wallet submission head, on
-    // any blocked/uncertain result, or when the existing wake budget is exhausted.
-    if (requestedMode === CONTINUATION_MODE && walletDrainBurstRefundAttempts > 0 && walletDrainBurstStopReason === null && refundPass.state === "ok") {
-      for (let passIndex = 0; passIndex < MAX_ATTEMPTS && Date.now() - wakeStartedAt < WALLET_DRAIN_BURST_BUDGET_MS; passIndex += 1) {
-        let drainHead: Awaited<ReturnType<typeof readAutomaticRefundDrainHead>>
-        try {
-          drainHead = await readAutomaticRefundDrainHead(MAX_ATTEMPTS)
-        } catch {
-          break
-        }
-        if (drainHead.state !== "ok" || drainHead.refundDrainHeadRefundId !== null) break
-
-        let followUp: Awaited<ReturnType<typeof runAutomaticRefundPass>>
-        try {
-          followUp = await runAutomaticRefundPass(MAX_ATTEMPTS, null)
-        } catch {
-          break
-        }
-        refundPostWalletBurstPasses += 1
-        refundPass = followUp
-        if (followUp.state !== "ok") break
-        const progressed = followUp.results.some((result) => result.outcome === "success")
-        if (!progressed) break
-        refundPostWalletBurstProgressed = true
-      }
-    }
-
-    const refundIntakePipeline = await runBoundedOrderedPipeline(refundCandidateIds.slice(0, MAX_ATTEMPTS), async (paymentId) => {
-      try {
-        return { value: await ensureAutomaticRefundIntent(paymentId) }
-      } catch {
-        return { value: { outcome: "blocked" as const, paymentId, reason: "intake_exception" } }
-      }
-    })
-    refundResults.push(...refundIntakePipeline.values)
-    refundIntakePeakInFlight = refundIntakePipeline.peakInFlight
   } else {
     refundPass = { state: "blocked" }
   }
@@ -1431,17 +1426,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   let walletDrainKickGateReleased = false
   let walletDrainKickGateReleaseDeferred = false
   const periodicFreshCreateDetected = !immediateDrainMode && useReadyExecution && !piCreateBackpressureActive() && ((readyShadowFreshCreateIds?.length ?? 0) > 0 || (readyShadowRetryableIds?.length ?? 0) > 0)
-  const refundIntakeCreated = refundResults.some((result) => result.outcome === "created")
-  const refundPassProgressed = refundPass.state === "ok" && refundPass.results.some((result) => result.outcome === "success")
-  // A successful refund step is already durable and re-read by the next pass. Reuse the
-  // existing trusted continuation path so a 10-minute periodic cadence does not turn the
-  // durable refund state machine into a 10-minute delay per stage. The only continuation
-  // allowed across a settlement stop is the verified refund-eligible handoff above; wallet
-  // uncertainty/refund stops still remain fail-closed and wait for later evidence.
-  const continuationNeeded = useReadyExecution && (
-    refundHandoffReady ||
-    walletDrainBurstStopReason === null && (readyLegacyQuarantineSucceeded > 0 || periodicFreshCreateDetected || refundIntakeCreated || refundPassProgressed || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
-  )
+  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (readyLegacyQuarantineSucceeded > 0 || periodicFreshCreateDetected || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
   if (continuationNeeded) {
     walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
   } else if (useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive()) {
@@ -1467,7 +1452,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   const workDurationMs = Date.now() - workStartedAt
   const wakeDurationMs = Date.now() - wakeStartedAt
   console.log("[P7J12 OTHER PREREQ]", { readyClassOther, readyOtherFreshMissingPatterns, readyLegacyQuarantineAttempted, readyLegacyQuarantineSucceeded })
-  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, walletDrainDeferredDbCount, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, refundHandoffReady, refundHandoffPaymentId, refundPostWalletBurstPasses, refundPostWalletBurstProgressed, walletDrainBurstLanes, walletDrainContinuationScheduled, walletDrainKickGateReleased, walletDrainKickGateReleaseDeferred, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassTerminalEgress, readyTerminalEgressPrunedCount, readyClassReadyOnlyEgress, readyReadyOnlyEgressPrunedCount, readyClassOther, readyOtherDiagnosticPatterns, readyOtherFreshMissingPatterns, readyLegacyQuarantineAttempted, readyLegacyQuarantineSucceeded, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
+  console.log("[P7H CAPACITY] transient wake", { discoveryDurationMs, workDurationMs, wakeDurationMs, activeSetSize, keys: keys.length, postHorizonIds: postHorizonIds.length, preparedSubmitIds: preparedSubmitIds.length, retryableIds: retryableIds.length, freshDispatchIds: freshDispatchIds.length, settlementReconcilingDiscoveryIds: settlementReconcilingDiscoveryIds.length, staleRetryReconcilingDiscoveryIds: staleRetryReconcilingDiscoveryIds.length, refundCandidateIds: refundCandidateIds.length, eligibleIds: eligibleIds.length, results: results.length, refundResults: refundResults.length, boundedPipelineConcurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPipelinePeakInFlight, refundIntakePeakInFlight, piCreateBackpressureActive: piCreateBackpressureActive(), piCreateBackpressureUntilMs, piCreateBackpressureUnavailable, walletDrainFairnessClass, walletDrainFairnessSelectedLane: preHead?.lane ?? null, walletDrainFairnessPreparedOverride: preHead?.lane === "prepared", walletDrainFairnessFreshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0, walletDrainBurstLimit: WALLET_DRAIN_BURST_LIMIT, walletDrainBurstBudgetMs: WALLET_DRAIN_BURST_BUDGET_MS, walletDrainBurstDurationMs, walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, walletDrainDeferredDbCount, walletDrainBurstSettlementAttempts, walletDrainBurstRefundAttempts, walletDrainBurstStopReason, walletDrainBurstLanes, walletDrainContinuationScheduled, walletDrainKickGateReleased, walletDrainKickGateReleaseDeferred, readySampleSize: readySample.length, readySetSize, readyIndexed, readyMissing, readyOrderedCount, readyFirstScore, readyLastScore, readyStrictlyIncreasing, readyClassInvalid, readyClassPostHorizon, readyClassPrepared, readyClassRetryable, readyClassFresh, readyClassStage1Only, readyClassReconciling, readyClassTerminalEgress, readyTerminalEgressPrunedCount, readyClassReadyOnlyEgress, readyReadyOnlyEgressPrunedCount, readyClassOther, readyOtherDiagnosticPatterns, readyOtherFreshMissingPatterns, readyLegacyQuarantineAttempted, readyLegacyQuarantineSucceeded, readyShadowEligibleIds, readyShadowPreparedIds, readyShadowFreshIds, readyShadowReconcilingIds, walletDrainShadowCount, walletDrainShadowHeadPaymentId, walletDrainShadowHeadRefundId, walletDrainShadowHeadKind, walletDrainSelectedHeadKind, walletDrainSelectedHeadPaymentId, walletDrainSelectedHeadRefundId, walletDrainSelectedHeadParity, walletDrainPreExecutionHeadKind, walletDrainPreExecutionHeadPaymentId, walletDrainPreExecutionHeadRefundId, walletDrainNonEmptyParity, walletDrainNonMoneyCertification, readyCoverageCount: readyCoverageAllIds.length, readyCoverageTruncated, readyCoverageIndexed, readyCoverageMissing, readyHeadTruncated, readyCoverageOutsideHead, readyResidencyCount, readyResidencyMissing, readyResidencyBackfilled, readyEligibleSetParity, readyFreshSetParity, readyReconcilingSetParity, readyAuthorityCertified, readySchedulerUsable, readyBaselineCertified, readyRotationStart, readyRotationNext, readyRotationCas, readyRotationCycleMax, readyRotationCycleGeneration, readyWindowCertified, readyExecutionSource: useReadyExecution ? "ready" : "legacy" })
 
   return NextResponse.json({ processed: results.length, results, refundIntake: { processed: refundResults.length, results: refundResults }, refundPass, settlementDispatchDiscovery: { count: freshDispatchIds.length }, settlementReconcilingDiscovery: { count: settlementReconcilingDiscoveryIds.length }, staleRetryReconcilingDiscovery: { count: staleRetryReconcilingDiscoveryIds.length }, settlementReconcilingEvidence, boundedPipeline: { concurrency: BOUNDED_PIPELINE_CONCURRENCY, settlementPeakInFlight: settlementPipelinePeakInFlight, refundIntakePeakInFlight }, piCreateBackpressure: { active: piCreateBackpressureActive(), untilMs: piCreateBackpressureUntilMs, unavailable: piCreateBackpressureUnavailable }, readyHygiene: { terminalEgressClassified: readyClassTerminalEgress, terminalEgressPruned: readyTerminalEgressPrunedCount, readyOnlyEgressClassified: readyClassReadyOnlyEgress, readyOnlyEgressPruned: readyReadyOnlyEgressPrunedCount, other: readyClassOther, otherDiagnosticPatterns: readyOtherDiagnosticPatterns, otherFreshMissingPatterns: readyOtherFreshMissingPatterns, legacyQuarantineAttempted: readyLegacyQuarantineAttempted, legacyQuarantineSucceeded: readyLegacyQuarantineSucceeded }, walletDrainFairness: { class: walletDrainFairnessClass, selectedLane: preHead?.lane ?? null, preparedOverride: preHead?.lane === "prepared", freshCreateSuppressed: piCreateBackpressureActive() && (readyShadowFreshCreateIds?.length ?? 0) > 0 }, walletDrainBurst: { limit: WALLET_DRAIN_BURST_LIMIT, budgetMs: WALLET_DRAIN_BURST_BUDGET_MS, durationMs: walletDrainBurstDurationMs, budgetExhausted: walletDrainBudgetExhausted, immediateDrainMode, periodicFreshCreateDetected, deferredDbCount: walletDrainDeferredDbCount, settlementAttempts: walletDrainBurstSettlementAttempts, refundAttempts: walletDrainBurstRefundAttempts, stopReason: walletDrainBurstStopReason, lanes: walletDrainBurstLanes, continuationScheduled: walletDrainContinuationScheduled, kickGateReleased: walletDrainKickGateReleased, kickGateReleaseDeferred: walletDrainKickGateReleaseDeferred }, drainLease: "acquired" })
   } finally {
