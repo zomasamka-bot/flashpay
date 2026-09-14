@@ -26,37 +26,13 @@ const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
 
 type PiNativeBridge = {
   shareFile?: (payload: { filename: string; file: File; title?: string; text?: string }) => Promise<unknown> | unknown
-  nativeFeaturesList?: () => Promise<unknown> | unknown
   openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
   openUrlInSystemBrowser?: (url: string) => Promise<unknown> | unknown
 }
 
-type ShareAttemptDiagnostic = {
-  version: "k5-share-diag-v1"
-  userAgent: string
-  secureContext: boolean
-  fileName: string
-  fileType: string
-  fileSize: number
-  navigatorShare: boolean
-  navigatorCanShare: boolean
-  navigatorCanShareFile: boolean | null
-  navigatorCanShareError?: string
-  webFileShareAttempted: boolean
-  webFileShareError?: string
-  piPresent: boolean
-  piShareFile: boolean
-  piShareFileArity: number | null
-  piShareFileAttempted: boolean
-  piShareFileError?: string
-  piNativeFeaturesList: boolean
-  piNativeFeatures?: unknown
-  piNativeFeaturesError?: string
-}
-
-function diagnosticError(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`.slice(0, 500)
-  return String(error).slice(0, 500)
+function shareErrorMessage(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`
+  return String(error)
 }
 
 type ReceiptPdfTools = typeof import("@/lib/receipt-pdf")
@@ -208,34 +184,16 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       const text = `FlashPay receipt ${receipt.flashPayPaymentId}`
       const webSupport = webFileShareSupport(pdfFile)
       const pi = getPiNativeBridge()
-      const diagnostic: ShareAttemptDiagnostic = {
-        version: "k5-share-diag-v1",
-        userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent.slice(0, 500),
-        secureContext: window.isSecureContext === true,
-        fileName: pdfFile.name,
-        fileType: pdfFile.type,
-        fileSize: pdfFile.size,
-        navigatorShare: typeof navigator.share === "function",
-        navigatorCanShare: typeof navigator.canShare === "function",
-        navigatorCanShareFile: webSupport === "supported" ? true : webSupport === "unsupported" ? false : null,
-        webFileShareAttempted: false,
-        piPresent: !!pi,
-        piShareFile: typeof pi?.shareFile === "function",
-        piShareFileArity: typeof pi?.shareFile === "function" ? pi.shareFile.length : null,
-        piShareFileAttempted: false,
-        piNativeFeaturesList: typeof pi?.nativeFeaturesList === "function",
-      }
+
 
       // Preserve the proven iPhone/native browser path: share the actual PDF
       // file when the browser explicitly supports file sharing.
       if (webSupport !== "unsupported" && typeof navigator.share === "function") {
-        diagnostic.webFileShareAttempted = true
         try {
           await navigator.share({ files: [pdfFile], title, text })
           return
         } catch (error) {
           if (isAbortError(error)) return
-          diagnostic.webFileShareError = diagnosticError(error)
         }
       }
 
@@ -244,14 +202,12 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       // retry the same PDF bytes/name as generic binary only for that exact
       // MIME rejection. This does not change the PDF payload or extension.
       if (typeof pi?.shareFile === "function") {
-        diagnostic.piShareFileAttempted = true
         try {
           await pi.shareFile({ filename: pdfFile.name, file: pdfFile, title, text })
           return
         } catch (error) {
           if (isAbortError(error)) return
-          const firstPiShareError = diagnosticError(error)
-          diagnostic.piShareFileError = firstPiShareError
+          const firstPiShareError = shareErrorMessage(error)
 
           if (firstPiShareError.toLowerCase().includes("unsupported mime type")) {
             const genericPdfFile = new File([pdfFile], pdfFile.name, {
@@ -263,35 +219,10 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
               return
             } catch (retryError) {
               if (isAbortError(retryError)) return
-              diagnostic.piShareFileError = `${firstPiShareError} | octet-stream retry: ${diagnosticError(retryError)}`.slice(0, 500)
+              // Continue to the proven HTTPS share fallback below.
             }
           }
         }
-      }
-
-      // Direct file sharing failed or is unavailable. Capture the exact
-      // runtime capabilities so Vercel logs can identify any remaining
-      // Samsung/Pi Browser attachment blocker without sharing a URL.
-      if (typeof pi?.nativeFeaturesList === "function") {
-        try {
-          diagnostic.piNativeFeatures = await pi.nativeFeaturesList()
-        } catch (error) {
-          diagnostic.piNativeFeaturesError = diagnosticError(error)
-        }
-      }
-      if (accessToken) {
-        void fetch("/api/receipt-share-diagnostics", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            paymentId: receipt.flashPayPaymentId,
-            diagnostic,
-          }),
-          keepalive: true,
-        }).catch(() => {})
       }
 
       // Keep Samsung's previously working share sheet as the final fallback.

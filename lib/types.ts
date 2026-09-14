@@ -192,10 +192,10 @@ export interface Receipt {
   reference: string
   
   // Fee and accounting breakdown - CRITICAL FOR MERCHANT SETTLEMENT
-  horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7) - charged from customer amount
-  appCommission?: number // App commission (default 0) - deducted from customer amount
-  merchantAmount: number // Amount to merchant (customerAmount - horizonFee - appCommission)
-  appNetImpact: number // Net app wallet impact (horizonFee + appCommission) - what app retains
+  horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7) - paid separately by the app wallet
+  appCommission?: number // App commission - canonical FlashPay invariant requires exactly 0
+  merchantAmount: number // Amount received by merchant - canonical invariant requires merchantAmount === customerAmount
+  appNetImpact: number // customerAmount - merchantAmount - horizonFeeCharged (normally negative fee; app absorbs it)
   
   // Legacy field for backward compatibility
   amount?: number // Deprecated - use customerAmount instead

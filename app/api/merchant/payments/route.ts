@@ -81,7 +81,7 @@ export async function GET(request: NextRequest) {
         `SELECT
            COUNT(*) FILTER (WHERE r.settlement_status = 'settled_to_merchant') AS successful_sales_count,
            COALESCE(SUM(t.amount) FILTER (WHERE r.settlement_status = 'settled_to_merchant'), 0) AS total_sales,
-           COUNT(*) FILTER (WHERE r.settlement_status IN ('paid_to_app', 'settlement_pending')) AS processing_count
+           COUNT(*) FILTER (WHERE r.settlement_status IN ('pending', 'paid_to_app', 'settlement_pending')) AS processing_count
          FROM transactions t
          LEFT JOIN receipts r ON r.transaction_id = t.id
          WHERE t.merchant_id = $1 AND t.created_at >= $2 AND t.created_at < $3`,
