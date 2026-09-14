@@ -125,7 +125,7 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.gate.prepared.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.gate.prepared.preparedHash || transaction.sequence !== input.gate.prepared.preparedSequence || transaction.source !== input.payment.from_address) return blocked
     const server = new Horizon.Server(HORIZON_URL)
     await server.submitTransaction(transaction)
-    if (process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
+    if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
       console.log("[P7 TEST] Refund post-replay-submit 0.10")
       return { outcome: "FAILED", code: "submit_failed", message: "P7 refund post-replay-submit test" }
     }
@@ -187,7 +187,7 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   const prepared = await ensureRefundPreparedSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence)
   if (!prepared || prepared.preparedNow !== true || prepared.envelopeXdr !== envelopeXdr || prepared.preparedHash !== preparedHash || prepared.preparedSequence !== preparedSequence) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
 
-  if (process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
+  if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
     console.log("[P7 TEST] Refund prepared-before-auth 0.10")
     return { outcome: "FAILED", code: "submit_failed", message: "P7 refund prepared-before-auth test" }
   }

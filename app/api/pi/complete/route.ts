@@ -411,7 +411,7 @@ export async function POST(request: NextRequest) {
         })
       }
     }
-    if(currentStatus==="pending"&&payment.merchantId==="hazemaboria"&&merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"&&finalPiAmount===0.13){console.log("[P7 TEST] Fresh dispatch interruption 0.13");const r=await buildA2USuccessResponse(flashPaymentId);if(!r)return NextResponse.json({error:"Response building failed"},{status:500});return NextResponse.json(r,{status:200})}
+    if(process.env.VERCEL_ENV!=="production"&&currentStatus==="pending"&&payment.merchantId==="hazemaboria"&&merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"&&finalPiAmount===0.13){console.log("[P7 TEST] Fresh dispatch interruption 0.13");const r=await buildA2USuccessResponse(flashPaymentId);if(!r)return NextResponse.json({error:"Response building failed"},{status:500});return NextResponse.json(r,{status:200})}
 
     // === STAGE 4: Return canonical response without waiting for settlement drain ===
     console.log("[Pi Complete] === STAGE 4: Return canonical asynchronous-settlement response ===")

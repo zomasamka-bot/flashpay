@@ -1385,7 +1385,13 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   let walletDrainKickGateReleased = false
   let walletDrainKickGateReleaseDeferred = false
   const periodicFreshCreateDetected = !immediateDrainMode && useReadyExecution && !piCreateBackpressureActive() && ((readyShadowFreshCreateIds?.length ?? 0) > 0 || (readyShadowRetryableIds?.length ?? 0) > 0)
-  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (readyLegacyQuarantineSucceeded > 0 || periodicFreshCreateDetected || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
+  const refundIntakeCreated = refundResults.some((result) => result.outcome === "created")
+  const refundPassProgressed = refundPass.state === "ok" && refundPass.results.some((result) => result.outcome === "success")
+  // A successful refund step is already durable and re-read by the next pass. Reuse the
+  // existing trusted continuation path so a 10-minute periodic cadence does not turn the
+  // durable refund state machine into a 10-minute delay per stage. Never continue after a
+  // wallet-drain uncertainty/stop; that remains fail-closed and waits for later evidence.
+  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (readyLegacyQuarantineSucceeded > 0 || periodicFreshCreateDetected || refundIntakeCreated || refundPassProgressed || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
   if (continuationNeeded) {
     walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
   } else if (useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive()) {

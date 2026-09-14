@@ -275,7 +275,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       }
       // Replace ctx.payment with fully merged record returned from persist
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage1Updates)
-      if (ctx.isRecovery===false && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
+      if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery===false && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
         console.log("[P7 TEST] Stage1-only interruption 0.14")
         return { ok:false,status:"settlement_pending",error:"Temporary Stage1-only interruption test" }
       }
@@ -999,7 +999,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     if (!prepared.ok) return prepared
     const { transaction, preparedHash } = prepared
 
-    if (ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
+    if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
       console.log("[A2U TEST] Stage2 prepared checkpoint fault point 0.11")
       return { ok: false, error: "Temporary Stage2 prepared checkpoint fault", userFacingStatus: "settlement_pending" }
     }
@@ -1008,7 +1008,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)
     if (!moved.ok) return moved
     const txidFromHorizon = moved.txidFromHorizon
-    if (ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
+    if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
       console.log("[A2U TEST] Stage2 post-submit fault point 0.12")
       return { ok: false, error: "Temporary Stage2 post-submit fault", userFacingStatus: "settlement_pending" }
     }
