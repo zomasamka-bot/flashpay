@@ -48,6 +48,137 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // K8 Daily Sales read model. This is presentation-only and deliberately
+    // reuses the existing authenticated merchant endpoint without changing
+    // payment, settlement, refund, or accounting execution.
+    if (searchParams.get("view") === "sales") {
+      const from = searchParams.get("from")
+      const to = searchParams.get("to")
+      if (!from || !to) {
+        return NextResponse.json({ error: "from and to are required" }, { status: 400 })
+      }
+
+      const fromMs = Date.parse(from)
+      const toMs = Date.parse(to)
+      const windowMs = toMs - fromMs
+      if (
+        !Number.isFinite(fromMs) ||
+        !Number.isFinite(toMs) ||
+        new Date(fromMs).toISOString() !== from ||
+        new Date(toMs).toISOString() !== to ||
+        windowMs <= 0 ||
+        windowMs > 26 * 60 * 60 * 1000
+      ) {
+        return NextResponse.json({ error: "Invalid sales day window" }, { status: 400 })
+      }
+
+      const aggregateRows = await query(
+        `SELECT
+           COUNT(*) FILTER (WHERE r.settlement_status = 'settled_to_merchant') AS successful_sales_count,
+           COALESCE(SUM(t.amount) FILTER (WHERE r.settlement_status = 'settled_to_merchant'), 0) AS total_sales,
+           COUNT(*) FILTER (WHERE r.settlement_status IN ('paid_to_app', 'settlement_pending')) AS processing_count
+         FROM transactions t
+         LEFT JOIN receipts r ON r.transaction_id = t.id
+         WHERE t.merchant_id = $1 AND t.created_at >= $2 AND t.created_at < $3`,
+        [verifiedUsername, from, to],
+      )
+      if (!Array.isArray(aggregateRows) || aggregateRows.length !== 1) {
+        return NextResponse.json({ error: "Sales summary unavailable" }, { status: 503 })
+      }
+      const aggregate = aggregateRows[0]
+      if (aggregate === null || typeof aggregate !== "object" || Array.isArray(aggregate)) {
+        return NextResponse.json({ error: "Sales summary unavailable" }, { status: 503 })
+      }
+      const aggregateRecord = aggregate as Record<string, unknown>
+      const successfulSalesCount = Number(aggregateRecord.successful_sales_count)
+      const totalSales = Number(aggregateRecord.total_sales)
+      const processingCount = Number(aggregateRecord.processing_count)
+      if (
+        !Number.isSafeInteger(successfulSalesCount) || successfulSalesCount < 0 ||
+        !Number.isFinite(totalSales) || totalSales < 0 ||
+        !Number.isSafeInteger(processingCount) || processingCount < 0
+      ) {
+        return NextResponse.json({ error: "Sales summary unavailable" }, { status: 503 })
+      }
+
+      // Return one bounded timeline page while totals are computed across the
+      // entire authoritative day window. K9 owns historical pagination/date navigation.
+      const rows = await query(
+        `SELECT
+           t.amount,
+           t.created_at,
+           t.status AS payment_status,
+           r.settlement_status,
+           r.payer_username
+         FROM transactions t
+         LEFT JOIN receipts r ON r.transaction_id = t.id
+         WHERE t.merchant_id = $1 AND t.created_at >= $2 AND t.created_at < $3
+         ORDER BY t.created_at DESC
+         LIMIT 251`,
+        [verifiedUsername, from, to],
+      )
+      if (!Array.isArray(rows)) {
+        return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+      }
+
+      const timeline: Array<{ occurredAt: string; customerName: string | null; amount: number; status: "paid" | "processing" | "failed" | "cancelled" | "needs_attention" }> = []
+      const visibleRows = rows.slice(0, 250)
+      for (const candidate of visibleRows) {
+        if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
+        const row = candidate as Record<string, unknown>
+        const amount = Number(row.amount)
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
+        if (!(row.created_at instanceof Date) && typeof row.created_at !== "string") {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
+        const occurredMs = row.created_at instanceof Date ? row.created_at.getTime() : Date.parse(row.created_at)
+        if (!Number.isFinite(occurredMs)) {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
+        if (row.settlement_status !== null && typeof row.settlement_status !== "string") {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
+        if (typeof row.payment_status !== "string") {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
+        if (row.payer_username !== null && row.payer_username !== undefined && typeof row.payer_username !== "string") {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
+
+        const rawStatus = typeof row.settlement_status === "string" ? row.settlement_status : row.payment_status
+        let status: "paid" | "processing" | "failed" | "cancelled" | "needs_attention"
+        if (rawStatus === "settled_to_merchant") status = "paid"
+        else if (rawStatus === "paid_to_app" || rawStatus === "settlement_pending" || rawStatus === "pending") status = "processing"
+        else if (rawStatus === "cancelled") status = "cancelled"
+        else if (rawStatus === "failed" || rawStatus === "settlement_failed") status = "failed"
+        else status = "needs_attention"
+
+        const payer = typeof row.payer_username === "string" ? row.payer_username.trim().replace(/^@+/, "") : ""
+        timeline.push({
+          occurredAt: new Date(occurredMs).toISOString(),
+          customerName: payer || null,
+          amount,
+          status,
+        })
+      }
+
+      return NextResponse.json({
+        day: {
+          from,
+          to,
+          totalSales,
+          successfulSalesCount,
+          processingCount,
+          timeline,
+          hasMore: rows.length > 250,
+        },
+      })
+    }
+
     // Validate limit as integer 1-1000
     const limitNum = Number(searchParams.get("limit") ?? "100")
     if (!Number.isInteger(limitNum) || limitNum < 1 || limitNum > 1000) {

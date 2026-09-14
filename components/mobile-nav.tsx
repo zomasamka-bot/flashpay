@@ -12,7 +12,7 @@ export function MobileNav() {
   const navItems = [
     { href: ROUTES.HOME, icon: Home, label: "Home" },
     { href: ROUTES.CREATE, icon: Plus, label: "Create" },
-    { href: ROUTES.PAYMENTS, icon: List, label: "Payments" },
+    { href: ROUTES.PAYMENTS, icon: List, label: "Sales" },
     { href: ROUTES.PROFILE, icon: User, label: "Profile" },
   ]
 
