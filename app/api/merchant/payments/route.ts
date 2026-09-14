@@ -1,9 +1,73 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { query, getMerchantPaymentDashboardSummary } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { redis, isRedisConfigured } from "@/lib/redis"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+/**
+ * Presentation-only fallback for legacy/current receipt rows whose payer_username
+ * is null. It reads the merchant's bounded canonical payment history and accepts a
+ * name only when merchant + exact Pi U2A identifier match. No financial state is
+ * written or inferred from this projection.
+ */
+async function resolveSalesPayerNames(
+  merchantUsername: string,
+  piPaymentIds: string[],
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (!isRedisConfigured || piPaymentIds.length === 0) return names
+
+  const wanted = new Set(piPaymentIds)
+  try {
+    const historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${merchantUsername}:payments:v1`, 0, 999, { rev: true })
+    if (!Array.isArray(historyIds) || historyIds.length > 1000) return names
+    const ids: string[] = []
+    const seen = new Set<string>()
+    for (const value of historyIds) {
+      if (typeof value !== "string" || !value || value !== value.trim() || seen.has(value)) return new Map()
+      seen.add(value)
+      ids.push(value)
+    }
+
+    const conflicts = new Set<string>()
+    for (let index = 0; index < ids.length; index += 200) {
+      const batch = ids.slice(index, index + 200)
+      const values = await redis.mget<unknown[]>(batch.map((id) => `payment:${id}`))
+      if (!Array.isArray(values) || values.length !== batch.length) return new Map()
+      for (let valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
+        const raw = values[valueIndex]
+        let paymentValue: unknown
+        try {
+          paymentValue = typeof raw === "string" ? JSON.parse(raw) : raw
+        } catch {
+          continue
+        }
+        const payment = asRecord(paymentValue)
+        if (!payment || payment.id !== batch[valueIndex] || payment.merchantId !== merchantUsername) continue
+        const piPaymentId = typeof payment.piPaymentId === "string" ? payment.piPaymentId.trim() : ""
+        if (!piPaymentId || !wanted.has(piPaymentId)) continue
+        const payerUsername = typeof payment.payerUsername === "string" ? payment.payerUsername.trim().replace(/^@+/, "") : ""
+        if (!payerUsername) continue
+        const existing = names.get(piPaymentId)
+        if (existing && existing !== payerUsername) {
+          conflicts.add(piPaymentId)
+          names.delete(piPaymentId)
+          continue
+        }
+        if (!conflicts.has(piPaymentId)) names.set(piPaymentId, payerUsername)
+      }
+    }
+  } catch {
+    return new Map()
+  }
+  return names
+}
 
 /**
  * GET /api/merchant/payments?merchantId=xxx&limit=100&fromDate=...&toDate=...
@@ -111,6 +175,7 @@ export async function GET(request: NextRequest) {
       const rows = await query(
         `SELECT
            t.id AS receipt_lookup_id,
+           t.payment_id AS pi_payment_id,
            t.amount,
            t.created_at,
            t.status AS payment_status,
@@ -129,6 +194,20 @@ export async function GET(request: NextRequest) {
 
       const timeline: Array<{ receiptLookupId: string; occurredAt: string; customerName: string | null; amount: number; status: "paid" | "processing" | "failed" | "cancelled" | "needs_attention" }> = []
       const visibleRows = rows.slice(0, 250)
+      const missingNamePiPaymentIds: string[] = []
+      const missingNamePiPaymentIdSet = new Set<string>()
+      for (const candidate of visibleRows) {
+        const row = asRecord(candidate)
+        if (!row) continue
+        const payer = typeof row.payer_username === "string" ? row.payer_username.trim().replace(/^@+/, "") : ""
+        const piPaymentId = typeof row.pi_payment_id === "string" ? row.pi_payment_id.trim() : ""
+        if (!payer && piPaymentId && !missingNamePiPaymentIdSet.has(piPaymentId)) {
+          missingNamePiPaymentIdSet.add(piPaymentId)
+          missingNamePiPaymentIds.push(piPaymentId)
+        }
+      }
+      const canonicalPayerNames = await resolveSalesPayerNames(verifiedUsername, missingNamePiPaymentIds)
+
       for (const candidate of visibleRows) {
         if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
           return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
@@ -167,11 +246,13 @@ export async function GET(request: NextRequest) {
         else if (rawStatus === "failed" || rawStatus === "settlement_failed") status = "failed"
         else status = "needs_attention"
 
-        const payer = typeof row.payer_username === "string" ? row.payer_username.trim().replace(/^@+/, "") : ""
+        const receiptPayer = typeof row.payer_username === "string" ? row.payer_username.trim().replace(/^@+/, "") : ""
+        const piPaymentId = typeof row.pi_payment_id === "string" ? row.pi_payment_id.trim() : ""
+        const canonicalPayer = piPaymentId ? canonicalPayerNames.get(piPaymentId) ?? "" : ""
         timeline.push({
           receiptLookupId,
           occurredAt: new Date(occurredMs).toISOString(),
-          customerName: payer || null,
+          customerName: receiptPayer || canonicalPayer || null,
           amount,
           status,
         })

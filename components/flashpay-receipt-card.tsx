@@ -291,14 +291,51 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         }
       }
 
-      // Never silently downgrade Share PDF to sharing an HTTPS link. If the host browser
-      // cannot hand a File to Android/iOS, keep Download PDF available and report the
-      // attachment limitation instead of sending the wrong thing.
-      console.warn("[Receipt PDF] Native attachment share unavailable", {
+      // This Pi Browser build cannot hand a PDF File to Android's native share sheet.
+      // Restore the previously proven share-sheet behavior as an explicit, last-resort
+      // secure-link fallback instead of leaving Share PDF dead. iPhone/other browsers
+      // still return above through the real File attachment path.
+      let url: string | null = null
+      try {
+        url = await ensureSharedPdfUrl()
+      } catch (error) {
+        failures.push(`pdf-url: ${shareErrorMessage(error)}`)
+      }
+
+      if (url && typeof navigator.share === "function") {
+        try {
+          await navigator.share({
+            title: receipt.transactionType === "refund" ? "FlashPay Refund Receipt" : "FlashPay Payment Receipt",
+            text: `FlashPay receipt ${receipt.flashPayPaymentId}`,
+            url,
+          })
+          setShareError("This Pi Browser shared a secure PDF link because it does not support PDF file attachments.")
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+          failures.push(`web-url: ${shareErrorMessage(error)}`)
+        }
+      }
+
+      if (url && typeof pi?.openShareDialog === "function") {
+        try {
+          pi.openShareDialog(
+            receipt.transactionType === "refund" ? "FlashPay Refund Receipt" : "FlashPay Payment Receipt",
+            `FlashPay receipt ${receipt.flashPayPaymentId}\n${url}`,
+          )
+          setShareError("This Pi Browser shared a secure PDF link because it does not support PDF file attachments.")
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+          failures.push(`pi-url: ${shareErrorMessage(error)}`)
+        }
+      }
+
+      console.warn("[Receipt PDF] Share unavailable", {
         paymentId: receipt.flashPayPaymentId,
-        failures: failures.slice(0, 6),
+        failures: failures.slice(0, 8),
       })
-      setShareError("This Pi Browser build did not accept the PDF attachment. Download PDF is still available.")
+      setShareError("PDF sharing is unavailable in this Pi Browser build. Download PDF is still available.")
     } finally {
       setSharing(false)
     }
