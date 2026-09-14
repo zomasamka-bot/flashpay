@@ -205,6 +205,13 @@ export default function MerchantPaymentsPage() {
     return () => controller.abort()
   }, [merchant?.merchantId, merchant?.accessToken, filterDateFrom, filterDateTo])
 
+  const flashPayIdQuery = searchQuery.trim()
+  const canOpenFlashPayId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(flashPayIdQuery)
+  const openFlashPayIdReceipt = () => {
+    if (!canOpenFlashPayId) return
+    router.push(getReceiptLink(flashPayIdQuery))
+  }
+
   const filteredPayments = payments.filter((p) => {
     const searchLower = searchQuery.trim().toLowerCase()
     const matchesSearch =
@@ -515,12 +522,23 @@ export default function MerchantPaymentsPage() {
                   <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                   <Input
                     id="search-input"
-                    placeholder="Search by reference or note..."
+                    placeholder="Reference, note, or FlashPay ID..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && canOpenFlashPayId) {
+                        e.preventDefault()
+                        openFlashPayIdReceipt()
+                      }
+                    }}
                     className="pl-10"
                   />
                 </div>
+                {canOpenFlashPayId && (
+                  <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={openFlashPayIdReceipt}>
+                    Open FlashPay receipt
+                  </Button>
+                )}
               </div>
 
               <div>

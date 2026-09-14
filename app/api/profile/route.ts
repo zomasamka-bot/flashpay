@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getMerchantProfileSummary, getSettledPaymentIds, query } from "@/lib/db"
+import { getMerchantProfileSummary, getSettledPaymentIds } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { readRefundPresentation } from "@/lib/refund-presentation-reader"
 import { readRefundPresentationPersistences, readRefundPresentationProofs } from "@/lib/refund-presentation-persistence"
@@ -210,98 +210,12 @@ export async function GET(request: NextRequest) {
         typeof payment.piPaymentId !== "string" || !settledPaymentIds.has(payment.piPaymentId),
     )
 
-    // Read-only correction overlay: completed refund presentations classify their
-    // canonical transaction from exactly one settlement row, without changing the total.
-    const overlaidPiPaymentIds = new Set<string>()
-    const correctionPiPaymentIds: string[] = []
-    const correctionPiPaymentIdSet = new Set<string>()
-    for (const payment of authoritativeOperationalPayments) {
-      const presentationValue: unknown = payment.refundPresentation
-      if (
-        typeof presentationValue !== "object" ||
-        presentationValue === null ||
-        Array.isArray(presentationValue)
-      ) continue
-      const presentation = presentationValue as Record<string, unknown>
-      if (presentation.merchantStatus !== "refund_completed") continue
-      if (presentation.paymentId !== payment.paymentId) continue
-      if (typeof payment.piPaymentId !== "string" || payment.piPaymentId.length === 0) continue
-      if (correctionPiPaymentIdSet.has(payment.piPaymentId)) continue
-      correctionPiPaymentIdSet.add(payment.piPaymentId)
-      correctionPiPaymentIds.push(payment.piPaymentId)
-    }
+    // Profile and Payment Dashboard intentionally keep the exact same raw accounting
+    // projection from getMerchantPaymentDashboardSummary(). Completed-refund UI state
+    // remains presentation-only here and must not reclassify financial totals.
 
-    const correctionRowsByPaymentId = new Map<string, unknown[]>()
-    for (let index = 0; index < correctionPiPaymentIds.length; index += 200) {
-      const batchPaymentIds = correctionPiPaymentIds.slice(index, index + 200)
-      const placeholders = batchPaymentIds.map((_, batchIndex) => `$${batchIndex + 2}`).join(",")
-      const transactionRows = await query(
-        `SELECT t.payment_id, t.id, t.amount, r.settlement_status
-         FROM transactions t
-         LEFT JOIN receipts r ON r.transaction_id = t.id
-         WHERE t.merchant_id = $1 AND t.payment_id IN (${placeholders})`,
-        [verifiedMerchant.username, ...batchPaymentIds],
-      )
-      if (!Array.isArray(transactionRows)) return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
-      for (const rowValue of transactionRows) {
-        if (!isRecord(rowValue) || typeof rowValue.payment_id !== "string" || !correctionPiPaymentIdSet.has(rowValue.payment_id)) {
-          return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
-        }
-        const rows = correctionRowsByPaymentId.get(rowValue.payment_id) ?? []
-        rows.push(rowValue)
-        correctionRowsByPaymentId.set(rowValue.payment_id, rows)
-      }
-    }
-
-    for (const payment of authoritativeOperationalPayments) {
-      const presentationValue: unknown = payment.refundPresentation
-      if (
-        typeof presentationValue !== "object" ||
-        presentationValue === null ||
-        Array.isArray(presentationValue)
-      ) continue
-      const presentation = presentationValue as Record<string, unknown>
-      if (presentation.merchantStatus !== "refund_completed") continue
-      if (presentation.paymentId !== payment.paymentId) continue
-      if (typeof payment.piPaymentId !== "string" || payment.piPaymentId.length === 0) continue
-      if (overlaidPiPaymentIds.has(payment.piPaymentId)) continue
-      overlaidPiPaymentIds.add(payment.piPaymentId)
-      const transactionRows = correctionRowsByPaymentId.get(payment.piPaymentId) ?? []
-      if (transactionRows.length !== 1) continue
-
-      const rowValue: unknown = transactionRows[0]
-      if (!isRecord(rowValue)) continue
-      const settlementStatus: unknown = rowValue.settlement_status
-      if (typeof settlementStatus !== "string") continue
-      if (settlementStatus === "failed" || settlementStatus === "settlement_failed") continue
-
-      const amountValue: unknown = rowValue.amount
-      const amount = typeof amountValue === "number"
-        ? amountValue
-        : typeof amountValue === "string"
-          ? Number(amountValue)
-          : Number.NaN
-      if (!Number.isFinite(amount)) continue
-
-      if (["settlement_pending", "paid_to_app", "pending"].includes(settlementStatus)) {
-        profileSummary.pendingTransactions -= 1
-        profileSummary.totalAwaitingAmount -= amount
-      } else if (settlementStatus === "settled_to_merchant") {
-        profileSummary.settledTransactions -= 1
-        profileSummary.totalSettledAmount -= amount
-      } else if (settlementStatus === "completed") {
-        profileSummary.completedTransactions -= 1
-        profileSummary.totalCompletedAmount -= amount
-      } else {
-        continue
-      }
-
-      profileSummary.failedTransactions += 1
-      profileSummary.totalFailedAmount += amount
-    }
-
-    // Presentation-only dismissal is applied only after all financial totals and
-    // refund correction overlays are complete, so it cannot alter accounting truth.
+    // Presentation-only dismissal is applied only after the shared financial totals
+    // are computed, so it cannot alter accounting truth.
     const completedRefundPaymentIds = authoritativeOperationalPayments
       .filter((payment) => {
         const presentation = payment.refundPresentation
