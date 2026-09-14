@@ -110,6 +110,7 @@ export async function GET(request: NextRequest) {
       // entire authoritative day window. K9 owns historical pagination/date navigation.
       const rows = await query(
         `SELECT
+           t.id AS receipt_lookup_id,
            t.amount,
            t.created_at,
            t.status AS payment_status,
@@ -126,13 +127,17 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
       }
 
-      const timeline: Array<{ occurredAt: string; customerName: string | null; amount: number; status: "paid" | "processing" | "failed" | "cancelled" | "needs_attention" }> = []
+      const timeline: Array<{ receiptLookupId: string; occurredAt: string; customerName: string | null; amount: number; status: "paid" | "processing" | "failed" | "cancelled" | "needs_attention" }> = []
       const visibleRows = rows.slice(0, 250)
       for (const candidate of visibleRows) {
         if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
           return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
         }
         const row = candidate as Record<string, unknown>
+        const receiptLookupId = typeof row.receipt_lookup_id === "string" ? row.receipt_lookup_id.trim() : ""
+        if (!receiptLookupId) {
+          return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
+        }
         const amount = Number(row.amount)
         if (!Number.isFinite(amount) || amount <= 0) {
           return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
@@ -164,6 +169,7 @@ export async function GET(request: NextRequest) {
 
         const payer = typeof row.payer_username === "string" ? row.payer_username.trim().replace(/^@+/, "") : ""
         timeline.push({
+          receiptLookupId,
           occurredAt: new Date(occurredMs).toISOString(),
           customerName: payer || null,
           amount,

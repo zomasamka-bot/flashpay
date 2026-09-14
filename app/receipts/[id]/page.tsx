@@ -1,18 +1,20 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { BackButton } from "@/components/back-button"
 import { Spinner } from "@/components/ui/spinner"
 import { FlashPayReceiptCard } from "@/components/flashpay-receipt-card"
 import { config } from "@/lib/config"
+import { getReceiptLink } from "@/lib/router"
 import type { FlashPayReceiptView } from "@/lib/types"
 import { Printer } from "lucide-react"
 import { useUnifiedStore } from "@/lib/unified-store"
 
 export default function ReceiptPage() {
   const params = useParams()
+  const router = useRouter()
   const receiptId = params.id as string
   const [receipt, setReceipt] = useState<FlashPayReceiptView | null>(null)
   const [loading, setLoading] = useState(true)
@@ -26,8 +28,13 @@ export default function ReceiptPage() {
         const headers: HeadersInit = { "Content-Type": "application/json" }
         if (merchant?.accessToken) headers.Authorization = `Bearer ${merchant.accessToken}`
         const response = await fetch(`${config.appUrl}/api/receipts/${encodeURIComponent(receiptId)}`, { headers })
-        if (response.ok) setReceipt(await response.json())
-        else setReceipt(null)
+        if (response.ok) {
+          const nextReceipt = await response.json() as FlashPayReceiptView
+          setReceipt(nextReceipt)
+          if (nextReceipt.flashPayPaymentId && nextReceipt.flashPayPaymentId !== receiptId) {
+            router.replace(getReceiptLink(nextReceipt.flashPayPaymentId), { scroll: false })
+          }
+        } else setReceipt(null)
       } catch {
         setReceipt(null)
       } finally {
@@ -35,7 +42,7 @@ export default function ReceiptPage() {
       }
     }
     if (receiptId) void fetchReceipt()
-  }, [receiptId, merchant?.accessToken])
+  }, [receiptId, merchant?.accessToken, router])
 
   if (loading) return <main className="min-h-screen bg-background flex items-center justify-center"><Spinner /></main>
 

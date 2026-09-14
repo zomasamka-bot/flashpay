@@ -3,9 +3,10 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
 
-import { ROUTES } from "@/lib/router"
+import { getReceiptLink, ROUTES } from "@/lib/router"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { config } from "@/lib/config"
 import { useToast } from "@/hooks/use-toast"
@@ -13,7 +14,7 @@ import { useMerchant } from "@/lib/use-merchant"
 import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
 import { unifiedStore } from "@/lib/unified-store"
 import type { RefundPresentation } from "@/lib/types"
-import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet, Loader2 } from "lucide-react"
+import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet, Loader2, Search } from "lucide-react"
 
 type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
@@ -119,6 +120,7 @@ function ProfileContent() {
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [openRefundReceipts, setOpenRefundReceipts] = useState<Record<string, boolean>>({})
   const [dismissingRefundId, setDismissingRefundId] = useState<string | null>(null)
+  const [receiptSearchId, setReceiptSearchId] = useState("")
 
   // Owner UID verification — stores result separately from payment system
   const { uidData, verifyUid, clearUid } = useOwnerUid()
@@ -309,6 +311,15 @@ function ProfileContent() {
     } finally {
       setDismissingRefundId(null)
     }
+  }
+
+  const handleReceiptSearch = () => {
+    const flashPayId = receiptSearchId.trim()
+    if (!flashPayId || flashPayId.length > 128) {
+      toast({ title: "FlashPay ID required", description: "Enter a valid FlashPay ID.", variant: "destructive" })
+      return
+    }
+    router.push(getReceiptLink(flashPayId))
   }
 
   const handleLogout = () => {
@@ -546,6 +557,29 @@ function ProfileContent() {
                     </div>
                   </div>
                 )}
+                <form
+                  className="border-t pt-3"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    handleReceiptSearch()
+                  }}
+                >
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">Find Receipt by FlashPay ID</p>
+                  <div className="flex gap-2">
+                    <Input
+                      value={receiptSearchId}
+                      onChange={(event) => setReceiptSearchId(event.target.value)}
+                      placeholder="FlashPay ID"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="FlashPay ID"
+                    />
+                    <Button type="submit" variant="outline" className="shrink-0 gap-2">
+                      <Search className="h-4 w-4" />
+                      Find
+                    </Button>
+                  </div>
+                </form>
               </div>
             ) : null}
           </CardContent>

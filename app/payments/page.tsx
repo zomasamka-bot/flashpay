@@ -1,17 +1,20 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, RefreshCw, ShoppingBag } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { config } from "@/lib/config"
+import { getReceiptLink } from "@/lib/router"
 import { useMerchant } from "@/lib/use-merchant"
 
 type SalesStatus = "paid" | "processing" | "failed" | "cancelled" | "needs_attention"
 
 interface SalesTimelineItem {
+  receiptLookupId: string
   occurredAt: string
   customerName: string | null
   amount: number
@@ -67,8 +70,8 @@ function getLocalDayWindow(dateKey: string): LocalDayWindow | null {
     dateKey,
     from: start.toISOString(),
     to: end.toISOString(),
-    label: new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(start),
-    dateLabel: new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", year: "numeric" }).format(start),
+    label: new Intl.DateTimeFormat("en-GB-u-nu-latn", { weekday: "long" }).format(start),
+    dateLabel: new Intl.DateTimeFormat("en-GB-u-nu-latn", { day: "2-digit", month: "long", year: "numeric" }).format(start),
   }
 }
 
@@ -92,6 +95,7 @@ function isSalesDay(value: unknown): value is SalesDay {
     if (item === null || typeof item !== "object" || Array.isArray(item)) return false
     const row = item as Record<string, unknown>
     return (
+      typeof row.receiptLookupId === "string" && row.receiptLookupId.trim().length > 0 && row.receiptLookupId === row.receiptLookupId.trim() &&
       typeof row.occurredAt === "string" && Number.isFinite(Date.parse(row.occurredAt)) &&
       (row.customerName === null || typeof row.customerName === "string") &&
       typeof row.amount === "number" && Number.isFinite(row.amount) && row.amount > 0 &&
@@ -109,6 +113,7 @@ const STATUS_LABEL: Record<SalesStatus, string> = {
 }
 
 export default function PaymentsPage() {
+  const router = useRouter()
   const merchant = useMerchant()
   const todayKey = useMemo(() => toLocalDateKey(new Date()), [])
   const [selectedDate, setSelectedDate] = useState(todayKey)
@@ -249,14 +254,26 @@ export default function PaymentsPage() {
               </Button>
               <div className="space-y-1.5">
                 <label htmlFor="sales-date" className="text-xs font-medium text-muted-foreground">Sales date</label>
-                <Input
-                  id="sales-date"
-                  type="date"
-                  value={selectedDate}
-                  max={todayKey}
-                  onChange={(event) => selectDate(event.target.value)}
-                  disabled={loading}
-                />
+                <div className="relative">
+                  <div
+                    className={`flex h-10 w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm tabular-nums ${loading ? "cursor-not-allowed opacity-50" : ""}`}
+                    aria-hidden="true"
+                  >
+                    {dayWindow?.dateLabel ?? selectedDate}
+                  </div>
+                  <Input
+                    id="sales-date"
+                    type="date"
+                    lang="en-GB"
+                    dir="ltr"
+                    value={selectedDate}
+                    max={todayKey}
+                    onChange={(event) => selectDate(event.target.value)}
+                    disabled={loading}
+                    aria-label="Sales date"
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  />
+                </div>
               </div>
               <Button
                 type="button"
@@ -323,7 +340,7 @@ export default function PaymentsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>{isToday ? "Today's Activity" : "Sales Activity"}</CardTitle>
-                <CardDescription>Server-authoritative merchant sales timeline for the selected local day</CardDescription>
+                <CardDescription>Server-authoritative merchant sales timeline. Tap any sale to open its canonical receipt.</CardDescription>
               </CardHeader>
               <CardContent>
                 {loading && !day ? (
@@ -333,16 +350,22 @@ export default function PaymentsPage() {
                 ) : (
                   <div className="divide-y">
                     {day.timeline.map((item, index) => (
-                      <div key={`${item.occurredAt}-${index}`} className="flex items-center gap-3 py-3">
+                      <button
+                        key={`${item.receiptLookupId}-${item.occurredAt}-${index}`}
+                        type="button"
+                        onClick={() => router.push(getReceiptLink(item.receiptLookupId))}
+                        className="flex w-full items-center gap-3 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={`Open receipt for ${item.customerName ? `@${item.customerName}` : "this sale"}`}
+                      >
                         <div className="w-16 shrink-0 text-sm font-medium tabular-nums">
-                          {new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(item.occurredAt))}
+                          {new Intl.DateTimeFormat("en-GB-u-nu-latn", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(item.occurredAt))}
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium">{item.customerName ? `@${item.customerName}` : "Name unavailable"}</p>
                           <p className="text-xs text-muted-foreground">{STATUS_LABEL[item.status]}</p>
                         </div>
                         <div className="shrink-0 text-right font-semibold tabular-nums">{item.amount.toFixed(2)}π</div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}

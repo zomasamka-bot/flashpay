@@ -10,6 +10,7 @@ import { BackButton } from "@/components/back-button"
 import { Spinner } from "@/components/ui/spinner"
 import { useMerchant } from "@/lib/use-merchant"
 import { config } from "@/lib/config"
+import { getReceiptLink } from "@/lib/router"
 
 import { Calendar, Search, Download, ChevronRight, ChevronDown, TrendingUp, Filter } from "lucide-react"
 
@@ -207,9 +208,6 @@ export default function MerchantPaymentsPage() {
   const filteredPayments = payments.filter((p) => {
     const searchLower = searchQuery.trim().toLowerCase()
     const matchesSearch =
-      p.id.toLowerCase().includes(searchLower) ||
-      p.transactionId.toLowerCase().includes(searchLower) ||
-      p.paymentId.toLowerCase().includes(searchLower) ||
       p.reference.toLowerCase().includes(searchLower) ||
       p.note.toLowerCase().includes(searchLower)
     const matchesStatus = filterStatus === "all" || p.status.toLowerCase() === filterStatus
@@ -517,7 +515,7 @@ export default function MerchantPaymentsPage() {
                   <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                   <Input
                     id="search-input"
-                    placeholder="Search by ID or note..."
+                    placeholder="Search by reference or note..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-10"
@@ -664,13 +662,13 @@ export default function MerchantPaymentsPage() {
                 {filteredPayments.map((payment) => (
                   <div
                     key={payment.id}
-                    onClick={() => router.push(`/receipts/${payment.id}`)}
+                    onClick={() => router.push(getReceiptLink(payment.transactionId))}
                     className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-slate-900/50 cursor-pointer transition-colors gap-4 sm:gap-0"
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3 flex-wrap">
-                        <div className="font-mono text-sm text-muted-foreground truncate">
-                          {payment.id.substring(0, 8)}...
+                        <div className="text-sm font-medium text-foreground truncate">
+                          {payment.reference}
                         </div>
                         <Badge className={getStatusColor(payment.status)}>
                           {mapStatusLabel(payment.status)}

@@ -15,6 +15,7 @@ export const ROUTES = {
   PRIVACY: "/privacy",
   TERMS: "/terms",
   TRANSACTIONS: "/transactions",
+  RECEIPTS: "/receipts",
   // Owner-only operations console routes
   OPERATIONS: "/operations",
   OPERATIONS_DOMAINS: "/operations/domains",
@@ -25,6 +26,10 @@ export const ROUTES = {
 
 export function getPaymentLink(id: string): string {
   return `${ROUTES.PAY}/${id}`
+}
+
+export function getReceiptLink(id: string): string {
+  return `${ROUTES.RECEIPTS}/${encodeURIComponent(id)}`
 }
 
 /**
@@ -67,6 +72,7 @@ export function isValidRoute(path: string): boolean {
     ROUTES.PRIVACY,
     ROUTES.TERMS,
     ROUTES.TRANSACTIONS,
+    ROUTES.RECEIPTS,
     ROUTES.OPERATIONS,
     ROUTES.OPERATIONS_DOMAINS,
     ROUTES.CONTROL_PANEL,

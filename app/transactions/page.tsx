@@ -10,6 +10,7 @@ import { BackButton } from "@/components/back-button"
 import { Spinner } from "@/components/ui/spinner"
 import { useMerchant } from "@/lib/use-merchant"
 import { config } from "@/lib/config"
+import { getReceiptLink } from "@/lib/router"
 import type { Transaction } from "@/lib/types"
 import { Calendar, Search, Download, ChevronRight } from "lucide-react"
 
@@ -131,8 +132,8 @@ export default function TransactionsPage() {
     return matchesSearch && matchesAmount && matchesStatus
   })
 
-  const handleViewReceipt = (transactionId: string) => {
-    router.push(`/receipts/${transactionId}`)
+  const handleViewReceipt = (receiptLookupId: string) => {
+    router.push(getReceiptLink(receiptLookupId))
   }
 
   const handleExport = async () => {
