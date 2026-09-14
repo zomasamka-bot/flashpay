@@ -1,19 +1,73 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
-import { AlertTriangle, CheckCircle2, LogOut, Search, Shield, Wallet } from "lucide-react"
-
-import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
+import { useState, useEffect } from "react"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { useToast } from "@/hooks/use-toast"
-import { config } from "@/lib/config"
-import type { RefundPresentation } from "@/lib/types"
-import { unifiedStore } from "@/lib/unified-store"
-import { useMerchant } from "@/lib/use-merchant"
+import { useRouter } from "next/navigation"
+
+import { ROUTES } from "@/lib/router"
 import { useOwnerUid } from "@/lib/use-owner-uid"
+import { config } from "@/lib/config"
+import { useToast } from "@/hooks/use-toast"
+import { useMerchant } from "@/lib/use-merchant"
+import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
+import { unifiedStore } from "@/lib/unified-store"
+import type { RefundPresentation } from "@/lib/types"
+import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet, Loader2 } from "lucide-react"
+
+type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
+
+const profileDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+})
+
+function formatProfileDateTime(createdAt: string): string {
+  const date = new Date(createdAt)
+  if (!Number.isFinite(date.getTime())) {
+    return "Unavailable"
+  }
+  return profileDateFormatter.format(date)
+}
+
+function mapSettlementStatus(status: SettlementStatus): string {
+  if (status === "settled_to_merchant") return "Settled"
+  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "Processing"
+  if (status === "failed" || status === "settlement_failed") return "Failed"
+  if (status === "cancelled") return "Cancelled"
+  if (status === "completed") return "Legacy Completed"
+  return "Other"
+}
+
+function merchantAttentionStatus(item: OperationalPayment): string {
+  if (item.refundPresentation?.merchantStatus === "refund_pending" || item.refundPresentation?.merchantStatus === "refund_confirmed") return "Failed — Refunding customer"
+  if (item.refundPresentation?.merchantStatus === "refund_completed") return "Failed — Refunded to customer"
+  if (item.refundPresentation?.merchantStatus === "refund_attention_required") return "Failed — Refund requires attention"
+  if (
+    item.settlementFailureState === "manual_review_required" ||
+    item.refundStatus === "manual_review_required"
+  ) return "Manual review required"
+  if (item.settlementFailureState === "held") return "Held for settlement safety"
+  if (
+    item.status === "refund_pending" ||
+    item.settlementFailureState === "refund_pending" ||
+    item.refundStatus === "pending" ||
+    item.refundStatus === "submitted"
+  ) return "Refund pending"
+  if (item.refundStatus === "failed") return "Refund failed — review required"
+  if (item.status === "settlement_failed") return "Settlement failed — review required"
+  if (item.settlementFailureState === "retryable" || item.nextRetryAt) return "Automatic retry scheduled"
+  if (
+    item.status === "paid_to_app" ||
+    item.status === "settlement_pending" ||
+    item.settlementFailureState === "reconciling"
+  ) return "Settlement processing"
+  return "Review required"
+}
 
 interface OperationalPayment {
   paymentId: string
@@ -21,86 +75,67 @@ interface OperationalPayment {
   status: string
   settlementFailureState: string
   settlementFailureCode?: string
+  heldAt?: string
   nextRetryAt?: string
   refundStatus: string
+  refundPaymentId?: string
+  refundTxid?: string
+  u2aTxid?: string
+  a2uPaymentId?: string
+  a2uTxid?: string
   refundPresentation?: RefundPresentation
+  updatedAt?: string
 }
 
 interface ProfileSummary {
   operationalPayments?: OperationalPayment[]
+  totalTransactions: number
   settledTransactions: number
   totalSettledAmount: number
+  pendingTransactions: number
+  totalAwaitingAmount: number
+  failedTransactions: number
+  totalFailedAmount: number
+  cancelledTransactions: number
+  totalCancelledAmount: number
+  completedTransactions: number
+  totalCompletedAmount: number
+  latestTransaction: {
+    transactionId: string
+    reference: string
+    amount: number
+    createdAt: string
+    settlementStatus: string | null
+  } | null
 }
 
-function isCompletedRefund(item: OperationalPayment): boolean {
-  return item.refundPresentation?.merchantStatus === "refund_completed"
-}
-
-function needsAttention(item: OperationalPayment): boolean {
-  if (isCompletedRefund(item)) return false
-  if (item.status === "refunded" || item.refundStatus === "completed" || item.settlementFailureState === "refunded") return false
-
-  return (
-    item.refundPresentation?.merchantStatus === "refund_pending" ||
-    item.refundPresentation?.merchantStatus === "refund_confirmed" ||
-    item.refundPresentation?.merchantStatus === "refund_attention_required" ||
-    item.status === "paid_to_app" ||
-    item.status === "settlement_pending" ||
-    item.status === "settlement_failed" ||
-    item.status === "refund_pending" ||
-    item.settlementFailureState === "manual_review_required" ||
-    item.settlementFailureState === "held" ||
-    item.settlementFailureState === "retryable" ||
-    item.settlementFailureState === "reconciling" ||
-    item.settlementFailureState === "refund_pending" ||
-    item.refundStatus === "pending" ||
-    item.refundStatus === "submitted" ||
-    item.refundStatus === "failed" ||
-    item.refundStatus === "manual_review_required" ||
-    Boolean(item.nextRetryAt)
-  )
-}
-
-function attentionLabel(item: OperationalPayment): string {
-  if (item.refundPresentation?.merchantStatus === "refund_pending" || item.refundPresentation?.merchantStatus === "refund_confirmed") return "Refund in progress"
-  if (item.refundPresentation?.merchantStatus === "refund_attention_required") return "Refund requires attention"
-  if (item.settlementFailureState === "manual_review_required" || item.refundStatus === "manual_review_required") return "Manual review required"
-  if (item.settlementFailureState === "held") return "Held for settlement safety"
-  if (item.refundStatus === "failed") return "Refund review required"
-  if (item.status === "settlement_failed") return "Settlement review required"
-  if (item.settlementFailureState === "retryable" || item.nextRetryAt) return "Automatic retry scheduled"
-  if (item.status === "paid_to_app" || item.status === "settlement_pending" || item.settlementFailureState === "reconciling") return "Settlement processing"
-  return "Processing"
-}
-
-export default function ProfilePage() {
+function ProfileContent() {
   const router = useRouter()
   const { toast } = useToast()
-  const merchantState = useMerchant()
-  const { uidData, verifyUid, clearUid } = useOwnerUid()
-
   const [mounted, setMounted] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [summary, setSummary] = useState<ProfileSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
-  const [searchId, setSearchId] = useState("")
   const [openRefundReceipts, setOpenRefundReceipts] = useState<Record<string, boolean>>({})
-  const [dismissingRefundId, setDismissingRefundId] = useState<string | null>(null)
 
-  useEffect(() => setMounted(true), [])
+  // Owner UID verification — stores result separately from payment system
+  const { uidData, verifyUid, clearUid } = useOwnerUid()
+  const piUsername = uidData.username
+  
+  // Canonical merchant state for continuity
+  const merchantState = useMerchant()
 
-  const merchantAuthenticated = Boolean(merchantState.merchantId.trim() && merchantState.accessToken?.trim())
-  const merchantUsername = merchantState.piUsername?.trim() || merchantState.merchantId.trim()
-  const isOwner = Boolean(config.ownerUid) && (
-    (uidData.status === "success" && uidData.uid === config.ownerUid) ||
-    (merchantAuthenticated && merchantState.uid === config.ownerUid)
-  )
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
+  // Fetch profile summary when merchant state changes
   useEffect(() => {
     const controller = new AbortController()
 
     const fetchProfileSummary = async () => {
+      // Clear if credentials missing
       if (!merchantState.merchantId || !merchantState.accessToken) {
         setSummary(null)
         setSummaryError(null)
@@ -108,75 +143,114 @@ export default function ProfilePage() {
         return
       }
 
+      // Clear before request
       setSummary(null)
       setSummaryError(null)
       setSummaryLoading(true)
 
       try {
-        const response = await fetch(
-          `${config.appUrl}/api/profile?merchantId=${encodeURIComponent(merchantState.merchantId)}`,
-          {
-            headers: { Authorization: `Bearer ${merchantState.accessToken}` },
-            signal: controller.signal,
+        const url = `${config.appUrl}/api/profile?merchantId=${encodeURIComponent(merchantState.merchantId)}`
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${merchantState.accessToken}`,
           },
-        )
+          signal: controller.signal,
+        })
 
         if (controller.signal.aborted) return
+
         if (!response.ok) {
+          setSummary(null)
           setSummaryError(`Failed to load profile: ${response.statusText}`)
           return
         }
 
         const data = await response.json()
-        if (!controller.signal.aborted) setSummary(data)
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          setSummaryError(error instanceof Error ? error.message : "Error loading profile")
-        }
+
+        if (controller.signal.aborted) return
+
+        setSummary(data)
+      } catch (err) {
+        if (controller.signal.aborted) return
+
+        setSummary(null)
+        setSummaryError(err instanceof Error ? err.message : "Error loading profile")
       } finally {
-        if (!controller.signal.aborted) setSummaryLoading(false)
+        if (!controller.signal.aborted) {
+          setSummaryLoading(false)
+        }
       }
     }
 
-    void fetchProfileSummary()
+    fetchProfileSummary()
     return () => controller.abort()
   }, [merchantState.merchantId, merchantState.accessToken])
 
-  const attentionPayments = useMemo(
-    () => (summary?.operationalPayments ?? []).filter(needsAttention),
-    [summary?.operationalPayments],
-  )
 
-  const completedRefunds = useMemo(
-    () => (summary?.operationalPayments ?? []).filter(isCompletedRefund),
-    [summary?.operationalPayments],
-  )
 
+  // Profile authentication - verifies owner AND persists to canonical merchant state
   const handleConnectWallet = async () => {
     setIsAuthenticating(true)
+
     try {
-      if (!window.Pi || typeof window.Pi.authenticate !== "function") throw new Error("Pi SDK not available")
+      if (!window.Pi || typeof window.Pi.authenticate !== "function") {
+        throw new Error("Pi SDK not available")
+      }
 
-      const authResult = await window.Pi.authenticate(["username", "payments", "wallet_address"], () => {})
-      if (!authResult?.user) throw new Error("No user data from Pi Network")
+      // Call Pi.authenticate with owner scopes
+      const authResult = await window.Pi.authenticate(
+        ["username", "payments", "wallet_address"],
+        () => {
+          // Ignore incomplete payments during profile auth
+        }
+      )
 
-      const uid = authResult.user.uid || authResult.user.userId || authResult.user.user_id || authResult.user.app_uid || authResult.user.appUid || ""
+      if (!authResult || !authResult.user) {
+        throw new Error("No user data from Pi Network")
+      }
+
+      // Extract UID from various possible field names
+      const uid =
+        authResult.user.uid ||
+        authResult.user.userId ||
+        authResult.user.user_id ||
+        authResult.user.app_uid ||
+        authResult.user.appUid ||
+        ""
+
+      if (!uid) {
+        throw new Error("No user ID returned")
+      }
+
       const accessToken = authResult.accessToken
-      if (!uid) throw new Error("No user ID returned")
-      if (!accessToken) throw new Error("No access token returned")
+      if (!accessToken) {
+        throw new Error("No access token returned")
+      }
 
       const username = authResult.user.username || ""
       const walletAddress = authResult.user.wallet_address || ""
-      const verifyResult = await verifyUid(uid, accessToken, username)
-      if (!verifyResult.success) throw new Error(verifyResult.error || "Owner verification failed")
 
+      // PHASE 1: Store in isolated ownerUidStore and verify against NEXT_PUBLIC_OWNER_UID
+      const verifyResult = await verifyUid(uid, accessToken, username)
+
+      if (!verifyResult.success) {
+        throw new Error(verifyResult.error || "Owner verification failed")
+      }
+
+      // PHASE 1: Persist same verified identity through canonical merchant state
+      // This bridges Profile auth to the merchant pages (Home, Payments, etc.)
       unifiedStore.completeMerchantSetup(username, walletAddress, uid)
       unifiedStore.updateMerchantState({ accessToken })
-      toast({ title: "Connected", description: `Verified by Pi Network as @${username}` })
+
+      toast({
+        title: "Connected",
+        description: `Verified by Pi Network as @${username}`,
+      })
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Failed to connect wallet"
       toast({
         title: "Connection Failed",
-        description: error instanceof Error ? error.message : "Failed to connect wallet",
+        description: errorMsg,
         variant: "destructive",
       })
     } finally {
@@ -184,257 +258,309 @@ export default function ProfilePage() {
     }
   }
 
-  const handleLogout = () => {
-    if (!confirm("Are you sure you want to log out?")) return
-    clearUid()
-    unifiedStore.clearMerchantAuth()
-    router.push("/")
-    toast({ title: "Logged out", description: "Your session has been cleared" })
-  }
-
-  const handleReceiptSearch = () => {
-    const id = searchId.trim()
-    if (!id) {
-      toast({ title: "Enter a FlashPay ID", description: "Use the FlashPay ID shown on the payment or receipt.", variant: "destructive" })
-      return
-    }
-    router.push(`/receipts/${encodeURIComponent(id)}`)
-  }
-
-  const handleDismissCompletedRefund = async (paymentId: string) => {
-    if (!merchantState.merchantId || !merchantState.accessToken || dismissingRefundId) return
-    setDismissingRefundId(paymentId)
-    try {
-      const response = await fetch(`${config.appUrl}/api/profile`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${merchantState.accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          merchantId: merchantState.merchantId,
-          paymentId,
-          action: "dismiss_completed_refund",
-        }),
-      })
-      if (!response.ok) throw new Error("Could not remove this refund from Profile")
-
-      setSummary((current) => current
-        ? { ...current, operationalPayments: (current.operationalPayments ?? []).filter((item) => item.paymentId !== paymentId) }
-        : current)
-      setOpenRefundReceipts((current) => {
-        const next = { ...current }
-        delete next[paymentId]
-        return next
-      })
-      toast({ title: "Removed from Profile", description: "The refund record and receipt remain available by FlashPay ID." })
-    } catch (error) {
+  // Disconnect wallet and clear both owner UID and merchant state
+  const handleDisconnect = () => {
+    if (confirm("Disconnect wallet and clear authentication?")) {
+      // Clear from both stores for consistent state
+      clearUid()
+      unifiedStore.clearMerchantAuth()
+      
       toast({
-        title: "Could not remove refund",
-        description: error instanceof Error ? error.message : "Please try again.",
-        variant: "destructive",
+        title: "Disconnected",
+        description: "Wallet connection cleared",
       })
-    } finally {
-      setDismissingRefundId(null)
     }
   }
 
-  if (!mounted) return null
+  const handleLogout = () => {
+    if (confirm("Are you sure you want to log out?")) {
+      // Clear from both stores for consistent state
+      clearUid()
+      unifiedStore.clearMerchantAuth()
+      
+      router.push("/")
+      toast({
+        title: "Logged out",
+        description: "Your session has been cleared",
+      })
+    }
+  }
+
+  if (!mounted) {
+    return null
+  }
+
+  // Owner access: Verified UID must exactly match NEXT_PUBLIC_OWNER_UID
+  const isOwner = uidData.status === "success" && uidData.uid === config.ownerUid
+  const isConnected = uidData.status === "success"
+
+  // Merchant authentication and username
+  const merchantAuthenticated = Boolean(merchantState.merchantId.trim() && merchantState.accessToken?.trim())
+  const merchantUsername = merchantState.piUsername?.trim() || merchantState.merchantId.trim()
+
+  // Owner-only visibility for Wallet Connection card
+  const showOwnerWalletCard = merchantAuthenticated && Boolean(config.ownerUid) && Boolean(merchantState.uid) && merchantState.uid === config.ownerUid
 
   return (
     <div className="min-h-screen pb-20 pt-4">
-      <div className="mx-auto max-w-4xl space-y-6 px-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
+      <div className="max-w-4xl mx-auto px-4 space-y-6">
+        {/* Header */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <Shield className="h-6 w-6 text-primary" />
-              <h1 className="text-2xl font-bold">Merchant Workspace</h1>
+              <h1 className="text-2xl font-bold">Account</h1>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Your FlashPay business account</p>
+            <Button onClick={handleLogout} variant="outline" size="sm" className="gap-2 bg-transparent">
+              <LogOut className="h-4 w-4" />
+              Logout
+            </Button>
           </div>
-          <Button onClick={handleLogout} variant="outline" size="sm" className="gap-2 bg-transparent">
-            <LogOut className="h-4 w-4" />
-            Logout
-          </Button>
+          <p className="text-sm text-muted-foreground">Your account settings</p>
+          {merchantAuthenticated && <p className="text-xs text-muted-foreground mt-1">@{merchantUsername}</p>}
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Merchant</CardTitle>
-            <CardDescription>Identity and Pi connection status</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-medium uppercase text-muted-foreground">Merchant identity</p>
-                <p className="mt-1 text-lg font-semibold">{merchantAuthenticated ? `@${merchantUsername}` : "Not connected"}</p>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <Wallet className="h-4 w-4" />
-                <span className={merchantAuthenticated ? "font-medium text-green-700" : "text-muted-foreground"}>
-                  {merchantAuthenticated ? "Pi connected" : "Pi not connected"}
-                </span>
-              </div>
-            </div>
-            {!merchantAuthenticated && (
-              <p className="text-sm text-muted-foreground">Authenticate from Home to load your merchant workspace.</p>
-            )}
-            {isOwner && uidData.status !== "success" && (
-              <Button onClick={handleConnectWallet} disabled={isAuthenticating} variant="outline" className="w-full">
-                {isAuthenticating ? "Connecting..." : "Verify owner wallet"}
-              </Button>
-            )}
-          </CardContent>
-        </Card>
+        {/* Wallet Connection Status */}
+        {showOwnerWalletCard && (
+          <Card className={isConnected ? "border-green-200 bg-green-50" : "border-yellow-200 bg-yellow-50"}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Wallet className="h-5 w-5" />
+                Wallet Connection
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isConnected ? (
+                <div className="space-y-3">
+                  <div className="text-sm">
+                    <p className="font-medium text-green-900">Wallet Connected</p>
+                    <p className="text-xs text-green-700 mt-1">Your wallet has been authenticated with FlashPay</p>
+                  </div>
+                  <Button onClick={handleDisconnect} variant="outline" className="w-full gap-2">
+                    Disconnect Wallet
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-yellow-900">
+                    Connect your Pi Wallet to access your profile features
+                  </p>
+                  <Button 
+                    onClick={handleConnectWallet} 
+                    disabled={isAuthenticating}
+                    className="w-full gap-2"
+                  >
+                    <Wallet className="h-4 w-4" />
+                    {isAuthenticating ? "Connecting..." : "Connect Wallet"}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
+        {/* Profile Summary */}
         <Card>
           <CardHeader>
-            <CardTitle>Business Overview</CardTitle>
-            <CardDescription>Simple merchant-facing totals from the authoritative profile read model</CardDescription>
+            <CardTitle>Profile Summary</CardTitle>
           </CardHeader>
           <CardContent>
             {!merchantAuthenticated ? (
-              <p className="text-sm text-muted-foreground">Connect your merchant account to view business totals.</p>
+              <p className="text-sm text-muted-foreground">
+                Authenticate from Home to load your merchant profile
+              </p>
             ) : summaryLoading ? (
-              <p className="text-sm text-muted-foreground">Loading business overview...</p>
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Loading profile...</span>
+              </div>
             ) : summaryError ? (
               <p className="text-sm text-destructive">{summaryError}</p>
             ) : summary ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border p-4">
-                  <p className="text-xs font-medium uppercase text-muted-foreground">Total Sales</p>
-                  <p className="mt-2 text-2xl font-bold">{summary.totalSettledAmount.toFixed(2)}π</p>
-                </div>
-                <div className="rounded-lg border p-4">
-                  <p className="text-xs font-medium uppercase text-muted-foreground">Successful Payments</p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <CheckCircle2 className="h-5 w-5 text-green-700" />
-                    <p className="text-2xl font-bold">{summary.settledTransactions}</p>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Transactions</p>
+                    <p className="text-lg font-semibold">{summary.totalTransactions}</p>
                   </div>
-                </div>
-                <div className="rounded-lg border p-4">
-                  <p className="text-xs font-medium uppercase text-muted-foreground">Needs Attention</p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <AlertTriangle className="h-5 w-5 text-amber-700" />
-                    <p className="text-2xl font-bold">{attentionPayments.length}</p>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Settled Transactions</p>
+                    <p className="text-lg font-semibold">{summary.settledTransactions}</p>
                   </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Settled Amount</p>
+                    <p className="text-lg font-semibold">{summary.totalSettledAmount.toFixed(2)}π</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Pending Transactions</p>
+                    <p className="text-lg font-semibold">{summary.pendingTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Awaiting Amount</p>
+                    <p className="text-lg font-semibold">{summary.totalAwaitingAmount.toFixed(2)}π</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Failed Transactions</p>
+                    <p className="text-lg font-semibold">{summary.failedTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Failed Amount</p>
+                    <p className="text-lg font-semibold">{summary.totalFailedAmount.toFixed(2)}π</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Cancelled Transactions</p>
+                    <p className="text-lg font-semibold">{summary.cancelledTransactions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total Cancelled Amount</p>
+                    <p className="text-lg font-semibold">{summary.totalCancelledAmount.toFixed(2)}π</p>
+                  </div>
+                  {(summary.completedTransactions > 0 || summary.totalCompletedAmount > 0) && (
+                    <>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Legacy Completed Transactions</p>
+                        <p className="text-lg font-semibold">{summary.completedTransactions}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Legacy Completed Amount</p>
+                        <p className="text-lg font-semibold">{summary.totalCompletedAmount.toFixed(2)}π</p>
+                      </div>
+                    </>
+                  )}
                 </div>
+                {summary.operationalPayments &&
+                  summary.operationalPayments.filter(
+                    (item) =>
+                      item.refundPresentation?.merchantStatus === "refund_completed" ||
+                      (item.status !== "refunded" &&
+                        item.refundStatus !== "completed" &&
+                        item.settlementFailureState !== "refunded"),
+                  ).length > 0 && (
+                    <div className="pt-3 border-t space-y-3">
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Payments Requiring Attention</p>
+                        <p className="text-sm text-muted-foreground">Payments still being settled or requiring action.</p>
+                      </div>
+                      {summary.operationalPayments
+                        .filter(
+                          (item) =>
+                            item.refundPresentation?.merchantStatus === "refund_completed" || (item.status !== "refunded" && item.refundStatus !== "completed" && item.settlementFailureState !== "refunded"),
+                        )
+                        .map((item) => (
+                          <div key={item.paymentId} className="rounded-md border p-3 text-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="font-medium">{item.paymentId}</span>
+                              <span>{item.amount.toFixed(2)}π</span>
+                            </div>
+                            <p className="text-muted-foreground mt-1">{merchantAttentionStatus(item)}</p>
+                            {item.refundPresentation?.merchantStatus === "refund_completed" && (
+                              <div className="mt-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setOpenRefundReceipts((current) => ({ ...current, [item.paymentId]: !current[item.paymentId] }))}
+                                >
+                                  {openRefundReceipts[item.paymentId] ? "Hide refund receipt" : "Tap to view refund receipt"}
+                                </Button>
+                                {openRefundReceipts[item.paymentId] && (
+                                  <CustomerRefundStatusCard presentation={item.refundPresentation} status="ready" audience="merchant" />
+                                )}
+                              </div>
+                            )}
+                            {item.nextRetryAt && (
+                              <p className="text-xs text-muted-foreground">Next retry: {formatProfileDateTime(item.nextRetryAt)}</p>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                {summary.latestTransaction && (
+                  <div className="pt-3 border-t">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Latest Transaction</p>
+                    <div className="space-y-1 text-sm">
+                      <p>
+                        <span className="text-muted-foreground">Reference:</span> {summary.latestTransaction.reference}
+                      </p>
+                      <p>
+                        <span className="text-muted-foreground">Amount:</span> π{summary.latestTransaction.amount}
+                      </p>
+                      <p>
+                        <span className="text-muted-foreground">Date:</span> {formatProfileDateTime(summary.latestTransaction.createdAt)}
+                      </p>
+                      {summary.latestTransaction.settlementStatus && (
+                        <p>
+                          <span className="text-muted-foreground">Status:</span> {mapSettlementStatus(summary.latestTransaction.settlementStatus)}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : null}
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Find a Receipt</CardTitle>
-            <CardDescription>Search using the customer-facing FlashPay ID only</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form
-              className="flex flex-col gap-2 sm:flex-row"
-              onSubmit={(event) => {
-                event.preventDefault()
-                handleReceiptSearch()
-              }}
-            >
-              <Input
-                value={searchId}
-                onChange={(event) => setSearchId(event.target.value)}
-                placeholder="FlashPay ID"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <Button type="submit" className="gap-2 sm:w-auto">
-                <Search className="h-4 w-4" />
-                Search
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        {attentionPayments.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Needs Attention</CardTitle>
-              <CardDescription>Payments still processing or requiring review</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {attentionPayments.map((item) => (
-                <button
-                  key={item.paymentId}
-                  type="button"
-                  onClick={() => router.push(`/receipts/${encodeURIComponent(item.paymentId)}`)}
-                  className="w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/50"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 break-all text-sm font-semibold">{item.paymentId}</span>
-                    <span className="shrink-0 font-semibold">{item.amount.toFixed(2)}π</span>
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">{attentionLabel(item)}</p>
-                </button>
-              ))}
-            </CardContent>
-          </Card>
-        )}
-
-        {completedRefunds.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Completed Refunds</CardTitle>
-              <CardDescription>Completed refunds can be hidden here without deleting the financial record or receipt</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {completedRefunds.map((item) => (
-                <div key={item.paymentId} className="rounded-lg border p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 break-all text-sm font-semibold">{item.paymentId}</span>
-                    <span className="shrink-0 font-semibold">{item.amount.toFixed(2)}π</span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setOpenRefundReceipts((current) => ({ ...current, [item.paymentId]: !current[item.paymentId] }))}
-                    >
-                      {openRefundReceipts[item.paymentId] ? "Hide refund receipt" : "View refund receipt"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={dismissingRefundId !== null}
-                      onClick={() => void handleDismissCompletedRefund(item.paymentId)}
-                    >
-                      {dismissingRefundId === item.paymentId ? "Removing..." : "Remove from Profile"}
-                    </Button>
-                  </div>
-                  {openRefundReceipts[item.paymentId] && item.refundPresentation && (
-                    <div className="mt-3">
-                      <CustomerRefundStatusCard presentation={item.refundPresentation} status="ready" audience="merchant" />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        )}
-
+        {/* Owner Operations Console Link (Owner Only) */}
         {isOwner && (
-          <Card className="border-primary">
+          <Card className="border-2 border-primary">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Shield className="h-5 w-5" />
                 Operations Console
               </CardTitle>
-              <CardDescription>Owner-only platform operations</CardDescription>
+              <CardDescription>Access platform management tools</CardDescription>
             </CardHeader>
             <CardContent>
-              <Button onClick={() => router.push("/operations")} className="w-full">Open Operations Console</Button>
+              <Button onClick={() => router.push("/operations")} className="w-full" size="lg">
+                <Shield className="h-4 w-4 mr-2" />
+                Open Operations Console
+                <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
             </CardContent>
           </Card>
         )}
+
+        {/* Merchant Payment Requests */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5" />
+              Payment Requests
+            </CardTitle>
+            <CardDescription>View and track payment requests you created</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => router.push(ROUTES.MERCHANT_PAYMENTS)} className="w-full" size="lg" variant="outline">
+              <BarChart3 className="h-4 w-4 mr-2" />
+              View Payment Requests
+              <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Transaction History Access */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <History className="h-5 w-5" />
+              Transaction History
+            </CardTitle>
+            <CardDescription>View receipts and complete transaction ledger</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => router.push("/transactions")} className="w-full" size="lg" variant="outline">
+              <History className="h-4 w-4 mr-2" />
+              View All Transactions
+              <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     </div>
   )
+}
+
+export default function ProfilePage() {
+  return <ProfileContent />
 }

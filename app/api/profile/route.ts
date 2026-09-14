@@ -14,12 +14,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-const PROFILE_DISMISSED_REFUND_PREFIX = "flashpay:profile:dismissed-refund:v1"
-
-function dismissedRefundKey(merchantId: string, paymentId: string): string {
-  return `${PROFILE_DISMISSED_REFUND_PREFIX}:${merchantId}:${paymentId}`
-}
-
 /**
  * GET /api/profile?merchantId=xxx
  * Returns merchant profile summary with transaction statistics
@@ -300,105 +294,12 @@ export async function GET(request: NextRequest) {
       profileSummary.totalFailedAmount += amount
     }
 
-    // K7 presentation-only dismissal. This projection is intentionally applied
-    // after all accounting corrections so hiding a completed refund from the
-    // merchant workspace cannot change financial totals, evidence, or search.
-    const completedRefundPaymentIds = authoritativeOperationalPayments
-      .filter((payment) => {
-        const presentation = payment.refundPresentation
-        return isRecord(presentation) && presentation.merchantStatus === "refund_completed" && presentation.paymentId === payment.paymentId
-      })
-      .map((payment) => payment.paymentId)
-      .filter((paymentId): paymentId is string => typeof paymentId === "string" && paymentId.length > 0)
-
-    const dismissedRefundPaymentIds = new Set<string>()
-    for (let index = 0; index < completedRefundPaymentIds.length; index += 200) {
-      const batchIds = completedRefundPaymentIds.slice(index, index + 200)
-      let markers: unknown[]
-      try {
-        const values = await redis.mget<unknown[]>(batchIds.map((paymentId) => dismissedRefundKey(verifiedMerchant.username, paymentId)))
-        if (!Array.isArray(values) || values.length !== batchIds.length) return NextResponse.json({ error: "Profile presentation unavailable" }, { status: 503 })
-        markers = values
-      } catch {
-        return NextResponse.json({ error: "Profile presentation unavailable" }, { status: 503 })
-      }
-      for (let markerIndex = 0; markerIndex < markers.length; markerIndex += 1) {
-        const marker = markers[markerIndex]
-        if (marker !== null && marker !== "dismissed") return NextResponse.json({ error: "Profile presentation unavailable" }, { status: 503 })
-        if (marker === "dismissed") dismissedRefundPaymentIds.add(batchIds[markerIndex])
-      }
-    }
-
-    const visibleOperationalPayments = authoritativeOperationalPayments.filter((payment) => {
-      const paymentId = typeof payment.paymentId === "string" ? payment.paymentId : ""
-      return !dismissedRefundPaymentIds.has(paymentId)
-    })
-
-    return NextResponse.json({ ...profileSummary, operationalPayments: visibleOperationalPayments })
+    return NextResponse.json({ ...profileSummary, operationalPayments: authoritativeOperationalPayments })
   } catch (error) {
     console.error("[Profile API] Error:", error)
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
     )
-  }
-}
-
-/**
- * POST /api/profile
- * Presentation-only dismissal for a completed refund. Never mutates the
- * canonical payment, refund checkpoint, Horizon proof, accounting, or audit.
- */
-export async function POST(request: NextRequest) {
-  if (!isRedisConfigured) return NextResponse.json({ error: "Profile presentation unavailable" }, { status: 503 })
-
-  try {
-    const authHeader = request.headers.get("authorization")
-    const verifiedMerchant = await authorizeFromHeader(authHeader)
-    if (!verifiedMerchant) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
-    const body: unknown = await request.json()
-    if (!isRecord(body)) return NextResponse.json({ error: "Invalid request" }, { status: 400 })
-
-    const merchantId = body.merchantId
-    const paymentId = body.paymentId
-    const action = body.action
-    if (
-      typeof merchantId !== "string" || merchantId.length === 0 || merchantId !== merchantId.trim() || merchantId !== verifiedMerchant.username ||
-      typeof paymentId !== "string" || paymentId.length === 0 || paymentId.length > 128 || paymentId !== paymentId.trim() ||
-      action !== "dismiss_completed_refund"
-    ) {
-      return NextResponse.json({ error: "Invalid request" }, { status: 400 })
-    }
-
-    const rawPayment = await redis.get(`payment:${paymentId}`)
-    let paymentValue: unknown
-    try {
-      paymentValue = typeof rawPayment === "string" ? JSON.parse(rawPayment) : rawPayment
-    } catch {
-      return NextResponse.json({ error: "Payment unavailable" }, { status: 503 })
-    }
-    if (!isRecord(paymentValue) || paymentValue.id !== paymentId || paymentValue.merchantId !== verifiedMerchant.username) {
-      return NextResponse.json({ error: "Payment not found" }, { status: 404 })
-    }
-
-    // Only a fully projected completed refund can be dismissed from Profile.
-    // This gate is presentation-only and does not alter the payment itself.
-    if (
-      paymentValue.status !== "refunded" ||
-      paymentValue.refundStatus !== "completed" ||
-      paymentValue.settlementFailureState !== "refunded"
-    ) {
-      return NextResponse.json({ error: "Only completed refunds can be removed from Profile" }, { status: 409 })
-    }
-
-    await redis.set(dismissedRefundKey(verifiedMerchant.username, paymentId), "dismissed")
-    const marker = await redis.get(dismissedRefundKey(verifiedMerchant.username, paymentId))
-    if (marker !== "dismissed") return NextResponse.json({ error: "Profile presentation unavailable" }, { status: 503 })
-
-    return NextResponse.json({ paymentId, dismissed: true })
-  } catch (error) {
-    console.error("[Profile API] Presentation dismissal error:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
