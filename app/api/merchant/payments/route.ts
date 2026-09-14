@@ -72,6 +72,11 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Invalid sales day window" }, { status: 400 })
       }
 
+      const offset = Number(searchParams.get("offset") ?? "0")
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > 100000) {
+        return NextResponse.json({ error: "Invalid sales timeline offset" }, { status: 400 })
+      }
+
       const aggregateRows = await query(
         `SELECT
            COUNT(*) FILTER (WHERE r.settlement_status = 'settled_to_merchant') AS successful_sales_count,
@@ -113,9 +118,9 @@ export async function GET(request: NextRequest) {
          FROM transactions t
          LEFT JOIN receipts r ON r.transaction_id = t.id
          WHERE t.merchant_id = $1 AND t.created_at >= $2 AND t.created_at < $3
-         ORDER BY t.created_at DESC
-         LIMIT 251`,
-        [verifiedUsername, from, to],
+         ORDER BY t.created_at DESC, t.id DESC
+         LIMIT 251 OFFSET $4`,
+        [verifiedUsername, from, to, offset],
       )
       if (!Array.isArray(rows)) {
         return NextResponse.json({ error: "Sales timeline unavailable" }, { status: 503 })
@@ -175,6 +180,7 @@ export async function GET(request: NextRequest) {
           processingCount,
           timeline,
           hasMore: rows.length > 250,
+          nextOffset: rows.length > 250 ? offset + visibleRows.length : null,
         },
       })
     }

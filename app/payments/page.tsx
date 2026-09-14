@@ -1,10 +1,11 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { CalendarDays, CheckCircle2, Clock, RefreshCw, ShoppingBag } from "lucide-react"
+import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, RefreshCw, ShoppingBag } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { config } from "@/lib/config"
 import { useMerchant } from "@/lib/use-merchant"
 
@@ -25,18 +26,57 @@ interface SalesDay {
   processingCount: number
   timeline: SalesTimelineItem[]
   hasMore: boolean
+  nextOffset: number | null
 }
 
-function getLocalDayWindow(): { from: string; to: string; label: string; dateLabel: string } {
-  const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+interface LocalDayWindow {
+  dateKey: string
+  from: string
+  to: string
+  label: string
+  dateLabel: string
+}
+
+function toLocalDateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function parseLocalDateKey(dateKey: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const parsed = new Date(year, month - 1, day, 0, 0, 0, 0)
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) return null
+  return parsed
+}
+
+function getLocalDayWindow(dateKey: string): LocalDayWindow | null {
+  const start = parseLocalDateKey(dateKey)
+  if (!start) return null
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1, 0, 0, 0, 0)
   return {
+    dateKey,
     from: start.toISOString(),
     to: end.toISOString(),
-    label: new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(now),
-    dateLabel: new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", year: "numeric" }).format(now),
+    label: new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(start),
+    dateLabel: new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", year: "numeric" }).format(start),
   }
+}
+
+function shiftLocalDateKey(dateKey: string, days: number): string | null {
+  const date = parseLocalDateKey(dateKey)
+  if (!date || !Number.isInteger(days)) return null
+  const shifted = new Date(date.getFullYear(), date.getMonth(), date.getDate() + days, 0, 0, 0, 0)
+  return toLocalDateKey(shifted)
 }
 
 function isSalesDay(value: unknown): value is SalesDay {
@@ -47,6 +87,7 @@ function isSalesDay(value: unknown): value is SalesDay {
   if (typeof day.successfulSalesCount !== "number" || !Number.isInteger(day.successfulSalesCount) || day.successfulSalesCount < 0) return false
   if (typeof day.processingCount !== "number" || !Number.isInteger(day.processingCount) || day.processingCount < 0) return false
   if (typeof day.hasMore !== "boolean" || !Array.isArray(day.timeline)) return false
+  if (day.nextOffset !== null && (!Number.isSafeInteger(day.nextOffset) || (day.nextOffset as number) < 0)) return false
   return day.timeline.every((item) => {
     if (item === null || typeof item !== "object" || Array.isArray(item)) return false
     const row = item as Record<string, unknown>
@@ -69,10 +110,38 @@ const STATUS_LABEL: Record<SalesStatus, string> = {
 
 export default function PaymentsPage() {
   const merchant = useMerchant()
-  const dayWindow = useMemo(() => getLocalDayWindow(), [])
+  const todayKey = useMemo(() => toLocalDateKey(new Date()), [])
+  const [selectedDate, setSelectedDate] = useState(todayKey)
+  const dayWindow = useMemo(() => getLocalDayWindow(selectedDate), [selectedDate])
   const [day, setDay] = useState<SalesDay | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const fetchSalesPage = useCallback(async (offset: number, signal?: AbortSignal): Promise<SalesDay> => {
+    if (!merchant.merchantId || !merchant.accessToken) throw new Error("Merchant authentication required")
+    if (!dayWindow) throw new Error("Invalid sales date")
+
+    const params = new URLSearchParams({
+      merchantId: merchant.merchantId,
+      view: "sales",
+      from: dayWindow.from,
+      to: dayWindow.to,
+      offset: String(offset),
+    })
+    const response = await fetch(`${config.appUrl}/api/merchant/payments?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${merchant.accessToken}` },
+      cache: "no-store",
+      signal,
+    })
+    if (!response.ok) throw new Error(`Sales unavailable (${response.status})`)
+    const payload: unknown = await response.json()
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Invalid sales response")
+    const candidate = (payload as Record<string, unknown>).day
+    if (!isSalesDay(candidate)) throw new Error("Invalid sales response")
+    if (candidate.from !== dayWindow.from || candidate.to !== dayWindow.to) throw new Error("Sales date mismatch")
+    return candidate
+  }, [dayWindow, merchant.accessToken, merchant.merchantId])
 
   const loadSales = useCallback(async (signal?: AbortSignal) => {
     if (!merchant.merchantId || !merchant.accessToken) {
@@ -81,27 +150,18 @@ export default function PaymentsPage() {
       setLoading(false)
       return
     }
+    if (!dayWindow) {
+      setDay(null)
+      setError("Invalid sales date")
+      setLoading(false)
+      return
+    }
 
     setLoading(true)
     setError(null)
     try {
-      const params = new URLSearchParams({
-        merchantId: merchant.merchantId,
-        view: "sales",
-        from: dayWindow.from,
-        to: dayWindow.to,
-      })
-      const response = await fetch(`${config.appUrl}/api/merchant/payments?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${merchant.accessToken}` },
-        cache: "no-store",
-        signal,
-      })
-      if (!response.ok) throw new Error(`Sales unavailable (${response.status})`)
-      const payload: unknown = await response.json()
-      if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Invalid sales response")
-      const candidate = (payload as Record<string, unknown>).day
-      if (!isSalesDay(candidate)) throw new Error("Invalid sales response")
-      setDay(candidate)
+      const firstPage = await fetchSalesPage(0, signal)
+      setDay(firstPage)
     } catch (loadError) {
       if (signal?.aborted) return
       setDay(null)
@@ -109,13 +169,43 @@ export default function PaymentsPage() {
     } finally {
       if (!signal?.aborted) setLoading(false)
     }
-  }, [dayWindow.from, dayWindow.to, merchant.accessToken, merchant.merchantId])
+  }, [dayWindow, fetchSalesPage, merchant.accessToken, merchant.merchantId])
+
+  const loadMore = async () => {
+    if (!day?.hasMore || day.nextOffset === null || loadingMore) return
+    setLoadingMore(true)
+    setError(null)
+    try {
+      const nextPage = await fetchSalesPage(day.nextOffset)
+      setDay((current) => {
+        if (!current || current.from !== nextPage.from || current.to !== nextPage.to) return current
+        return {
+          ...nextPage,
+          timeline: [...current.timeline, ...nextPage.timeline],
+        }
+      })
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load more sales")
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController()
     void loadSales(controller.signal)
     return () => controller.abort()
   }, [loadSales])
+
+  const isToday = selectedDate === todayKey
+  const previousDate = shiftLocalDateKey(selectedDate, -1)
+  const nextDate = shiftLocalDateKey(selectedDate, 1)
+  const canGoNext = nextDate !== null && nextDate <= todayKey
+
+  const selectDate = (dateKey: string) => {
+    if (!getLocalDayWindow(dateKey) || dateKey > todayKey) return
+    setSelectedDate(dateKey)
+  }
 
   return (
     <div className="min-h-screen pb-24 pt-4">
@@ -128,7 +218,7 @@ export default function PaymentsPage() {
             </div>
             <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
               <CalendarDays className="h-4 w-4" />
-              <span>{dayWindow.label}, {dayWindow.dateLabel}</span>
+              <span>{dayWindow ? `${dayWindow.label}, ${dayWindow.dateLabel}` : "Invalid date"}</span>
             </div>
           </div>
           <Button
@@ -136,7 +226,7 @@ export default function PaymentsPage() {
             variant="outline"
             size="sm"
             onClick={() => void loadSales()}
-            disabled={loading || !merchant.merchantId || !merchant.accessToken}
+            disabled={loading || !merchant.merchantId || !merchant.accessToken || !dayWindow}
             className="gap-2"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -144,13 +234,57 @@ export default function PaymentsPage() {
           </Button>
         </div>
 
+        <Card>
+          <CardContent className="pt-6">
+            <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2"
+                disabled={!previousDate || loading}
+                onClick={() => previousDate && selectDate(previousDate)}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous day
+              </Button>
+              <div className="space-y-1.5">
+                <label htmlFor="sales-date" className="text-xs font-medium text-muted-foreground">Sales date</label>
+                <Input
+                  id="sales-date"
+                  type="date"
+                  value={selectedDate}
+                  max={todayKey}
+                  onChange={(event) => selectDate(event.target.value)}
+                  disabled={loading}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2"
+                disabled={!canGoNext || loading}
+                onClick={() => nextDate && canGoNext && selectDate(nextDate)}
+              >
+                Next day
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+            {!isToday && (
+              <Button type="button" variant="ghost" size="sm" className="mt-3" disabled={loading} onClick={() => selectDate(todayKey)}>
+                Back to Today
+              </Button>
+            )}
+            <p className="mt-2 text-xs text-muted-foreground">Day boundaries follow this device&apos;s local time; the server receives the exact UTC window for that local calendar day.</p>
+          </CardContent>
+        </Card>
+
         {!merchant.merchantId || !merchant.accessToken ? (
           <Card>
             <CardContent className="py-10 text-center text-sm text-muted-foreground">
               Connect your Pi merchant account from Home to view sales.
             </CardContent>
           </Card>
-        ) : error ? (
+        ) : error && !day ? (
           <Card>
             <CardContent className="py-10 text-center">
               <p className="text-sm text-destructive">{error}</p>
@@ -162,7 +296,7 @@ export default function PaymentsPage() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Card>
                 <CardHeader className="pb-2">
-                  <CardDescription>Today&apos;s Sales</CardDescription>
+                  <CardDescription>{isToday ? "Today's Sales" : "Sales"}</CardDescription>
                   <CardTitle className="text-3xl">{day ? `${day.totalSales.toFixed(2)}π` : "—"}</CardTitle>
                 </CardHeader>
               </Card>
@@ -188,14 +322,14 @@ export default function PaymentsPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Today&apos;s Activity</CardTitle>
-                <CardDescription>Server-authoritative merchant sales timeline</CardDescription>
+                <CardTitle>{isToday ? "Today's Activity" : "Sales Activity"}</CardTitle>
+                <CardDescription>Server-authoritative merchant sales timeline for the selected local day</CardDescription>
               </CardHeader>
               <CardContent>
                 {loading && !day ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">Loading today&apos;s sales...</p>
+                  <p className="py-8 text-center text-sm text-muted-foreground">Loading sales...</p>
                 ) : !day || day.timeline.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">No sales activity today.</p>
+                  <p className="py-8 text-center text-sm text-muted-foreground">No sales activity for this day.</p>
                 ) : (
                   <div className="divide-y">
                     {day.timeline.map((item, index) => (
@@ -212,8 +346,13 @@ export default function PaymentsPage() {
                     ))}
                   </div>
                 )}
+                {error && day && <p className="mt-3 text-sm text-destructive">{error}</p>}
                 {day?.hasMore && (
-                  <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">More activity exists for this day. Full history navigation is added in K9.</p>
+                  <div className="mt-4 border-t pt-4 text-center">
+                    <Button type="button" variant="outline" onClick={() => void loadMore()} disabled={loadingMore}>
+                      {loadingMore ? "Loading..." : "Load more"}
+                    </Button>
+                  </div>
                 )}
               </CardContent>
             </Card>
