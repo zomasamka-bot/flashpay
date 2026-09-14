@@ -118,6 +118,7 @@ function ProfileContent() {
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [openRefundReceipts, setOpenRefundReceipts] = useState<Record<string, boolean>>({})
+  const [dismissingRefundId, setDismissingRefundId] = useState<string | null>(null)
 
   // Owner UID verification — stores result separately from payment system
   const { uidData, verifyUid, clearUid } = useOwnerUid()
@@ -269,6 +270,44 @@ function ProfileContent() {
         title: "Disconnected",
         description: "Wallet connection cleared",
       })
+    }
+  }
+
+  const handleDismissCompletedRefund = async (paymentId: string) => {
+    if (!merchantState.merchantId || !merchantState.accessToken || dismissingRefundId) return
+    setDismissingRefundId(paymentId)
+    try {
+      const response = await fetch(`${config.appUrl}/api/profile`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${merchantState.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          merchantId: merchantState.merchantId,
+          paymentId,
+          action: "dismiss_completed_refund",
+        }),
+      })
+      if (!response.ok) throw new Error("Could not remove this refund from Profile")
+
+      setSummary((current) => current
+        ? { ...current, operationalPayments: (current.operationalPayments ?? []).filter((item) => item.paymentId !== paymentId) }
+        : current)
+      setOpenRefundReceipts((current) => {
+        const next = { ...current }
+        delete next[paymentId]
+        return next
+      })
+      toast({ title: "Removed from Profile", description: "The refund record and receipt remain available in financial records." })
+    } catch (error) {
+      toast({
+        title: "Could not remove refund",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setDismissingRefundId(null)
     }
   }
 
@@ -455,14 +494,25 @@ function ProfileContent() {
                             <p className="text-muted-foreground mt-1">{merchantAttentionStatus(item)}</p>
                             {item.refundPresentation?.merchantStatus === "refund_completed" && (
                               <div className="mt-2">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setOpenRefundReceipts((current) => ({ ...current, [item.paymentId]: !current[item.paymentId] }))}
-                                >
-                                  {openRefundReceipts[item.paymentId] ? "Hide refund receipt" : "Tap to view refund receipt"}
-                                </Button>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setOpenRefundReceipts((current) => ({ ...current, [item.paymentId]: !current[item.paymentId] }))}
+                                  >
+                                    {openRefundReceipts[item.paymentId] ? "Hide refund receipt" : "Tap to view refund receipt"}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    disabled={dismissingRefundId !== null}
+                                    onClick={() => void handleDismissCompletedRefund(item.paymentId)}
+                                  >
+                                    {dismissingRefundId === item.paymentId ? "Removing..." : "Remove from Profile"}
+                                  </Button>
+                                </div>
                                 {openRefundReceipts[item.paymentId] && (
                                   <CustomerRefundStatusCard presentation={item.refundPresentation} status="ready" audience="merchant" />
                                 )}

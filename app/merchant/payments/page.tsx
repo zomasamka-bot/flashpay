@@ -11,7 +11,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { useMerchant } from "@/lib/use-merchant"
 import { config } from "@/lib/config"
 
-import { Calendar, Search, Download, ChevronRight, TrendingUp, Filter } from "lucide-react"
+import { Calendar, Search, Download, ChevronRight, ChevronDown, TrendingUp, Filter } from "lucide-react"
 
 interface MerchantPayment {
   id: string
@@ -79,6 +79,7 @@ export default function MerchantPaymentsPage() {
   const [filterDateTo, setFilterDateTo] = useState("")
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [showFullSummary, setShowFullSummary] = useState(false)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -379,7 +380,7 @@ export default function MerchantPaymentsPage() {
               <h2 className="text-lg font-semibold">All-time Merchant Summary</h2>
             </div>
 
-            {/* Statistics Grid */}
+            {/* Primary merchant summary — keep the most useful four cards visible. */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-900/10 border-blue-200 dark:border-blue-800">
                 <CardContent className="pt-6">
@@ -402,83 +403,101 @@ export default function MerchantPaymentsPage() {
                 </CardContent>
               </Card>
 
-              <Card className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-900/10 border-red-200 dark:border-red-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-red-700 dark:text-red-400">{summary?.failed_transactions ?? "—"}</div>
-                  <p className="text-sm text-red-600 dark:text-red-300 mt-1">Failed Transactions</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-900/10 border-purple-200 dark:border-purple-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-purple-700 dark:text-purple-400">{summary ? `${summary.total_payment_volume.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-purple-600 dark:text-purple-300 mt-1">Total Payment Volume</p>
-                </CardContent>
-              </Card>
-
               <Card className="bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-900/10 border-indigo-200 dark:border-indigo-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-indigo-700 dark:text-indigo-400">{summary ? `${summary.total_settled_amount.toFixed(2)}π` : "—"}</div>
                   <p className="text-sm text-indigo-600 dark:text-indigo-300 mt-1">Total Settled Amount</p>
                 </CardContent>
               </Card>
-
-              <Card className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-900/10 border-orange-200 dark:border-orange-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-orange-700 dark:text-orange-400">{summary ? `${summary.total_awaiting_amount.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">Total Awaiting Amount</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-900/20 dark:to-pink-900/10 border-pink-200 dark:border-pink-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-pink-700 dark:text-pink-400">{summary ? `${summary.total_failed_amount.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-pink-600 dark:text-pink-300 mt-1">Total Failed Amount</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900/20 dark:to-slate-900/10 border-slate-200 dark:border-slate-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-slate-700 dark:text-slate-400">{summary?.cancelled_transactions ?? "—"}</div>
-                  <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">Cancelled Transactions</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-cyan-50 to-cyan-100 dark:from-cyan-900/20 dark:to-cyan-900/10 border-cyan-200 dark:border-cyan-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-cyan-700 dark:text-cyan-400">{summary ? `${summary.total_cancelled_amount.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-cyan-600 dark:text-cyan-300 mt-1">Total Cancelled Amount</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900/20 dark:to-teal-900/10 border-teal-200 dark:border-teal-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-teal-700 dark:text-teal-400">{summary?.completed_transactions ?? "—"}</div>
-                  <p className="text-sm text-teal-600 dark:text-teal-300 mt-1">Completed Transactions</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-lime-50 to-lime-100 dark:from-lime-900/20 dark:to-lime-900/10 border-lime-200 dark:border-lime-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-lime-700 dark:text-lime-400">{summary ? `${summary.total_completed_amount.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-lime-600 dark:text-lime-300 mt-1">Total Completed Amount</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-rose-50 to-rose-100 dark:from-rose-900/20 dark:to-rose-900/10 border-rose-200 dark:border-rose-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-rose-700 dark:text-rose-400">{summary?.other_transactions ?? "—"}</div>
-                  <p className="text-sm text-rose-600 dark:text-rose-300 mt-1">Other Transactions</p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-900/20 dark:to-amber-900/10 border-amber-200 dark:border-amber-800">
-                <CardContent className="pt-6">
-                  <div className="text-3xl font-bold text-amber-700 dark:text-amber-400">{summary ? `${summary.total_other_amount.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-amber-600 dark:text-amber-300 mt-1">Total Other Amount</p>
-                </CardContent>
-              </Card>
             </div>
+
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => setShowFullSummary((current) => !current)}
+                aria-expanded={showFullSummary}
+              >
+                {showFullSummary ? "Hide full summary" : "View full summary"}
+                <ChevronDown className={`h-4 w-4 transition-transform ${showFullSummary ? "rotate-180" : ""}`} />
+              </Button>
+            </div>
+
+            {showFullSummary && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Card className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-900/10 border-purple-200 dark:border-purple-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-purple-700 dark:text-purple-400">{summary ? `${summary.total_payment_volume.toFixed(2)}π` : "—"}</div>
+                    <p className="text-sm text-purple-600 dark:text-purple-300 mt-1">Total Payment Volume</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-900/10 border-orange-200 dark:border-orange-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-orange-700 dark:text-orange-400">{summary ? `${summary.total_awaiting_amount.toFixed(2)}π` : "—"}</div>
+                    <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">Total Awaiting Amount</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-900/10 border-red-200 dark:border-red-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-red-700 dark:text-red-400">{summary?.failed_transactions ?? "—"}</div>
+                    <p className="text-sm text-red-600 dark:text-red-300 mt-1">Failed Transactions</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-900/20 dark:to-pink-900/10 border-pink-200 dark:border-pink-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-pink-700 dark:text-pink-400">{summary ? `${summary.total_failed_amount.toFixed(2)}π` : "—"}</div>
+                    <p className="text-sm text-pink-600 dark:text-pink-300 mt-1">Total Failed Amount</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900/20 dark:to-slate-900/10 border-slate-200 dark:border-slate-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-slate-700 dark:text-slate-400">{summary?.cancelled_transactions ?? "—"}</div>
+                    <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">Cancelled Transactions</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-cyan-50 to-cyan-100 dark:from-cyan-900/20 dark:to-cyan-900/10 border-cyan-200 dark:border-cyan-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-cyan-700 dark:text-cyan-400">{summary ? `${summary.total_cancelled_amount.toFixed(2)}π` : "—"}</div>
+                    <p className="text-sm text-cyan-600 dark:text-cyan-300 mt-1">Total Cancelled Amount</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900/20 dark:to-teal-900/10 border-teal-200 dark:border-teal-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-teal-700 dark:text-teal-400">{summary?.completed_transactions ?? "—"}</div>
+                    <p className="text-sm text-teal-600 dark:text-teal-300 mt-1">Completed Transactions</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-lime-50 to-lime-100 dark:from-lime-900/20 dark:to-lime-900/10 border-lime-200 dark:border-lime-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-lime-700 dark:text-lime-400">{summary ? `${summary.total_completed_amount.toFixed(2)}π` : "—"}</div>
+                    <p className="text-sm text-lime-600 dark:text-lime-300 mt-1">Total Completed Amount</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-rose-50 to-rose-100 dark:from-rose-900/20 dark:to-rose-900/10 border-rose-200 dark:border-rose-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-rose-700 dark:text-rose-400">{summary?.other_transactions ?? "—"}</div>
+                    <p className="text-sm text-rose-600 dark:text-rose-300 mt-1">Other Transactions</p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-900/20 dark:to-amber-900/10 border-amber-200 dark:border-amber-800">
+                  <CardContent className="pt-6">
+                    <div className="text-3xl font-bold text-amber-700 dark:text-amber-400">{summary ? `${summary.total_other_amount.toFixed(2)}π` : "—"}</div>
+                    <p className="text-sm text-amber-600 dark:text-amber-300 mt-1">Total Other Amount</p>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
 
         <Card>
           <CardHeader>
