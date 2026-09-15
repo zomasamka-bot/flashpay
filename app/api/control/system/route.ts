@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { readSystemState, enableKillSwitch, disableKillSwitch, resetSystemState } from "@/lib/system-control"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
+import { appendOperationalAuditEvent, type OperationalAuditAction } from "@/lib/operational-audit"
 
 /**
  * GET /api/control/system
@@ -65,6 +66,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const requestId = request.headers.get("x-vercel-id") || crypto.randomUUID()
+    const previous = await readSystemState()
+    if (!previous.ok) {
+      return NextResponse.json(
+        { error: "System control state unavailable", reason: previous.reason, requestId },
+        { status: 503 }
+      )
+    }
+
     let newState
     switch (action) {
       case "enable":
@@ -78,9 +88,30 @@ export async function POST(request: NextRequest) {
         break
     }
 
+    const auditAction = `control.${action}` as OperationalAuditAction
+    try {
+      await appendOperationalAuditEvent({
+        action: auditAction,
+        actorUid: auth.uid,
+        requestId,
+        previousRevision: previous.state.revision,
+        resultingRevision: newState.revision,
+        previousEnabled: previous.state.killSwitchEnabled,
+        resultingEnabled: newState.killSwitchEnabled,
+        reason: action === "enable" ? message : "",
+      })
+    } catch (auditError) {
+      console.error("[API] Control state changed but audit persistence failed:", auditError)
+      return NextResponse.json(
+        { error: "Control state changed but audit persistence is uncertain", requestId },
+        { status: 503 }
+      )
+    }
+
     return NextResponse.json({
       success: true,
       state: newState,
+      requestId,
       message: `Kill switch ${action === "enable" ? "ENABLED" : action === "disable" ? "DISABLED" : "RESET"}`,
     })
   } catch (error) {
