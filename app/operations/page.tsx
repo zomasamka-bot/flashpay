@@ -26,6 +26,9 @@ export default function OperationsPage() {
   const [overviewAsOf, setOverviewAsOf] = useState<string | null>(null)
   const [overviewError, setOverviewError] = useState(false)
   const [overviewLoading, setOverviewLoading] = useState(false)
+  const [financialHealth, setFinancialHealth] = useState<{ postgres: { settled: number; settlementOpen: number; settlementFailed: number; refundPending: number; refundManualReview: number }; recovery: { active: number; ready: number; drainLeaseActive: boolean; piCreateBackpressureActive: boolean }; asOf: string } | null>(null)
+  const [financialHealthError, setFinancialHealthError] = useState(false)
+  const [financialHealthLoading, setFinancialHealthLoading] = useState(false)
   const [accessDenied, setAccessDenied] = useState(false)
 
   useEffect(() => {
@@ -77,6 +80,35 @@ export default function OperationsPage() {
   useEffect(() => {
     if (uidData.status === "success" && uidData.uid === config.ownerUid && uidData.accessToken) {
       void loadAnalyticsSafely()
+    }
+  }, [uidData.status, uidData.uid, uidData.accessToken])
+
+  const loadFinancialHealth = async () => {
+    if (!uidData.accessToken) return
+    setFinancialHealthLoading(true)
+    setFinancialHealthError(false)
+    try {
+      const response = await fetch("/api/operations/financial-health", {
+        headers: { Authorization: `Bearer ${uidData.accessToken}` },
+        cache: "no-store",
+      })
+      const data = await response.json()
+      if (!response.ok || data?.available !== true || !data?.postgres || !data?.recovery || typeof data?.asOf !== "string") {
+        throw new Error("Financial operations health unavailable")
+      }
+      setFinancialHealth({ postgres: data.postgres, recovery: data.recovery, asOf: data.asOf })
+    } catch (error) {
+      console.error("[operations] Error loading financial health:", error)
+      setFinancialHealth(null)
+      setFinancialHealthError(true)
+    } finally {
+      setFinancialHealthLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (uidData.status === "success" && uidData.uid === config.ownerUid && uidData.accessToken) {
+      void loadFinancialHealth()
     }
   }, [uidData.status, uidData.uid, uidData.accessToken])
 
@@ -174,6 +206,41 @@ export default function OperationsPage() {
                 Refresh
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* M6: read-only financial operations health. Never a financial decision authority. */}
+        <Card className="border-amber-500/40">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Stethoscope className="h-5 w-5" />
+              Financial Operations Health
+            </CardTitle>
+            <CardDescription>Authoritative read-only settlement, refund, and recovery signals</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {financialHealthError ? (
+              <Alert variant="destructive"><AlertDescription>Financial health is unavailable. No healthy state is inferred.</AlertDescription></Alert>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  <div><div className="text-muted-foreground">Settled</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settled ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">Settlement open</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settlementOpen ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">Settlement failed</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settlementFailed ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">Refund pending</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.refundPending ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">Manual review</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.refundManualReview ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">Recovery active</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.recovery.active ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">Wallet ready</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.recovery.ready ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">Pi create pressure</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth ? (financialHealth.recovery.piCreateBackpressureActive ? "ACTIVE" : "Clear") : "—"}</div></div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>{financialHealth ? `PostgreSQL + Redis · as of ${new Date(financialHealth.asOf).toLocaleString()} · drain lease ${financialHealth.recovery.drainLeaseActive ? "active" : "idle"}` : "Loading authoritative financial health…"}</span>
+                  <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => void loadFinancialHealth()} disabled={financialHealthLoading || !uidData.accessToken}>
+                    {financialHealthLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Refresh
+                  </Button>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
