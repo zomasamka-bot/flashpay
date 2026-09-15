@@ -11,6 +11,7 @@ import { getReceiptLink } from "@/lib/router"
 import type { FlashPayReceiptView } from "@/lib/types"
 import { Printer } from "lucide-react"
 import { useUnifiedStore } from "@/lib/unified-store"
+import { useI18n } from "@/components/i18n-provider"
 
 export default function ReceiptPage() {
   const params = useParams()
@@ -20,6 +21,7 @@ export default function ReceiptPage() {
   const [loading, setLoading] = useState(true)
   const store = useUnifiedStore()
   const merchant = store.getMerchantState()
+  const { t } = useI18n()
 
   useEffect(() => {
     const fetchReceipt = async () => {
@@ -51,7 +53,7 @@ export default function ReceiptPage() {
       <main className="min-h-screen bg-background pb-20">
         <div className="max-w-2xl mx-auto p-4">
           <BackButton />
-          <div className="mt-6 rounded-lg border p-6 text-center text-muted-foreground">Receipt not found or not available yet.</div>
+          <div className="mt-6 rounded-lg border p-6 text-center text-muted-foreground">{t("receipt.notFound", "Receipt not found or not available yet.")}</div>
         </div>
       </main>
     )
@@ -61,10 +63,10 @@ export default function ReceiptPage() {
     <main className="min-h-screen bg-background pb-20 print:bg-white">
       <div className="max-w-2xl mx-auto px-4 pb-4 pt-12 space-y-5 print:p-0">
         <div className="flex items-center justify-between print:hidden">
-          <h1 className="text-2xl font-bold">Receipt</h1>
+          <h1 className="text-2xl font-bold">{t("receipt.title", "Receipt")}</h1>
           <div className="flex gap-2">
             <Button type="button" variant="outline" size="sm" onClick={() => window.print()}>
-              <Printer className="mr-2 h-4 w-4" /> Print
+              <Printer className="mr-2 h-4 w-4" /> {t("receipt.print", "Print")}
             </Button>
             <BackButton />
           </div>
