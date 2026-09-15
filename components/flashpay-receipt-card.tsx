@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import type { FlashPayReceiptView } from "@/lib/types"
 import { Check, Copy, Download, Loader2, Share2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
+import { useI18n } from "@/components/i18n-provider"
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -91,6 +92,7 @@ function webFileShareSupport(file: File): "supported" | "unknown" | "unsupported
 }
 
 export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPayReceiptView; accessToken?: string | null }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [pdfTools, setPdfTools] = useState<ReceiptPdfTools | null>(null)
@@ -348,10 +350,10 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">FlashPay</p>
-            <CardTitle className="mt-1 text-2xl">{receipt.transactionType === "refund" ? "Refund Receipt" : "Payment Receipt"}</CardTitle>
+            <CardTitle className="mt-1 text-2xl">{receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")}</CardTitle>
           </div>
           <Badge variant={receipt.status === "failed" || receipt.status === "needs_attention" ? "destructive" : "default"}>
-            {STATUS_LABEL[receipt.status]}
+            {t(`receipt.status.${receipt.status}`)}
           </Badge>
         </div>
       </CardHeader>
@@ -361,19 +363,19 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         </div>
 
         <div className="grid grid-cols-2 gap-4 rounded-lg bg-muted p-4">
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">Merchant</p><p className="mt-1 font-semibold">{receipt.merchantName}</p></div>
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">Customer</p><p className="mt-1 font-semibold">{receipt.customerName ?? "Name unavailable"}</p></div>
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.merchant")}</p><p className="mt-1 font-semibold">{receipt.merchantName}</p></div>
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.customer")}</p><p className="mt-1 font-semibold">{receipt.customerName ?? t("common.unavailable")}</p></div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">Type</p><p className="mt-1 font-medium">{receipt.transactionType === "refund" ? "Refund" : "Payment"}</p></div>
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">Date & Time</p><p className="mt-1 font-medium" dir="ltr" lang="en">{formatDateTime(receipt.occurredAt)}</p></div>
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.type")}</p><p className="mt-1 font-medium">{receipt.transactionType === "refund" ? t("receipt.refund") : t("receipt.payment")}</p></div>
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.dateTime")}</p><p className="mt-1 font-medium" dir="ltr" lang="en">{formatDateTime(receipt.occurredAt)}</p></div>
         </div>
 
-        {receipt.note && <div><p className="text-xs font-semibold uppercase text-muted-foreground">Note</p><p className="mt-1">{receipt.note}</p></div>}
+        {receipt.note && <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.note")}</p><p className="mt-1">{receipt.note}</p></div>}
 
         <div className="rounded-lg border p-4">
-          <p className="text-xs font-semibold uppercase text-muted-foreground">FlashPay ID</p>
+          <p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.flashpayId")}</p>
           <div className="mt-2 flex items-center gap-2">
             <code className="min-w-0 flex-1 break-all text-sm font-semibold">{receipt.flashPayPaymentId}</code>
             <Button type="button" variant="ghost" size="sm" className="print:hidden" onClick={copyId} aria-label="Copy FlashPay ID">
@@ -385,16 +387,16 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         <div className="print:hidden grid grid-cols-1 gap-3 border-t pt-4 sm:grid-cols-2">
           <Button type="button" variant="outline" onClick={sharePdf} disabled={!pdfFile || !pdfTools || sharing || pdfFailed}>
             {sharing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Share2 className="mr-2 h-4 w-4" />}
-            {pdfFailed ? "PDF unavailable" : pdfFile ? "Share PDF" : "Preparing PDF…"}
+            {pdfFailed ? t("receipt.pdfUnavailable") : pdfFile ? t("receipt.sharePdf") : t("receipt.preparingPdf")}
           </Button>
           <Button type="button" variant="outline" onClick={downloadPdf} disabled={!pdfFile || !pdfTools || pdfFailed}>
-            <Download className="mr-2 h-4 w-4" /> Download PDF
+            <Download className="mr-2 h-4 w-4" />{t("receipt.downloadPdf")}
           </Button>
         </div>
 
         {shareError && <p className="print:hidden text-center text-xs text-amber-700">{shareError}</p>}
 
-        <div className="border-t pt-4 text-center text-xs text-muted-foreground">Verified transaction record by FlashPay</div>
+        <div className="border-t pt-4 text-center text-xs text-muted-foreground">{t("receipt.verified")}</div>
       </CardContent>
     </Card>
   )

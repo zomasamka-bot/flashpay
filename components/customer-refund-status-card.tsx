@@ -2,6 +2,7 @@
 
 import type { RefundPresentation } from "@/lib/types"
 import { useState } from "react"
+import { useI18n } from "@/components/i18n-provider"
 
 type Props = {
   presentation?: RefundPresentation
@@ -43,6 +44,7 @@ async function copyText(value: string): Promise<boolean> {
 }
 
 function CopyButton({ value }: { value: string }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -58,7 +60,7 @@ function CopyButton({ value }: { value: string }) {
       onClick={() => void handleCopy()}
       aria-label="Copy FlashPay ID"
     >
-      {copied ? "Copied" : "Copy"}
+      {copied ? t("common.copied") : t("common.copy")}
     </button>
   )
 }
@@ -98,11 +100,12 @@ function Detail({ label, value, copyable = false }: { label: string; value?: str
 
 export default function CustomerRefundStatusCard({ presentation, status, audience = "customer" }: Props) {
   const [receiptCopied, setReceiptCopied] = useState(false)
+  const { t } = useI18n()
 
   if (status === "loading") {
     return (
       <section aria-live="polite" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <p className="text-sm text-slate-600">Loading refund status…</p>
+        <p className="text-sm text-slate-600">{t("refund.loading")}</p>
       </section>
     )
   }
@@ -110,28 +113,22 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
   if (status === "indeterminate" || !presentation) {
     return (
       <section aria-live="polite" className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
-        <h2 className="text-base font-semibold text-amber-950">Refund status cannot be verified yet.</h2>
-        <p className="mt-2 text-sm text-amber-900">Please try again later.</p>
+        <h2 className="text-base font-semibold text-amber-950">{t("refund.unverified")}</h2>
+        <p className="mt-2 text-sm text-amber-900">{t("refund.tryLater")}</p>
       </section>
     )
   }
 
-  const statusLabel = {
-    refund_pending: "Your refund is being processed back to your Pi Wallet and usually appears there within about 3 minutes. Processing continues automatically, so you may safely leave this page. If you need a finalized refund receipt, please allow up to 10 minutes for the final records to complete.",
-    refund_confirmed: "Your refund has been sent back through Pi. Open Pi Wallet to view the transaction; final records will continue automatically.",
-    refund_completed:
-      audience === "merchant"
-        ? "Refund completed — The refund has been returned to the customer's Pi Wallet."
-        : "Refund completed — Your refund has been returned to your Pi Wallet. Open Pi Wallet to view the transaction.",
-    refund_delayed: "Refund status cannot be verified yet.",
-  }[presentation.customerStatus]
+  const statusLabel = presentation.customerStatus === "refund_completed"
+    ? t(audience === "merchant" ? "refund.completedMerchant" : "refund.completedCustomer")
+    : t(`refund.status.${presentation.customerStatus}`)
 
   const receiptFields = [
-    ["Amount", `${presentation.amount} ${presentation.currency}`],
-    ["FlashPay ID", presentation.paymentId],
-    ["Status", statusLabel],
-    ["Requested at", formatLocalDateTime(presentation.requestedAt)],
-    ["Completed at", formatLocalDateTime(presentation.finalization.completedAt)],
+    [t("refund.amount"), `${presentation.amount} ${presentation.currency}`],
+    [t("refund.flashpayId"), presentation.paymentId],
+    [t("refund.statusLabel"), statusLabel],
+    [t("refund.requestedAt"), formatLocalDateTime(presentation.requestedAt)],
+    [t("refund.completedAt"), formatLocalDateTime(presentation.finalization.completedAt)],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "")
 
   const copyReceipt = async () => {
@@ -144,22 +141,22 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
   return (
     <section aria-live="polite" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <header className="border-b border-slate-200 pb-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Refund status</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{t("refund.title")}</p>
         <h2 className="mt-2 text-lg font-semibold text-slate-950">{statusLabel}</h2>
         <button
           type="button"
           className="mt-3 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
           onClick={() => void copyReceipt()}
         >
-          {receiptCopied ? "Copied" : "Copy refund status"}
+          {receiptCopied ? t("common.copied") : t("refund.copyStatus")}
         </button>
       </header>
       <dl className="mt-2">
-        <Detail label="Amount" value={`${presentation.amount} ${presentation.currency}`} />
-        <Detail label="FlashPay ID" value={presentation.paymentId} copyable />
-        <Detail label="Requested at" value={formatLocalDateTime(presentation.requestedAt)} />
-        <Detail label="Completed at" value={formatLocalDateTime(presentation.finalization.completedAt)} />
-        <Detail label="Finalized at" value={formatLocalDateTime(presentation.finalization.finalizedAt)} />
+        <Detail label={t("refund.amount")} value={`${presentation.amount} ${presentation.currency}`} />
+        <Detail label={t("refund.flashpayId")} value={presentation.paymentId} copyable />
+        <Detail label={t("refund.requestedAt")} value={formatLocalDateTime(presentation.requestedAt)} />
+        <Detail label={t("refund.completedAt")} value={formatLocalDateTime(presentation.finalization.completedAt)} />
+        <Detail label={t("refund.finalizedAt")} value={formatLocalDateTime(presentation.finalization.finalizedAt)} />
       </dl>
     </section>
   )

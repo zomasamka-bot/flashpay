@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { config } from "@/lib/config"
 import { getReceiptLink } from "@/lib/router"
 import { useMerchant } from "@/lib/use-merchant"
+import { useI18n } from "@/components/i18n-provider"
 
 type SalesStatus = "paid" | "processing" | "failed" | "cancelled" | "needs_attention"
 
@@ -115,6 +116,7 @@ const STATUS_LABEL: Record<SalesStatus, string> = {
 export default function PaymentsPage() {
   const router = useRouter()
   const merchant = useMerchant()
+  const { t } = useI18n()
   const todayKey = useMemo(() => toLocalDateKey(new Date()), [])
   const [selectedDate, setSelectedDate] = useState(todayKey)
   const dayWindow = useMemo(() => getLocalDayWindow(selectedDate), [selectedDate])
@@ -219,7 +221,7 @@ export default function PaymentsPage() {
           <div>
             <div className="flex items-center gap-2">
               <ShoppingBag className="h-6 w-6 text-primary" />
-              <h1 className="text-2xl font-bold">Sales</h1>
+              <h1 className="text-2xl font-bold">{t("sales.title")}</h1>
             </div>
             <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
               <CalendarDays className="h-4 w-4" />
@@ -250,10 +252,10 @@ export default function PaymentsPage() {
                 onClick={() => previousDate && selectDate(previousDate)}
               >
                 <ChevronLeft className="h-4 w-4" />
-                Previous day
+                {t("sales.previousDay")}
               </Button>
               <div className="space-y-1.5">
-                <label htmlFor="sales-date" className="text-xs font-medium text-muted-foreground">Sales date</label>
+                <label htmlFor="sales-date" className="text-xs font-medium text-muted-foreground">{t("sales.date")}</label>
                 <div className="relative">
                   <div
                     className={`flex h-10 w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm tabular-nums ${loading ? "cursor-not-allowed opacity-50" : ""}`}
@@ -270,7 +272,7 @@ export default function PaymentsPage() {
                     max={todayKey}
                     onChange={(event) => selectDate(event.target.value)}
                     disabled={loading}
-                    aria-label="Sales date"
+                    aria-label={t("sales.date")}
                     className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                   />
                 </div>
@@ -282,13 +284,13 @@ export default function PaymentsPage() {
                 disabled={!canGoNext || loading}
                 onClick={() => nextDate && canGoNext && selectDate(nextDate)}
               >
-                Next day
+                {t("sales.nextDay")}
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
             {!isToday && (
               <Button type="button" variant="ghost" size="sm" className="mt-3" disabled={loading} onClick={() => selectDate(todayKey)}>
-                Back to Today
+                {t("sales.backToday")}
               </Button>
             )}
             <p className="mt-2 text-xs text-muted-foreground">Day boundaries follow this device&apos;s local time; the server receives the exact UTC window for that local calendar day.</p>
@@ -313,13 +315,13 @@ export default function PaymentsPage() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Card>
                 <CardHeader className="pb-2">
-                  <CardDescription>{isToday ? "Today's Sales" : "Sales"}</CardDescription>
+                  <CardDescription>{isToday ? t("sales.todaySales") : t("sales.title")}</CardDescription>
                   <CardTitle className="text-3xl">{day ? `${day.totalSales.toFixed(2)}π` : "—"}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
                 <CardHeader className="pb-2">
-                  <CardDescription>Successful Sales</CardDescription>
+                  <CardDescription>{t("sales.successfulSales")}</CardDescription>
                   <CardTitle className="flex items-center gap-2 text-3xl">
                     <CheckCircle2 className="h-5 w-5 text-green-700" />
                     {day?.successfulSalesCount ?? "—"}
@@ -328,7 +330,7 @@ export default function PaymentsPage() {
               </Card>
               <Card>
                 <CardHeader className="pb-2">
-                  <CardDescription>Processing</CardDescription>
+                  <CardDescription>{t("sales.processing")}</CardDescription>
                   <CardTitle className="flex items-center gap-2 text-3xl">
                     <Clock className="h-5 w-5 text-amber-700" />
                     {day?.processingCount ?? "—"}
@@ -339,14 +341,14 @@ export default function PaymentsPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>{isToday ? "Today's Activity" : "Sales Activity"}</CardTitle>
+                <CardTitle>{isToday ? t("sales.todayActivity") : t("sales.activity")}</CardTitle>
                 <CardDescription>Server-authoritative merchant sales timeline. Tap any sale to open its canonical receipt.</CardDescription>
               </CardHeader>
               <CardContent>
                 {loading && !day ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">Loading sales...</p>
+                  <p className="py-8 text-center text-sm text-muted-foreground">{t("sales.loading")}</p>
                 ) : !day || day.timeline.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">No sales activity for this day.</p>
+                  <p className="py-8 text-center text-sm text-muted-foreground">{t("sales.empty")}</p>
                 ) : (
                   <div className="divide-y">
                     {day.timeline.map((item, index) => (
@@ -362,7 +364,7 @@ export default function PaymentsPage() {
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium">{item.customerName ? `@${item.customerName}` : "Name unavailable"}</p>
-                          <p className="text-xs text-muted-foreground">{STATUS_LABEL[item.status]}</p>
+                          <p className="text-xs text-muted-foreground">{t(`sales.status.${item.status}`)}</p>
                         </div>
                         <div className="shrink-0 text-right font-semibold tabular-nums">{item.amount.toFixed(2)}π</div>
                       </button>
@@ -373,7 +375,7 @@ export default function PaymentsPage() {
                 {day?.hasMore && (
                   <div className="mt-4 border-t pt-4 text-center">
                     <Button type="button" variant="outline" onClick={() => void loadMore()} disabled={loadingMore}>
-                      {loadingMore ? "Loading..." : "Load more"}
+                      {loadingMore ? t("sales.loading") : t("sales.loadMore")}
                     </Button>
                   </div>
                 )}

@@ -15,6 +15,7 @@ import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
 import { unifiedStore } from "@/lib/unified-store"
 import type { RefundPresentation } from "@/lib/types"
 import { Shield, BarChart3, ArrowRight, LogOut, History, Wallet, Loader2, Search } from "lucide-react"
+import { useI18n } from "@/components/i18n-provider"
 
 type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
@@ -112,6 +113,7 @@ interface ProfileSummary {
 
 function ProfileContent() {
   const router = useRouter()
+  const { t } = useI18n()
   const { toast } = useToast()
   const [mounted, setMounted] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
@@ -359,14 +361,14 @@ function ProfileContent() {
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <Shield className="h-6 w-6 text-primary" />
-              <h1 className="text-2xl font-bold">Account</h1>
+              <h1 className="text-2xl font-bold">{t("profile.account")}</h1>
             </div>
             <Button onClick={handleLogout} variant="outline" size="sm" className="gap-2 bg-transparent">
               <LogOut className="h-4 w-4" />
-              Logout
+              {t("profile.logout")}
             </Button>
           </div>
-          <p className="text-sm text-muted-foreground">Your account settings</p>
+          <p className="text-sm text-muted-foreground">{t("profile.settings")}</p>
           {merchantAuthenticated && <p className="text-xs text-muted-foreground mt-1">@{merchantUsername}</p>}
         </div>
 
@@ -412,7 +414,7 @@ function ProfileContent() {
         {/* Profile Summary */}
         <Card>
           <CardHeader>
-            <CardTitle>Profile Summary</CardTitle>
+            <CardTitle>{t("profile.summary")}</CardTitle>
           </CardHeader>
           <CardContent>
             {!merchantAuthenticated ? (
@@ -430,39 +432,39 @@ function ProfileContent() {
               <div className="space-y-3">
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <div>
-                    <p className="text-xs text-muted-foreground">Total Transactions</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.totalTransactions")}</p>
                     <p className="text-lg font-semibold">{summary.totalTransactions}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Settled Transactions</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.settledTransactions")}</p>
                     <p className="text-lg font-semibold">{summary.settledTransactions}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Total Settled Amount</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.totalSettledAmount")}</p>
                     <p className="text-lg font-semibold">{summary.totalSettledAmount.toFixed(2)}π</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Pending Transactions</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.pendingTransactions")}</p>
                     <p className="text-lg font-semibold">{summary.pendingTransactions}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Total Awaiting Amount</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.totalAwaitingAmount")}</p>
                     <p className="text-lg font-semibold">{summary.totalAwaitingAmount.toFixed(2)}π</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Failed Transactions</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.failedTransactions")}</p>
                     <p className="text-lg font-semibold">{summary.failedTransactions}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Total Failed Amount</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.totalFailedAmount")}</p>
                     <p className="text-lg font-semibold">{summary.totalFailedAmount.toFixed(2)}π</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Cancelled Transactions</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.cancelledTransactions")}</p>
                     <p className="text-lg font-semibold">{summary.cancelledTransactions}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Total Cancelled Amount</p>
+                    <p className="text-xs text-muted-foreground">{t("profile.totalCancelledAmount")}</p>
                     <p className="text-lg font-semibold">{summary.totalCancelledAmount.toFixed(2)}π</p>
                   </div>
                   {(summary.completedTransactions > 0 || summary.totalCompletedAmount > 0) && (
@@ -538,7 +540,7 @@ function ProfileContent() {
                   )}
                 {summary.latestTransaction && (
                   <div className="pt-3 border-t">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Latest Transaction</p>
+                    <p className="text-xs font-medium text-muted-foreground mb-2">{t("profile.latestTransaction")}</p>
                     <div className="space-y-1 text-sm">
                       <p>
                         <span className="text-muted-foreground">Reference:</span> {summary.latestTransaction.reference}
@@ -564,7 +566,7 @@ function ProfileContent() {
                     handleReceiptSearch()
                   }}
                 >
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">Find Receipt by FlashPay ID</p>
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">{t("profile.findReceipt")}</p>
                   <div className="flex gap-2">
                     <Input
                       value={receiptSearchId}
@@ -576,7 +578,7 @@ function ProfileContent() {
                     />
                     <Button type="submit" variant="outline" className="shrink-0 gap-2">
                       <Search className="h-4 w-4" />
-                      Find
+                      {t("profile.find")}
                     </Button>
                   </div>
                 </form>
@@ -610,14 +612,14 @@ function ProfileContent() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <BarChart3 className="h-5 w-5" />
-              Payment Requests
+              {t("profile.paymentRequests")}
             </CardTitle>
-            <CardDescription>View and track payment requests you created</CardDescription>
+            <CardDescription>{t("profile.paymentRequestsDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Button onClick={() => router.push(ROUTES.MERCHANT_PAYMENTS)} className="w-full" size="lg" variant="outline">
               <BarChart3 className="h-4 w-4 mr-2" />
-              View Payment Requests
+              {t("profile.viewPaymentRequests")}
               <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
           </CardContent>
@@ -628,14 +630,14 @@ function ProfileContent() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <History className="h-5 w-5" />
-              Transaction History
+              {t("profile.transactionHistory")}
             </CardTitle>
-            <CardDescription>View receipts and complete transaction ledger</CardDescription>
+            <CardDescription>{t("profile.transactionHistoryDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Button onClick={() => router.push("/transactions")} className="w-full" size="lg" variant="outline">
               <History className="h-4 w-4 mr-2" />
-              View All Transactions
+              {t("profile.viewAllTransactions")}
               <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
           </CardContent>
