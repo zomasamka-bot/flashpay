@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Check, Wallet, AlertCircle, Share2, Copy, DollarSign, X, AlertTriangle } from "lucide-react"
+import { ArrowLeft, Check, Wallet, AlertCircle, Share2, Copy, DollarSign, X, AlertTriangle, Globe2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
@@ -16,10 +16,13 @@ import { useLoadPaymentHistory } from "@/lib/use-load-payment-history"
 import { useMerchant } from "@/lib/use-merchant"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CustomerPaymentView } from "@/components/customer-payment-view"
+import { useI18n } from "@/components/i18n-provider"
+import { LOCALE_METADATA, SUPPORTED_LOCALES, type AppLocale } from "@/lib/i18n/config"
 
 export default function HomePage() {
   const router = useRouter()
   const { toast } = useToast()
+  const { locale, setLocale } = useI18n()
 
   // Load persistent payment history on app mount
   useLoadPaymentHistory()
@@ -45,6 +48,7 @@ export default function HomePage() {
   const [routeResolved, setRouteResolved] = useState(false)
   const [showShareMenu, setShowShareMenu] = useState(false)
   const [showConversion, setShowConversion] = useState(false)
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false)
   const [localAmount, setLocalAmount] = useState("")
   const [currency, setCurrency] = useState("USD")
   const [piRate, setPiRate] = useState("1")
@@ -747,6 +751,44 @@ export default function HomePage() {
           <DollarSign className="h-4 w-4" />
           Convert Local Price to Pi
         </Button>
+
+        {/* Language Selector — presentation only */}
+        <div className="relative mt-2">
+          <Button
+            onClick={() => setShowLanguageSelector((open) => !open)}
+            variant="outline"
+            className="w-full gap-2"
+            aria-haspopup="listbox"
+            aria-expanded={showLanguageSelector}
+          >
+            <Globe2 className="h-4 w-4" />
+            Language · {LOCALE_METADATA[locale].nativeName}
+          </Button>
+          {showLanguageSelector && (
+            <div
+              role="listbox"
+              aria-label="Language"
+              className="absolute bottom-full z-40 mb-2 w-full overflow-hidden rounded-md border bg-background shadow-md"
+            >
+              {SUPPORTED_LOCALES.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  role="option"
+                  aria-selected={locale === option}
+                  onClick={() => {
+                    setLocale(option as AppLocale)
+                    setShowLanguageSelector(false)
+                  }}
+                  className="flex w-full items-center justify-between px-4 py-2.5 text-start text-sm hover:bg-muted focus:bg-muted focus:outline-none"
+                >
+                  <span>{LOCALE_METADATA[option].nativeName}</span>
+                  {locale === option ? <Check className="h-4 w-4" /> : null}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Currency Conversion Modal */}
