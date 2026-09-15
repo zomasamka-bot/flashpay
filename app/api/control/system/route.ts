@@ -75,18 +75,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    let newState
-    switch (action) {
-      case "enable":
-        newState = await enableKillSwitch(message, auth.uid)
-        break
-      case "disable":
-        newState = await disableKillSwitch(auth.uid)
-        break
-      case "reset":
-        newState = await resetSystemState(auth.uid)
-        break
-    }
+    const newState =
+      action === "enable"
+        ? await enableKillSwitch(message, auth.uid)
+        : action === "disable"
+          ? await disableKillSwitch(auth.uid)
+          : await resetSystemState(auth.uid)
 
     const auditAction = `control.${action}` as OperationalAuditAction
     try {
