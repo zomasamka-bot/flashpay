@@ -22,7 +22,7 @@ import { LOCALE_METADATA, SUPPORTED_LOCALES, type AppLocale } from "@/lib/i18n/c
 export default function HomePage() {
   const router = useRouter()
   const { toast } = useToast()
-  const { locale, setLocale } = useI18n()
+  const { locale, setLocale, t } = useI18n()
 
   // Load persistent payment history on app mount
   useLoadPaymentHistory()
@@ -488,7 +488,7 @@ export default function HomePage() {
         <div className="border-b bg-muted/30 px-4 py-3">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
-              <span className="text-muted-foreground">Today:</span>
+              <span className="text-muted-foreground">{t("home.today", "Today:")}</span>
               <span className="font-semibold">{paymentStats.paidPayments} sales</span>
               <span className="font-semibold">{paymentStats.totalAmount.toFixed(2)} π</span>
             </div>
@@ -501,7 +501,7 @@ export default function HomePage() {
 
         {/* QR Payment View */}
         <div className="flex-1 flex flex-col items-center justify-center px-4 pt-8 pb-32 safe-area-inset-bottom">
-          <div className="text-sm text-muted-foreground mb-4">Scan QR Code to Pay</div>
+          <div className="text-sm text-muted-foreground mb-4">{t("home.scanQr", "Scan QR Code to Pay")}</div>
 
           <div className="bg-white p-8 rounded-3xl shadow-2xl mb-6">
             <QRCode value={paymentLink} size={300} />
@@ -520,12 +520,12 @@ export default function HomePage() {
             {payment?.status === "settled_to_merchant" ? (
               <>
                 <Check className="h-5 w-5" />
-                <span className="font-semibold">Payment Received!</span>
+                <span className="font-semibold">{t("home.paymentReceived", "Payment Received!")}</span>
               </>
             ) : (
               <>
                 <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-                <span>Waiting for payment...</span>
+                <span>{t("home.waitingPayment", "Waiting for payment...")}</span>
               </>
             )}
           </div>
@@ -535,11 +535,11 @@ export default function HomePage() {
             <div className="flex gap-2">
               <Button onClick={handleSharePayment} variant="outline" className="flex-1 gap-2">
                 <Share2 className="h-4 w-4" />
-                Share Payment
+                {t("home.sharePayment", "Share Payment")}
               </Button>
               <Button onClick={handleCopyLink} variant="outline" className="flex-1 gap-2">
                 <Copy className="h-4 w-4" />
-                Copy Link
+                {t("home.copyLink", "Copy Link")}
               </Button>
             </div>
 
@@ -547,7 +547,7 @@ export default function HomePage() {
             {currentPaymentId && (
               <div className="flex items-center justify-between gap-2 p-3 rounded-lg bg-muted/50 text-xs">
                 <div className="flex flex-col gap-1">
-                  <span className="text-muted-foreground">Payment ID</span>
+                  <span className="text-muted-foreground">{t("home.paymentId", "Payment ID")}</span>
                   <code className="font-mono font-semibold break-all">{currentPaymentId}</code>
                 </div>
                 <Button
@@ -578,17 +578,17 @@ export default function HomePage() {
                   Email
                 </Button>
                 <Button onClick={handleCopyLink} variant="ghost" size="sm" className="text-xs h-10 col-span-2">
-                  Copy Link
+                  {t("home.copyLink", "Copy Link")}
                 </Button>
                 <Button onClick={() => setShowShareMenu(false)} variant="ghost" size="sm" className="text-xs h-10 col-span-2">
-                  Close
+                  {t("common.close", "Close")}
                 </Button>
               </div>
             )}
           </div>
 
           <Button onClick={handleNextCustomer} className="h-14 px-12 text-lg" size="lg">
-            Next Customer
+            {t("home.nextCustomer", "Next Customer")}
           </Button>
         </div>
       </div>
@@ -605,7 +605,7 @@ export default function HomePage() {
             <div className="text-xs mt-1">{sdkError}</div>
             <div className="flex gap-2 mt-2">
               <Button onClick={() => window.location.reload()} variant="outline" size="sm" className="h-7 text-xs">
-                Reload Page
+                {t("common.reload", "Reload Page")}
               </Button>
             </div>
           </AlertDescription>
@@ -639,7 +639,7 @@ export default function HomePage() {
         <div className="border-b bg-muted/30 px-4 py-3">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
-              <span className="text-muted-foreground">Today:</span>
+              <span className="text-muted-foreground">{t("home.today", "Today:")}</span>
               <span className="font-semibold">{paymentStats.paidPayments} sales</span>
               <span className="font-semibold">{paymentStats.totalAmount.toFixed(2)} π</span>
             </div>
@@ -655,7 +655,7 @@ export default function HomePage() {
       <div className="flex-1 flex flex-col px-4 py-6 pb-32 md:pb-6 safe-area-inset-bottom">
         {/* Amount Display */}
         <div className="text-center py-8">
-          <div className="text-sm text-muted-foreground mb-2">Amount</div>
+          <div className="text-sm text-muted-foreground mb-2">{t("home.amount", "Amount")}</div>
           <div className="text-6xl font-bold tabular-nums">
             {displayAmount}
             <span className="text-4xl text-muted-foreground ml-2">π</span>
@@ -716,7 +716,7 @@ export default function HomePage() {
             </Button>
           ))}
           <Button onClick={handleClear} variant="outline" className="h-13 md:h-16 text-xs md:text-sm bg-transparent">
-            Clear
+            {t("common.clear", "Clear")}
           </Button>
 
           <Button
@@ -739,7 +739,7 @@ export default function HomePage() {
           size="lg"
         >
           <Check className="h-6 w-6" />
-          Generate QR Code
+          {t("home.generateQr", "Generate QR Code")}
         </Button>
 
         {/* Convert Local Price Button */}
@@ -749,7 +749,7 @@ export default function HomePage() {
           className="w-full mt-3 gap-2"
         >
           <DollarSign className="h-4 w-4" />
-          Convert Local Price to Pi
+          {t("home.convertLocal", "Convert Local Price to Pi")}
         </Button>
 
         {/* Language Selector — presentation only */}
@@ -762,12 +762,12 @@ export default function HomePage() {
             aria-expanded={showLanguageSelector}
           >
             <Globe2 className="h-4 w-4" />
-            Language · {LOCALE_METADATA[locale].nativeName}
+            {t("common.language", "Language")} · {LOCALE_METADATA[locale].nativeName}
           </Button>
           {showLanguageSelector && (
             <div
               role="listbox"
-              aria-label="Language"
+              aria-label={t("common.language", "Language")}
               className="absolute bottom-full z-40 mb-2 w-full overflow-hidden rounded-md border bg-background shadow-md"
             >
               {SUPPORTED_LOCALES.map((option) => (
@@ -798,7 +798,7 @@ export default function HomePage() {
           <div className="relative bg-background rounded-t-lg md:rounded-lg w-full md:max-w-md max-h-[calc(100vh-120px)] md:max-h-[90vh] overflow-y-auto flex flex-col pb-20 md:pb-6">
             {/* Header */}
             <div className="flex items-center justify-between mb-4 shrink-0 px-6 pt-6">
-              <h2 className="text-lg font-semibold">Convert to Pi</h2>
+              <h2 className="text-lg font-semibold">{t("convert.title", "Convert to Pi")}</h2>
               <Button
                 onClick={() => setShowConversion(false)}
                 variant="ghost"
@@ -813,10 +813,10 @@ export default function HomePage() {
             <div className="flex-1 overflow-y-auto px-6 space-y-4">
               {/* Local Amount */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Local Amount</label>
+                <label className="text-sm font-medium">{t("convert.localAmount", "Local Amount")}</label>
                 <Input
                   type="number"
-                  placeholder="Enter amount"
+                  placeholder={t("convert.enterAmount", "Enter amount")}
                   value={localAmount}
                   onChange={(e) => setLocalAmount(e.target.value)}
                   className="text-lg"
@@ -825,7 +825,7 @@ export default function HomePage() {
 
               {/* Currency Selector */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Currency</label>
+                <label className="text-sm font-medium">{t("convert.currency", "Currency")}</label>
                 <Select value={currency} onValueChange={setCurrency}>
                   <SelectTrigger>
                     <SelectValue />
@@ -844,12 +844,12 @@ export default function HomePage() {
 
               {/* Pi Reference Rate */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Pi Reference Rate</label>
+                <label className="text-sm font-medium">{t("convert.piRate", "Pi Reference Rate")}</label>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">1 Pi =</span>
                   <Input
                     type="number"
-                    placeholder="Rate"
+                    placeholder={t("convert.rate", "Rate")}
                     value={piRate}
                     onChange={(e) => setPiRate(e.target.value)}
                     className="flex-1"
@@ -868,7 +868,7 @@ export default function HomePage() {
                 return isValid ? (
                   <div className="p-4 rounded-lg bg-secondary/20 space-y-4 mt-6">
                     <div>
-                      <p className="text-xs text-muted-foreground mb-2">Pi Amount</p>
+                      <p className="text-xs text-muted-foreground mb-2">{t("convert.piAmount", "Pi Amount")}</p>
                       <p className="text-3xl font-bold">{piAmount}π</p>
                     </div>
                     <Button
@@ -881,7 +881,7 @@ export default function HomePage() {
                       }}
                       className="w-full"
                     >
-                      Use This Pi Amount
+                      {t("convert.useAmount", "Use This Pi Amount")}
                     </Button>
                   </div>
                 ) : null

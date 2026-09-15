@@ -2,6 +2,28 @@ import type { TranslationDictionary } from "@/lib/i18n/config"
 
 const messages = {
   "common.language": "Язык",
+  "common.close": "Закрыть",
+  "common.reload": "Перезагрузить страницу",
+  "common.clear": "Очистить",
+  "home.today": "Сегодня:",
+  "home.scanQr": "Отсканируйте QR-код для оплаты",
+  "home.paymentReceived": "Платёж получен!",
+  "home.waitingPayment": "Ожидание платежа...",
+  "home.sharePayment": "Поделиться платежом",
+  "home.copyLink": "Копировать ссылку",
+  "home.paymentId": "ID платежа",
+  "home.nextCustomer": "Следующий клиент",
+  "home.amount": "Сумма",
+  "home.generateQr": "Создать QR-код",
+  "home.convertLocal": "Конвертировать местную цену в Pi",
+  "convert.title": "Конвертировать в Pi",
+  "convert.localAmount": "Сумма в местной валюте",
+  "convert.enterAmount": "Введите сумму",
+  "convert.currency": "Валюта",
+  "convert.piRate": "Справочный курс Pi",
+  "convert.rate": "Курс",
+  "convert.piAmount": "Сумма в Pi",
+  "convert.useAmount": "Использовать эту сумму Pi",
 } satisfies TranslationDictionary
 
 export default messages
