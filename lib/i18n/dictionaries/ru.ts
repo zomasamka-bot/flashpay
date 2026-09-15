@@ -24,6 +24,18 @@ const messages = {
   "convert.rate": "Курс",
   "convert.piAmount": "Сумма в Pi",
   "convert.useAmount": "Использовать эту сумму Pi",
+  "nav.home": "Главная",
+  "nav.create": "Создать",
+  "nav.sales": "Продажи",
+  "nav.profile": "Профиль",
+  "create.title": "Создать платёж",
+  "create.details": "Детали платежа",
+  "create.amount": "Сумма (π)",
+  "create.note": "Примечание (необязательно)",
+  "create.notePlaceholder": "например, оплата услуг, покупка товара...",
+  "create.creating": "Создание...",
+  "create.submit": "Создать запрос на оплату",
+  "create.help": "После создания вы получите ссылку и QR-код, по которым любой пользователь сможет заплатить вам через Pi Wallet.",
 } satisfies TranslationDictionary
 
 export default messages

@@ -24,6 +24,18 @@ const messages = {
   "convert.rate": "Tỷ giá",
   "convert.piAmount": "Số Pi",
   "convert.useAmount": "Dùng số Pi này",
+  "nav.home": "Trang chủ",
+  "nav.create": "Tạo",
+  "nav.sales": "Bán hàng",
+  "nav.profile": "Hồ sơ",
+  "create.title": "Tạo thanh toán",
+  "create.details": "Chi tiết thanh toán",
+  "create.amount": "Số tiền (π)",
+  "create.note": "Ghi chú (không bắt buộc)",
+  "create.notePlaceholder": "ví dụ: thanh toán dịch vụ, mua sản phẩm...",
+  "create.creating": "Đang tạo...",
+  "create.submit": "Tạo yêu cầu thanh toán",
+  "create.help": "Sau khi tạo, bạn sẽ nhận được liên kết có thể chia sẻ và mã QR để bất kỳ ai cũng có thể thanh toán cho bạn qua Pi Wallet.",
 } satisfies TranslationDictionary
 
 export default messages

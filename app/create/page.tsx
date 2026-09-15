@@ -13,10 +13,12 @@ import { useToast } from "@/hooks/use-toast"
 import { BackButton } from "@/components/back-button"
 import { createPayment } from "@/lib/operations"
 import { getPaymentLink, ROUTES } from "@/lib/router"
+import { useI18n } from "@/components/i18n-provider"
 
 export default function CreatePaymentPage() {
   const router = useRouter()
   const { toast } = useToast()
+  const { t } = useI18n()
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
   const [isCreating, setIsCreating] = useState(false)
@@ -66,16 +68,16 @@ export default function CreatePaymentPage() {
       <div className="max-w-lg mx-auto px-4">
         <div className="flex items-center gap-4 mb-6">
           <BackButton />
-          <h1 className="text-2xl font-bold">Create Payment</h1>
+          <h1 className="text-2xl font-bold">{t("create.title", "Create Payment")}</h1>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Payment Details</CardTitle>
+            <CardTitle>{t("create.details", "Payment Details")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="amount">Amount (π)</Label>
+              <Label htmlFor="amount">{t("create.amount", "Amount (π)")}</Label>
               <div className="relative">
                 <Input
                   id="amount"
@@ -94,10 +96,10 @@ export default function CreatePaymentPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="note">Note (Optional)</Label>
+              <Label htmlFor="note">{t("create.note", "Note (Optional)")}</Label>
               <Textarea
                 id="note"
-                placeholder="e.g., Payment for services, Product purchase..."
+                placeholder={t("create.notePlaceholder", "e.g., Payment for services, Product purchase...")}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 rows={4}
@@ -112,11 +114,11 @@ export default function CreatePaymentPage() {
               size="lg"
             >
               {isCreating ? (
-                "Creating..."
+                t("create.creating", "Creating...")
               ) : (
                 <>
                   <Check className="h-5 w-5" />
-                  Create Payment Request
+                  {t("create.submit", "Create Payment Request")}
                 </>
               )}
             </Button>
@@ -125,8 +127,7 @@ export default function CreatePaymentPage() {
 
         <div className="mt-6 p-4 bg-muted rounded-lg">
           <p className="text-sm text-muted-foreground">
-            After creating, you'll receive a shareable link and QR code that anyone can use to pay you through Pi
-            Wallet.
+            {t("create.help", "After creating, you’ll receive a shareable link and QR code that anyone can use to pay you through Pi Wallet.")}
           </p>
         </div>
       </div>

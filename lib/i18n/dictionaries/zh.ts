@@ -24,6 +24,18 @@ const messages = {
   "convert.rate": "汇率",
   "convert.piAmount": "Pi 金额",
   "convert.useAmount": "使用此 Pi 金额",
+  "nav.home": "首页",
+  "nav.create": "创建",
+  "nav.sales": "销售",
+  "nav.profile": "个人资料",
+  "create.title": "创建付款",
+  "create.details": "付款详情",
+  "create.amount": "金额 (π)",
+  "create.note": "备注（可选）",
+  "create.notePlaceholder": "例如：服务付款、购买商品...",
+  "create.creating": "正在创建...",
+  "create.submit": "创建付款请求",
+  "create.help": "创建后，你将获得可分享的链接和二维码，任何人都可以通过 Pi Wallet 向你付款。",
 } satisfies TranslationDictionary
 
 export default messages

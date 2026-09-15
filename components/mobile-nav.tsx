@@ -5,15 +5,17 @@ import { usePathname } from "next/navigation"
 import { Home, Plus, List, User } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ROUTES } from "@/lib/router"
+import { useI18n } from "@/components/i18n-provider"
 
 export function MobileNav() {
   const pathname = usePathname()
+  const { t } = useI18n()
 
   const navItems = [
-    { href: ROUTES.HOME, icon: Home, label: "Home" },
-    { href: ROUTES.CREATE, icon: Plus, label: "Create" },
-    { href: ROUTES.PAYMENTS, icon: List, label: "Sales" },
-    { href: ROUTES.PROFILE, icon: User, label: "Profile" },
+    { href: ROUTES.HOME, icon: Home, label: t("nav.home", "Home") },
+    { href: ROUTES.CREATE, icon: Plus, label: t("nav.create", "Create") },
+    { href: ROUTES.PAYMENTS, icon: List, label: t("nav.sales", "Sales") },
+    { href: ROUTES.PROFILE, icon: User, label: t("nav.profile", "Profile") },
   ]
 
   if (pathname.startsWith("/pay")) {

@@ -24,6 +24,18 @@ const messages = {
   "convert.rate": "السعر",
   "convert.piAmount": "مبلغ Pi",
   "convert.useAmount": "استخدام مبلغ Pi هذا",
+  "nav.home": "الرئيسية",
+  "nav.create": "إنشاء",
+  "nav.sales": "المبيعات",
+  "nav.profile": "الملف الشخصي",
+  "create.title": "إنشاء دفعة",
+  "create.details": "تفاصيل الدفع",
+  "create.amount": "المبلغ (π)",
+  "create.note": "ملاحظة (اختياري)",
+  "create.notePlaceholder": "مثال: دفع مقابل خدمات أو شراء منتج...",
+  "create.creating": "جارٍ الإنشاء...",
+  "create.submit": "إنشاء طلب دفع",
+  "create.help": "بعد الإنشاء، ستحصل على رابط قابل للمشاركة ورمز QR يمكن لأي شخص استخدامهما للدفع لك عبر محفظة Pi.",
 } satisfies TranslationDictionary
 
 export default messages

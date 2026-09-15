@@ -24,6 +24,18 @@ const messages = {
   "convert.rate": "Rate",
   "convert.piAmount": "Pi Amount",
   "convert.useAmount": "Use This Pi Amount",
+  "nav.home": "Home",
+  "nav.create": "Create",
+  "nav.sales": "Sales",
+  "nav.profile": "Profile",
+  "create.title": "Create Payment",
+  "create.details": "Payment Details",
+  "create.amount": "Amount (π)",
+  "create.note": "Note (Optional)",
+  "create.notePlaceholder": "e.g., Payment for services, Product purchase...",
+  "create.creating": "Creating...",
+  "create.submit": "Create Payment Request",
+  "create.help": "After creating, you’ll receive a shareable link and QR code that anyone can use to pay you through Pi Wallet.",
 } satisfies TranslationDictionary
 
 export default messages

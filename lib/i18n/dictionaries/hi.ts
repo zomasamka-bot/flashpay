@@ -24,6 +24,18 @@ const messages = {
   "convert.rate": "दर",
   "convert.piAmount": "Pi राशि",
   "convert.useAmount": "इस Pi राशि का उपयोग करें",
+  "nav.home": "होम",
+  "nav.create": "बनाएँ",
+  "nav.sales": "बिक्री",
+  "nav.profile": "प्रोफ़ाइल",
+  "create.title": "भुगतान बनाएँ",
+  "create.details": "भुगतान विवरण",
+  "create.amount": "राशि (π)",
+  "create.note": "नोट (वैकल्पिक)",
+  "create.notePlaceholder": "जैसे, सेवाओं का भुगतान, उत्पाद खरीद...",
+  "create.creating": "बनाया जा रहा है...",
+  "create.submit": "भुगतान अनुरोध बनाएँ",
+  "create.help": "बनाने के बाद आपको साझा करने योग्य लिंक और QR कोड मिलेगा, जिससे कोई भी Pi Wallet के जरिए आपको भुगतान कर सकता है।",
 } satisfies TranslationDictionary
 
 export default messages

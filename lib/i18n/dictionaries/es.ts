@@ -24,6 +24,18 @@ const messages = {
   "convert.rate": "Tasa",
   "convert.piAmount": "Importe en Pi",
   "convert.useAmount": "Usar este importe en Pi",
+  "nav.home": "Inicio",
+  "nav.create": "Crear",
+  "nav.sales": "Ventas",
+  "nav.profile": "Perfil",
+  "create.title": "Crear pago",
+  "create.details": "Detalles del pago",
+  "create.amount": "Importe (π)",
+  "create.note": "Nota (opcional)",
+  "create.notePlaceholder": "p. ej., pago por servicios, compra de producto...",
+  "create.creating": "Creando...",
+  "create.submit": "Crear solicitud de pago",
+  "create.help": "Después de crearla, recibirás un enlace para compartir y un código QR que cualquiera podrá usar para pagarte con Pi Wallet.",
 } satisfies TranslationDictionary
 
 export default messages
