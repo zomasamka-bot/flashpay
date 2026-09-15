@@ -242,6 +242,13 @@ const messages = {
   'transactions.legacyAmount': 'Устаревшая сумма',
   'transactions.empty': 'Транзакций пока нет.',
   'transactions.noMatch': 'Нет транзакций, соответствующих фильтрам.',
+  'receipt.copyId': 'Копировать ID FlashPay',
+  'profile.removeSuccess': 'Удалено из профиля',
+  'profile.removeSuccessDesc': 'Запись о возврате и квитанция остаются доступными в финансовых записях.',
+  'profile.removeError': 'Не удалось удалить возврат',
+  'profile.tryAgain': 'Попробуйте ещё раз.',
+  'profile.idRequired': 'Требуется ID FlashPay',
+  'profile.idRequiredDesc': 'Введите действительный ID FlashPay.',
 } satisfies TranslationDictionary
 
 export default messages

@@ -58,7 +58,7 @@ function CopyButton({ value }: { value: string }) {
       type="button"
       className="ml-2 shrink-0 text-xs font-semibold text-blue-700 underline underline-offset-2"
       onClick={() => void handleCopy()}
-      aria-label="Copy FlashPay ID"
+      aria-label={t("receipt.copyId")}
     >
       {copied ? t("common.copied") : t("common.copy")}
     </button>

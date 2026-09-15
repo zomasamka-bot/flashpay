@@ -241,6 +241,13 @@ const messages = {
   'transactions.legacyAmount': 'Legacy Completed Amount',
   'transactions.empty': 'No transactions yet',
   'transactions.noMatch': 'No transactions match your filters',
+  'receipt.copyId': 'Copy FlashPay ID',
+  'profile.removeSuccess': 'Removed from Profile',
+  'profile.removeSuccessDesc': 'The refund record and receipt remain available in financial records.',
+  'profile.removeError': 'Could not remove refund',
+  'profile.tryAgain': 'Please try again.',
+  'profile.idRequired': 'FlashPay ID required',
+  'profile.idRequiredDesc': 'Enter a valid FlashPay ID.',
 } satisfies TranslationDictionary
 
 export default messages

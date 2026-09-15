@@ -242,6 +242,13 @@ const messages = {
   'transactions.legacyAmount': 'Importe heredado',
   'transactions.empty': 'No hay transacciones todavía.',
   'transactions.noMatch': 'Ninguna transacción coincide con los filtros.',
+  'receipt.copyId': 'Copiar ID de FlashPay',
+  'profile.removeSuccess': 'Eliminado del perfil',
+  'profile.removeSuccessDesc': 'El registro del reembolso y el recibo siguen disponibles en los registros financieros.',
+  'profile.removeError': 'No se pudo eliminar el reembolso',
+  'profile.tryAgain': 'Inténtalo de nuevo.',
+  'profile.idRequired': 'Se requiere el ID de FlashPay',
+  'profile.idRequiredDesc': 'Introduce un ID de FlashPay válido.',
 } satisfies TranslationDictionary
 
 export default messages

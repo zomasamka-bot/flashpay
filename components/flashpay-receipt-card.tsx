@@ -378,7 +378,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
           <p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.flashpayId")}</p>
           <div className="mt-2 flex items-center gap-2">
             <code className="min-w-0 flex-1 break-all text-sm font-semibold">{receipt.flashPayPaymentId}</code>
-            <Button type="button" variant="ghost" size="sm" className="print:hidden" onClick={copyId} aria-label="Copy FlashPay ID">
+            <Button type="button" variant="ghost" size="sm" className="print:hidden" onClick={copyId} aria-label={t("receipt.copyId")}>
               {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>

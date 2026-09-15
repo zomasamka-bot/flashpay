@@ -241,6 +241,13 @@ const messages = {
   'transactions.legacyAmount': 'إجمالي المكتمل القديم',
   'transactions.empty': 'لا توجد معاملات بعد',
   'transactions.noMatch': 'لا توجد معاملات مطابقة لعوامل التصفية',
+  'receipt.copyId': 'نسخ معرّف FlashPay',
+  'profile.removeSuccess': 'تمت الإزالة من الملف الشخصي',
+  'profile.removeSuccessDesc': 'يظل سجل الاسترداد والإيصال متاحين في السجلات المالية.',
+  'profile.removeError': 'تعذرت إزالة الاسترداد',
+  'profile.tryAgain': 'يرجى المحاولة مرة أخرى.',
+  'profile.idRequired': 'معرّف FlashPay مطلوب',
+  'profile.idRequiredDesc': 'أدخل معرّف FlashPay صالحًا.',
 } satisfies TranslationDictionary
 
 export default messages

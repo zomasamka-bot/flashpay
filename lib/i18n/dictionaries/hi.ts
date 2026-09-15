@@ -242,6 +242,13 @@ const messages = {
   'transactions.legacyAmount': 'पुरानी राशि',
   'transactions.empty': 'अभी कोई लेनदेन नहीं।',
   'transactions.noMatch': 'फ़िल्टर से मेल खाता कोई लेनदेन नहीं।',
+  'receipt.copyId': 'FlashPay ID कॉपी करें',
+  'profile.removeSuccess': 'प्रोफ़ाइल से हटाया गया',
+  'profile.removeSuccessDesc': 'रिफंड रिकॉर्ड और रसीद वित्तीय रिकॉर्ड में उपलब्ध रहेंगे।',
+  'profile.removeError': 'रिफंड हटाया नहीं जा सका',
+  'profile.tryAgain': 'कृपया फिर प्रयास करें।',
+  'profile.idRequired': 'FlashPay ID आवश्यक है',
+  'profile.idRequiredDesc': 'एक मान्य FlashPay ID दर्ज करें।',
 } satisfies TranslationDictionary
 
 export default messages

@@ -242,6 +242,13 @@ const messages = {
   'transactions.legacyAmount': 'Số tiền cũ',
   'transactions.empty': 'Chưa có giao dịch.',
   'transactions.noMatch': 'Không có giao dịch phù hợp với bộ lọc.',
+  'receipt.copyId': 'Sao chép FlashPay ID',
+  'profile.removeSuccess': 'Đã xóa khỏi hồ sơ',
+  'profile.removeSuccessDesc': 'Bản ghi hoàn tiền và biên lai vẫn có trong hồ sơ tài chính.',
+  'profile.removeError': 'Không thể xóa hoàn tiền',
+  'profile.tryAgain': 'Vui lòng thử lại.',
+  'profile.idRequired': 'Cần FlashPay ID',
+  'profile.idRequiredDesc': 'Nhập FlashPay ID hợp lệ.',
 } satisfies TranslationDictionary
 
 export default messages

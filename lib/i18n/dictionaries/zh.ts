@@ -242,6 +242,13 @@ const messages = {
   'transactions.legacyAmount': '旧版金额',
   'transactions.empty': '暂无交易。',
   'transactions.noMatch': '没有符合筛选条件的交易。',
+  'receipt.copyId': '复制 FlashPay ID',
+  'profile.removeSuccess': '已从个人资料中移除',
+  'profile.removeSuccessDesc': '退款记录和收据仍保留在财务记录中。',
+  'profile.removeError': '无法移除退款',
+  'profile.tryAgain': '请重试。',
+  'profile.idRequired': '需要 FlashPay ID',
+  'profile.idRequiredDesc': '请输入有效的 FlashPay ID。',
 } satisfies TranslationDictionary
 
 export default messages

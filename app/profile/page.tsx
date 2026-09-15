@@ -303,11 +303,11 @@ function ProfileContent() {
         delete next[paymentId]
         return next
       })
-      toast({ title: "Removed from Profile", description: "The refund record and receipt remain available in financial records." })
+      toast({ title: t("profile.removeSuccess"), description: t("profile.removeSuccessDesc") })
     } catch (error) {
       toast({
-        title: "Could not remove refund",
-        description: error instanceof Error ? error.message : "Please try again.",
+        title: t("profile.removeError"),
+        description: error instanceof Error ? error.message : t("profile.tryAgain"),
         variant: "destructive",
       })
     } finally {
@@ -318,7 +318,7 @@ function ProfileContent() {
   const handleReceiptSearch = () => {
     const flashPayId = receiptSearchId.trim()
     if (!flashPayId || flashPayId.length > 128) {
-      toast({ title: "FlashPay ID required", description: "Enter a valid FlashPay ID.", variant: "destructive" })
+      toast({ title: t("profile.idRequired"), description: t("profile.idRequiredDesc"), variant: "destructive" })
       return
     }
     router.push(getReceiptLink(flashPayId))
