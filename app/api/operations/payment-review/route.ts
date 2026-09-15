@@ -5,6 +5,7 @@ import { isPaymentFinal } from "@/lib/payment-status"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { isRedisConfigured, redis } from "@/lib/redis"
 import type { Payment } from "@/lib/types"
+import { appendOperationalQueueAuditEvent } from "@/lib/operational-audit"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -54,7 +55,11 @@ async function buildReview(payment: Payment) {
     parties: { merchantId: payment.merchantId, merchantUid: payment.merchantUid ?? dbEvidence.merchantUid ?? null, merchantAddress: payment.merchantAddress ?? null, payerUid: payment.payerUid ?? null, payerUsername: payment.payerUsername ?? dbEvidence.payerUsername ?? null },
     canonical: { status: payment.status, settlementFailureState: payment.settlementFailureState ?? null, piPaymentId: payment.piPaymentId ?? null, u2aTxid: payment.u2aTxid ?? null, a2uPaymentId: payment.a2uPaymentId ?? null, a2uTxid: payment.a2uTxid ?? null, horizonSuccessFlag: payment.horizonSuccessFlag === true, piCompleted: payment.piCompleted === true, dbRecorded: payment.dbRecorded === true, requiresDbReconciliation: payment.requiresDbReconciliation === true, piCompletionPending: payment.piCompletionPending === true, refundStatus: payment.refundStatus ?? null, refundPaymentId: payment.refundPaymentId ?? null, refundTxid: payment.refundTxid ?? null, customerAmount: payment.customerAmount ?? payment.amount ?? null, merchantAmount: payment.merchantAmount ?? null, horizonFeeCharged: payment.horizonFeeCharged ?? null, appNetImpact: payment.appNetImpact ?? null, retryCount: payment.retryCount ?? null, nextRetryAt: payment.nextRetryAt ?? null, lastErrorCode: payment.a2uErrorCode ?? payment.refundFailureCode ?? null, lastErrorMessage: payment.a2uErrorMessage ?? null },
     database: dbEvidence, refund: refund.state === "present" ? { state: "present", status: refund.checkpoint.status, stage: refund.checkpoint.stage, refundId: refund.checkpoint.refundId, refundPaymentId: refund.checkpoint.refundPaymentId ?? null, refundTxid: refund.checkpoint.refundTxid ?? null, amount: refund.checkpoint.amount, attemptCount: refund.checkpoint.attemptCount, lastErrorCode: refund.checkpoint.lastErrorCode ?? null, lastErrorMessage: refund.checkpoint.lastErrorMessage ?? null, updatedAt: refund.checkpoint.updatedAt } : { state: refund.state },
-    action: { allowed: false, message: verdict === "Final" ? "No action required." : verdict === "Recovering" ? "Recovery is automatic. Manual execution is intentionally unavailable while the authoritative recovery path owns this payment." : "No financial action is exposed until the existing Plan 7 authority can prove a safe transition. Unknown/conflict always fails closed." } }
+    action: {
+      allowed: false,
+      canPruneFromQueue: (payment.status === "cancelled" || payment.status === "failed") && !payment.paidAt && !payment.u2aTxid && !payment.a2uPaymentId && !payment.a2uTxid && payment.horizonSuccessFlag !== true && payment.piCompleted !== true && payment.dbRecorded !== true && !payment.refundPaymentId && !payment.refundTxid && refund.state === "absent",
+      message: verdict === "Final" ? "No action required." : verdict === "Recovering" ? "Recovery is automatic. Manual execution is intentionally unavailable while the authoritative recovery path owns this payment." : "No financial action is exposed until the existing Plan 7 authority can prove a safe transition. Unknown/conflict always fails closed."
+    } }
 }
 
 export async function GET(request: NextRequest) {
@@ -74,4 +79,38 @@ export async function GET(request: NextRequest) {
     const visible = reviews.filter(r => r.verdict !== "Final" || r.refund.state === "present").sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
     return NextResponse.json({ available: true, asOf: new Date().toISOString(), items: visible, counts: { total: visible.length, recovering: visible.filter(x=>x.verdict==="Recovering").length, manualReview: visible.filter(x=>x.verdict==="Manual Review").length, conflicts: visible.filter(x=>x.verdict==="Conflict").length, unknown: visible.filter(x=>x.verdict==="Unknown").length, refunds: visible.filter(x=>x.refund.state==="present").length }, note: ids.length >= 250 ? "Showing the first 250 active recovery records." : null }, { headers: { "Cache-Control": "no-store" } })
   } catch { return NextResponse.json({ error: "Operational review unavailable", available: false }, { status: 503 }) }
+}
+
+
+export async function POST(request: NextRequest) {
+  const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
+  if (!auth.ok) return NextResponse.json({ error: "Unauthorized" }, { status: auth.status })
+  if (!isRedisConfigured) return NextResponse.json({ error: "Canonical Redis unavailable" }, { status: 503 })
+  try {
+    const body = await request.json() as { action?: unknown; paymentId?: unknown }
+    if (body.action !== "prune_terminal" || typeof body.paymentId !== "string" || !validPaymentId(body.paymentId)) {
+      return NextResponse.json({ error: "Invalid operator action" }, { status: 400 })
+    }
+    const payment = await readPayment(body.paymentId)
+    if (!payment) return NextResponse.json({ error: "Canonical payment not found" }, { status: 404 })
+    const refund = await findRefundCheckpointByPaymentId(payment.id)
+    const safeTerminal = (payment.status === "cancelled" || payment.status === "failed") &&
+      !payment.paidAt && !payment.u2aTxid && !payment.a2uPaymentId && !payment.a2uTxid && !payment.a2uPreparedTxHash &&
+      payment.horizonSuccessFlag !== true && payment.piCompleted !== true && payment.dbRecorded !== true &&
+      !payment.refundPaymentId && !payment.refundTxid && refund.state === "absent"
+    if (!safeTerminal) {
+      return NextResponse.json({ error: "Queue removal is blocked because terminal no-movement evidence is not proven" }, { status: 409 })
+    }
+    const requestId = request.headers.get("x-vercel-id") || crypto.randomUUID()
+    const removed = await redis.eval<[string], number>(
+      "local a=redis.call('SREM',KEYS[1],ARGV[1]); local r=redis.call('ZREM',KEYS[2],ARGV[1]); if a==1 or r==1 then return 1 end; return 0",
+      [ACTIVE_KEY, "flashpay:settlement:ready:v1"],
+      [payment.id],
+    )
+    if (removed !== 0 && removed !== 1) return NextResponse.json({ error: "Invalid queue removal result" }, { status: 503 })
+    await appendOperationalQueueAuditEvent({ actorUid: auth.uid, requestId, paymentId: payment.id, action: "queue.prune_terminal", reason: "Owner removed a proven terminal no-movement payment from operational recovery indexes" })
+    return NextResponse.json({ success: true, paymentId: payment.id, removed: removed === 1, requestId }, { headers: { "Cache-Control": "no-store" } })
+  } catch {
+    return NextResponse.json({ error: "Operator action unavailable" }, { status: 503 })
+  }
 }

@@ -40,3 +40,19 @@ export async function appendOperationalAuditEvent(input: Omit<OperationalAuditEv
   await redis.lpush(AUDIT_KEY, JSON.stringify(event))
   await redis.ltrim(AUDIT_KEY, 0, MAX_EVENTS - 1)
 }
+
+
+export async function appendOperationalQueueAuditEvent(input: { actorUid: string; requestId: string; paymentId: string; action: "queue.prune_terminal"; reason: string }): Promise<void> {
+  if (!isRedisConfigured) throw new Error("Operational audit Redis is not configured")
+  const event = {
+    eventId: randomUUID(),
+    action: input.action,
+    actorUid: input.actorUid,
+    requestId: input.requestId,
+    paymentId: input.paymentId,
+    createdAt: Date.now(),
+    reason: safeReason(input.reason),
+  }
+  await redis.lpush(AUDIT_KEY, JSON.stringify(event))
+  await redis.ltrim(AUDIT_KEY, 0, MAX_EVENTS - 1)
+}
