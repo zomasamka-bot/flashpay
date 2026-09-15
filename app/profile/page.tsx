@@ -45,30 +45,30 @@ function mapSettlementStatus(status: SettlementStatus): string {
   return "Other"
 }
 
-function merchantAttentionStatus(item: OperationalPayment): string {
-  if (item.refundPresentation?.merchantStatus === "refund_pending" || item.refundPresentation?.merchantStatus === "refund_confirmed") return "Failed — Refunding customer"
-  if (item.refundPresentation?.merchantStatus === "refund_completed") return "Failed — Refunded to customer"
-  if (item.refundPresentation?.merchantStatus === "refund_attention_required") return "Failed — Refund requires attention"
+function merchantAttentionStatus(item: OperationalPayment, t: (key: string) => string): string {
+  if (item.refundPresentation?.merchantStatus === "refund_pending" || item.refundPresentation?.merchantStatus === "refund_confirmed") return t("profile.attention.refunding")
+  if (item.refundPresentation?.merchantStatus === "refund_completed") return t("profile.attention.refunded")
+  if (item.refundPresentation?.merchantStatus === "refund_attention_required") return t("profile.attention.refundAttention")
   if (
     item.settlementFailureState === "manual_review_required" ||
     item.refundStatus === "manual_review_required"
-  ) return "Manual review required"
-  if (item.settlementFailureState === "held") return "Held for settlement safety"
+  ) return t("profile.attention.manualReview")
+  if (item.settlementFailureState === "held") return t("profile.attention.held")
   if (
     item.status === "refund_pending" ||
     item.settlementFailureState === "refund_pending" ||
     item.refundStatus === "pending" ||
     item.refundStatus === "submitted"
-  ) return "Refund pending"
-  if (item.refundStatus === "failed") return "Refund failed — review required"
-  if (item.status === "settlement_failed") return "Settlement failed — review required"
-  if (item.settlementFailureState === "retryable" || item.nextRetryAt) return "Automatic retry scheduled"
+  ) return t("profile.attention.refundPending")
+  if (item.refundStatus === "failed") return t("profile.attention.refundFailed")
+  if (item.status === "settlement_failed") return t("profile.attention.settlementFailed")
+  if (item.settlementFailureState === "retryable" || item.nextRetryAt) return t("profile.attention.retryScheduled")
   if (
     item.status === "paid_to_app" ||
     item.status === "settlement_pending" ||
     item.settlementFailureState === "reconciling"
-  ) return "Settlement processing"
-  return "Review required"
+  ) return t("profile.attention.settlementProcessing")
+  return t("profile.attention.reviewRequired")
 }
 
 interface OperationalPayment {
@@ -490,8 +490,8 @@ function ProfileContent() {
                   ).length > 0 && (
                     <div className="pt-3 border-t space-y-3">
                       <div>
-                        <p className="text-xs font-medium text-muted-foreground">Payments Requiring Attention</p>
-                        <p className="text-sm text-muted-foreground">Payments still being settled or requiring action.</p>
+                        <p className="text-xs font-medium text-muted-foreground">{t("profile.attention.title")}</p>
+                        <p className="text-sm text-muted-foreground">{t("profile.attention.description")}</p>
                       </div>
                       {summary.operationalPayments
                         .filter(
@@ -504,7 +504,7 @@ function ProfileContent() {
                               <span className="font-medium">{item.paymentId}</span>
                               <span>{item.amount.toFixed(2)}π</span>
                             </div>
-                            <p className="text-muted-foreground mt-1">{merchantAttentionStatus(item)}</p>
+                            <p className="text-muted-foreground mt-1">{merchantAttentionStatus(item, t)}</p>
                             {item.refundPresentation?.merchantStatus === "refund_completed" && (
                               <div className="mt-2">
                                 <div className="flex flex-wrap gap-2">
@@ -514,7 +514,7 @@ function ProfileContent() {
                                     size="sm"
                                     onClick={() => setOpenRefundReceipts((current) => ({ ...current, [item.paymentId]: !current[item.paymentId] }))}
                                   >
-                                    {openRefundReceipts[item.paymentId] ? "Hide refund receipt" : "Tap to view refund receipt"}
+                                    {openRefundReceipts[item.paymentId] ? t("profile.attention.hideRefund") : t("profile.attention.viewRefund")}
                                   </Button>
                                   <Button
                                     type="button"
@@ -523,7 +523,7 @@ function ProfileContent() {
                                     disabled={dismissingRefundId !== null}
                                     onClick={() => void handleDismissCompletedRefund(item.paymentId)}
                                   >
-                                    {dismissingRefundId === item.paymentId ? "Removing..." : "Remove from Profile"}
+                                    {dismissingRefundId === item.paymentId ? t("profile.attention.removing") : t("profile.attention.remove")}
                                   </Button>
                                 </div>
                                 {openRefundReceipts[item.paymentId] && (
@@ -532,7 +532,7 @@ function ProfileContent() {
                               </div>
                             )}
                             {item.nextRetryAt && (
-                              <p className="text-xs text-muted-foreground">Next retry: {formatProfileDateTime(item.nextRetryAt)}</p>
+                              <p className="text-xs text-muted-foreground">{t("profile.attention.nextRetry")}: {formatProfileDateTime(item.nextRetryAt)}</p>
                             )}
                           </div>
                         ))}

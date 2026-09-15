@@ -13,6 +13,7 @@ import { config } from "@/lib/config"
 import { getReceiptLink } from "@/lib/router"
 
 import { Calendar, Search, Download, ChevronRight, ChevronDown, TrendingUp, Filter } from "lucide-react"
+import { useI18n } from "@/components/i18n-provider"
 
 interface MerchantPayment {
   id: string
@@ -51,6 +52,7 @@ interface MerchantDashboardSummary {
 }
 
 export default function MerchantPaymentsPage() {
+  const { t } = useI18n()
   const router = useRouter()
   const merchant = useMerchant()
 
@@ -361,7 +363,7 @@ export default function MerchantPaymentsPage() {
     return (
       <main className="flex-1 flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <p className="text-muted-foreground">Please authenticate to view payments</p>
+          <p className="text-muted-foreground">{t("dashboard.authenticate")}</p>
         </div>
       </main>
     )
@@ -375,14 +377,14 @@ export default function MerchantPaymentsPage() {
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <TrendingUp className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-            <h1 className="text-3xl font-bold">Payment Dashboard</h1>
+            <h1 className="text-3xl font-bold">{t("dashboard.title")}</h1>
           </div>
-          <p className="text-muted-foreground">Track payments and settlements</p>
+          <p className="text-muted-foreground">{t("dashboard.description")}</p>
         </div>
 
         <div className="space-y-6">
             <div>
-              <h2 className="text-lg font-semibold">All-time Merchant Summary</h2>
+              <h2 className="text-lg font-semibold">{t("dashboard.summary")}</h2>
             </div>
 
             {/* Primary merchant summary — keep the most useful four cards visible. */}
@@ -390,28 +392,28 @@ export default function MerchantPaymentsPage() {
               <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-900/10 border-blue-200 dark:border-blue-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-blue-700 dark:text-blue-400">{summary?.total_requests ?? "—"}</div>
-                  <p className="text-sm text-blue-600 dark:text-blue-300 mt-1">Total Requests</p>
+                  <p className="text-sm text-blue-600 dark:text-blue-300 mt-1">{t("dashboard.totalRequests")}</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-900/10 border-green-200 dark:border-green-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-green-700 dark:text-green-400">{summary?.settled_transactions ?? "—"}</div>
-                  <p className="text-sm text-green-600 dark:text-green-300 mt-1">Settled Transactions</p>
+                  <p className="text-sm text-green-600 dark:text-green-300 mt-1">{t("dashboard.settledTransactions")}</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-yellow-50 to-yellow-100 dark:from-yellow-900/20 dark:to-yellow-900/10 border-yellow-200 dark:border-yellow-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-yellow-700 dark:text-yellow-400">{summary?.pending_transactions ?? "—"}</div>
-                  <p className="text-sm text-yellow-600 dark:text-yellow-300 mt-1">Pending Transactions</p>
+                  <p className="text-sm text-yellow-600 dark:text-yellow-300 mt-1">{t("dashboard.pendingTransactions")}</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-900/10 border-indigo-200 dark:border-indigo-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-indigo-700 dark:text-indigo-400">{summary ? `${summary.total_settled_amount.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-indigo-600 dark:text-indigo-300 mt-1">Total Settled Amount</p>
+                  <p className="text-sm text-indigo-600 dark:text-indigo-300 mt-1">{t("dashboard.totalSettledAmount")}</p>
                 </CardContent>
               </Card>
             </div>
@@ -425,7 +427,7 @@ export default function MerchantPaymentsPage() {
                 onClick={() => setShowFullSummary((current) => !current)}
                 aria-expanded={showFullSummary}
               >
-                {showFullSummary ? "Hide full summary" : "View full summary"}
+                {showFullSummary ? t("dashboard.hideFull") : t("dashboard.viewFull")}
                 <ChevronDown className={`h-4 w-4 transition-transform ${showFullSummary ? "rotate-180" : ""}`} />
               </Button>
             </div>
@@ -435,42 +437,42 @@ export default function MerchantPaymentsPage() {
                 <Card className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-900/10 border-purple-200 dark:border-purple-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-purple-700 dark:text-purple-400">{summary ? `${summary.total_payment_volume.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-purple-600 dark:text-purple-300 mt-1">Total Payment Volume</p>
+                    <p className="text-sm text-purple-600 dark:text-purple-300 mt-1">{t("dashboard.totalVolume")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-900/10 border-orange-200 dark:border-orange-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-orange-700 dark:text-orange-400">{summary ? `${summary.total_awaiting_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">Total Awaiting Amount</p>
+                    <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">{t("dashboard.totalAwaiting")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-900/10 border-red-200 dark:border-red-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-red-700 dark:text-red-400">{summary?.failed_transactions ?? "—"}</div>
-                    <p className="text-sm text-red-600 dark:text-red-300 mt-1">Failed Transactions</p>
+                    <p className="text-sm text-red-600 dark:text-red-300 mt-1">{t("dashboard.failedTransactions")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-900/20 dark:to-pink-900/10 border-pink-200 dark:border-pink-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-pink-700 dark:text-pink-400">{summary ? `${summary.total_failed_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-pink-600 dark:text-pink-300 mt-1">Total Failed Amount</p>
+                    <p className="text-sm text-pink-600 dark:text-pink-300 mt-1">{t("dashboard.totalFailed")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900/20 dark:to-slate-900/10 border-slate-200 dark:border-slate-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-slate-700 dark:text-slate-400">{summary?.cancelled_transactions ?? "—"}</div>
-                    <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">Cancelled Transactions</p>
+                    <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">{t("dashboard.cancelledTransactions")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-cyan-50 to-cyan-100 dark:from-cyan-900/20 dark:to-cyan-900/10 border-cyan-200 dark:border-cyan-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-cyan-700 dark:text-cyan-400">{summary ? `${summary.total_cancelled_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-cyan-600 dark:text-cyan-300 mt-1">Total Cancelled Amount</p>
+                    <p className="text-sm text-cyan-600 dark:text-cyan-300 mt-1">{t("dashboard.totalCancelled")}</p>
                   </CardContent>
                 </Card>
 
@@ -510,7 +512,7 @@ export default function MerchantPaymentsPage() {
               <Filter className="h-5 w-5" />
               Filters
             </CardTitle>
-            <CardDescription>Filters affect the payment list only.</CardDescription>
+            <CardDescription>{t("dashboard.filtersDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -522,7 +524,7 @@ export default function MerchantPaymentsPage() {
                   <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                   <Input
                     id="search-input"
-                    placeholder="Reference, note, or FlashPay ID..."
+                    placeholder={t("dashboard.searchPlaceholder")}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onKeyDown={(e) => {
@@ -644,7 +646,7 @@ export default function MerchantPaymentsPage() {
                 ) : (
                   <>
                     <Download className="h-4 w-4" />
-                    Export CSV
+                    {t("dashboard.export")}
                   </>
                 )}
               </Button>
@@ -659,8 +661,8 @@ export default function MerchantPaymentsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Payments {filteredPayments.length > 0 && `(${filteredPayments.length})`}</CardTitle>
-            <CardDescription>Click any payment to view receipt details</CardDescription>
+            <CardTitle>{t("dashboard.payments")} {filteredPayments.length > 0 && `(${filteredPayments.length})`}</CardTitle>
+            <CardDescription>{t("dashboard.clickReceipt")}</CardDescription>
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -673,7 +675,7 @@ export default function MerchantPaymentsPage() {
               </div>
             ) : filteredPayments.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
-                <p>No payments found matching your filters</p>
+                <p>{t("dashboard.noPayments")}</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -693,7 +695,7 @@ export default function MerchantPaymentsPage() {
                         </Badge>
                       </div>
                       <p className="text-sm text-muted-foreground mt-1">
-                        {payment.note || "No note"}
+                        {payment.note || t("dashboard.noNote")}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
                         {formatDate(payment.createdAt)}

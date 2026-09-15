@@ -13,6 +13,7 @@ import { config } from "@/lib/config"
 import { getReceiptLink } from "@/lib/router"
 import type { Transaction } from "@/lib/types"
 import { Calendar, Search, Download, ChevronRight } from "lucide-react"
+import { useI18n } from "@/components/i18n-provider"
 
 type TransactionSummary = {
   total_payment_volume: number
@@ -59,6 +60,7 @@ function getSettlementCategory(status: SettlementStatus): "settled" | "processin
 }
 
 export default function TransactionsPage() {
+  const { t } = useI18n()
   const router = useRouter()
   const merchant = useMerchant()
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -205,8 +207,8 @@ export default function TransactionsPage() {
       <div className="max-w-2xl mx-auto p-4 space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">Transaction History</h1>
-            <p className="text-sm text-muted-foreground mt-1">Complete record of all payments</p>
+            <h1 className="text-3xl font-bold text-foreground">{t("transactions.title")}</h1>
+            <p className="text-sm text-muted-foreground mt-1">{t("transactions.description")}</p>
           </div>
           <BackButton />
         </div>
@@ -215,27 +217,27 @@ export default function TransactionsPage() {
         {summary && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Payment Summary</CardTitle>
+              <CardTitle className="text-lg">{t("transactions.summary")}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Payment Volume:</span>
+                <span className="text-muted-foreground">{t("transactions.totalVolume")}:</span>
                 <span className="font-semibold text-lg">{summary.total_payment_volume.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Settled Amount:</span>
+                <span className="text-muted-foreground">{t("transactions.totalSettled")}:</span>
                 <span className="font-semibold">{summary.total_settled_amount.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Awaiting Amount:</span>
+                <span className="text-muted-foreground">{t("transactions.totalAwaiting")}:</span>
                 <span className="font-semibold">{summary.total_awaiting_amount.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Failed Amount:</span>
+                <span className="text-muted-foreground">{t("transactions.totalFailed")}:</span>
                 <span className="font-semibold">{summary.total_failed_amount.toFixed(2)}π</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Cancelled Amount:</span>
+                <span className="text-muted-foreground">{t("transactions.totalCancelled")}:</span>
                 <span className="font-semibold">{summary.total_cancelled_amount.toFixed(2)}π</span>
               </div>
               {(summary.completed_transactions > 0 || summary.total_completed_amount > 0) && (
@@ -259,7 +261,7 @@ export default function TransactionsPage() {
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search by reference or description..."
+              placeholder={t("transactions.search")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10"
@@ -287,7 +289,7 @@ export default function TransactionsPage() {
                 onClick={() => setStatusFilter(filter)}
                 className="capitalize"
               >
-                {filter === "all" ? "All" : filter === "settled" ? "Settled" : filter === "processing" ? "Processing" : filter === "failed" ? "Failed" : "Cancelled"}
+                {filter === "all" ? t("transactions.all") : filter === "settled" ? t("transactions.settled") : filter === "processing" ? t("transactions.processing") : filter === "failed" ? t("transactions.failed") : t("transactions.cancelled")}
               </Button>
             ))}
           </div>
@@ -302,7 +304,7 @@ export default function TransactionsPage() {
           <Card>
             <CardContent className="pt-6">
               <p className="text-center text-muted-foreground">
-                {transactions.length === 0 ? "No transactions yet" : "No transactions match your filters"}
+                {transactions.length === 0 ? t("transactions.empty") : t("transactions.noMatch")}
               </p>
             </CardContent>
           </Card>
