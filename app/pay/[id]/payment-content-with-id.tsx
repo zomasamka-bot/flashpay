@@ -18,6 +18,7 @@ import { getPiNetUrl } from "@/lib/router"
 import { unifiedStore } from "@/lib/unified-store"
 import type { Payment, RefundPresentation } from "@/lib/types"
 import { useI18n } from "@/components/i18n-provider"
+import { isAppLocale } from "@/lib/i18n/config"
 
 export default function PaymentContentWithId({ 
   paymentId, 
@@ -34,7 +35,7 @@ export default function PaymentContentWithId({
   console.log("[v0][PaymentContentWithId] Component initialized with props:", { paymentId, urlAmount, urlNote, entry })
 
   const { toast } = useToast()
-  const { t } = useI18n()
+  const { t, locale, setLocale } = useI18n()
   const [payment, setPayment] = useState<Payment | null>(null)
   const [loading, setLoading] = useState(true)
   const [isPaying, setIsPaying] = useState(false)
@@ -89,6 +90,8 @@ export default function PaymentContentWithId({
       const urlParams = new URLSearchParams(window.location.search)
       const mode = urlParams.get("entry") as "pi" | "share" | null
       const urlAmount = urlParams.get("amount")
+      const localeHint = urlParams.get("lang")?.toLowerCase()
+      if (isAppLocale(localeHint)) setLocale(localeHint)
       console.log("[v0][EntryMode] URL search string:", window.location.search)
       console.log("[v0][EntryMode] Parsed entry param:", mode)
       console.log("[v0][EntryMode] Parsed amount param:", urlAmount)
@@ -551,7 +554,7 @@ export default function PaymentContentWithId({
 
   // If entry mode is "share", show bridge UI to open Pi Browser
   if (entryMode === "share" && urlAmount) {
-    const piDeepLink = `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(paymentId)}?amount=${encodeURIComponent(urlAmount)}&entry=pi${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
+    const piDeepLink = `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(paymentId)}?amount=${encodeURIComponent(urlAmount)}&entry=pi&lang=${encodeURIComponent(locale)}${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4 flex items-center">
@@ -636,7 +639,7 @@ export default function PaymentContentWithId({
 
   const isPaid = payment.status === "settled_to_merchant"
   const isRefundView = entryMode === "pi" && authoritativeLoaded && ["settlement_failed", "refund_pending", "refunded"].includes(payment.status)
-  const paymentQR = getPiNetUrl(paymentId)
+  const paymentQR = getPiNetUrl(paymentId, locale)
 
   if (isRefundView) {
     return (

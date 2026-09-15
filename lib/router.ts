@@ -38,13 +38,14 @@ export function getReceiptLink(id: string): string {
  * Hash routing persists across the PiNet facade and is visible in address bar.
  * Payment data is fetched from backend by ID, not URL (authoritative source).
  */
-export function getPiNetPaymentUrl(id: string, amount?: number, note?: string): string {
-  return `https://flashpayaefebeff3375.pinet.com/#/pay/${encodeURIComponent(id)}`
+export function getPiNetPaymentUrl(id: string, amount?: number, note?: string, locale?: string): string {
+  const localeHint = locale ? `?lang=${encodeURIComponent(locale)}` : ""
+  return `https://flashpayaefebeff3375.pinet.com/#/pay/${encodeURIComponent(id)}${localeHint}`
 }
 
 /** @deprecated Use getPiNetPaymentUrl instead */
-export function getPiNetUrl(id: string): string {
-  return getPiNetPaymentUrl(id)
+export function getPiNetUrl(id: string, locale?: string): string {
+  return getPiNetPaymentUrl(id, undefined, undefined, locale)
 }
 
 export function getPiDeepLink(id: string, domain = "flashpay.pi", amount?: number, note?: string): string {

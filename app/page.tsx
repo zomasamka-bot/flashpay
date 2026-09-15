@@ -17,7 +17,7 @@ import { useMerchant } from "@/lib/use-merchant"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CustomerPaymentView } from "@/components/customer-payment-view"
 import { useI18n } from "@/components/i18n-provider"
-import { LOCALE_METADATA, SUPPORTED_LOCALES, type AppLocale } from "@/lib/i18n/config"
+import { LOCALE_METADATA, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, isAppLocale, type AppLocale } from "@/lib/i18n/config"
 
 export default function HomePage() {
   const router = useRouter()
@@ -55,9 +55,14 @@ export default function HomePage() {
   
   useEffect(() => {
     // Check hash first (Pi Browser QR route: #/pay/{id})
-    const hashMatch = window.location.hash.match(/^#\/pay\/([0-9a-f-]{36})\/?$/i)
+    const hashMatch = window.location.hash.match(/^#\/pay\/([0-9a-f-]{36})\/?(?:\?lang=([a-z]{2}))?$/i)
     if (hashMatch && hashMatch[1]) {
       const id = hashMatch[1]
+      const localeHint = hashMatch[2]?.toLowerCase()
+      if (isAppLocale(localeHint)) {
+        try { window.localStorage.setItem(LOCALE_STORAGE_KEY, localeHint) } catch {}
+        setLocale(localeHint)
+      }
       console.log("[v0][Home-Init] Detected hash payment ID:", id)
       setIsCustomerView(true)
       setCustomerPaymentId(id)
@@ -320,7 +325,7 @@ export default function HomePage() {
 
   // Payment data is fetched from backend by ID, not from URL (authoritative source)
   const paymentLink = currentPaymentId && payment
-    ? `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=pi${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    ? `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=pi&lang=${encodeURIComponent(locale)}${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
@@ -328,7 +333,7 @@ export default function HomePage() {
 
   // Payment sharing handlers
   const sharePaymentUrl = currentPaymentId && payment
-    ? `https://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    ? `https://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share&lang=${encodeURIComponent(locale)}${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   
   const handleSharePayment = async () => {

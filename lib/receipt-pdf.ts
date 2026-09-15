@@ -5,14 +5,27 @@ const PAGE_HEIGHT_PX = 1754
 const PDF_PAGE_WIDTH = 595.28
 const PDF_PAGE_HEIGHT = 841.89
 
-const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
-  successful: "Payment successful",
-  processing: "Processing",
-  refunded: "Refunded",
-  failed: "Payment failed",
-  cancelled: "Cancelled",
-  needs_attention: "Needs attention",
+export interface ReceiptPdfLabels {
+  paymentReceipt: string
+  refundReceipt: string
+  merchant: string
+  customer: string
+  unavailable: string
+  type: string
+  payment: string
+  refund: string
+  dateTime: string
+  note: string
+  flashPayId: string
+  verified: string
+  status: Record<FlashPayReceiptView["status"], string>
 }
+
+export interface ReceiptPdfOptions {
+  labels: ReceiptPdfLabels
+  direction: "ltr" | "rtl"
+}
+
 
 const encoder = new TextEncoder()
 
@@ -106,19 +119,21 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number,
   return lines
 }
 
-function drawLabel(ctx: CanvasRenderingContext2D, label: string, x: number, y: number) {
+function drawLabel(ctx: CanvasRenderingContext2D, label: string, x: number, y: number, maxWidth = 420, direction: "ltr" | "rtl" = "ltr") {
   ctx.fillStyle = "#6b7280"
   ctx.font = "600 28px Arial, Helvetica, sans-serif"
-  ctx.textAlign = "left"
-  ctx.fillText(label.toUpperCase(), x, y)
+  ctx.direction = direction
+  ctx.textAlign = direction === "rtl" ? "right" : "left"
+  ctx.fillText(label.toUpperCase(), direction === "rtl" ? x + maxWidth : x, y)
 }
 
-function drawValue(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, maxWidth: number, startSize = 38) {
+function drawValue(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, maxWidth: number, startSize = 38, direction: "ltr" | "rtl" = "ltr") {
   const size = fitFont(ctx, value, maxWidth, startSize, 25, 600)
   ctx.font = `600 ${size}px Arial, Helvetica, sans-serif`
   ctx.fillStyle = "#111827"
-  ctx.textAlign = "left"
-  ctx.fillText(value, x, y)
+  ctx.direction = direction
+  ctx.textAlign = direction === "rtl" ? "right" : "left"
+  ctx.fillText(value, direction === "rtl" ? x + maxWidth : x, y)
 }
 
 function statusFill(status: FlashPayReceiptView["status"]): string {
@@ -129,7 +144,8 @@ function statusFill(status: FlashPayReceiptView["status"]): string {
   return "#2563eb"
 }
 
-function createReceiptCanvas(receipt: FlashPayReceiptView): HTMLCanvasElement {
+function createReceiptCanvas(receipt: FlashPayReceiptView, options: ReceiptPdfOptions): HTMLCanvasElement {
+  const { labels, direction } = options
   const canvas = document.createElement("canvas")
   canvas.width = PAGE_WIDTH_PX
   canvas.height = PAGE_HEIGHT_PX
@@ -149,9 +165,11 @@ function createReceiptCanvas(receipt: FlashPayReceiptView): HTMLCanvasElement {
 
   ctx.fillStyle = "#111827"
   ctx.font = "700 60px Arial, Helvetica, sans-serif"
-  ctx.fillText(receipt.transactionType === "refund" ? "Refund Receipt" : "Payment Receipt", margin, 190)
+  ctx.direction = direction
+  ctx.textAlign = direction === "rtl" ? "right" : "left"
+  ctx.fillText(receipt.transactionType === "refund" ? labels.refundReceipt : labels.paymentReceipt, direction === "rtl" ? PAGE_WIDTH_PX - margin : margin, 190)
 
-  const statusText = STATUS_LABEL[receipt.status]
+  const statusText = labels.status[receipt.status]
   ctx.font = "600 27px Arial, Helvetica, sans-serif"
   const badgeWidth = Math.max(230, ctx.measureText(statusText).width + 54)
   roundedRect(ctx, PAGE_WIDTH_PX - margin - badgeWidth, 93, badgeWidth, 58, 29)
@@ -186,25 +204,26 @@ function createReceiptCanvas(receipt: FlashPayReceiptView): HTMLCanvasElement {
   const colWidth = (contentWidth - colGap - 72) / 2
   const leftX = margin + 36
   const rightX = margin + 36 + colWidth + colGap
-  drawLabel(ctx, "Merchant", leftX, partyY + 62)
-  drawValue(ctx, receipt.merchantName, leftX, partyY + 125, colWidth)
-  drawLabel(ctx, "Customer", rightX, partyY + 62)
-  drawValue(ctx, receipt.customerName ?? "Name unavailable", rightX, partyY + 125, colWidth)
+  drawLabel(ctx, labels.merchant, leftX, partyY + 62, colWidth, direction)
+  drawValue(ctx, receipt.merchantName, leftX, partyY + 125, colWidth, 38, direction)
+  drawLabel(ctx, labels.customer, rightX, partyY + 62, colWidth, direction)
+  drawValue(ctx, receipt.customerName ?? labels.unavailable, rightX, partyY + 125, colWidth, 38, direction)
 
   const detailsY = 825
-  drawLabel(ctx, "Type", margin, detailsY)
-  drawValue(ctx, receipt.transactionType === "refund" ? "Refund" : "Payment", margin, detailsY + 66, 390, 40)
-  drawLabel(ctx, "Date & Time", 630, detailsY)
+  drawLabel(ctx, labels.type, margin, detailsY, 390, direction)
+  drawValue(ctx, receipt.transactionType === "refund" ? labels.refund : labels.payment, margin, detailsY + 66, 390, 40, direction)
+  drawLabel(ctx, labels.dateTime, 630, detailsY, PAGE_WIDTH_PX - margin - 630, direction)
   drawValue(ctx, formatReceiptDateTime(receipt.occurredAt), 630, detailsY + 66, PAGE_WIDTH_PX - margin - 630, 34)
 
   let nextY = 1005
   if (receipt.note) {
-    drawLabel(ctx, "Note", margin, nextY)
+    drawLabel(ctx, labels.note, margin, nextY, contentWidth, direction)
     ctx.font = "400 31px Arial, Helvetica, sans-serif"
     ctx.fillStyle = "#111827"
-    ctx.textAlign = "left"
+    ctx.direction = direction
+    ctx.textAlign = direction === "rtl" ? "right" : "left"
     const lines = wrapText(ctx, receipt.note, contentWidth, 3)
-    lines.forEach((line, index) => ctx.fillText(line, margin, nextY + 54 + index * 42))
+    lines.forEach((line, index) => ctx.fillText(line, direction === "rtl" ? PAGE_WIDTH_PX - margin : margin, nextY + 54 + index * 42))
     nextY += 92 + Math.max(0, lines.length - 1) * 42
   }
 
@@ -213,9 +232,10 @@ function createReceiptCanvas(receipt: FlashPayReceiptView): HTMLCanvasElement {
   ctx.strokeStyle = "#d1d5db"
   ctx.lineWidth = 3
   ctx.stroke()
-  drawLabel(ctx, "FlashPay ID", margin + 36, idBoxY + 62)
+  drawLabel(ctx, labels.flashPayId, margin + 36, idBoxY + 62, contentWidth - 72, direction)
   ctx.font = "600 31px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
   ctx.fillStyle = "#111827"
+  ctx.direction = "ltr"
   ctx.textAlign = "left"
   const idLines = wrapText(ctx, receipt.flashPayPaymentId, contentWidth - 72, 3)
   idLines.forEach((line, index) => ctx.fillText(line, margin + 36, idBoxY + 122 + index * 42))
@@ -229,7 +249,7 @@ function createReceiptCanvas(receipt: FlashPayReceiptView): HTMLCanvasElement {
   ctx.fillStyle = "#6b7280"
   ctx.font = "400 27px Arial, Helvetica, sans-serif"
   ctx.textAlign = "center"
-  ctx.fillText("Verified transaction record by FlashPay", PAGE_WIDTH_PX / 2, footerY)
+  ctx.fillText(labels.verified, PAGE_WIDTH_PX / 2, footerY)
 
   return canvas
 }
@@ -296,9 +316,9 @@ function jpegToPdf(jpeg: Uint8Array, imageWidth: number, imageHeight: number): U
   return concatBytes(chunks)
 }
 
-export async function createReceiptPdfFile(receipt: FlashPayReceiptView): Promise<File> {
+export async function createReceiptPdfFile(receipt: FlashPayReceiptView, options: ReceiptPdfOptions): Promise<File> {
   if (typeof document === "undefined") throw new Error("PDF generation requires a browser")
-  const canvas = createReceiptCanvas(receipt)
+  const canvas = createReceiptCanvas(receipt, options)
   const jpeg = await canvasToJpegBytes(canvas)
   const pdf = jpegToPdf(jpeg, canvas.width, canvas.height)
   const pdfBuffer = new ArrayBuffer(pdf.byteLength)

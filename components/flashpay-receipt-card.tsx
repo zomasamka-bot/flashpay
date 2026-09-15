@@ -92,7 +92,7 @@ function webFileShareSupport(file: File): "supported" | "unknown" | "unsupported
 }
 
 export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPayReceiptView; accessToken?: string | null }) {
-  const { t } = useI18n()
+  const { t, locale, direction } = useI18n()
   const [copied, setCopied] = useState(false)
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [pdfTools, setPdfTools] = useState<ReceiptPdfTools | null>(null)
@@ -122,7 +122,31 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
     sharedPdfPromiseRef.current = null
     void import("@/lib/receipt-pdf")
       .then(async (tools) => {
-        const file = await tools.createReceiptPdfFile(receiptSnapshot)
+        const file = await tools.createReceiptPdfFile(receiptSnapshot, {
+          direction,
+          labels: {
+            paymentReceipt: t("receipt.paymentReceipt"),
+            refundReceipt: t("receipt.refundReceipt"),
+            merchant: t("receipt.merchant"),
+            customer: t("receipt.customer"),
+            unavailable: t("common.unavailable"),
+            type: t("receipt.type"),
+            payment: t("receipt.payment"),
+            refund: t("receipt.refund"),
+            dateTime: t("receipt.dateTime"),
+            note: t("receipt.note"),
+            flashPayId: t("receipt.flashpayId"),
+            verified: t("receipt.verified"),
+            status: {
+              successful: t("receipt.status.successful"),
+              processing: t("receipt.status.processing"),
+              refunded: t("receipt.status.refunded"),
+              failed: t("receipt.status.failed"),
+              cancelled: t("receipt.status.cancelled"),
+              needs_attention: t("receipt.status.needs_attention"),
+            },
+          },
+        })
         if (!cancelled) {
           setPdfTools(tools)
           setPdfFile(file)
@@ -140,6 +164,9 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
     receipt.status,
     receipt.occurredAt,
     receipt.note,
+    locale,
+    direction,
+    t,
   ])
 
   const copyId = async () => {

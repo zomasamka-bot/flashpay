@@ -43,7 +43,7 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const shouldSkipSDK = skipSDKRoutes.some((route) => pathname?.startsWith(route))
 
   // For /pay/[id] routes OR hash-based #/pay/[id] routes, render children immediately and expose readiness promise
-  const isPayRoute = pathname?.startsWith("/pay/") || (typeof window !== "undefined" && /^#\/pay\/[0-9a-f-]{36}\/?$/i.test(window.location.hash))
+  const isPayRoute = pathname?.startsWith("/pay/") || (typeof window !== "undefined" && /^#\/pay\/[0-9a-f-]{36}\/?(?:\?lang=[a-z]{2})?$/i.test(window.location.hash))
 
   useEffect(() => {
     // Skip SDK loading for admin routes - owner is already verified
