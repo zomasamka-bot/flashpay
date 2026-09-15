@@ -28,6 +28,7 @@ const runtimeEnv = process.env
 const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
 const DRAIN_LEASE_TTL_SECONDS = 900
 const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
+const RECOVERY_WAKE_HEALTH_KEY = "flashpay:operations:recovery-last-wake:v1"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -606,6 +607,12 @@ export async function POST(request: NextRequest) {
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
+
+  // M7 telemetry only: schedule best-effort freshness evidence after trusted authentication.
+  // It must never block, authorize, or alter financial recovery execution.
+  try {
+    after(async () => { try { await redis.set(RECOVERY_WAKE_HEALTH_KEY, new Date().toISOString(), { ex: 7 * 24 * 60 * 60 }) } catch {} })
+  } catch {}
 
   const requestedMode = new URL(request.url).searchParams.get("mode")
   if (requestedMode === CONTINUATION_MODE) {
