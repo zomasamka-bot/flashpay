@@ -10,68 +10,68 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 type Verdict = "Final" | "Recovering" | "Manual Review" | "Conflict" | "Unknown"
+const ACTIVE_KEY = "flashpay:recovery:active-payments:v1"
 
 function validPaymentId(value: string | null): value is string {
   return typeof value === "string" && value.length >= 8 && value.length <= 128 && value === value.trim() && /^[A-Za-z0-9_-]+$/.test(value)
 }
 
-export async function GET(request: NextRequest) {
-  const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
-  if (!auth.ok) return NextResponse.json({ error: "Unauthorized" }, { status: auth.status })
-  const paymentId = new URL(request.url).searchParams.get("paymentId")
-  if (!validPaymentId(paymentId)) return NextResponse.json({ error: "Invalid Payment ID" }, { status: 400 })
-  if (!isRedisConfigured) return NextResponse.json({ verdict: "Unknown", paymentId, reason: "Canonical Redis unavailable" }, { status: 503 })
+async function readPayment(paymentId: string): Promise<Payment | null> {
+  const raw = await redis.get<unknown>(`payment:${paymentId}`)
+  if (!raw) return null
+  const payment = (typeof raw === "string" ? JSON.parse(raw) : raw) as Payment
+  return payment && payment.id === paymentId ? payment : null
+}
 
-  let payment: Payment | null = null
-  try {
-    const raw = await redis.get<unknown>(`payment:${paymentId}`)
-    if (raw) payment = (typeof raw === "string" ? JSON.parse(raw) : raw) as Payment
-  } catch {
-    return NextResponse.json({ verdict: "Unknown", paymentId, reason: "Canonical payment read failed" }, { status: 503 })
-  }
-  if (!payment) return NextResponse.json({ verdict: "Unknown", paymentId, reason: "Payment not found in canonical Redis" }, { status: 404 })
-  if (payment.id !== paymentId) return NextResponse.json({ verdict: "Conflict", paymentId, reason: "Canonical payment identity mismatch" }, { status: 409 })
-
+async function buildReview(payment: Payment) {
+  const paymentId = payment.id
   const refund = await findRefundCheckpointByPaymentId(paymentId)
-  let dbEvidence: { state: "present" | "absent" | "unknown"; transactionCount?: number; receiptCount?: number } = { state: "unknown" }
+  let dbEvidence: { state: "present" | "absent" | "unknown"; transactionCount?: number; receiptCount?: number; merchantUid?: string | null; payerUsername?: string | null } = { state: "unknown" }
   try {
     const rows = await query(`SELECT
       (SELECT COUNT(*)::int FROM transactions WHERE payment_id=$1) AS transaction_count,
-      (SELECT COUNT(*)::int FROM receipts WHERE payment_id=$1 OR u2a_identifier=$1) AS receipt_count`, [paymentId])
+      (SELECT COUNT(*)::int FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id=$1 OR r.u2a_identifier=$1) AS receipt_count,
+      (SELECT merchant_uid FROM transactions WHERE payment_id=$1 LIMIT 1) AS merchant_uid,
+      (SELECT r.payer_username FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id=$1 LIMIT 1) AS payer_username`, [paymentId])
     const row = Array.isArray(rows) && rows.length === 1 && rows[0] && typeof rows[0] === "object" ? rows[0] as Record<string, unknown> : null
     if (row) {
-      const transactionCount = Number(row.transaction_count)
-      const receiptCount = Number(row.receipt_count)
-      if (Number.isSafeInteger(transactionCount) && Number.isSafeInteger(receiptCount)) dbEvidence = { state: transactionCount > 0 || receiptCount > 0 ? "present" : "absent", transactionCount, receiptCount }
+      const transactionCount = Number(row.transaction_count), receiptCount = Number(row.receipt_count)
+      if (Number.isSafeInteger(transactionCount) && Number.isSafeInteger(receiptCount)) dbEvidence = { state: transactionCount > 0 || receiptCount > 0 ? "present" : "absent", transactionCount, receiptCount, merchantUid: typeof row.merchant_uid === "string" ? row.merchant_uid : null, payerUsername: typeof row.payer_username === "string" ? row.payer_username : null }
     }
   } catch {}
 
   const settlementEvidence = Boolean(payment.a2uPaymentId || payment.a2uTxid || payment.a2uPreparedTxHash || payment.horizonSuccessFlag)
   const refundEvidence = refund.state === "present" || Boolean(payment.refundPaymentId || payment.refundTxid || (payment.refundStatus && payment.refundStatus !== "not_started"))
-  let verdict: Verdict = "Unknown"
-  let reason = "Evidence is insufficient for an automatic conclusion"
-  if (settlementEvidence && refundEvidence) { verdict = "Conflict"; reason = "Settlement and refund evidence coexist; no action is permitted here" }
+  let verdict: Verdict = "Unknown", reason = "Evidence is insufficient for an automatic conclusion"
+  if (settlementEvidence && refundEvidence) { verdict = "Conflict"; reason = "Settlement and refund evidence coexist; financial action is blocked" }
   else if (isPaymentFinal(payment)) { verdict = "Final"; reason = "Canonical finality proof is complete" }
   else if (refund.state === "uncertain" || dbEvidence.state === "unknown") { verdict = "Unknown"; reason = "One or more authoritative reads are uncertain" }
   else if (payment.status === "settlement_failed" && (payment.settlementFailureState === "manual_review_required" || payment.refundStatus === "manual_review_required")) { verdict = "Manual Review"; reason = "Canonical state requires manual review" }
-  else if (payment.status === "paid_to_app" || payment.status === "settlement_pending" || payment.requiresDbReconciliation === true || payment.piCompletionPending === true || payment.refundStatus === "pending" || payment.refundStatus === "submitted") { verdict = "Recovering"; reason = "Canonical state is non-final and owned by existing recovery authorities" }
-  else if (payment.status === "settlement_failed") { verdict = "Manual Review"; reason = "Settlement failed without a safe workbench action" }
+  else if (payment.status === "paid_to_app" || payment.status === "settlement_pending" || payment.requiresDbReconciliation === true || payment.piCompletionPending === true || payment.refundStatus === "pending" || payment.refundStatus === "submitted") { verdict = "Recovering"; reason = "Non-final state is owned by existing recovery authorities" }
+  else if (payment.status === "settlement_failed") { verdict = "Manual Review"; reason = "Settlement failed without a proven safe manual action" }
 
-  return NextResponse.json({
-    paymentId, verdict, reason, asOf: new Date().toISOString(),
-    canonical: {
-      status: payment.status, settlementFailureState: payment.settlementFailureState ?? null,
-      piPaymentId: payment.piPaymentId ?? null, u2aTxid: payment.u2aTxid ?? null,
-      a2uPaymentId: payment.a2uPaymentId ?? null, a2uTxid: payment.a2uTxid ?? null,
-      horizonSuccessFlag: payment.horizonSuccessFlag === true, piCompleted: payment.piCompleted === true,
-      dbRecorded: payment.dbRecorded === true, requiresDbReconciliation: payment.requiresDbReconciliation === true,
-      piCompletionPending: payment.piCompletionPending === true, refundStatus: payment.refundStatus ?? null,
-      refundPaymentId: payment.refundPaymentId ?? null, refundTxid: payment.refundTxid ?? null,
-      customerAmount: payment.customerAmount ?? payment.amount ?? null, merchantAmount: payment.merchantAmount ?? null,
-      horizonFeeCharged: payment.horizonFeeCharged ?? null, appNetImpact: payment.appNetImpact ?? null,
-    },
-    database: dbEvidence,
-    refund: refund.state === "present" ? { state: "present", status: refund.checkpoint.status, stage: refund.checkpoint.stage, refundId: refund.checkpoint.refundId } : { state: refund.state },
-    action: { allowed: false, message: "Read-only workbench. Financial remediation remains exclusively behind existing Plan 7 executors, locks, and gates." },
-  }, { headers: { "Cache-Control": "no-store" } })
+  return { paymentId, verdict, reason, asOf: new Date().toISOString(), createdAt: payment.createdAt, updatedAt: payment.lastAttemptAt ?? payment.settledAt ?? payment.paidAt ?? payment.createdAt,
+    parties: { merchantId: payment.merchantId, merchantUid: payment.merchantUid ?? dbEvidence.merchantUid ?? null, merchantAddress: payment.merchantAddress ?? null, payerUid: payment.payerUid ?? null, payerUsername: payment.payerUsername ?? dbEvidence.payerUsername ?? null },
+    canonical: { status: payment.status, settlementFailureState: payment.settlementFailureState ?? null, piPaymentId: payment.piPaymentId ?? null, u2aTxid: payment.u2aTxid ?? null, a2uPaymentId: payment.a2uPaymentId ?? null, a2uTxid: payment.a2uTxid ?? null, horizonSuccessFlag: payment.horizonSuccessFlag === true, piCompleted: payment.piCompleted === true, dbRecorded: payment.dbRecorded === true, requiresDbReconciliation: payment.requiresDbReconciliation === true, piCompletionPending: payment.piCompletionPending === true, refundStatus: payment.refundStatus ?? null, refundPaymentId: payment.refundPaymentId ?? null, refundTxid: payment.refundTxid ?? null, customerAmount: payment.customerAmount ?? payment.amount ?? null, merchantAmount: payment.merchantAmount ?? null, horizonFeeCharged: payment.horizonFeeCharged ?? null, appNetImpact: payment.appNetImpact ?? null, retryCount: payment.retryCount ?? null, nextRetryAt: payment.nextRetryAt ?? null, lastErrorCode: payment.a2uErrorCode ?? payment.refundFailureCode ?? null, lastErrorMessage: payment.a2uErrorMessage ?? null },
+    database: dbEvidence, refund: refund.state === "present" ? { state: "present", status: refund.checkpoint.status, stage: refund.checkpoint.stage, refundId: refund.checkpoint.refundId, refundPaymentId: refund.checkpoint.refundPaymentId ?? null, refundTxid: refund.checkpoint.refundTxid ?? null, amount: refund.checkpoint.amount, attemptCount: refund.checkpoint.attemptCount, lastErrorCode: refund.checkpoint.lastErrorCode ?? null, lastErrorMessage: refund.checkpoint.lastErrorMessage ?? null, updatedAt: refund.checkpoint.updatedAt } : { state: refund.state },
+    action: { allowed: false, message: verdict === "Final" ? "No action required." : verdict === "Recovering" ? "Recovery is automatic. Manual execution is intentionally unavailable while the authoritative recovery path owns this payment." : "No financial action is exposed until the existing Plan 7 authority can prove a safe transition. Unknown/conflict always fails closed." } }
+}
+
+export async function GET(request: NextRequest) {
+  const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
+  if (!auth.ok) return NextResponse.json({ error: "Unauthorized" }, { status: auth.status })
+  if (!isRedisConfigured) return NextResponse.json({ error: "Canonical Redis unavailable", available: false }, { status: 503 })
+  const url = new URL(request.url), paymentId = url.searchParams.get("paymentId")
+  try {
+    if (paymentId) {
+      if (!validPaymentId(paymentId)) return NextResponse.json({ error: "Invalid Payment ID" }, { status: 400 })
+      const payment = await readPayment(paymentId)
+      if (!payment) return NextResponse.json({ verdict: "Unknown", paymentId, reason: "Payment not found in canonical Redis" }, { status: 404 })
+      return NextResponse.json(await buildReview(payment), { headers: { "Cache-Control": "no-store" } })
+    }
+    const ids = (await redis.smembers(ACTIVE_KEY)).filter((id): id is string => validPaymentId(id)).slice(0, 250)
+    const reviews = (await Promise.all(ids.map(async id => { try { const p = await readPayment(id); return p ? await buildReview(p) : null } catch { return null } }))).filter((r): r is NonNullable<typeof r> => Boolean(r))
+    const visible = reviews.filter(r => r.verdict !== "Final" || r.refund.state === "present").sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    return NextResponse.json({ available: true, asOf: new Date().toISOString(), items: visible, counts: { total: visible.length, recovering: visible.filter(x=>x.verdict==="Recovering").length, manualReview: visible.filter(x=>x.verdict==="Manual Review").length, conflicts: visible.filter(x=>x.verdict==="Conflict").length, unknown: visible.filter(x=>x.verdict==="Unknown").length, refunds: visible.filter(x=>x.refund.state==="present").length }, note: ids.length >= 250 ? "Showing the first 250 active recovery records." : null }, { headers: { "Cache-Control": "no-store" } })
+  } catch { return NextResponse.json({ error: "Operational review unavailable", available: false }, { status: 503 }) }
 }

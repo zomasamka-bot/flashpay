@@ -1,7 +1,6 @@
 "use client"
-
-import { FormEvent, useEffect, useState } from "react"
-import { AlertTriangle, CheckCircle2, Loader2, Search, ShieldCheck } from "lucide-react"
+import { FormEvent, useCallback, useEffect, useState } from "react"
+import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Search, ShieldCheck } from "lucide-react"
 import { BackButton } from "@/components/back-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -9,51 +8,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { config } from "@/lib/config"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 
-type Review = {
-  paymentId: string; verdict: "Final" | "Recovering" | "Manual Review" | "Conflict" | "Unknown"; reason: string; asOf: string
-  canonical: Record<string, unknown>; database: Record<string, unknown>; refund: Record<string, unknown>
-  action: { allowed: false; message: string }
-}
-
-export default function EmergencyPage() {
-  const { uidData } = useOwnerUid()
-  const [mounted, setMounted] = useState(false)
-  const [paymentId, setPaymentId] = useState("")
-  const [review, setReview] = useState<Review | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
-  useEffect(() => setMounted(true), [])
-
-  const inspect = async (event: FormEvent) => {
-    event.preventDefault(); setReview(null); setError("")
-    const id = paymentId.trim()
-    if (!id || uidData.status !== "success" || uidData.uid !== config.ownerUid || !uidData.accessToken) { setError("Owner authentication and a valid Payment ID are required."); return }
-    setLoading(true)
-    try {
-      const response = await fetch(`/api/operations/payment-review?paymentId=${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${uidData.accessToken}` }, cache: "no-store" })
-      const data = await response.json()
-      if (!response.ok && !data?.verdict) throw new Error(data?.error || "Review unavailable")
-      setReview(data)
-    } catch (e) { setError(e instanceof Error ? e.message : "Review unavailable") }
-    finally { setLoading(false) }
-  }
-
-  if (!mounted) return null
-  const entries = review ? Object.entries(review.canonical).filter(([, value]) => value !== null && value !== undefined) : []
-  const badgeClass = review?.verdict === "Final" ? "bg-green-600" : review?.verdict === "Recovering" ? "bg-blue-600" : review?.verdict === "Conflict" ? "bg-red-600" : "bg-amber-600"
-
-  return <div className="min-h-screen bg-background p-4"><div className="mx-auto max-w-2xl space-y-5">
-    <BackButton />
-    <div><h1 className="text-3xl font-bold">Recovery & Manual Review</h1><p className="mt-1 text-muted-foreground">Owner-only evidence workbench. Read-only by design.</p></div>
-    <Card><CardHeader><CardTitle className="flex items-center gap-2"><Search className="h-5 w-5"/>Inspect Payment</CardTitle><CardDescription>Enter the exact FlashPay Payment ID. Unknown or conflicting evidence never enables an action.</CardDescription></CardHeader><CardContent>
-      <form onSubmit={inspect} className="flex gap-2"><input aria-label="Payment ID" value={paymentId} onChange={e=>setPaymentId(e.target.value)} placeholder="Payment ID" className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 font-mono text-sm"/><Button type="submit" disabled={loading}>{loading?<Loader2 className="h-4 w-4 animate-spin"/>:"Inspect"}</Button></form>
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-    </CardContent></Card>
-    {review && <>
-      <Card className={review.verdict === "Conflict" ? "border-red-400" : "border-amber-300"}><CardHeader><div className="flex items-center justify-between gap-3"><CardTitle className="flex items-center gap-2">{review.verdict === "Final"?<CheckCircle2 className="h-5 w-5"/>:<AlertTriangle className="h-5 w-5"/>}Verdict</CardTitle><Badge className={badgeClass}>{review.verdict}</Badge></div><CardDescription>{review.reason}</CardDescription></CardHeader><CardContent className="text-xs text-muted-foreground">As of {new Date(review.asOf).toLocaleString()}</CardContent></Card>
-      <Card><CardHeader><CardTitle>Canonical Payment Evidence</CardTitle></CardHeader><CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-2">{entries.map(([key,value])=><div key={key} className="rounded-md border p-2"><div className="text-xs text-muted-foreground">{key}</div><div className="break-all font-mono text-sm">{String(value)}</div></div>)}</CardContent></Card>
-      <Card><CardHeader><CardTitle>Cross-checks</CardTitle></CardHeader><CardContent className="space-y-2 text-sm"><div className="rounded-md border p-3">Database: <strong>{String(review.database.state)}</strong>{typeof review.database.transactionCount === "number"?` · transactions ${review.database.transactionCount} · receipts ${review.database.receiptCount}`:""}</div><div className="rounded-md border p-3">Refund checkpoint: <strong>{String(review.refund.state)}</strong>{review.refund.status?` · ${String(review.refund.status)} / ${String(review.refund.stage)}`:""}</div></CardContent></Card>
-      <Card className="border-blue-300"><CardContent className="flex gap-3 pt-6"><ShieldCheck className="h-5 w-5 shrink-0 text-blue-600"/><p className="text-sm">{review.action.message}</p></CardContent></Card>
-    </>}
-  </div></div>
-}
+type Review = { paymentId:string; verdict:"Final"|"Recovering"|"Manual Review"|"Conflict"|"Unknown"; reason:string; asOf:string; createdAt?:string; updatedAt?:string; parties:Record<string,unknown>; canonical:Record<string,unknown>; database:Record<string,unknown>; refund:Record<string,unknown>; action:{allowed:false;message:string} }
+type Queue = { available:true; asOf:string; items:Review[]; counts:{total:number;recovering:number;manualReview:number;conflicts:number;unknown:number;refunds:number}; note?:string|null }
+const badge=(v:Review["verdict"])=>v==="Final"?"bg-green-600":v==="Recovering"?"bg-blue-600":v==="Conflict"?"bg-red-600":"bg-amber-600"
+export default function EmergencyPage(){
+ const {uidData}=useOwnerUid(); const [mounted,setMounted]=useState(false); const [queue,setQueue]=useState<Queue|null>(null); const [selected,setSelected]=useState<Review|null>(null); const [id,setId]=useState(""); const [loading,setLoading]=useState(false); const [error,setError]=useState(""); useEffect(()=>setMounted(true),[])
+ const owner=uidData.status==="success"&&uidData.uid===config.ownerUid&&Boolean(uidData.accessToken)
+ const load=useCallback(async()=>{if(!owner||!uidData.accessToken)return;setLoading(true);setError("");try{const r=await fetch("/api/operations/payment-review",{headers:{Authorization:`Bearer ${uidData.accessToken}`},cache:"no-store"});const d=await r.json();if(!r.ok||d?.available!==true)throw new Error(d?.error||"Workbench unavailable");setQueue(d)}catch(e){setQueue(null);setError(e instanceof Error?e.message:"Workbench unavailable")}finally{setLoading(false)}},[owner,uidData.accessToken]); useEffect(()=>{void load()},[load])
+ const inspect=async(e:FormEvent)=>{e.preventDefault();if(!owner||!uidData.accessToken||!id.trim())return;setLoading(true);setError("");try{const r=await fetch(`/api/operations/payment-review?paymentId=${encodeURIComponent(id.trim())}`,{headers:{Authorization:`Bearer ${uidData.accessToken}`},cache:"no-store"});const d=await r.json();if(!r.ok&&!d?.verdict)throw new Error(d?.error||"Review unavailable");setSelected(d)}catch(e){setError(e instanceof Error?e.message:"Review unavailable")}finally{setLoading(false)}}
+ if(!mounted||!owner)return null; const c=queue?.counts
+ return <div className="min-h-screen bg-background p-4"><div className="mx-auto max-w-5xl space-y-5"><BackButton/><div className="flex items-start justify-between gap-3"><div><h1 className="text-3xl font-bold">Recovery Command Center</h1><p className="mt-1 text-muted-foreground">Owner-only live workbench for recovery, refunds, conflicts and manual review.</p></div><Button variant="outline" size="sm" onClick={()=>void load()} disabled={loading}>{loading?<Loader2 className="h-4 w-4 animate-spin"/>:<RefreshCw className="h-4 w-4"/>}</Button></div>
+ <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">{[["Open",c?.total],["Recovering",c?.recovering],["Review",c?.manualReview],["Conflict",c?.conflicts],["Unknown",c?.unknown],["Refunds",c?.refunds]].map(([k,v])=><Card key={String(k)}><CardContent className="p-3"><div className="text-xs text-muted-foreground">{k}</div><div className="text-2xl font-bold">{v??"—"}</div></CardContent></Card>)}</div>
+ {error&&<Card className="border-red-400"><CardContent className="pt-6 text-sm text-red-600">{error}</CardContent></Card>}
+ <Card><CardHeader><CardTitle>Live Recovery Queue</CardTitle><CardDescription>Discovered from the canonical active-recovery index. Final ordinary payments are not noise; refund evidence remains visible.</CardDescription></CardHeader><CardContent className="space-y-2">{!queue&&!loading?<p className="text-sm text-muted-foreground">Unavailable.</p>:queue?.items.length===0?<p className="text-sm text-muted-foreground">No active recovery or refund records are currently indexed.</p>:queue?.items.map(x=><button key={x.paymentId} onClick={()=>setSelected(x)} className="w-full rounded-lg border p-3 text-left hover:bg-muted/40"><div className="flex items-center justify-between gap-2"><span className="break-all font-mono text-xs">{x.paymentId}</span><Badge className={badge(x.verdict)}>{x.verdict}</Badge></div><div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><span>Status <b>{String(x.canonical.status??"—")}</b></span><span>Refund <b>{String(x.refund.status??x.refund.state??"—")}</b></span><span>Merchant <b>{String(x.parties.merchantId??"—")}</b></span><span>Amount <b>{String(x.canonical.customerAmount??"—")} π</b></span></div><p className="mt-2 text-xs text-muted-foreground">{x.reason}</p></button>)}{queue?.note&&<p className="text-xs text-amber-700">{queue.note}</p>}</CardContent></Card>
+ <Card><CardHeader><CardTitle className="flex items-center gap-2"><Search className="h-5 w-5"/>Exact Payment Lookup</CardTitle><CardDescription>Optional deep lookup for any known FlashPay Payment ID.</CardDescription></CardHeader><CardContent><form onSubmit={inspect} className="flex gap-2"><input aria-label="Payment ID" value={id} onChange={e=>setId(e.target.value)} placeholder="Payment ID" className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 font-mono text-sm"/><Button disabled={loading}>Inspect</Button></form></CardContent></Card>
+ {selected&&<><Card className={selected.verdict==="Conflict"?"border-red-400":"border-amber-300"}><CardHeader><div className="flex items-center justify-between gap-2"><CardTitle className="flex items-center gap-2">{selected.verdict==="Final"?<CheckCircle2 className="h-5 w-5"/>:<AlertTriangle className="h-5 w-5"/>}{selected.verdict}</CardTitle><Badge className={badge(selected.verdict)}>{String(selected.canonical.status??"Unknown")}</Badge></div><CardDescription>{selected.reason}</CardDescription></CardHeader></Card>
+ <div className="grid gap-4 md:grid-cols-2"><Detail title="Parties" data={selected.parties}/><Detail title="Canonical Financial State" data={selected.canonical}/><Detail title="Refund Checkpoint" data={selected.refund}/><Detail title="Database Cross-check" data={selected.database}/></div>
+ <Card className="border-blue-300"><CardContent className="flex gap-3 pt-6"><ShieldCheck className="h-5 w-5 shrink-0 text-blue-600"/><div><b>Safe operator disposition</b><p className="mt-1 text-sm">{selected.action.message}</p><p className="mt-2 text-xs text-muted-foreground">This console never deletes financial evidence, invents status, submits Horizon transactions, creates refunds, or bypasses wallet/recovery locks.</p></div></CardContent></Card></>}
+ </div></div>}
+function Detail({title,data}:{title:string;data:Record<string,unknown>}){const e=Object.entries(data).filter(([,v])=>v!==null&&v!==undefined);return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent className="space-y-2">{e.map(([k,v])=><div key={k} className="rounded-md border p-2"><div className="text-xs text-muted-foreground">{k}</div><div className="break-all font-mono text-sm">{String(v)}</div></div>)}</CardContent></Card>}
