@@ -74,7 +74,10 @@ function ControlPanelContent() {
       try {
         const response = await fetch(`${config.appUrl}/api/control/system`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${uidData.accessToken || ""}`,
+          },
           body: JSON.stringify({
             action: enable ? "enable" : "disable",
             message: enable ? "Maintenance in progress. Please try again later." : undefined,
@@ -97,7 +100,7 @@ function ControlPanelContent() {
         setIsToggling(false)
       }
     },
-    [router]
+    [router, uidData.accessToken]
   )
 
   // Reset system state
@@ -113,7 +116,10 @@ function ControlPanelContent() {
     try {
       const response = await fetch(`${config.appUrl}/api/control/system`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${uidData.accessToken || ""}`,
+          },
         body: JSON.stringify({ action: "reset" }),
       })
 
@@ -127,7 +133,7 @@ function ControlPanelContent() {
     } finally {
       setIsToggling(false)
     }
-  }, [])
+  }, [uidData.accessToken])
 
   if (isLoading) {
     return (

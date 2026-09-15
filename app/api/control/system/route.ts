@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSystemState, enableKillSwitch, disableKillSwitch, resetSystemState } from "@/lib/system-control"
-import { isOwnerUid, unauthorizedResponse } from "@/lib/owner-auth"
+import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
 
 /**
  * GET /api/control/system
@@ -46,16 +46,16 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const { action, message, ownerUid } = await request.json()
-
-    // Verify owner access for write operations
-    if (!isOwnerUid(ownerUid)) {
-      console.warn("[API] Unauthorized system control attempt by UID:", ownerUid?.substring(0, 8))
-      return NextResponse.json(
-        unauthorizedResponse(),
-        { status: 403 }
-      )
+    const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
+    if (!auth.ok) {
+      const error =
+        auth.status === 500 ? "Owner verification not configured" :
+        auth.status === 503 ? "Owner verification unavailable" :
+        "Unauthorized"
+      return NextResponse.json({ error }, { status: auth.status })
     }
+
+    const { action, message } = await request.json()
 
     if (!["enable", "disable", "reset"].includes(action)) {
       return NextResponse.json(
