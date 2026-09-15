@@ -214,7 +214,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       // when an authenticated HTTPS link cannot be created.
       if (webFileShareSupport(pdfFile) === "supported" && typeof navigator.share === "function") {
         try {
-          await navigator.share({ files: [pdfFile], title: "Save FlashPay Receipt" })
+          await navigator.share({ files: [pdfFile], title: t("receipt.downloadPdf") })
           return
         } catch (error) {
           if (isAbortError(error)) return
@@ -334,8 +334,8 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       if (url && typeof navigator.share === "function") {
         try {
           await navigator.share({
-            title: receipt.transactionType === "refund" ? "FlashPay Refund Receipt" : "FlashPay Payment Receipt",
-            text: `FlashPay receipt ${receipt.flashPayPaymentId}`,
+            title: receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt"),
+            text: `${receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")} · ${receipt.flashPayPaymentId}`,
             url,
           })
           setShareError("This Pi Browser shared a secure PDF link because it does not support PDF file attachments.")
@@ -349,8 +349,8 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       if (url && typeof pi?.openShareDialog === "function") {
         try {
           pi.openShareDialog(
-            receipt.transactionType === "refund" ? "FlashPay Refund Receipt" : "FlashPay Payment Receipt",
-            `FlashPay receipt ${receipt.flashPayPaymentId}\n${url}`,
+            receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt"),
+            `${receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")} · ${receipt.flashPayPaymentId}\n${url}`,
           )
           setShareError("This Pi Browser shared a secure PDF link because it does not support PDF file attachments.")
           return
