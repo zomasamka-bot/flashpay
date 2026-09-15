@@ -17,6 +17,7 @@ import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/opera
 import { getPiNetUrl } from "@/lib/router"
 import { unifiedStore } from "@/lib/unified-store"
 import type { Payment, RefundPresentation } from "@/lib/types"
+import { useI18n } from "@/components/i18n-provider"
 
 export default function PaymentContentWithId({ 
   paymentId, 
@@ -33,6 +34,7 @@ export default function PaymentContentWithId({
   console.log("[v0][PaymentContentWithId] Component initialized with props:", { paymentId, urlAmount, urlNote, entry })
 
   const { toast } = useToast()
+  const { t } = useI18n()
   const [payment, setPayment] = useState<Payment | null>(null)
   const [loading, setLoading] = useState(true)
   const [isPaying, setIsPaying] = useState(false)
@@ -432,7 +434,7 @@ export default function PaymentContentWithId({
           console.log("[v0] ✅ Payment confirmed and settled to merchant!")
           setPayment(updated)
           setIsPaying(false)
-          toast({ title: "Payment Successful", description: "Your payment was completed successfully" })
+          toast({ title: t("pay.toast.successTitle"), description: t("pay.toast.successDesc") })
         }
       }
       } finally {
@@ -464,8 +466,8 @@ export default function PaymentContentWithId({
     if (isPaymentPaid(paymentId)) {
       addDiagnostic("Payment already completed")
       toast({
-        title: "Already Paid",
-        description: "This payment has already been completed",
+        title: t("pay.toast.alreadyPaidTitle"),
+        description: t("pay.toast.alreadyPaidDesc"),
         variant: "destructive",
       })
       return
@@ -482,8 +484,8 @@ export default function PaymentContentWithId({
         addDiagnostic(`AUTH FAILED: ${authResult.error}`)
         setAuthStatus("failed")
         toast({
-          title: "Authentication Required",
-          description: authResult.error || "Please authenticate with Pi Browser",
+          title: t("pay.toast.authRequiredTitle"),
+          description: authResult.error || t("pay.toast.authRequiredDesc"),
           variant: "destructive",
         })
         return
@@ -507,8 +509,8 @@ export default function PaymentContentWithId({
         setIsPaying(false)
         void persistReceiptIdentity()
         toast({
-          title: "Payment Successful",
-          description: "Your payment was completed successfully",
+          title: t("pay.toast.successTitle"),
+          description: t("pay.toast.successDesc"),
         })
         try {
           const updated = await getPaymentFromServer(paymentId, true)
@@ -558,12 +560,12 @@ export default function PaymentContentWithId({
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary text-primary-foreground mb-4">
               <span className="text-2xl">π</span>
             </div>
-            <h1 className="text-2xl font-bold mb-2">FlashPay Request</h1>
+            <h1 className="text-2xl font-bold mb-2">{t("pay.request")}</h1>
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-center">Payment Ready</CardTitle>
+              <CardTitle className="text-center">{t("pay.ready")}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="text-center py-4">
@@ -572,7 +574,7 @@ export default function PaymentContentWithId({
               </div>
 
               <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-center">
-                <p className="text-sm text-blue-900 dark:text-blue-100">To complete this payment, open this link in Pi Browser</p>
+                <p className="text-sm text-blue-900 dark:text-blue-100">{t("pay.openInstruction")}</p>
               </div>
 
               <Button
@@ -582,11 +584,11 @@ export default function PaymentContentWithId({
                 className="w-full h-12 text-lg gap-2"
                 size="lg"
               >
-                <span>Open in Pi Browser & Pay</span>
+                <span>{t("pay.openAndPay")}</span>
               </Button>
 
               <p className="text-xs text-center text-muted-foreground">
-                Payment ID: {paymentId}
+                {t("pay.paymentId")}: <span dir="ltr" className="font-mono">{paymentId}</span>
               </p>
             </CardContent>
           </Card>
@@ -601,7 +603,7 @@ export default function PaymentContentWithId({
         <Card className="max-w-md w-full">
           <CardContent className="p-8 text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-muted-foreground">Loading payment...</p>
+            <p className="text-muted-foreground">{t("pay.loading")}</p>
             <p className="text-xs text-muted-foreground mt-2">ID: {paymentId}</p>
           </CardContent>
         </Card>
@@ -614,17 +616,17 @@ export default function PaymentContentWithId({
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardHeader>
-            <CardTitle className="text-center">Payment Not Found</CardTitle>
+            <CardTitle className="text-center">{t("pay.notFound")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-center">
             <p className="text-muted-foreground">
-              Payment ID: {paymentId}
+              {t("pay.paymentId")}: <span dir="ltr" className="font-mono">{paymentId}</span>
             </p>
             <p className="text-sm text-muted-foreground">
-              This payment doesn't exist or has been removed.
+              {t("pay.notFoundDesc")}
             </p>
             <Link href="/">
-              <Button className="w-full">Go to Home</Button>
+              <Button className="w-full">{t("pay.goHome")}</Button>
             </Link>
           </CardContent>
         </Card>
@@ -644,8 +646,8 @@ export default function PaymentContentWithId({
           {payment.status === "settlement_failed" && (
             <div className={refundPresentation?.customerStatus === "refund_completed" ? "rounded-lg border border-green-300 bg-green-50 p-4 text-center text-sm text-green-800" : "rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-center text-sm text-destructive"}>
               {refundPresentation?.customerStatus === "refund_completed"
-                ? "Refund completed successfully. Your refund has been returned to your Pi Wallet. Open Pi Wallet to view the transaction."
-                : "Payment did not reach the recipient. Please wait a moment. Do not worry—your automatic refund is being initiated."}
+                ? t("pay.refundCompleted")
+                : t("pay.refundInitiated")}
             </div>
           )}
         </div>
@@ -682,7 +684,7 @@ export default function PaymentContentWithId({
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary text-primary-foreground mb-4">
             <span className="text-2xl">π</span>
           </div>
-          <h1 className="text-2xl font-bold mb-2">FlashPay Request</h1>
+          <h1 className="text-2xl font-bold mb-2">{t("pay.request")}</h1>
         </div>
 
         {isPaid ? (
@@ -701,8 +703,8 @@ export default function PaymentContentWithId({
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle>Payment Details</CardTitle>
-              <Badge variant="secondary">{payment.status}</Badge>
+              <CardTitle>{t("pay.details")}</CardTitle>
+              <Badge variant="secondary">{t(`pay.status.${payment.status}`, payment.status)}</Badge>
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -719,14 +721,14 @@ export default function PaymentContentWithId({
                 {authStatus === "authenticating" && (
                   <div className="p-4 bg-muted rounded-lg text-center">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
-                    <p className="text-sm text-muted-foreground">Authenticating with Pi Browser...</p>
+                    <p className="text-sm text-muted-foreground">{t("pay.authenticatingBrowser")}</p>
                   </div>
                 )}
 
                 {authStatus === "failed" && (
                   <div className="p-4 bg-destructive/10 text-destructive rounded-lg text-center">
-                    <p className="text-sm font-semibold mb-1">Authentication Failed</p>
-                    <p className="text-xs">Please open this page in Pi Browser</p>
+                    <p className="text-sm font-semibold mb-1">{t("pay.authFailed")}</p>
+                    <p className="text-xs">{t("pay.openInPiBrowser")}</p>
                   </div>
                 )}
 
@@ -737,21 +739,21 @@ export default function PaymentContentWithId({
                   size="lg"
                 >
                   {isPaying
-                    ? "Confirming on blockchain..."
+                    ? t("pay.confirming")
                     : authStatus === "authenticating"
-                      ? "Authenticating..."
+                      ? t("pay.authenticating")
                       : authStatus === "failed"
-                        ? "Authentication Failed"
+                        ? t("pay.authFailed")
                         : !piSDKReady
-                          ? "Loading Pi Wallet..."
+                          ? t("pay.loadingWallet")
                           : !authoritativeLoaded
-                            ? "Loading Payment..."
-                            : "Pay with Pi Wallet"}
+                            ? t("pay.loading")
+                            : t("pay.payWallet")}
                 </Button>
                 
                 {isPaying && (
                   <p className="text-xs text-center text-muted-foreground">
-                    Blockchain confirmation may take 1-2 minutes. Please wait...
+                    {t("pay.blockchainWait")}
                   </p>
                 )}
               </>
