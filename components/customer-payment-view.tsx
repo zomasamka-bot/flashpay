@@ -9,7 +9,8 @@ import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { executePayment, getPaymentFromServer } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
-import { getStatusLabel, getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
+import { getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
+import { useI18n } from "@/components/i18n-provider"
 import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
 import type { Payment, PaymentStatus } from "@/lib/types"
 
@@ -23,6 +24,7 @@ export function CustomerPaymentView({
   onError?: (error: string) => void
 }) {
   const { toast } = useToast()
+  const { t } = useI18n()
   const [payment, setPayment] = useState<Payment | null>(null)
   const [loading, setLoading] = useState(true)
   const [isPaying, setIsPaying] = useState(false)
@@ -252,7 +254,7 @@ export function CustomerPaymentView({
           <div className="flex items-center justify-between">
             <CardTitle>Payment Request</CardTitle>
             <Badge variant={getStatusColor(payment.status)}>
-              {getStatusLabel(payment.status)}
+              {t(`pay.status.${payment.status}`)}
             </Badge>
           </div>
         </CardHeader>

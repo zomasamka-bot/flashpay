@@ -119,35 +119,6 @@ export function isPaymentFinal(payment: Payment): boolean {
 }
 
 /**
- * Get human-readable status label for UI display
- */
-export function getStatusLabel(status: PaymentStatus): string {
-  switch (status) {
-    case 'pending':
-      return 'Pending'
-    case 'paid_to_app':
-      return 'Processing'
-    case 'settlement_pending':
-      return 'Processing Settlement'
-    case 'settled_to_merchant':
-      return 'Paid'
-    case 'settlement_failed':
-      return 'Settlement Failed'
-    case 'failed':
-      return 'Failed'
-    case 'cancelled':
-      return 'Cancelled'
-    case 'refund_pending':
-      return 'Refund Pending'
-    case 'refunded':
-      return 'Refunded'
-    default:
-      const _exhaustive: never = status
-      return _exhaustive
-  }
-}
-
-/**
  * Get display color for status badge
  */
 export function getStatusColor(status: PaymentStatus): 'default' | 'secondary' | 'destructive' | 'outline' {
@@ -187,35 +158,6 @@ export function validateStatusTransition(fromStatus: PaymentStatus, toStatus: Pa
       `Invalid status transition: cannot downgrade from settled_to_merchant to ${toStatus}`
     )
   }
-}
-
-/**
- * Get settlement status for intermediate states
- * For display purposes: paid_to_app and settlement_pending show as "Processing"
- */
-export function getSettlementDisplay(status: PaymentStatus): string {
-  if (isProcessingStatus(status)) {
-    return 'Processing'
-  }
-  if (isPaid(status)) {
-    return 'Settled'
-  }
-  if (status === 'settlement_failed') {
-    return 'Settlement Failed'
-  }
-  if (status === 'failed') {
-    return 'Payment Failed'
-  }
-  if (status === 'cancelled') {
-    return 'Cancelled'
-  }
-  if (status === 'refund_pending') {
-    return 'Refund Pending'
-  }
-  if (status === 'refunded') {
-    return 'Refunded'
-  }
-  return 'Pending'
 }
 
 /**
