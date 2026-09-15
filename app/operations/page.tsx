@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ArrowRight, Settings, Stethoscope, Globe, BarChart3, ArrowLeft, AlertTriangle, RefreshCw, Loader2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { unifiedStore } from "@/lib/unified-store"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { config } from "@/lib/config"
 
@@ -23,12 +22,14 @@ export default function OperationsPage() {
   const { uidData } = useOwnerUid()
   const { toast } = useToast()
   const [mounted, setMounted] = useState(false)
-  const [globalAnalytics, setGlobalAnalytics] = useState<any>(null)
+  const [globalAnalytics, setGlobalAnalytics] = useState<{ totalMerchants: number; activeMerchants: number; totalPayments: number; totalVolume: number } | null>(null)
+  const [overviewAsOf, setOverviewAsOf] = useState<string | null>(null)
+  const [overviewError, setOverviewError] = useState(false)
+  const [overviewLoading, setOverviewLoading] = useState(false)
   const [accessDenied, setAccessDenied] = useState(false)
 
   useEffect(() => {
     setMounted(true)
-    loadAnalyticsSafely()
   }, [])
 
   // Silent access check - redirect if not owner, otherwise allow access
@@ -50,26 +51,34 @@ export default function OperationsPage() {
     // Owner will be redirected if uidData eventually shows they're not owner
   }, [mounted, uidData.status, uidData.uid])
 
-  const loadAnalyticsSafely = () => {
+  const loadAnalyticsSafely = async () => {
+    if (!uidData.accessToken) return
+    setOverviewLoading(true)
+    setOverviewError(false)
     try {
-      if (typeof window === "undefined") return
-      const analytics = unifiedStore.getGlobalAnalytics()
-      setGlobalAnalytics({
-        totalMerchants: analytics?.totalMerchants ?? 0,
-        activeMerchants: analytics?.activeMerchants ?? 0,
-        totalPayments: analytics?.totalPayments ?? 0,
-        totalVolume: analytics?.totalVolume ?? 0,
+      const response = await fetch("/api/operations/overview", {
+        headers: { Authorization: `Bearer ${uidData.accessToken}` },
+        cache: "no-store",
       })
+      const data = await response.json()
+      if (!response.ok || !data?.overview) throw new Error("Platform overview unavailable")
+      setGlobalAnalytics(data.overview)
+      setOverviewAsOf(typeof data.asOf === "string" ? data.asOf : null)
     } catch (error) {
-      console.error("[operations] Error loading analytics:", error)
-      setGlobalAnalytics({
-        totalMerchants: 0,
-        activeMerchants: 0,
-        totalPayments: 0,
-        totalVolume: 0,
-      })
+      console.error("[operations] Error loading authoritative overview:", error)
+      setGlobalAnalytics(null)
+      setOverviewAsOf(null)
+      setOverviewError(true)
+    } finally {
+      setOverviewLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (uidData.status === "success" && uidData.uid === config.ownerUid && uidData.accessToken) {
+      void loadAnalyticsSafely()
+    }
+  }, [uidData.status, uidData.uid, uidData.accessToken])
 
 
 
@@ -141,22 +150,29 @@ export default function OperationsPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Merchants</div>
-                <div className="text-3xl font-bold">{globalAnalytics?.totalMerchants ?? 0}</div>
+                <div className="text-3xl font-bold">{overviewLoading ? "…" : globalAnalytics?.totalMerchants ?? "—"}</div>
               </div>
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Active</div>
-                <div className="text-3xl font-bold text-accent">{globalAnalytics?.activeMerchants ?? 0}</div>
+                <div className="text-3xl font-bold text-accent">{overviewLoading ? "…" : globalAnalytics?.activeMerchants ?? "—"}</div>
               </div>
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Payments</div>
-                <div className="text-3xl font-bold">{globalAnalytics?.totalPayments ?? 0}</div>
+                <div className="text-3xl font-bold">{overviewLoading ? "…" : globalAnalytics?.totalPayments ?? "—"}</div>
               </div>
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Volume</div>
                 <div className="text-3xl font-bold text-primary">
-                  {(globalAnalytics?.totalVolume ?? 0).toFixed(2)} π
+                  {overviewLoading ? "…" : globalAnalytics ? `${globalAnalytics.totalVolume.toFixed(2)} π` : "—"}
                 </div>
               </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>{overviewError ? "Authoritative platform overview unavailable" : overviewAsOf ? `PostgreSQL · as of ${new Date(overviewAsOf).toLocaleString()}` : "Loading authoritative platform overview…"}</span>
+              <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => void loadAnalyticsSafely()} disabled={overviewLoading || !uidData.accessToken}>
+                {overviewLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                Refresh
+              </Button>
             </div>
           </CardContent>
         </Card>
