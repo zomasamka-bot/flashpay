@@ -1,141 +1,137 @@
 /**
  * System control state manager.
- * Manages kill switch and app-wide operational state in Redis.
- * This is the single source of truth for system control.
+ * Operational control only; never a financial authority.
  */
 
 import { redis, isRedisConfigured } from "./redis"
 
 export interface SystemState {
+  version: 1
+  revision: number
   killSwitchEnabled: boolean
   maintenanceMessage: string
   lastToggleTime: number
   toggledBy?: string
+  expiresAt: number | null
 }
+
+export type SystemStateRead =
+  | { ok: true; state: SystemState; source: "redis" | "default" }
+  | { ok: false; reason: "redis_unavailable" | "invalid_state" }
 
 const SYSTEM_STATE_KEY = "flashpay:system:state"
+const KILL_SWITCH_TTL_SECONDS = 86400
 
-const DEFAULT_STATE: SystemState = {
-  killSwitchEnabled: false,
-  maintenanceMessage: "Maintenance in progress. Please try again later.",
-  lastToggleTime: Date.now(),
+function defaultState(now = Date.now()): SystemState {
+  return {
+    version: 1,
+    revision: 0,
+    killSwitchEnabled: false,
+    maintenanceMessage: "Maintenance in progress. Please try again later.",
+    lastToggleTime: now,
+    expiresAt: null,
+  }
 }
 
-/**
- * Get the current system state from Redis.
- * If Redis is not configured, defaults are used (app is always active).
- */
-export async function getSystemState(): Promise<SystemState> {
-  if (!isRedisConfigured) {
-    return DEFAULT_STATE
+function parseState(data: unknown): SystemState | null {
+  let parsed: unknown = data
+  if (typeof data === "string") {
+    try { parsed = JSON.parse(data) } catch { return null }
   }
+  if (!parsed || typeof parsed !== "object") return null
+  const obj = parsed as Record<string, unknown>
 
+  // Backward-compatible read of the pre-M3 shape.
+  if (
+    typeof obj.killSwitchEnabled !== "boolean" ||
+    typeof obj.maintenanceMessage !== "string" ||
+    typeof obj.lastToggleTime !== "number"
+  ) return null
+
+  return {
+    version: 1,
+    revision: typeof obj.revision === "number" && Number.isSafeInteger(obj.revision) && obj.revision >= 0 ? obj.revision : 0,
+    killSwitchEnabled: obj.killSwitchEnabled,
+    maintenanceMessage: obj.maintenanceMessage,
+    lastToggleTime: obj.lastToggleTime,
+    toggledBy: typeof obj.toggledBy === "string" ? obj.toggledBy : undefined,
+    expiresAt: typeof obj.expiresAt === "number" ? obj.expiresAt : null,
+  }
+}
+
+export async function readSystemState(): Promise<SystemStateRead> {
+  if (!isRedisConfigured) return { ok: false, reason: "redis_unavailable" }
   try {
     const data = await redis.get(SYSTEM_STATE_KEY)
-    if (!data) return DEFAULT_STATE
-    
-    // Parse Redis response (could be string or object)
-    let parsed: unknown
-    if (typeof data === 'string') {
-      parsed = JSON.parse(data)
-    } else {
-      parsed = data
-    }
-    
-    // Validate as SystemState
-    if (typeof parsed !== 'object' || parsed === null) return DEFAULT_STATE
-    const obj = parsed as Record<string, unknown>
-    
-    if (typeof obj.killSwitchEnabled === 'boolean' &&
-        typeof obj.maintenanceMessage === 'string' &&
-        typeof obj.lastToggleTime === 'number') {
-      return {
-        killSwitchEnabled: obj.killSwitchEnabled,
-        maintenanceMessage: obj.maintenanceMessage,
-        lastToggleTime: obj.lastToggleTime,
-        toggledBy: typeof obj.toggledBy === 'string' ? obj.toggledBy : undefined,
-      }
-    }
-    
-    return DEFAULT_STATE
+    if (data === null || data === undefined) return { ok: true, state: defaultState(), source: "default" }
+    const state = parseState(data)
+    return state ? { ok: true, state, source: "redis" } : { ok: false, reason: "invalid_state" }
   } catch (error) {
     console.error("[System Control] Failed to fetch system state:", error)
-    return DEFAULT_STATE
+    return { ok: false, reason: "redis_unavailable" }
   }
 }
 
-/**
- * Check if the app is currently active (kill switch is OFF).
- */
+export async function getSystemState(): Promise<SystemState> {
+  const result = await readSystemState()
+  if (!result.ok) throw new Error(`System control state unavailable: ${result.reason}`)
+  return result.state
+}
+
+async function nextRevision(): Promise<number> {
+  const current = await readSystemState()
+  if (!current.ok) throw new Error(`System control state unavailable: ${current.reason}`)
+  return current.state.revision + 1
+}
+
 export async function isAppActive(): Promise<boolean> {
-  const state = await getSystemState()
-  return !state.killSwitchEnabled
+  const result = await readSystemState()
+  // M3 does not wire this into payment/app availability. Unknown control state is
+  // therefore reported as inactive to control callers only, never as financial truth.
+  return result.ok ? !result.state.killSwitchEnabled : false
 }
 
-/**
- * Toggle the kill switch ON (disable app).
- */
-export async function enableKillSwitch(message?: string): Promise<SystemState> {
-  if (!isRedisConfigured) {
-    console.error("[System Control] Redis not configured, cannot enable kill switch")
-    return DEFAULT_STATE
-  }
-
+export async function enableKillSwitch(message?: string, toggledBy?: string): Promise<SystemState> {
+  if (!isRedisConfigured) throw new Error("System control Redis is not configured")
+  const now = Date.now()
   const newState: SystemState = {
+    version: 1,
+    revision: await nextRevision(),
     killSwitchEnabled: true,
-    maintenanceMessage: message || DEFAULT_STATE.maintenanceMessage,
-    lastToggleTime: Date.now(),
+    maintenanceMessage: message || defaultState(now).maintenanceMessage,
+    lastToggleTime: now,
+    toggledBy,
+    expiresAt: now + KILL_SWITCH_TTL_SECONDS * 1000,
   }
-
-  try {
-    await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState), { ex: 86400 }) // 24 hour expiry for safety
-    console.log("[System Control] Kill switch ENABLED")
-    return newState
-  } catch (error) {
-    console.error("[System Control] Failed to enable kill switch:", error)
-    throw error
-  }
+  await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState), { ex: KILL_SWITCH_TTL_SECONDS })
+  console.log("[System Control] Kill switch ENABLED")
+  return newState
 }
 
-/**
- * Toggle the kill switch OFF (enable app).
- */
-export async function disableKillSwitch(): Promise<SystemState> {
-  if (!isRedisConfigured) {
-    console.error("[System Control] Redis not configured, cannot disable kill switch")
-    return DEFAULT_STATE
-  }
-
+export async function disableKillSwitch(toggledBy?: string): Promise<SystemState> {
+  if (!isRedisConfigured) throw new Error("System control Redis is not configured")
   const newState: SystemState = {
+    version: 1,
+    revision: await nextRevision(),
     killSwitchEnabled: false,
     maintenanceMessage: "",
     lastToggleTime: Date.now(),
+    toggledBy,
+    expiresAt: null,
   }
-
-  try {
-    await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState))
-    console.log("[System Control] Kill switch DISABLED")
-    return newState
-  } catch (error) {
-    console.error("[System Control] Failed to disable kill switch:", error)
-    throw error
-  }
+  await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState))
+  console.log("[System Control] Kill switch DISABLED")
+  return newState
 }
 
-/**
- * Force reset the system state (emergency only).
- */
-export async function resetSystemState(): Promise<SystemState> {
-  if (!isRedisConfigured) {
-    return DEFAULT_STATE
+export async function resetSystemState(toggledBy?: string): Promise<SystemState> {
+  if (!isRedisConfigured) throw new Error("System control Redis is not configured")
+  const newState: SystemState = {
+    ...defaultState(),
+    revision: await nextRevision(),
+    toggledBy,
   }
-
-  try {
-    await redis.del(SYSTEM_STATE_KEY)
-    console.log("[System Control] System state RESET to default")
-    return DEFAULT_STATE
-  } catch (error) {
-    console.error("[System Control] Failed to reset system state:", error)
-    throw error
-  }
+  await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState))
+  console.log("[System Control] Control state RESET to default")
+  return newState
 }

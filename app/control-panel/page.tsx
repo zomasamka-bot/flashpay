@@ -44,7 +44,9 @@ function ControlPanelContent() {
   const fetchSystemState = useCallback(async () => {
     try {
       setError(null)
-      const response = await fetch(`${config.appUrl}/api/control/system`)
+      const response = await fetch(`${config.appUrl}/api/control/system`, {
+        headers: { Authorization: `Bearer ${uidData.accessToken || ""}` },
+      })
       if (!response.ok) throw new Error("Failed to fetch system state")
       const data: SystemState = await response.json()
       setSystemState(data)
@@ -53,7 +55,7 @@ function ControlPanelContent() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [uidData.accessToken])
 
   // Load initial state
   useEffect(() => {

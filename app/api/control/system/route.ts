@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSystemState, enableKillSwitch, disableKillSwitch, resetSystemState } from "@/lib/system-control"
+import { readSystemState, enableKillSwitch, disableKillSwitch, resetSystemState } from "@/lib/system-control"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
 
 /**
@@ -16,26 +16,27 @@ import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
  * Returns default "active" state if Redis is not available.
  */
 export async function GET(request: NextRequest) {
-  try {
-    // Verify owner access - for GET we allow public access to read state
-    // but log the access attempt
-    const state = await getSystemState()
-    return NextResponse.json(state, { 
-      status: 200,
-      headers: { "Cache-Control": "no-cache, no-store, must-revalidate" }
-    })
-  } catch (error) {
-    console.error("[API] Failed to fetch system state:", error)
-    // Return default state (app active) on error - fail open
+  const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
+  if (!auth.ok) {
+    const error =
+      auth.status === 500 ? "Owner verification not configured" :
+      auth.status === 503 ? "Owner verification unavailable" :
+      "Unauthorized"
+    return NextResponse.json({ error }, { status: auth.status })
+  }
+
+  const result = await readSystemState()
+  if (!result.ok) {
     return NextResponse.json(
-      {
-        killSwitchEnabled: false,
-        maintenanceMessage: "",
-        lastToggleTime: Date.now(),
-      },
-      { status: 200 }
+      { error: "System control state unavailable", reason: result.reason },
+      { status: 503, headers: { "Cache-Control": "no-cache, no-store, must-revalidate" } }
     )
   }
+
+  return NextResponse.json(
+    { ...result.state, stateSource: result.source },
+    { status: 200, headers: { "Cache-Control": "no-cache, no-store, must-revalidate" } }
+  )
 }
 
 /**
@@ -67,13 +68,13 @@ export async function POST(request: NextRequest) {
     let newState
     switch (action) {
       case "enable":
-        newState = await enableKillSwitch(message)
+        newState = await enableKillSwitch(message, auth.uid)
         break
       case "disable":
-        newState = await disableKillSwitch()
+        newState = await disableKillSwitch(auth.uid)
         break
       case "reset":
-        newState = await resetSystemState()
+        newState = await resetSystemState(auth.uid)
         break
     }
 
