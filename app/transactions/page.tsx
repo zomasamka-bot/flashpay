@@ -41,13 +41,13 @@ function formatTransactionDate(createdAt: string): string {
   return dateFormatter.format(date)
 }
 
-function mapSettlementStatus(status: SettlementStatus): string {
-  if (status === "settled_to_merchant") return "Settled"
-  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "Processing"
-  if (status === "failed" || status === "settlement_failed") return "Failed"
-  if (status === "cancelled") return "Cancelled"
-  if (status === "completed") return "Legacy Completed"
-  return "Other"
+function mapSettlementStatus(status: SettlementStatus, t: (key: string) => string): string {
+  if (status === "settled_to_merchant") return t("transactions.settled")
+  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return t("transactions.processing")
+  if (status === "failed" || status === "settlement_failed") return t("transactions.failed")
+  if (status === "cancelled") return t("transactions.cancelled")
+  if (status === "completed") return t("transactions.legacy")
+  return t("transactions.other")
 }
 
 function getSettlementCategory(status: SettlementStatus): "settled" | "processing" | "failed" | "cancelled" | "legacy" | "other" {
@@ -156,7 +156,7 @@ export default function TransactionsPage() {
       escapeCsvCell(txn.reference),
       escapeCsvCell(txn.amount.toString()),
       escapeCsvCell(formatTransactionDate(txn.createdAt)),
-      escapeCsvCell(mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status)),
+      escapeCsvCell(mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status, t)),
       escapeCsvCell(txn.description),
     ])
 
@@ -243,11 +243,11 @@ export default function TransactionsPage() {
               {(summary.completed_transactions > 0 || summary.total_completed_amount > 0) && (
                 <>
                   <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Legacy Completed Transactions:</span>
+                    <span className="text-muted-foreground">{t("transactions.legacyTransactions")}:</span>
                     <span className="font-semibold">{summary.completed_transactions}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Legacy Completed Amount:</span>
+                    <span className="text-muted-foreground">{t("transactions.legacyAmount")}:</span>
                     <span className="font-semibold">{summary.total_completed_amount.toFixed(2)}π</span>
                   </div>
                 </>
@@ -269,7 +269,7 @@ export default function TransactionsPage() {
           </div>
           <div className="flex gap-2">
             <Input
-              placeholder="Filter by amount (π)"
+              placeholder={t("transactions.filterAmount")}
               type="number"
               value={filterAmount}
               onChange={(e) => setFilterAmount(e.target.value)}
@@ -277,7 +277,7 @@ export default function TransactionsPage() {
             />
             <Button onClick={handleExport} variant="outline" size="sm">
               <Download className="h-4 w-4 mr-2" />
-              Export CSV
+              {t("transactions.export")}
             </Button>
           </div>
           <div className="flex gap-2 flex-wrap">
@@ -337,7 +337,7 @@ export default function TransactionsPage() {
                           }
                           className="text-xs"
                         >
-                          {mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status)}
+                          {mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status, t)}
                         </Badge>
                       </div>
                     </div>
@@ -351,7 +351,7 @@ export default function TransactionsPage() {
                         }
                         className="text-xs"
                       >
-                        {mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status)}
+                        {mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status, t)}
                       </Badge>
                     </div>
                     <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />

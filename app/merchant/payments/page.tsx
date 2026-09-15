@@ -246,12 +246,12 @@ export default function MerchantPaymentsPage() {
 
   const mapStatusLabel = (status: string): string => {
     const lowerStatus = status.toLowerCase()
-    if (lowerStatus === "settled_to_merchant") return "Settled"
-    if (lowerStatus === "pending" || lowerStatus === "paid_to_app" || lowerStatus === "settlement_pending") return "Processing"
-    if (lowerStatus === "failed" || lowerStatus === "settlement_failed") return "Failed"
-    if (lowerStatus === "cancelled") return "Cancelled"
-    if (lowerStatus === "completed") return "Legacy Completed"
-    return "Other"
+    if (lowerStatus === "settled_to_merchant") return t("dashboard.status.settled")
+    if (lowerStatus === "pending" || lowerStatus === "paid_to_app" || lowerStatus === "settlement_pending") return t("dashboard.status.processing")
+    if (lowerStatus === "failed" || lowerStatus === "settlement_failed") return t("dashboard.status.failed")
+    if (lowerStatus === "cancelled") return t("dashboard.status.cancelled")
+    if (lowerStatus === "completed") return t("dashboard.status.legacy")
+    return t("dashboard.status.other")
   }
 
   const formatDate = (dateStr: string) => {
@@ -392,28 +392,28 @@ export default function MerchantPaymentsPage() {
               <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-900/10 border-blue-200 dark:border-blue-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-blue-700 dark:text-blue-400">{summary?.total_requests ?? "—"}</div>
-                  <p className="text-sm text-blue-600 dark:text-blue-300 mt-1">{t("dashboard.totalRequests")}</p>
+                  <p className="text-sm break-words leading-tight text-blue-600 dark:text-blue-300 mt-1">{t("dashboard.totalRequests")}</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-900/10 border-green-200 dark:border-green-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-green-700 dark:text-green-400">{summary?.settled_transactions ?? "—"}</div>
-                  <p className="text-sm text-green-600 dark:text-green-300 mt-1">{t("dashboard.settledTransactions")}</p>
+                  <p className="text-sm break-words leading-tight text-green-600 dark:text-green-300 mt-1">{t("dashboard.settledTransactions")}</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-yellow-50 to-yellow-100 dark:from-yellow-900/20 dark:to-yellow-900/10 border-yellow-200 dark:border-yellow-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-yellow-700 dark:text-yellow-400">{summary?.pending_transactions ?? "—"}</div>
-                  <p className="text-sm text-yellow-600 dark:text-yellow-300 mt-1">{t("dashboard.pendingTransactions")}</p>
+                  <p className="text-sm break-words leading-tight text-yellow-600 dark:text-yellow-300 mt-1">{t("dashboard.pendingTransactions")}</p>
                 </CardContent>
               </Card>
 
               <Card className="bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-900/10 border-indigo-200 dark:border-indigo-800">
                 <CardContent className="pt-6">
                   <div className="text-3xl font-bold text-indigo-700 dark:text-indigo-400">{summary ? `${summary.total_settled_amount.toFixed(2)}π` : "—"}</div>
-                  <p className="text-sm text-indigo-600 dark:text-indigo-300 mt-1">{t("dashboard.totalSettledAmount")}</p>
+                  <p className="text-sm break-words leading-tight text-indigo-600 dark:text-indigo-300 mt-1">{t("dashboard.totalSettledAmount")}</p>
                 </CardContent>
               </Card>
             </div>
@@ -437,70 +437,70 @@ export default function MerchantPaymentsPage() {
                 <Card className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-900/10 border-purple-200 dark:border-purple-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-purple-700 dark:text-purple-400">{summary ? `${summary.total_payment_volume.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-purple-600 dark:text-purple-300 mt-1">{t("dashboard.totalVolume")}</p>
+                    <p className="text-sm break-words leading-tight text-purple-600 dark:text-purple-300 mt-1">{t("dashboard.totalVolume")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-900/10 border-orange-200 dark:border-orange-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-orange-700 dark:text-orange-400">{summary ? `${summary.total_awaiting_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">{t("dashboard.totalAwaiting")}</p>
+                    <p className="text-sm break-words leading-tight text-orange-600 dark:text-orange-300 mt-1">{t("dashboard.totalAwaiting")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-900/10 border-red-200 dark:border-red-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-red-700 dark:text-red-400">{summary?.failed_transactions ?? "—"}</div>
-                    <p className="text-sm text-red-600 dark:text-red-300 mt-1">{t("dashboard.failedTransactions")}</p>
+                    <p className="text-sm break-words leading-tight text-red-600 dark:text-red-300 mt-1">{t("dashboard.failedTransactions")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-pink-50 to-pink-100 dark:from-pink-900/20 dark:to-pink-900/10 border-pink-200 dark:border-pink-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-pink-700 dark:text-pink-400">{summary ? `${summary.total_failed_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-pink-600 dark:text-pink-300 mt-1">{t("dashboard.totalFailed")}</p>
+                    <p className="text-sm break-words leading-tight text-pink-600 dark:text-pink-300 mt-1">{t("dashboard.totalFailed")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900/20 dark:to-slate-900/10 border-slate-200 dark:border-slate-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-slate-700 dark:text-slate-400">{summary?.cancelled_transactions ?? "—"}</div>
-                    <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">{t("dashboard.cancelledTransactions")}</p>
+                    <p className="text-sm break-words leading-tight text-slate-600 dark:text-slate-300 mt-1">{t("dashboard.cancelledTransactions")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-cyan-50 to-cyan-100 dark:from-cyan-900/20 dark:to-cyan-900/10 border-cyan-200 dark:border-cyan-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-cyan-700 dark:text-cyan-400">{summary ? `${summary.total_cancelled_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-cyan-600 dark:text-cyan-300 mt-1">{t("dashboard.totalCancelled")}</p>
+                    <p className="text-sm break-words leading-tight text-cyan-600 dark:text-cyan-300 mt-1">{t("dashboard.totalCancelled")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900/20 dark:to-teal-900/10 border-teal-200 dark:border-teal-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-teal-700 dark:text-teal-400">{summary?.completed_transactions ?? "—"}</div>
-                    <p className="text-sm text-teal-600 dark:text-teal-300 mt-1">Completed Transactions</p>
+                    <p className="text-sm break-words leading-tight text-teal-600 dark:text-teal-300 mt-1">{t("dashboard.completedTransactions")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-lime-50 to-lime-100 dark:from-lime-900/20 dark:to-lime-900/10 border-lime-200 dark:border-lime-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-lime-700 dark:text-lime-400">{summary ? `${summary.total_completed_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-lime-600 dark:text-lime-300 mt-1">Total Completed Amount</p>
+                    <p className="text-sm break-words leading-tight text-lime-600 dark:text-lime-300 mt-1">{t("dashboard.totalCompleted")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-rose-50 to-rose-100 dark:from-rose-900/20 dark:to-rose-900/10 border-rose-200 dark:border-rose-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-rose-700 dark:text-rose-400">{summary?.other_transactions ?? "—"}</div>
-                    <p className="text-sm text-rose-600 dark:text-rose-300 mt-1">Other Transactions</p>
+                    <p className="text-sm break-words leading-tight text-rose-600 dark:text-rose-300 mt-1">{t("dashboard.otherTransactions")}</p>
                   </CardContent>
                 </Card>
 
                 <Card className="bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-900/20 dark:to-amber-900/10 border-amber-200 dark:border-amber-800">
                   <CardContent className="pt-6">
                     <div className="text-3xl font-bold text-amber-700 dark:text-amber-400">{summary ? `${summary.total_other_amount.toFixed(2)}π` : "—"}</div>
-                    <p className="text-sm text-amber-600 dark:text-amber-300 mt-1">Total Other Amount</p>
+                    <p className="text-sm break-words leading-tight text-amber-600 dark:text-amber-300 mt-1">{t("dashboard.totalOther")}</p>
                   </CardContent>
                 </Card>
               </div>
@@ -510,7 +510,7 @@ export default function MerchantPaymentsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Filter className="h-5 w-5" />
-              Filters
+              {t("dashboard.filters")}
             </CardTitle>
             <CardDescription>{t("dashboard.filtersDescription")}</CardDescription>
           </CardHeader>
@@ -518,7 +518,7 @@ export default function MerchantPaymentsPage() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div>
                 <label htmlFor="search-input" className="text-sm font-medium mb-2 block">
-                  Search
+                  {t("dashboard.search")}
                 </label>
                 <div className="relative">
                   <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
@@ -538,14 +538,14 @@ export default function MerchantPaymentsPage() {
                 </div>
                 {canOpenFlashPayId && (
                   <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={openFlashPayIdReceipt}>
-                    Open FlashPay receipt
+                    {t("dashboard.openReceipt")}
                   </Button>
                 )}
               </div>
 
               <div>
                 <label htmlFor="status-select" className="text-sm font-medium mb-2 block">
-                  Status
+                  {t("dashboard.status")}
                 </label>
                 <select
                   id="status-select"
@@ -558,20 +558,20 @@ export default function MerchantPaymentsPage() {
                   }}
                   className="px-4 py-2 border rounded-lg bg-background dark:bg-slate-950 border-input dark:border-slate-800 w-full"
                 >
-                  <option value="all">All Status</option>
-                  <option value="settled_to_merchant">Settled to Merchant</option>
-                  <option value="paid_to_app">Paid to App</option>
-                  <option value="settlement_pending">Settlement Pending</option>
-                  <option value="settlement_failed">Settlement Failed</option>
-                  <option value="failed">Failed</option>
-                  <option value="pending">Pending</option>
-                  <option value="cancelled">Cancelled</option>
+                  <option value="all">{t("dashboard.status.all")}</option>
+                  <option value="settled_to_merchant">{t("dashboard.status.settled")}</option>
+                  <option value="paid_to_app">{t("dashboard.status.paidToApp")}</option>
+                  <option value="settlement_pending">{t("dashboard.status.settlementPending")}</option>
+                  <option value="settlement_failed">{t("dashboard.status.settlementFailed")}</option>
+                  <option value="failed">{t("dashboard.status.failed")}</option>
+                  <option value="pending">{t("dashboard.status.pending")}</option>
+                  <option value="cancelled">{t("dashboard.status.cancelled")}</option>
                 </select>
               </div>
 
               <div>
                 <label htmlFor="date-from" className="text-sm font-medium mb-2 block">
-                  From Date
+                  {t("dashboard.fromDate")}
                 </label>
                 <div className="relative">
                   <div
@@ -595,7 +595,7 @@ export default function MerchantPaymentsPage() {
 
               <div>
                 <label htmlFor="date-to" className="text-sm font-medium mb-2 block">
-                  To Date
+                  {t("dashboard.toDate")}
                 </label>
                 <div className="relative">
                   <div
@@ -630,7 +630,7 @@ export default function MerchantPaymentsPage() {
                 }}
                 variant="outline"
               >
-                Reset Filters
+                {t("dashboard.reset")}
               </Button>
               <Button
                 onClick={exportToCSV}
@@ -641,7 +641,7 @@ export default function MerchantPaymentsPage() {
                 {exporting ? (
                   <>
                     <Spinner className="h-4 w-4" />
-                    Exporting...
+                    {t("dashboard.exporting")}
                   </>
                 ) : (
                   <>
@@ -694,7 +694,7 @@ export default function MerchantPaymentsPage() {
                           {mapStatusLabel(payment.status)}
                         </Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground mt-1">
+                      <p className="text-sm break-words leading-tight text-muted-foreground mt-1">
                         {payment.note || t("dashboard.noNote")}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
