@@ -10,6 +10,7 @@ import { DomainGuard } from "@/components/domain-guard"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { PiSDKLoader } from "@/components/pi-sdk-loader"
 import { Analytics } from "@vercel/analytics/next"
+import { I18nProvider } from "@/components/i18n-provider"
 
 // Database schema initialization moved to non-blocking background task
 // (Called in /app/api/pi/complete/route.ts when first payment completes)
@@ -34,7 +35,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" dir="ltr" suppressHydrationWarning>
       <head>
         <style>{`
 html {
@@ -46,12 +47,14 @@ html {
       </head>
       <body>
         <ErrorBoundary>
-          <PiSDKLoader>
-            <TestnetIndicator />
-            <DomainGuard>{children}</DomainGuard>
-            <MobileNav />
-            <Toaster />
-          </PiSDKLoader>
+          <I18nProvider>
+            <PiSDKLoader>
+              <TestnetIndicator />
+              <DomainGuard>{children}</DomainGuard>
+              <MobileNav />
+              <Toaster />
+            </PiSDKLoader>
+          </I18nProvider>
         </ErrorBoundary>
         <Analytics />
       </body>
