@@ -6,7 +6,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 const AUDIT_KEY = "flashpay:operations:audit:v1"
 const MAX_EVENTS = 500
 
-export type OperationalAuditAction = "control.enable" | "control.disable" | "control.reset"
+export type OperationalAuditAction = "control.enable" | "control.disable" | "control.reset" | "domain.enable" | "domain.disable"
 
 export interface OperationalAuditEvent {
   eventId: string
