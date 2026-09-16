@@ -68,7 +68,7 @@ function ControlPanelContent() {
     }
 
     const confirmation = action === "enable" ? "ACTIVATE" : action === "disable" ? "DEACTIVATE" : "RESTORE"
-    const typed = window.prompt(`High-impact owner control. Type ${confirmation} to continue.`)
+    const typed = window.prompt(document.documentElement.lang === "ar" ? `تحكم عالي التأثير للمالك. اكتب ${confirmation} للمتابعة.` : `High-impact owner control. Type ${confirmation} to continue.`)
     if (typed !== confirmation) return
 
     writeInFlightRef.current = true
