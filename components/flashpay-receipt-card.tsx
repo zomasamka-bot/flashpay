@@ -124,6 +124,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       .then(async (tools) => {
         const file = await tools.createReceiptPdfFile(receiptSnapshot, {
           direction,
+          locale,
           labels: {
             paymentReceipt: t("receipt.paymentReceipt"),
             refundReceipt: t("receipt.refundReceipt"),
