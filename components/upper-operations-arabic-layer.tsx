@@ -40,8 +40,40 @@ export function UpperOperationsArabicLayer(){
       applyingRef.current=true
       try{
         const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT); let node:Node|null
-        while((node=walker.nextNode())){const t=node as Text; const parent=t.parentElement; if(!parent||["SCRIPT","STYLE","CODE"].includes(parent.tagName))continue; if(!originals.has(t)) originals.set(t,t.nodeValue??""); const base=originals.get(t)??""; const next=locale==="ar"?translate(base):base; if(t.nodeValue!==next)t.nodeValue=next}
-        root.querySelectorAll("[placeholder],[aria-label],[title]").forEach(el=>{let saved=attrOriginals.get(el); if(!saved){saved={}; for(const a of ["placeholder","aria-label","title"]){const v=el.getAttribute(a);if(v)saved[a]=v} attrOriginals.set(el,saved)} for(const [a,v] of Object.entries(saved)){const next=locale==="ar"?translate(v):v;if(el.getAttribute(a)!==next)el.setAttribute(a,next)}})
+        while((node=walker.nextNode())){
+          const t=node as Text; const parent=t.parentElement
+          if(!parent||["SCRIPT","STYLE","CODE"].includes(parent.tagName))continue
+          const current=t.nodeValue??""
+          let base=originals.get(t)
+          if(base===undefined){base=current; originals.set(t,base)}
+          else {
+            const rendered=locale==="ar"?translate(base):base
+            // React may reuse the same Text node for async data. If its value no longer
+            // matches what this presentation layer rendered, the application owns the
+            // new value; promote it to the new canonical source instead of restoring
+            // the stale loading/placeholder text.
+            if(current!==rendered){base=current; originals.set(t,base)}
+          }
+          const next=locale==="ar"?translate(base):base
+          if(t.nodeValue!==next)t.nodeValue=next
+        }
+        root.querySelectorAll("[placeholder],[aria-label],[title]").forEach(el=>{
+          let saved=attrOriginals.get(el)
+          if(!saved){saved={}; attrOriginals.set(el,saved)}
+          for(const a of ["placeholder","aria-label","title"]){
+            const current=el.getAttribute(a)
+            if(current===null)continue
+            const previous=saved[a]
+            if(previous===undefined)saved[a]=current
+            else {
+              const rendered=locale==="ar"?translate(previous):previous
+              if(current!==rendered)saved[a]=current
+            }
+            const base=saved[a]
+            const next=locale==="ar"?translate(base):base
+            if(current!==next)el.setAttribute(a,next)
+          }
+        })
       } finally { applyingRef.current=false }
     }
     apply()
