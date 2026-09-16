@@ -8,15 +8,14 @@ import { Check, Copy, Download, Loader2, Share2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { useI18n } from "@/components/i18n-provider"
 
-const dateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
-  hourCycle: "h23", numberingSystem: "latn",
-})
-
-function formatDateTime(value: string): string {
+function formatDateTime(value: string, locale: string): string {
   const date = new Date(value)
   if (!Number.isFinite(date.getTime())) return "Unavailable"
-  const parts = Object.fromEntries(dateTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value]))
+  const formatter = new Intl.DateTimeFormat(locale, {
+    day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23", numberingSystem: "latn",
+  })
+  const parts = Object.fromEntries(formatter.formatToParts(date).map(({ type, value: part }) => [type, part]))
   return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
 }
 
@@ -397,7 +396,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
 
         <div className="grid grid-cols-2 gap-4">
           <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.type")}</p><p className="mt-1 font-medium">{receipt.transactionType === "refund" ? t("receipt.refund") : t("receipt.payment")}</p></div>
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.dateTime")}</p><p className="mt-1 font-medium" dir="ltr" lang="en">{formatDateTime(receipt.occurredAt)}</p></div>
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.dateTime")}</p><p className="mt-1 font-medium" dir="ltr" lang="en">{formatDateTime(receipt.occurredAt, locale)}</p></div>
         </div>
 
         {receipt.note && <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.note")}</p><p className="mt-1">{receipt.note}</p></div>}
