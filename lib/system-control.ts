@@ -78,9 +78,12 @@ export async function getSystemState(): Promise<SystemState> {
   return result.state
 }
 
-async function nextRevision(): Promise<number> {
+async function nextRevision(expectedRevision?: number): Promise<number> {
   const current = await readSystemState()
   if (!current.ok) throw new Error(`System control state unavailable: ${current.reason}`)
+  if (expectedRevision !== undefined && current.state.revision !== expectedRevision) {
+    throw new Error("Stale system control revision")
+  }
   return current.state.revision + 1
 }
 
@@ -91,12 +94,12 @@ export async function isAppActive(): Promise<boolean> {
   return result.ok ? !result.state.killSwitchEnabled : false
 }
 
-export async function enableKillSwitch(message?: string, toggledBy?: string): Promise<SystemState> {
+export async function enableKillSwitch(message?: string, toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
   const now = Date.now()
   const newState: SystemState = {
     version: 1,
-    revision: await nextRevision(),
+    revision: await nextRevision(expectedRevision),
     killSwitchEnabled: true,
     maintenanceMessage: message || defaultState(now).maintenanceMessage,
     lastToggleTime: now,
@@ -108,11 +111,11 @@ export async function enableKillSwitch(message?: string, toggledBy?: string): Pr
   return newState
 }
 
-export async function disableKillSwitch(toggledBy?: string): Promise<SystemState> {
+export async function disableKillSwitch(toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
   const newState: SystemState = {
     version: 1,
-    revision: await nextRevision(),
+    revision: await nextRevision(expectedRevision),
     killSwitchEnabled: false,
     maintenanceMessage: "",
     lastToggleTime: Date.now(),
@@ -124,11 +127,11 @@ export async function disableKillSwitch(toggledBy?: string): Promise<SystemState
   return newState
 }
 
-export async function resetSystemState(toggledBy?: string): Promise<SystemState> {
+export async function resetSystemState(toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
   const newState: SystemState = {
     ...defaultState(),
-    revision: await nextRevision(),
+    revision: await nextRevision(expectedRevision),
     toggledBy,
   }
   await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState))
