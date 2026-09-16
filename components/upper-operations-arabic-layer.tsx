@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { usePathname } from "next/navigation"
 import { useI18n } from "@/components/i18n-provider"
 
@@ -31,15 +31,28 @@ function translate(value:string){const trimmed=value.trim(); if(!trimmed)return 
 
 export function UpperOperationsArabicLayer(){
   const pathname=usePathname(); const {locale}=useI18n(); const scoped=SCOPES.some(p=>pathname===p||pathname.startsWith(`${p}/`))
+  const applyingRef=useRef(false)
   useEffect(()=>{
     if(!scoped)return
     const root=document.body
     const apply=()=>{
-      const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT); let node:Node|null
-      while((node=walker.nextNode())){const t=node as Text; const parent=t.parentElement; if(!parent||["SCRIPT","STYLE","CODE"].includes(parent.tagName))continue; if(!originals.has(t)) originals.set(t,t.nodeValue??""); const base=originals.get(t)??""; const next=locale==="ar"?translate(base):base; if(t.nodeValue!==next)t.nodeValue=next}
-      root.querySelectorAll("[placeholder],[aria-label],[title]").forEach(el=>{let saved=attrOriginals.get(el); if(!saved){saved={}; for(const a of ["placeholder","aria-label","title"]){const v=el.getAttribute(a);if(v)saved[a]=v} attrOriginals.set(el,saved)} for(const [a,v] of Object.entries(saved)){const next=locale==="ar"?translate(v):v;if(el.getAttribute(a)!==next)el.setAttribute(a,next)}})
+      if(applyingRef.current)return
+      applyingRef.current=true
+      try{
+        const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT); let node:Node|null
+        while((node=walker.nextNode())){const t=node as Text; const parent=t.parentElement; if(!parent||["SCRIPT","STYLE","CODE"].includes(parent.tagName))continue; if(!originals.has(t)) originals.set(t,t.nodeValue??""); const base=originals.get(t)??""; const next=locale==="ar"?translate(base):base; if(t.nodeValue!==next)t.nodeValue=next}
+        root.querySelectorAll("[placeholder],[aria-label],[title]").forEach(el=>{let saved=attrOriginals.get(el); if(!saved){saved={}; for(const a of ["placeholder","aria-label","title"]){const v=el.getAttribute(a);if(v)saved[a]=v} attrOriginals.set(el,saved)} for(const [a,v] of Object.entries(saved)){const next=locale==="ar"?translate(v):v;if(el.getAttribute(a)!==next)el.setAttribute(a,next)}})
+      } finally { applyingRef.current=false }
     }
-    apply(); const observer=new MutationObserver(apply); observer.observe(root,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["placeholder","aria-label","title"]}); return()=>observer.disconnect()
+    apply()
+    let queued=false
+    const observer=new MutationObserver(()=>{
+      if(applyingRef.current||queued)return
+      queued=true
+      queueMicrotask(()=>{queued=false;apply()})
+    })
+    observer.observe(root,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["placeholder","aria-label","title"]})
+    return()=>observer.disconnect()
   },[locale,scoped])
   return null
 }
