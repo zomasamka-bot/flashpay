@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ArrowRight, Settings, Stethoscope, Globe, BarChart3, ArrowLeft, AlertTriangle, RefreshCw, Loader2 } from "lucide-react"
+import { ArrowRight, Settings, Stethoscope, Globe, BarChart3, ArrowLeft, AlertTriangle, RefreshCw, Loader2, Activity } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { config } from "@/lib/config"
@@ -30,6 +30,8 @@ export default function OperationsPage() {
   const [financialHealthError, setFinancialHealthError] = useState(false)
   const [financialHealthLoading, setFinancialHealthLoading] = useState(false)
   const [accessDenied, setAccessDenied] = useState(false)
+  const [incident, setIncident] = useState<{ overall: "healthy" | "degraded" | "maintenance" | "unknown"; reason: string; asOf: string; control: { available: boolean; killSwitchEnabled?: boolean; revision?: number }; financial: { settlementOpen:number; settlementFailed:number; refundPending:number; manualReview:number; oldestOpenAt:string|null } | null; recovery: { active:number; ready:number; lastWakeAt:string|null; lastWakeAgeMs:number|null; wakeFresh:boolean|null } | null } | null>(null)
+  const [incidentLoading, setIncidentLoading] = useState(false)
 
   useEffect(() => {
     setMounted(true)
@@ -112,6 +114,20 @@ export default function OperationsPage() {
     }
   }, [uidData.status, uidData.uid, uidData.accessToken])
 
+  const loadIncidentHealth = async () => {
+    if (!uidData.accessToken) return
+    setIncidentLoading(true)
+    try {
+      const response = await fetch("/api/operations/incident-health", { headers: { Authorization: `Bearer ${uidData.accessToken}` }, cache: "no-store" })
+      const data = await response.json()
+      if (!response.ok || typeof data?.overall !== "string" || typeof data?.asOf !== "string") throw new Error("Incident health unavailable")
+      setIncident(data)
+    } catch (error) { console.error("[operations] incident health unavailable", error); setIncident({ overall: "unknown", reason: "Authoritative incident health is unavailable", asOf: new Date().toISOString(), control: { available: false }, financial: null, recovery: null }) }
+    finally { setIncidentLoading(false) }
+  }
+
+  useEffect(() => { if (uidData.status === "success" && uidData.uid === config.ownerUid && uidData.accessToken) void loadIncidentHealth() }, [uidData.status, uidData.uid, uidData.accessToken])
+
 
 
   if (!mounted) {
@@ -169,6 +185,30 @@ export default function OperationsPage() {
             </Button>
           </div>
         </div>
+
+        {/* M10: incident mode and observability. Read-only; never a financial authority. */}
+        <Card className={incident?.overall === "healthy" ? "border-green-500/50" : incident?.overall === "maintenance" ? "border-blue-500/50" : incident?.overall === "degraded" ? "border-amber-500/60" : "border-yellow-500/60"}>
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Activity className="h-5 w-5"/>System Health</span><span className="text-sm font-semibold uppercase">{incidentLoading ? "CHECKING" : incident?.overall ?? "UNKNOWN"}</span></CardTitle>
+            <CardDescription>{incident?.reason ?? "Reading authoritative operational evidence…"}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div><div className="text-muted-foreground">Settlement open</div><div className="text-xl font-bold">{incident?.financial?.settlementOpen ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">Failures</div><div className="text-xl font-bold">{incident?.financial?.settlementFailed ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">Refund pending</div><div className="text-xl font-bold">{incident?.financial?.refundPending ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">Manual review</div><div className="text-xl font-bold">{incident?.financial?.manualReview ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">Recovery active</div><div className="text-xl font-bold">{incident?.recovery?.active ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">Wallet ready</div><div className="text-xl font-bold">{incident?.recovery?.ready ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">Worker wake</div><div className="text-sm font-semibold">{incident?.recovery?.wakeFresh === true ? "Fresh" : incident?.recovery?.wakeFresh === false ? "Stale" : "Unknown"}</div></div>
+              <div><div className="text-muted-foreground">Control</div><div className="text-sm font-semibold">{incident?.control.available ? (incident.control.killSwitchEnabled ? "Maintenance" : "Online") : "Unknown"}</div></div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>{incident ? `as of ${new Date(incident.asOf).toLocaleString()}${incident.recovery?.lastWakeAt ? ` · last wake ${new Date(incident.recovery.lastWakeAt).toLocaleString()}` : ""}` : "Loading…"}</span>
+              <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => void loadIncidentHealth()} disabled={incidentLoading || !uidData.accessToken}>{incidentLoading ? <Loader2 className="h-3 w-3 animate-spin"/> : <RefreshCw className="h-3 w-3"/>} Refresh</Button>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Platform Statistics */}
         <Card>
