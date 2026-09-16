@@ -29,6 +29,7 @@ function ControlPanelContent() {
   const [success, setSuccess] = useState<string | null>(null)
   const [reason, setReason] = useState("")
   const writeInFlightRef = useRef(false)
+  const reasonRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => setMounted(true), [])
 
@@ -64,6 +65,10 @@ function ControlPanelContent() {
     const cleanReason = reason.trim()
     if (!cleanReason) {
       setError("Enter an operational reason before changing control state.")
+      requestAnimationFrame(() => {
+        reasonRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+        reasonRef.current?.focus({ preventScroll: true })
+      })
       return
     }
 
@@ -140,7 +145,7 @@ function ControlPanelContent() {
 
         <Card className="border-amber-500/50">
           <CardHeader><CardTitle className="flex items-center gap-2"><ShieldAlert className="h-5 w-5" />Change justification</CardTitle><CardDescription>Required for every control write and stored in the operational audit trail.</CardDescription></CardHeader>
-          <CardContent><label htmlFor="control-reason" className="sr-only">Operational change justification</label><textarea id="control-reason" aria-describedby="control-reason-count" value={reason} onChange={(e) => setReason(e.target.value.slice(0, 240))} disabled={isToggling} maxLength={240} rows={3} placeholder="Why is this operational change necessary?" className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none" /><div id="control-reason-count" className="text-right text-xs text-muted-foreground mt-1">{reason.length}/240</div></CardContent>
+          <CardContent><label htmlFor="control-reason" className="sr-only">Operational change justification</label><textarea ref={reasonRef} id="control-reason" aria-describedby="control-reason-count" value={reason} onChange={(e) => setReason(e.target.value.slice(0, 240))} disabled={isToggling} maxLength={240} rows={3} placeholder="Why is this operational change necessary?" className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none" /><div id="control-reason-count" className="text-right text-xs text-muted-foreground mt-1">{reason.length}/240</div></CardContent>
         </Card>
 
         <Card className="border-red-300 dark:border-red-900">
