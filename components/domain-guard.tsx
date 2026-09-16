@@ -3,33 +3,62 @@
 import type React from "react"
 
 import { usePathname, useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
-import { domainStore } from "@/lib/domains"
+import { useCallback, useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { AlertTriangle } from "lucide-react"
-import { ROUTES } from "@/lib/router"
+import { AlertTriangle, Loader2 } from "lucide-react"
 
-/**
- * Domain Guard Component
- * Checks if the current route is accessible based on domain status
- * Shows "Service Disabled" screen if domain is suspended
- */
+type Availability = { available: boolean; message: string }
+
+// Owner operational routes must remain reachable while maintenance is active,
+// otherwise the owner could not safely inspect or deactivate the control.
+function isOperationalRoute(pathname: string) {
+  return pathname === "/control-panel" || pathname === "/operations" || pathname.startsWith("/operations/") || pathname === "/diagnostics" || pathname === "/emergency"
+}
+
 export function DomainGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  const [canAccess, setCanAccess] = useState(false)
-  const [domain, setDomain] = useState<string>("")
+  const [availability, setAvailability] = useState<Availability | null>(null)
 
-  useEffect(() => {
-    // DOMAIN GUARD DISABLED - Allow all routes
-    // This app now runs on a single domain (flashpay-two.vercel.app)
-    // No need for multi-domain access control
-    console.log("[v0] Domain guard bypassed for route:", pathname)
-    setCanAccess(true)
+  const refreshAvailability = useCallback(async () => {
+    if (isOperationalRoute(pathname)) {
+      setAvailability({ available: true, message: "" })
+      return
+    }
+
+    setAvailability(null)
+    try {
+      const response = await fetch("/api/control/availability", { cache: "no-store" })
+      const data = await response.json().catch(() => null) as { available?: unknown; message?: unknown } | null
+      if (data && typeof data.available === "boolean") {
+        setAvailability({
+          available: data.available,
+          message: typeof data.message === "string" ? data.message : "",
+        })
+        return
+      }
+    } catch (error) {
+      console.error("[System Control] Availability check failed:", error)
+    }
+
+    // Unknown control state fails closed for the user-facing application.
+    setAvailability({ available: false, message: "Service temporarily unavailable. Please try again later." })
   }, [pathname])
 
-  if (!canAccess) {
+  useEffect(() => {
+    void refreshAvailability()
+  }, [refreshAvailability])
+
+  if (availability === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" aria-live="polite">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-label="Checking service availability" />
+      </div>
+    )
+  }
+
+  if (!availability.available) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
@@ -39,19 +68,19 @@ export function DomainGuard({ children }: { children: React.ReactNode }) {
                 <AlertTriangle className="h-8 w-8 text-muted-foreground" />
               </div>
             </div>
-            <CardTitle className="text-2xl">Service Disabled</CardTitle>
-            <CardDescription className="text-base">The {domain} domain is currently suspended</CardDescription>
+            <CardTitle className="text-2xl">Service Temporarily Unavailable</CardTitle>
+            <CardDescription className="text-base">FlashPay is currently in maintenance mode.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-center text-muted-foreground">
-              This service has been disabled by the system administrator. Please contact support or try again later.
+              {availability.message || "Maintenance in progress. Please try again later."}
             </p>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1 bg-transparent" onClick={() => router.back()}>
                 Go Back
               </Button>
-              <Button className="flex-1" onClick={() => router.push(ROUTES.HOME)}>
-                Go Home
+              <Button className="flex-1" onClick={() => void refreshAvailability()}>
+                Check Again
               </Button>
             </div>
           </CardContent>

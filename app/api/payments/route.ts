@@ -7,6 +7,7 @@ export const runtime = "nodejs"
 import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/redis"
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
+import { readSystemState } from "@/lib/system-control"
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +39,15 @@ export async function OPTIONS() {
 export async function POST(request: NextRequest) {
   const paymentTimingStartedAt = Date.now()
   try {
+    // M9: kill switch blocks creation of NEW financial flows only.
+    // Existing payment completion/recovery routes remain available so funds are never stranded.
+    const control = await readSystemState()
+    if (!control.ok || control.state.killSwitchEnabled) {
+      return NextResponse.json(
+        { error: "Service temporarily unavailable", code: "SYSTEM_MAINTENANCE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
     console.log("[API] ========================================")
     console.log("[API] PAYMENT CREATION REQUEST RECEIVED")
     const body = await request.json()
