@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic"
 
 type Verdict = "Final" | "Recovering" | "Manual Review" | "Conflict" | "Unknown"
 const ACTIVE_KEY = "flashpay:recovery:active-payments:v1"
+const DISMISSED_KEY = "flashpay:operations:review-dismissed:v1"
 
 function validPaymentId(value: string | null): value is string {
   return typeof value === "string" && value.length >= 8 && value.length <= 128 && value === value.trim() && /^[A-Za-z0-9_-]+$/.test(value)
@@ -76,7 +77,8 @@ export async function GET(request: NextRequest) {
     }
     const ids = (await redis.smembers(ACTIVE_KEY)).filter((id): id is string => validPaymentId(id)).slice(0, 250)
     const reviews = (await Promise.all(ids.map(async id => { try { const p = await readPayment(id); return p ? await buildReview(p) : null } catch { return null } }))).filter((r): r is NonNullable<typeof r> => Boolean(r))
-    const visible = reviews.filter(r => r.verdict !== "Final" || r.refund.state === "present").sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    const dismissed = new Set((await redis.smembers(DISMISSED_KEY)).filter((id): id is string => validPaymentId(id)))
+    const visible = reviews.filter(r => !dismissed.has(r.paymentId) && (r.verdict !== "Final" || r.refund.state === "present")).sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
     return NextResponse.json({ available: true, asOf: new Date().toISOString(), items: visible, counts: { total: visible.length, recovering: visible.filter(x=>x.verdict==="Recovering").length, manualReview: visible.filter(x=>x.verdict==="Manual Review").length, conflicts: visible.filter(x=>x.verdict==="Conflict").length, unknown: visible.filter(x=>x.verdict==="Unknown").length, refunds: visible.filter(x=>x.refund.state==="present").length }, note: ids.length >= 250 ? "Showing the first 250 active recovery records." : null }, { headers: { "Cache-Control": "no-store" } })
   } catch { return NextResponse.json({ error: "Operational review unavailable", available: false }, { status: 503 }) }
 }
@@ -88,12 +90,18 @@ export async function POST(request: NextRequest) {
   if (!isRedisConfigured) return NextResponse.json({ error: "Canonical Redis unavailable" }, { status: 503 })
   try {
     const body = await request.json() as { action?: unknown; paymentId?: unknown }
-    if (body.action !== "prune_terminal" || typeof body.paymentId !== "string" || !validPaymentId(body.paymentId)) {
+    if ((body.action !== "prune_terminal" && body.action !== "dismiss_reviewed") || typeof body.paymentId !== "string" || !validPaymentId(body.paymentId)) {
       return NextResponse.json({ error: "Invalid operator action" }, { status: 400 })
     }
     const payment = await readPayment(body.paymentId)
     if (!payment) return NextResponse.json({ error: "Canonical payment not found" }, { status: 404 })
     const refund = await findRefundCheckpointByPaymentId(payment.id)
+    if (body.action === "dismiss_reviewed") {
+      const requestId = request.headers.get("x-vercel-id") || crypto.randomUUID()
+      await redis.sadd(DISMISSED_KEY, payment.id)
+      await appendOperationalQueueAuditEvent({ actorUid: auth.uid, requestId, paymentId: payment.id, action: "queue.dismiss_reviewed", reason: "Owner dismissed a reviewed payment from the Operations console only; recovery indexes and financial evidence were not changed" })
+      return NextResponse.json({ success: true, paymentId: payment.id, dismissed: true, requestId }, { headers: { "Cache-Control": "no-store" } })
+    }
     const safeTerminal = (payment.status === "cancelled" || payment.status === "failed") &&
       !payment.paidAt && !payment.u2aTxid && !payment.a2uPaymentId && !payment.a2uTxid && !payment.a2uPreparedTxHash &&
       payment.horizonSuccessFlag !== true && payment.piCompleted !== true && payment.dbRecorded !== true &&
