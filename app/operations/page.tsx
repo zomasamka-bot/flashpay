@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ArrowRight, Settings, Stethoscope, Globe, BarChart3, ArrowLeft, AlertTriangle, RefreshCw, Loader2, Activity } from "lucide-react"
+import { ArrowRight, Settings, Stethoscope, Globe, BarChart3, AlertTriangle, RefreshCw, Loader2, Activity } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { config } from "@/lib/config"
@@ -165,25 +165,11 @@ export default function OperationsPage() {
   }
 
   return (
-    <div className="min-h-screen pb-20 pt-4">
+    <div className="min-h-screen pb-6 pt-4">
       <div className="max-w-4xl mx-auto px-4 space-y-6">
-        {/* Header */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold">Operations Console</h1>
-              <p className="text-sm text-muted-foreground mt-1">Platform management and monitoring</p>
-            </div>
-            <Button
-              onClick={() => router.push("/profile")}
-              variant="outline"
-              size="sm"
-              className="gap-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back to Profile
-            </Button>
-          </div>
+        <div className="mb-2">
+          <h1 className="text-3xl font-bold">Operations Console</h1>
+          <p className="text-sm text-muted-foreground mt-1">Platform management and monitoring</p>
         </div>
 
         {/* M10: incident mode and observability. Read-only; never a financial authority. */}

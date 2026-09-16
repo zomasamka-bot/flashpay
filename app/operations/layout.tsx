@@ -12,6 +12,7 @@ import { config } from "@/lib/config"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useRouter } from "next/navigation"
+import { OwnerOperationsHeader } from "@/components/owner-operations-header"
 
 export default function OperationsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -24,7 +25,7 @@ export default function OperationsLayout({ children }: { children: React.ReactNo
 
   // Owner verified - render console
   if (mounted && uidData.status === "success" && uidData.uid === config.ownerUid) {
-    return children
+    return <><OwnerOperationsHeader /><div className="pb-[max(1rem,env(safe-area-inset-bottom))]">{children}</div></>
   }
 
   // Explicitly denied - not the owner

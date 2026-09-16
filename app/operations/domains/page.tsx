@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Globe, Lock, Unlock, ExternalLink } from "lucide-react"
+import { Globe, Lock, Unlock, ExternalLink } from "lucide-react"
 import { useDomains } from "@/lib/domains"
 
 export default function DomainsPage() {
@@ -29,25 +29,11 @@ export default function DomainsPage() {
   const integrationDomains = domains.filter((d) => !d.isPrimary)
 
   return (
-    <div className="min-h-screen pb-20 pt-4">
+    <div className="min-h-screen pb-6 pt-4">
       <div className="max-w-4xl mx-auto px-4 space-y-6">
-        {/* Header */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold">Domain Management</h1>
-              <p className="text-sm text-muted-foreground mt-1">Configure integration domains and access controls</p>
-            </div>
-            <Button
-              onClick={() => router.push("/operations")}
-              variant="outline"
-              size="sm"
-              className="gap-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </Button>
-          </div>
+        <div className="mb-2">
+          <h1 className="text-3xl font-bold">Domain Management</h1>
+          <p className="text-sm text-muted-foreground mt-1">Configure integration domains and access controls</p>
         </div>
 
         {/* Master Lock Status */}

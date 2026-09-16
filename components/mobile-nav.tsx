@@ -18,7 +18,9 @@ export function MobileNav() {
     { href: ROUTES.PROFILE, icon: User, label: t("nav.profile", "Profile") },
   ]
 
-  if (pathname.startsWith("/pay")) {
+  const ownerOperationalRoute = pathname === "/control-panel" || pathname === "/diagnostics" || pathname === "/emergency" || pathname === "/operations" || pathname.startsWith("/operations/")
+
+  if (pathname.startsWith("/pay") || ownerOperationalRoute) {
     return null
   }
 

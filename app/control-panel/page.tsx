@@ -5,16 +5,16 @@
 
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { config } from "@/lib/config"
 import type { SystemState } from "@/lib/system-control"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { BackButton } from "@/components/back-button"
 import { AlertTriangle, Power, RefreshCw, CheckCircle2, ShieldAlert } from "lucide-react"
 import { useOwnerUid } from "@/lib/use-owner-uid"
+import { OwnerOperationsHeader } from "@/components/owner-operations-header"
 
 type ControlAction = "enable" | "disable" | "reset"
 
@@ -28,6 +28,7 @@ function ControlPanelContent() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [reason, setReason] = useState("")
+  const writeInFlightRef = useRef(false)
 
   useEffect(() => setMounted(true), [])
 
@@ -59,7 +60,7 @@ function ControlPanelContent() {
   useEffect(() => { void fetchSystemState() }, [fetchSystemState])
 
   const executeControl = useCallback(async (action: ControlAction) => {
-    if (!systemState || !uidData.accessToken) return
+    if (writeInFlightRef.current || !systemState || !uidData.accessToken) return
     const cleanReason = reason.trim()
     if (!cleanReason) {
       setError("Enter an operational reason before changing control state.")
@@ -70,6 +71,7 @@ function ControlPanelContent() {
     const typed = window.prompt(`High-impact owner control. Type ${confirmation} to continue.`)
     if (typed !== confirmation) return
 
+    writeInFlightRef.current = true
     setIsToggling(true)
     setError(null)
     setSuccess(null)
@@ -98,9 +100,13 @@ function ControlPanelContent() {
     } catch (err) {
       setError((err as Error)?.message || "Control change failed")
     } finally {
+      // A control write can succeed while audit persistence becomes uncertain.
+      // Always re-read canonical state before allowing another destructive action.
+      await fetchSystemState()
+      writeInFlightRef.current = false
       setIsToggling(false)
     }
-  }, [reason, systemState, uidData.accessToken])
+  }, [reason, systemState, uidData.accessToken, fetchSystemState])
 
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
@@ -109,12 +115,16 @@ function ControlPanelContent() {
   }
 
   return (
-    <main className="min-h-screen bg-background p-4 pb-28">
+    <>
+    <OwnerOperationsHeader />
+    <main className="min-h-screen bg-background p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <div className="max-w-2xl mx-auto space-y-6">
-        <div className="flex items-center justify-between gap-3"><div><h1 className="text-3xl font-bold">Control Panel</h1><p className="text-xs text-muted-foreground mt-1">Owner control plane · operational authority only</p></div><BackButton /></div>
+        <div><h1 className="text-3xl font-bold">Control Panel</h1><p className="text-xs text-muted-foreground mt-1">Owner control plane · operational authority only</p></div>
 
-        {error && <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{error}</AlertDescription></Alert>}
-        {success && <Alert className="border-green-500 bg-green-50 dark:bg-green-950"><CheckCircle2 className="h-4 w-4 text-green-600" /><AlertDescription>{success}</AlertDescription></Alert>}
+        <div aria-live="polite" aria-atomic="true">
+          {error && <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{error}</AlertDescription></Alert>}
+          {success && <Alert className="border-green-500 bg-green-50 dark:bg-green-950"><CheckCircle2 className="h-4 w-4 text-green-600" /><AlertDescription>{success}</AlertDescription></Alert>}
+        </div>
 
         <Card>
           <CardHeader><CardTitle>Authoritative Control State</CardTitle><CardDescription>Server-verified owner read · Redis-backed state</CardDescription></CardHeader>
@@ -130,7 +140,7 @@ function ControlPanelContent() {
 
         <Card className="border-amber-500/50">
           <CardHeader><CardTitle className="flex items-center gap-2"><ShieldAlert className="h-5 w-5" />Change justification</CardTitle><CardDescription>Required for every control write and stored in the operational audit trail.</CardDescription></CardHeader>
-          <CardContent><textarea value={reason} onChange={(e) => setReason(e.target.value.slice(0, 240))} disabled={isToggling} maxLength={240} rows={3} placeholder="Why is this operational change necessary?" className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none" /><div className="text-right text-xs text-muted-foreground mt-1">{reason.length}/240</div></CardContent>
+          <CardContent><label htmlFor="control-reason" className="sr-only">Operational change justification</label><textarea id="control-reason" aria-describedby="control-reason-count" value={reason} onChange={(e) => setReason(e.target.value.slice(0, 240))} disabled={isToggling} maxLength={240} rows={3} placeholder="Why is this operational change necessary?" className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none" /><div id="control-reason-count" className="text-right text-xs text-muted-foreground mt-1">{reason.length}/240</div></CardContent>
         </Card>
 
         <Card className="border-red-300 dark:border-red-900">
@@ -152,6 +162,7 @@ function ControlPanelContent() {
         <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>
       </div>
     </main>
+    </>
   )
 }
 
