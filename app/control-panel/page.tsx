@@ -156,7 +156,7 @@ function ControlPanelContent() {
 
         <Card>
           <CardHeader><CardTitle>Restore Control Defaults</CardTitle><CardDescription>Restores only the operational control-state record. It does not reset FlashPay, payments, financial records, recovery, or user data.</CardDescription></CardHeader>
-          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>This is deliberately not called “System Reset”: its authority is limited to the control-state record.</AlertDescription></Alert><Button onClick={() => void executeControl("reset")} disabled={isToggling || !systemState || !reason.trim()} variant="outline" size="lg" className="w-full">{isToggling ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}Restore Control Defaults</Button></CardContent>
+          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>This is deliberately not called “System Reset”: its authority is limited to the control-state record.</AlertDescription></Alert><p className="text-xs text-muted-foreground">This control remains available whenever the authoritative state is readable. A justification and RESTORE confirmation are still required before any write.</p><Button onClick={() => void executeControl("reset")} disabled={isToggling || !systemState} variant="outline" size="lg" className="w-full">{isToggling ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}Restore Control Defaults</Button></CardContent>
         </Card>
 
         <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>
