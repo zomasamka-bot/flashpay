@@ -78,13 +78,42 @@ export async function getSystemState(): Promise<SystemState> {
   return result.state
 }
 
-async function nextRevision(expectedRevision?: number): Promise<number> {
-  const current = await readSystemState()
-  if (!current.ok) throw new Error(`System control state unavailable: ${current.reason}`)
-  if (expectedRevision !== undefined && current.state.revision !== expectedRevision) {
-    throw new Error("Stale system control revision")
+export class StaleSystemControlRevisionError extends Error {
+  constructor() {
+    super("Stale system control revision")
+    this.name = "StaleSystemControlRevisionError"
   }
-  return current.state.revision + 1
+}
+
+const CAS_SYSTEM_STATE_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+local currentRevision = 0
+if raw then
+  local ok, decoded = pcall(cjson.decode, raw)
+  if not ok or type(decoded) ~= 'table' then return -2 end
+  local revision = decoded['revision']
+  if revision ~= nil then
+    if type(revision) ~= 'number' or revision < 0 or revision % 1 ~= 0 then return -2 end
+    currentRevision = revision
+  end
+end
+local expected = tonumber(ARGV[1])
+if currentRevision ~= expected then return 0 end
+local ttl = tonumber(ARGV[3])
+if ttl and ttl > 0 then
+  redis.call('SET', KEYS[1], ARGV[2], 'EX', ttl)
+else
+  redis.call('SET', KEYS[1], ARGV[2])
+end
+return 1
+`
+
+async function compareAndSetSystemState(expectedRevision: number, newState: SystemState, ttlSeconds = 0): Promise<SystemState> {
+  if (!isRedisConfigured) throw new Error("System control Redis is not configured")
+  const result = await redis.eval(CAS_SYSTEM_STATE_SCRIPT, [SYSTEM_STATE_KEY], [String(expectedRevision), JSON.stringify(newState), String(ttlSeconds)])
+  if (result === 0) throw new StaleSystemControlRevisionError()
+  if (result !== 1) throw new Error("System control state is invalid")
+  return newState
 }
 
 export async function isAppActive(): Promise<boolean> {
@@ -96,45 +125,49 @@ export async function isAppActive(): Promise<boolean> {
 
 export async function enableKillSwitch(message?: string, toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
+  if (expectedRevision === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
   const now = Date.now()
   const newState: SystemState = {
     version: 1,
-    revision: await nextRevision(expectedRevision),
+    revision: expectedRevision + 1,
     killSwitchEnabled: true,
     maintenanceMessage: message || defaultState(now).maintenanceMessage,
     lastToggleTime: now,
     toggledBy,
     expiresAt: now + KILL_SWITCH_TTL_SECONDS * 1000,
   }
-  await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState), { ex: KILL_SWITCH_TTL_SECONDS })
+  const committed = await compareAndSetSystemState(expectedRevision, newState, KILL_SWITCH_TTL_SECONDS)
   console.log("[System Control] Kill switch ENABLED")
-  return newState
+  return committed
 }
 
 export async function disableKillSwitch(toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
+  if (expectedRevision === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
   const newState: SystemState = {
     version: 1,
-    revision: await nextRevision(expectedRevision),
+    revision: expectedRevision + 1,
     killSwitchEnabled: false,
     maintenanceMessage: "",
     lastToggleTime: Date.now(),
     toggledBy,
     expiresAt: null,
   }
-  await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState))
+  const committed = await compareAndSetSystemState(expectedRevision, newState)
   console.log("[System Control] Kill switch DISABLED")
-  return newState
+  return committed
 }
 
 export async function resetSystemState(toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
+  if (expectedRevision === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
   const newState: SystemState = {
     ...defaultState(),
-    revision: await nextRevision(expectedRevision),
+    revision: expectedRevision + 1,
     toggledBy,
   }
-  await redis.set(SYSTEM_STATE_KEY, JSON.stringify(newState))
+  const committed = await compareAndSetSystemState(expectedRevision, newState)
   console.log("[System Control] Control state RESET to default")
-  return newState
+  return committed
 }
+

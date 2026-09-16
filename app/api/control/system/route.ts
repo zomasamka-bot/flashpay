@@ -4,7 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { readSystemState, enableKillSwitch, disableKillSwitch, resetSystemState } from "@/lib/system-control"
+import { readSystemState, enableKillSwitch, disableKillSwitch, resetSystemState, StaleSystemControlRevisionError, type SystemState } from "@/lib/system-control"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
 import { appendOperationalAuditEvent, type OperationalAuditAction } from "@/lib/operational-audit"
 
@@ -78,12 +78,24 @@ export async function POST(request: NextRequest) {
     }
 
     const typedAction = action as ControlAction
-    const newState =
-      typedAction === "enable"
-        ? await enableKillSwitch(message, auth.uid, expectedRevision)
-        : typedAction === "disable"
-          ? await disableKillSwitch(auth.uid, expectedRevision)
-          : await resetSystemState(auth.uid, expectedRevision)
+    let newState: SystemState
+    try {
+      newState =
+        typedAction === "enable"
+          ? await enableKillSwitch(message, auth.uid, expectedRevision)
+          : typedAction === "disable"
+            ? await disableKillSwitch(auth.uid, expectedRevision)
+            : await resetSystemState(auth.uid, expectedRevision)
+    } catch (writeError) {
+      if (writeError instanceof StaleSystemControlRevisionError) {
+        const current = await readSystemState()
+        return NextResponse.json(
+          { error: "Control state changed concurrently. Refresh before retrying.", code: "STALE_CONTROL_REVISION", state: current.ok ? current.state : undefined, requestId },
+          { status: 409, headers: NO_STORE }
+        )
+      }
+      throw writeError
+    }
 
     try {
       await appendOperationalAuditEvent({
