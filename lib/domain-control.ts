@@ -6,6 +6,7 @@ export interface DomainControlState {
   version: 1
   revision: number
   flashpayEnabled: boolean
+  masterUnlocked: boolean
   updatedAt: number
   updatedBy?: string
 }
@@ -17,7 +18,7 @@ export type DomainControlRead =
 const DOMAIN_CONTROL_KEY = "flashpay:domain:control:v1"
 
 function defaultState(): DomainControlState {
-  return { version: 1, revision: 0, flashpayEnabled: true, updatedAt: Date.now() }
+  return { version: 1, revision: 0, flashpayEnabled: true, masterUnlocked: false, updatedAt: Date.now() }
 }
 
 function parseState(data: unknown): DomainControlState | null {
@@ -33,6 +34,8 @@ function parseState(data: unknown): DomainControlState | null {
     version: 1,
     revision: obj.revision,
     flashpayEnabled: obj.flashpayEnabled,
+    // Backward-compatible migration: pre-Step-4 records are safely locked.
+    masterUnlocked: typeof obj.masterUnlocked === "boolean" ? obj.masterUnlocked : false,
     updatedAt: obj.updatedAt,
     updatedBy: typeof obj.updatedBy === "string" ? obj.updatedBy : undefined,
   }
@@ -72,12 +75,18 @@ return 1
 `
 
 export async function setFlashPayDomainEnabled(enabled: boolean, updatedBy: string, expectedRevision: number): Promise<DomainControlState> {
+  const current = await readDomainControlState()
+  if (!current.ok) throw new Error("Domain control state unavailable")
+  if (current.state.revision !== expectedRevision) throw new StaleDomainControlRevisionError()
+  if (!current.state.masterUnlocked) throw new Error("Domain master lock is locked")
+  const currentMasterUnlocked = current.state.masterUnlocked
   if (!isRedisConfigured) throw new Error("Domain control Redis is not configured")
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected domain revision is required")
   const state: DomainControlState = {
     version: 1,
     revision: expectedRevision + 1,
     flashpayEnabled: enabled,
+    masterUnlocked: currentMasterUnlocked,
     updatedAt: Date.now(),
     updatedBy,
   }
@@ -85,5 +94,26 @@ export async function setFlashPayDomainEnabled(enabled: boolean, updatedBy: stri
   if (result === 0) throw new StaleDomainControlRevisionError()
   if (result !== 1) throw new Error("Domain control state is invalid")
   console.log(`[Domain Control] FlashPay domain ${enabled ? "ENABLED" : "DISABLED"}`)
+  return state
+}
+
+export async function setDomainMasterUnlocked(masterUnlocked: boolean, updatedBy: string, expectedRevision: number): Promise<DomainControlState> {
+  if (!isRedisConfigured) throw new Error("Domain control Redis is not configured")
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected domain revision is required")
+  const current = await readDomainControlState()
+  if (!current.ok) throw new Error("Domain control state unavailable")
+  if (current.state.revision !== expectedRevision) throw new StaleDomainControlRevisionError()
+  const state: DomainControlState = {
+    version: 1,
+    revision: expectedRevision + 1,
+    flashpayEnabled: current.state.flashpayEnabled,
+    masterUnlocked,
+    updatedAt: Date.now(),
+    updatedBy,
+  }
+  const result = await redis.eval(CAS_DOMAIN_CONTROL_SCRIPT, [DOMAIN_CONTROL_KEY], [String(expectedRevision), JSON.stringify(state)])
+  if (result === 0) throw new StaleDomainControlRevisionError()
+  if (result !== 1) throw new Error("Domain control state is invalid")
+  console.log(`[Domain Control] Master lock ${masterUnlocked ? "UNLOCKED" : "LOCKED"}`)
   return state
 }

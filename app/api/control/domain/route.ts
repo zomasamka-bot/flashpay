@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
-import { readDomainControlState, setFlashPayDomainEnabled, StaleDomainControlRevisionError } from "@/lib/domain-control"
+import { readDomainControlState, setFlashPayDomainEnabled, setDomainMasterUnlocked, StaleDomainControlRevisionError } from "@/lib/domain-control"
 import { appendOperationalAuditEvent } from "@/lib/operational-audit"
 
 export const dynamic = "force-dynamic"
@@ -22,17 +22,21 @@ export async function POST(request: NextRequest) {
   try { body = await request.json() } catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400, headers: NO_STORE }) }
   if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid request body" }, { status: 400, headers: NO_STORE })
   const record = body as Record<string, unknown>
-  if (typeof record.enabled !== "boolean") return NextResponse.json({ error: "enabled must be boolean" }, { status: 400, headers: NO_STORE })
+  const operation = record.operation === "master" ? "master" : "domain"
+  if (operation === "domain" && typeof record.enabled !== "boolean") return NextResponse.json({ error: "enabled must be boolean" }, { status: 400, headers: NO_STORE })
+  if (operation === "master" && typeof record.masterUnlocked !== "boolean") return NextResponse.json({ error: "masterUnlocked must be boolean" }, { status: 400, headers: NO_STORE })
   const expectedRevision = record.expectedRevision
   if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return NextResponse.json({ error: "A valid expectedRevision is required" }, { status: 400, headers: NO_STORE })
   try {
     const previous = await readDomainControlState()
     if (!previous.ok) return NextResponse.json({ error: "Domain control state unavailable", reason: previous.reason }, { status: 503, headers: NO_STORE })
     if (previous.state.revision !== expectedRevision) return NextResponse.json({ error: "Domain state changed. Refresh before retrying.", code: "STALE_DOMAIN_REVISION", state: previous.state }, { status: 409, headers: NO_STORE })
-    const state = await setFlashPayDomainEnabled(record.enabled, auth.uid, expectedRevision)
+    const state = operation === "master"
+      ? await setDomainMasterUnlocked(record.masterUnlocked as boolean, auth.uid, expectedRevision)
+      : await setFlashPayDomainEnabled(record.enabled as boolean, auth.uid, expectedRevision)
     const requestId = request.headers.get("x-vercel-id") || crypto.randomUUID()
     try {
-      await appendOperationalAuditEvent({ action: record.enabled ? "domain.enable" : "domain.disable", actorUid: auth.uid, requestId, previousRevision: previous.state.revision, resultingRevision: state.revision, previousEnabled: previous.state.flashpayEnabled, resultingEnabled: state.flashpayEnabled, reason: "FlashPay domain availability control" })
+      await appendOperationalAuditEvent({ action: operation === "master" ? (state.masterUnlocked ? "domain.master_unlock" : "domain.master_lock") : (state.flashpayEnabled ? "domain.enable" : "domain.disable"), actorUid: auth.uid, requestId, previousRevision: previous.state.revision, resultingRevision: state.revision, previousEnabled: operation === "master" ? previous.state.masterUnlocked : previous.state.flashpayEnabled, resultingEnabled: operation === "master" ? state.masterUnlocked : state.flashpayEnabled, reason: operation === "master" ? "Domain control master lock" : "FlashPay domain availability control" })
     } catch (auditError) {
       console.error("[Domain Control] State changed but audit persistence failed:", auditError)
       return NextResponse.json({ error: "Domain state changed but audit persistence is uncertain", state, requestId }, { status: 503, headers: NO_STORE })
