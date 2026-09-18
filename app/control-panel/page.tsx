@@ -14,15 +14,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertTriangle, Power, RefreshCw, CheckCircle2, ShieldAlert } from "lucide-react"
 import { useOwnerUid } from "@/lib/use-owner-uid"
-import { useI18n } from "@/components/i18n-provider"
-import { translateUpperOperationsText } from "@/components/upper-operations-arabic-layer"
 import { OwnerOperationsHeader } from "@/components/owner-operations-header"
 
 type ControlAction = "enable" | "disable" | "reset"
 
 function ControlPanelContent() {
-  const { locale } = useI18n()
-  const tr = (value: string) => translateUpperOperationsText(locale, value)
   const router = useRouter()
   const { uidData } = useOwnerUid()
   const [mounted, setMounted] = useState(false)
@@ -120,7 +116,7 @@ function ControlPanelContent() {
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
   if (isLoading) {
-    return <div className="min-h-screen bg-background p-4"><div className="max-w-2xl mx-auto text-center pt-20"><div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /><p className="text-foreground/60 mt-4">{tr('Loading authoritative control state...')}</p></div></div>
+    return <div className="min-h-screen bg-background p-4"><div className="max-w-2xl mx-auto text-center pt-20"><div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /><p className="text-foreground/60 mt-4">Loading authoritative control state...</p></div></div>
   }
 
   return (
@@ -128,47 +124,47 @@ function ControlPanelContent() {
     <OwnerOperationsHeader />
     <main className="min-h-screen bg-background p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <div className="max-w-2xl mx-auto space-y-6">
-        <div><h1 className="text-3xl font-bold">{tr('Control Panel')}</h1><p className="text-xs text-muted-foreground mt-1">{tr('Owner control plane · operational authority only')}</p></div>
+        <div><h1 className="text-3xl font-bold">Control Panel</h1><p className="text-xs text-muted-foreground mt-1">Owner control plane · operational authority only</p></div>
 
         <div aria-live="polite" aria-atomic="true">
-          {error && <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{tr(error)}</AlertDescription></Alert>}
+          {error && <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{error}</AlertDescription></Alert>}
           {success && <Alert className="border-green-500 bg-green-50 dark:bg-green-950"><CheckCircle2 className="h-4 w-4 text-green-600" /><AlertDescription>{success}</AlertDescription></Alert>}
         </div>
 
         <Card>
-          <CardHeader><CardTitle>{tr('Authoritative Control State')}</CardTitle><CardDescription>{tr('Server-verified owner read · Redis-backed state')}</CardDescription></CardHeader>
+          <CardHeader><CardTitle>Authoritative Control State</CardTitle><CardDescription>Server-verified owner read · Redis-backed state</CardDescription></CardHeader>
           <CardContent className="space-y-4">
             {systemState ? <>
-              <div className="flex items-center justify-between p-4 rounded-lg border"><div><p className="font-medium">{tr('Application control')}</p><p className="text-sm text-muted-foreground">{systemState.killSwitchEnabled ? "Maintenance control active" : "Normal operation"}</p></div><span className={`px-3 py-1 rounded-full text-sm font-medium ${systemState.killSwitchEnabled ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400" : "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"}`}>{systemState.killSwitchEnabled ? "OFFLINE" : "ONLINE"}</span></div>
+              <div className="flex items-center justify-between p-4 rounded-lg border"><div><p className="font-medium">Application control</p><p className="text-sm text-muted-foreground">{systemState.killSwitchEnabled ? "Maintenance control active" : "Normal operation"}</p></div><span className={`px-3 py-1 rounded-full text-sm font-medium ${systemState.killSwitchEnabled ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400" : "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"}`}>{systemState.killSwitchEnabled ? "OFFLINE" : "ONLINE"}</span></div>
               <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground"><div>Revision <span className="font-mono text-foreground">{systemState.revision}</span></div><div>Updated <span className="text-foreground">{new Date(systemState.lastToggleTime).toLocaleString()}</span></div></div>
               {systemState.killSwitchEnabled && systemState.expiresAt && <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Emergency control has an explicit 24-hour safety expiry: {new Date(systemState.expiresAt).toLocaleString()}. Deactivate manually when the incident is resolved.</AlertDescription></Alert>}
-            </> : <Alert variant="destructive"><AlertDescription>{tr('Control state is unknown. Writes are blocked.')}</AlertDescription></Alert>}
-            <Button variant="outline" className="w-full" onClick={() => void fetchSystemState()} disabled={isToggling}><RefreshCw className="h-4 w-4 mr-2" />{tr('Refresh canonical state')}</Button>
+            </> : <Alert variant="destructive"><AlertDescription>Control state is unknown. Writes are blocked.</AlertDescription></Alert>}
+            <Button variant="outline" className="w-full" onClick={() => void fetchSystemState()} disabled={isToggling}><RefreshCw className="h-4 w-4 mr-2" />Refresh canonical state</Button>
           </CardContent>
         </Card>
 
         <Card className="border-amber-500/50">
-          <CardHeader><CardTitle className="flex items-center gap-2"><ShieldAlert className="h-5 w-5" />{tr('Change justification')}</CardTitle><CardDescription>{tr('Required for every control write and stored in the operational audit trail.')}</CardDescription></CardHeader>
-          <CardContent><label htmlFor="control-reason" className="sr-only">{tr('Operational change justification')}</label><textarea ref={reasonRef} id="control-reason" aria-describedby="control-reason-count" value={reason} onChange={(e) => setReason(e.target.value.slice(0, 240))} disabled={isToggling} maxLength={240} rows={3} placeholder="Why is this operational change necessary?" className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none" /><div id="control-reason-count" className="text-right text-xs text-muted-foreground mt-1">{reason.length}/240</div></CardContent>
+          <CardHeader><CardTitle className="flex items-center gap-2"><ShieldAlert className="h-5 w-5" />Change justification</CardTitle><CardDescription>Required for every control write and stored in the operational audit trail.</CardDescription></CardHeader>
+          <CardContent><label htmlFor="control-reason" className="sr-only">Operational change justification</label><textarea ref={reasonRef} id="control-reason" aria-describedby="control-reason-count" value={reason} onChange={(e) => setReason(e.target.value.slice(0, 240))} disabled={isToggling} maxLength={240} rows={3} placeholder="Why is this operational change necessary?" className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none" /><div id="control-reason-count" className="text-right text-xs text-muted-foreground mt-1">{reason.length}/240</div></CardContent>
         </Card>
 
         <Card className="border-red-300 dark:border-red-900">
-          <CardHeader><CardTitle className="flex items-center gap-2 text-red-600"><Power className="h-5 w-5" />{tr('Emergency Kill Switch')}</CardTitle><CardDescription>{tr('High-impact application availability control. It does not alter payment, settlement, refund, Horizon, DB, or accounting truth.')}</CardDescription></CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-red-600"><Power className="h-5 w-5" />Emergency Kill Switch</CardTitle><CardDescription>High-impact application availability control. It does not alter payment, settlement, refund, Horizon, DB, or accounting truth.</CardDescription></CardHeader>
           <CardContent className="space-y-4">
-            <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{tr('Every write performs fresh server-side owner verification and rejects a stale control revision. You must type the requested confirmation phrase.')}</AlertDescription></Alert>
+            <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>Every write performs fresh server-side owner verification and rejects a stale control revision. You must type the requested confirmation phrase.</AlertDescription></Alert>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Button onClick={() => void executeControl("enable")} disabled={isToggling || !systemState || systemState.killSwitchEnabled || !reason.trim()} variant="destructive" size="lg"><Power className="h-4 w-4 mr-2" />{tr('Activate')}</Button>
-              <Button onClick={() => void executeControl("disable")} disabled={isToggling || !systemState || !systemState.killSwitchEnabled || !reason.trim()} variant="outline" size="lg"><CheckCircle2 className="h-4 w-4 mr-2" />{tr('Deactivate')}</Button>
+              <Button onClick={() => void executeControl("enable")} disabled={isToggling || !systemState || systemState.killSwitchEnabled || !reason.trim()} variant="destructive" size="lg"><Power className="h-4 w-4 mr-2" />Activate</Button>
+              <Button onClick={() => void executeControl("disable")} disabled={isToggling || !systemState || !systemState.killSwitchEnabled || !reason.trim()} variant="outline" size="lg"><CheckCircle2 className="h-4 w-4 mr-2" />Deactivate</Button>
             </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>{tr('Restore Control Defaults')}</CardTitle><CardDescription>{tr('Restores only the operational control-state record. It does not reset FlashPay, payments, financial records, recovery, or user data.')}</CardDescription></CardHeader>
-          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>{tr('This is deliberately not called “System Reset”: its authority is limited to the control-state record.')}</AlertDescription></Alert><p className="text-xs text-muted-foreground">{tr('This control remains available whenever the authoritative state is readable. A justification and RESTORE confirmation are still required before any write.')}</p><Button onClick={() => void executeControl("reset")} disabled={isToggling || !systemState} variant="outline" size="lg" className="w-full">{isToggling ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}Restore Control Defaults</Button></CardContent>
+          <CardHeader><CardTitle>Restore Control Defaults</CardTitle><CardDescription>Restores only the operational control-state record. It does not reset FlashPay, payments, financial records, recovery, or user data.</CardDescription></CardHeader>
+          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>This is deliberately not called “System Reset”: its authority is limited to the control-state record.</AlertDescription></Alert><p className="text-xs text-muted-foreground">This control remains available whenever the authoritative state is readable. A justification and RESTORE confirmation are still required before any write.</p><Button onClick={() => void executeControl("reset")} disabled={isToggling || !systemState} variant="outline" size="lg" className="w-full">{isToggling ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}Restore Control Defaults</Button></CardContent>
         </Card>
 
-        <div className="text-center text-xs text-muted-foreground"><p>{tr('CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.')}</p></div>
+        <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>
       </div>
     </main>
     </>

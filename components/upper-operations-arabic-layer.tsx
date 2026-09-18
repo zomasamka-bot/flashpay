@@ -2,7 +2,6 @@
 
 
 const EXACT: Record<string, string> = {
-  "Server-backed platform health with secondary device diagnostics":"صحة المنصة المدعومة من الخادم مع تشخيصات ثانوية للجهاز","Checking authoritative dependencies…":"جارٍ فحص الاعتماديات الموثوقة…","Waiting for server diagnostics…":"في انتظار تشخيص الخادم…","Overall:":"الإجمالي:","as of":"اعتبارًا من","Integration Domain Pages":"صفحات نطاقات التكامل","Revision":"المراجعة","Updated":"آخر تحديث",
   "FlashPay Owner Operations":"تشغيل FlashPay للمالك","Operational control plane":"طبقة التحكم التشغيلية","Operations":"التشغيل","Control":"التحكم","Profile":"الملف الشخصي","Testnet":"الشبكة التجريبية",
   "Access Denied":"تم رفض الوصول","You do not have permission to access the Operations Console.":"ليست لديك صلاحية للوصول إلى وحدة التحكم التشغيلية.","Return to Home":"العودة إلى الرئيسية",
   "Operations Console":"وحدة التحكم التشغيلية","Platform management and monitoring":"إدارة المنصة ومراقبتها","System Health":"صحة النظام","CHECKING":"جارٍ التحقق","UNKNOWN":"غير معروف","Healthy":"سليم","Degraded":"متدهور","Maintenance":"صيانة","Unknown":"غير معروف",
