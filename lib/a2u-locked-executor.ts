@@ -6,6 +6,7 @@ import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
+import { logSettlementSubmitRuntimeDiagnostic } from "@/lib/settlement-submit-runtime-diagnostic"
 import { acquirePiWalletSubmitLock, readPiWalletIntent, replacePiWalletIntent, releasePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
@@ -321,6 +322,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         return { ok: true, status: 202 }
         }
         if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
+          await logSettlementSubmitRuntimeDiagnostic(latestPayment, `pre_replay_gate:${replay.outcome}`)
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         const allowed = replay.reference
@@ -355,11 +357,14 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           if (submitted.hash !== latestPayment.a2uPreparedTxHash) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           }
-        } catch {
+        } catch (submitError) {
+          console.error("[SETTLEMENT_SUBMIT_DIAGNOSTIC]", { paymentId, stage: "horizon_submit_exception", error: submitError instanceof Error ? submitError.message : "unknown", authorizesFinancialAction: false })
+          await logSettlementSubmitRuntimeDiagnostic(latestPayment, "post_submit_exception")
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         const verifiedReplay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
         if (verifiedReplay.outcome !== "MOVEMENT_VERIFIED") {
+          await logSettlementSubmitRuntimeDiagnostic(latestPayment, `post_submit_verify:${verifiedReplay.outcome}`)
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         const verifiedIntent = verifiedReplay.reference
