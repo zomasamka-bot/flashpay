@@ -172,6 +172,8 @@ function getMerchantStorageKey(merchantId: string): string {
   return `flashpay_merchant_${merchantId}_data`
 }
 
+const OWNER_SECRET = process.env.NEXT_PUBLIC_OWNER_SECRET || "flashpay_admin_2025"
+
 type StateListener = () => void
 type StateSection = keyof Omit<UnifiedState, "lastUpdated" | "version">
 
