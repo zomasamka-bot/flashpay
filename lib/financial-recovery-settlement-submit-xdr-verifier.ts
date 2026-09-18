@@ -36,56 +36,90 @@ export type SettlementSubmitXdrVerifierResult = Readonly<
     }
 >
 
-const blocked = (reason: "INVALID_INPUT" | "XDR_INVALID" | "INTENT_MISMATCH" | "SIGNATURE_INVALID"): SettlementSubmitXdrVerifierResult => ({
-  outcome: "BLOCKED",
-  reason,
-  reference: null,
-  moneyMovementProven: false,
-  authorizesFinancialAction: false,
-})
+type XdrDiagnosticCheck = Readonly<{ check: string; passed: boolean; expected?: unknown; observed?: unknown }>
+
+function logXdrDiagnostic(reason: "INVALID_INPUT" | "XDR_INVALID" | "INTENT_MISMATCH" | "SIGNATURE_INVALID", checks: readonly XdrDiagnosticCheck[]): void {
+  try {
+    console.error("[SETTLEMENT_SUBMIT_XDR_DIAGNOSTIC]", {
+      reason,
+      failedChecks: checks.filter((check) => !check.passed).map((check) => check.check),
+      checks,
+      authorizesFinancialAction: false,
+    })
+  } catch {}
+}
+
+const blocked = (reason: "INVALID_INPUT" | "XDR_INVALID" | "INTENT_MISMATCH" | "SIGNATURE_INVALID", checks: readonly XdrDiagnosticCheck[] = []): SettlementSubmitXdrVerifierResult => {
+  logXdrDiagnostic(reason, checks)
+  return {
+    outcome: "BLOCKED",
+    reason,
+    reference: null,
+    moneyMovementProven: false,
+    authorizesFinancialAction: false,
+  }
+}
 
 export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifierInput): SettlementSubmitXdrVerifierResult {
-  if (
-    typeof input.envelopeXdr !== "string" || !input.envelopeXdr.trim() || input.envelopeXdr !== input.envelopeXdr.trim() ||
-    !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
-    !/^[1-9][0-9]*$/.test(input.preparedSequence) ||
-    typeof input.a2uPaymentId !== "string" || !input.a2uPaymentId.trim() || input.a2uPaymentId !== input.a2uPaymentId.trim() ||
-    typeof input.fromAddress !== "string" || !input.fromAddress.trim() || input.fromAddress !== input.fromAddress.trim() ||
-    typeof input.toAddress !== "string" || !input.toAddress.trim() || input.toAddress !== input.toAddress.trim() ||
-    typeof input.amount !== "number" || !Number.isFinite(input.amount) || input.amount <= 0
-  ) return blocked("INVALID_INPUT")
+  const inputChecks: XdrDiagnosticCheck[] = [
+    { check: "envelopeXdrCanonical", passed: typeof input.envelopeXdr === "string" && !!input.envelopeXdr.trim() && input.envelopeXdr === input.envelopeXdr.trim() },
+    { check: "preparedHashFormat", passed: /^[0-9a-f]{64}$/.test(input.preparedHash) },
+    { check: "preparedSequenceFormat", passed: /^[1-9][0-9]*$/.test(input.preparedSequence) },
+    { check: "a2uPaymentIdCanonical", passed: typeof input.a2uPaymentId === "string" && !!input.a2uPaymentId.trim() && input.a2uPaymentId === input.a2uPaymentId.trim() },
+    { check: "fromAddressCanonical", passed: typeof input.fromAddress === "string" && !!input.fromAddress.trim() && input.fromAddress === input.fromAddress.trim() },
+    { check: "toAddressCanonical", passed: typeof input.toAddress === "string" && !!input.toAddress.trim() && input.toAddress === input.toAddress.trim() },
+    { check: "amountPositiveFinite", passed: typeof input.amount === "number" && Number.isFinite(input.amount) && input.amount > 0, expected: "positive finite number", observed: input.amount },
+  ]
+  if (inputChecks.some((check) => !check.passed)) return blocked("INVALID_INPUT", inputChecks)
 
   let transaction: StellarSDK.Transaction
   try {
     const parsed = StellarSDK.TransactionBuilder.fromXDR(input.envelopeXdr, "Pi Testnet")
-    if (!(parsed instanceof StellarSDK.Transaction)) return blocked("XDR_INVALID")
+    if (!(parsed instanceof StellarSDK.Transaction)) return blocked("XDR_INVALID", [{ check: "parsedTransaction", passed: false, expected: "StellarSDK.Transaction", observed: "non-transaction envelope" }])
     transaction = parsed
-  } catch {
-    return blocked("XDR_INVALID")
+  } catch (error) {
+    return blocked("XDR_INVALID", [{ check: "xdrParse", passed: false, expected: "valid Pi Testnet transaction XDR", observed: error instanceof Error ? error.message : "parse error" }])
   }
 
   try {
-    if (transaction.toXDR() !== input.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.preparedHash || transaction.sequence !== input.preparedSequence || transaction.source !== input.fromAddress) return blocked("INTENT_MISMATCH")
-    if (transaction.operations.length !== 1 || transaction.signatures.length !== 1) return blocked("INTENT_MISMATCH")
+    const transactionChecks: XdrDiagnosticCheck[] = [
+      { check: "xdrRoundTripMatch", passed: transaction.toXDR() === input.envelopeXdr },
+      { check: "hashMatch", passed: Buffer.from(transaction.hash()).toString("hex") === input.preparedHash, expected: input.preparedHash, observed: Buffer.from(transaction.hash()).toString("hex") },
+      { check: "sequenceMatch", passed: transaction.sequence === input.preparedSequence, expected: input.preparedSequence, observed: transaction.sequence },
+      { check: "sourceMatch", passed: transaction.source === input.fromAddress, expected: input.fromAddress, observed: transaction.source },
+      { check: "operationCountMatch", passed: transaction.operations.length === 1, expected: 1, observed: transaction.operations.length },
+      { check: "signatureCountMatch", passed: transaction.signatures.length === 1, expected: 1, observed: transaction.signatures.length },
+    ]
+    if (transactionChecks.some((check) => !check.passed)) return blocked("INTENT_MISMATCH", transactionChecks)
 
     const operation = transaction.operations[0]
-    if (operation.type !== "payment" || operation.source !== undefined || !operation.asset.isNative() || operation.destination !== input.toAddress || !Number.isFinite(Number(operation.amount)) || Number(operation.amount) !== input.amount) return blocked("INTENT_MISMATCH")
-    if (transaction.memo.type !== "text") return blocked("INTENT_MISMATCH")
+    const operationChecks: XdrDiagnosticCheck[] = [
+      { check: "operationTypeMatch", passed: operation.type === "payment", expected: "payment", observed: operation.type },
+      { check: "operationSourceImplicit", passed: operation.source === undefined, expected: "undefined", observed: operation.source ?? "undefined" },
+      { check: "assetNative", passed: operation.type === "payment" && operation.asset.isNative(), expected: "native", observed: operation.type === "payment" ? (operation.asset.isNative() ? "native" : operation.asset.getCode()) : operation.type },
+      { check: "destinationMatch", passed: operation.type === "payment" && operation.destination === input.toAddress, expected: input.toAddress, observed: operation.type === "payment" ? operation.destination : operation.type },
+      { check: "amountNumeric", passed: operation.type === "payment" && Number.isFinite(Number(operation.amount)), expected: "finite number", observed: operation.type === "payment" ? operation.amount : operation.type },
+      { check: "amountMatch", passed: operation.type === "payment" && Number(operation.amount) === input.amount, expected: input.amount, observed: operation.type === "payment" ? Number(operation.amount) : operation.type },
+    ]
+    if (operationChecks.some((check) => !check.passed)) return blocked("INTENT_MISMATCH", operationChecks)
+
+    if (transaction.memo.type !== "text") return blocked("INTENT_MISMATCH", [{ check: "memoTypeMatch", passed: false, expected: "text", observed: transaction.memo.type }])
     const memoValue = transaction.memo.value
-    if (typeof memoValue !== "string" && !Buffer.isBuffer(memoValue)) return blocked("INTENT_MISMATCH")
+    if (typeof memoValue !== "string" && !Buffer.isBuffer(memoValue)) return blocked("INTENT_MISMATCH", [{ check: "memoValueShape", passed: false, expected: "string or Buffer", observed: typeof memoValue }])
     const memo = typeof memoValue === "string" ? memoValue : memoValue.toString("utf8")
-    if (memo !== input.a2uPaymentId.substring(0, 28)) return blocked("INTENT_MISMATCH")
+    const expectedMemo = input.a2uPaymentId.substring(0, 28)
+    if (memo !== expectedMemo) return blocked("INTENT_MISMATCH", [{ check: "memoMatch", passed: false, expected: expectedMemo, observed: memo }])
 
     const signature = transaction.signatures[0]
     const keypair = StellarSDK.Keypair.fromPublicKey(input.fromAddress)
-    const signatureHint = signature.hint.toBytes()
-    const signatureBytes = signature.signature.toBytes()
-    if (
-      !Buffer.from(signatureHint).equals(Buffer.from(keypair.signatureHint())) ||
-      !keypair.verify(transaction.hash(), signatureBytes)
-    ) return blocked("SIGNATURE_INVALID")
-  } catch {
-    return blocked("INTENT_MISMATCH")
+    const hintMatch = Buffer.from(signature.hint.toBytes()).equals(Buffer.from(keypair.signatureHint()))
+    const signatureValid = keypair.verify(transaction.hash(), signature.signature.toBytes())
+    if (!hintMatch || !signatureValid) return blocked("SIGNATURE_INVALID", [
+      { check: "signatureHintMatch", passed: hintMatch },
+      { check: "signatureCryptographicallyValid", passed: signatureValid },
+    ])
+  } catch (error) {
+    return blocked("INTENT_MISMATCH", [{ check: "verifierException", passed: false, expected: "no verifier exception", observed: error instanceof Error ? error.message : "unknown" }])
   }
 
   return {
