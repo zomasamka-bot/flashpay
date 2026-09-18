@@ -347,22 +347,38 @@ export default function HomePage() {
       return
     }
 
-    // Try native share first if available
-    if (typeof navigator.share !== "function") {
-      setShowShareMenu(true)
-      return
+    const shareText = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}: ${sharePaymentUrl}`
+    const pi = window.Pi as (typeof window.Pi & {
+      openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
+    }) | undefined
+
+    // Inside Pi Browser, use Pi's native OS share bridge first. On Android this
+    // opens the phone share sheet directly instead of FlashPay's fallback menu.
+    if (typeof pi?.openShareDialog === "function") {
+      try {
+        await pi.openShareDialog("FlashPay Invoice", shareText)
+        return
+      } catch (error) {
+        if ((error as Error).name === "AbortError") return
+        console.error("Pi native share failed:", error)
+      }
     }
-    try {
-      const shareText = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}: ${sharePaymentUrl}`
-      await navigator.share({
-        title: "FlashPay Invoice",
-        text: shareText,
-      })
-    } catch (error) {
-      if ((error as Error).name === "AbortError") return
-      console.error("Native share failed:", error)
-      setShowShareMenu(true)
+
+    // Standards-based fallback for browsers outside Pi Browser.
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title: "FlashPay Invoice",
+          text: shareText,
+        })
+        return
+      } catch (error) {
+        if ((error as Error).name === "AbortError") return
+        console.error("Native share failed:", error)
+      }
     }
+
+    setShowShareMenu(true)
   }
 
   const handleShareWhatsApp = () => {
