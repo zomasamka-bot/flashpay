@@ -25,7 +25,7 @@ const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
 }
 
 type PiNativeBridge = {
-  shareFile?: (payload: unknown) => Promise<unknown> | unknown
+  shareFile?: (file: File) => Promise<unknown> | unknown
   openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
   openUrlInSystemBrowser?: (url: string) => Promise<unknown> | unknown
 }
@@ -246,10 +246,22 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       const pi = getPiNativeBridge()
       const failures: string[] = []
 
-      // Actual attachment path #1: invoke Web Share Level 2 directly. Do not trust
-      // canShare() as the sole gate because Android WebViews can misreport file support.
-      // Keep the payload strictly file-only to avoid WebView implementations that
-      // reject mixed file + title/text/url share payloads.
+      // Pi Browser's native file-sharing capability is the authoritative path inside
+      // Pi Browser. It hands the real PDF File to the phone's native share sheet and
+      // avoids Android Web Share/WebView differences.
+      if (typeof pi?.shareFile === "function") {
+        try {
+          await pi.shareFile(pdfFile)
+          return
+        } catch (error) {
+          if (isAbortError(error)) return
+          failures.push(`pi-pdf: ${shareErrorMessage(error)}`)
+        }
+      }
+
+      // Standards-based fallback for Safari/Chrome and Pi Browser builds that do not
+      // expose Pi.shareFile yet. canShare() is intentionally not the sole gate because
+      // embedded WebViews can report file support incorrectly.
       if (typeof navigator.share === "function") {
         try {
           await navigator.share({ files: [pdfFile] })
@@ -260,70 +272,8 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         }
       }
 
-      // Actual attachment path #2: Pi Browser builds that expose a native file bridge.
-      // Use the smallest payload first; extra text/title fields are intentionally omitted
-      // because the Android bridge only needs the file and filename for ACTION_SEND.
-      if (typeof pi?.shareFile === "function") {
-        try {
-          await pi.shareFile({ filename: pdfFile.name, file: pdfFile })
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`pi-pdf-object: ${shareErrorMessage(error)}`)
-        }
-
-        // Pi.shareFile is a newly rolled-out native capability and Pi Browser builds
-        // in the field do not all expose the same JS bridge shape yet. If the object
-        // payload is rejected, retry the exact same pre-generated File as the single
-        // argument. No URL/text fallback is involved, so success always means a real
-        // attachment was handed to the native share sheet.
-        try {
-          await pi.shareFile(pdfFile)
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`pi-pdf-file: ${shareErrorMessage(error)}`)
-        }
-      }
-
-      // Some Android bridges reject application/pdf while accepting generic binary. The
-      // bytes and .pdf filename remain unchanged, so receiving apps still get the PDF file.
-      const genericPdfFile = new File([pdfFile], pdfFile.name, {
-        type: "application/octet-stream",
-        lastModified: pdfFile.lastModified,
-      })
-
-      if (typeof pi?.shareFile === "function") {
-        try {
-          await pi.shareFile({ filename: genericPdfFile.name, file: genericPdfFile })
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`pi-binary-object: ${shareErrorMessage(error)}`)
-        }
-        try {
-          await pi.shareFile(genericPdfFile)
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`pi-binary-file: ${shareErrorMessage(error)}`)
-        }
-      }
-
-      if (typeof navigator.share === "function") {
-        try {
-          await navigator.share({ files: [genericPdfFile] })
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`web-binary: ${shareErrorMessage(error)}`)
-        }
-      }
-
-      // This Pi Browser build cannot hand a PDF File to Android's native share sheet.
-      // Restore the previously proven share-sheet behavior as an explicit, last-resort
-      // secure-link fallback instead of leaving Share PDF dead. iPhone/other browsers
-      // still return above through the real File attachment path.
+      // Last resort for older Pi Browser builds: keep Share usable without pretending
+      // that a secure HTTPS link is a PDF attachment.
       let url: string | null = null
       try {
         url = await ensureSharedPdfUrl()
@@ -331,28 +281,13 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         failures.push(`pdf-url: ${shareErrorMessage(error)}`)
       }
 
-      if (url && typeof navigator.share === "function") {
-        try {
-          await navigator.share({
-            title: receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt"),
-            text: `${receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")} · ${receipt.flashPayPaymentId}`,
-            url,
-          })
-          setShareError("This Pi Browser shared a secure PDF link because it does not support PDF file attachments.")
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`web-url: ${shareErrorMessage(error)}`)
-        }
-      }
-
       if (url && typeof pi?.openShareDialog === "function") {
         try {
-          pi.openShareDialog(
+          await pi.openShareDialog(
             receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt"),
             `${receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")} · ${receipt.flashPayPaymentId}\n${url}`,
           )
-          setShareError("This Pi Browser shared a secure PDF link because it does not support PDF file attachments.")
+          setShareError("This Pi Browser version cannot share the PDF as an attachment. Update Pi Browser to use native PDF sharing.")
           return
         } catch (error) {
           if (isAbortError(error)) return
@@ -362,9 +297,9 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
 
       console.warn("[Receipt PDF] Share unavailable", {
         paymentId: receipt.flashPayPaymentId,
-        failures: failures.slice(0, 8),
+        failures: failures.slice(0, 4),
       })
-      setShareError("PDF sharing is unavailable in this Pi Browser build. Download PDF is still available.")
+      setShareError("PDF sharing is unavailable in this Pi Browser version. Update Pi Browser or use Download PDF.")
     } finally {
       setSharing(false)
     }
