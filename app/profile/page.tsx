@@ -19,30 +19,29 @@ import { useI18n } from "@/components/i18n-provider"
 
 type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
-const profileDateFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-})
-
-function formatProfileDateTime(createdAt: string): string {
+function formatProfileDateTime(locale: string, createdAt: string): string {
   const date = new Date(createdAt)
   if (!Number.isFinite(date.getTime())) {
     return "Unavailable"
   }
-  return profileDateFormatter.format(date)
+  return new Intl.DateTimeFormat(`${locale}-u-nu-latn`, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    numberingSystem: "latn",
+  }).format(date)
 }
 
-function mapSettlementStatus(status: SettlementStatus): string {
-  if (status === "settled_to_merchant") return "Settled"
-  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return "Processing"
-  if (status === "failed" || status === "settlement_failed") return "Failed"
-  if (status === "cancelled") return "Cancelled"
-  if (status === "completed") return "Legacy Completed"
-  return "Other"
+function mapSettlementStatus(status: SettlementStatus, t: (key: string) => string): string {
+  if (status === "settled_to_merchant") return t("transactions.settled")
+  if (status === "pending" || status === "paid_to_app" || status === "settlement_pending") return t("transactions.processing")
+  if (status === "failed" || status === "settlement_failed") return t("transactions.failed")
+  if (status === "cancelled") return t("transactions.cancelled")
+  if (status === "completed") return t("transactions.legacy")
+  return t("transactions.other")
 }
 
 function merchantAttentionStatus(item: OperationalPayment, t: (key: string) => string): string {
@@ -113,7 +112,7 @@ interface ProfileSummary {
 
 function ProfileContent() {
   const router = useRouter()
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { toast } = useToast()
   const [mounted, setMounted] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
@@ -532,7 +531,7 @@ function ProfileContent() {
                               </div>
                             )}
                             {item.nextRetryAt && (
-                              <p className="text-xs text-muted-foreground">{t("profile.attention.nextRetry")}: {formatProfileDateTime(item.nextRetryAt)}</p>
+                              <p className="text-xs text-muted-foreground">{t("profile.attention.nextRetry")}: {formatProfileDateTime(locale, item.nextRetryAt)}</p>
                             )}
                           </div>
                         ))}
@@ -543,17 +542,17 @@ function ProfileContent() {
                     <p className="text-xs font-medium text-muted-foreground mb-2">{t("profile.latestTransaction")}</p>
                     <div className="space-y-1 text-sm">
                       <p>
-                        <span className="text-muted-foreground">Reference:</span> {summary.latestTransaction.reference}
+                        <span className="text-muted-foreground">{t("profile.latest.reference")}:</span> {summary.latestTransaction.reference}
                       </p>
                       <p>
-                        <span className="text-muted-foreground">Amount:</span> π{summary.latestTransaction.amount}
+                        <span className="text-muted-foreground">{t("profile.latest.amount")}:</span> π{summary.latestTransaction.amount}
                       </p>
                       <p>
-                        <span className="text-muted-foreground">Date:</span> {formatProfileDateTime(summary.latestTransaction.createdAt)}
+                        <span className="text-muted-foreground">{t("profile.latest.date")}:</span> {formatProfileDateTime(locale, summary.latestTransaction.createdAt)}
                       </p>
                       {summary.latestTransaction.settlementStatus && (
                         <p>
-                          <span className="text-muted-foreground">Status:</span> {mapSettlementStatus(summary.latestTransaction.settlementStatus)}
+                          <span className="text-muted-foreground">{t("profile.latest.status")}:</span> {mapSettlementStatus(summary.latestTransaction.settlementStatus, t)}
                         </p>
                       )}
                     </div>

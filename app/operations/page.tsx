@@ -16,11 +16,15 @@ import { ArrowRight, Settings, Stethoscope, Globe, BarChart3, AlertTriangle, Ref
 import { useToast } from "@/hooks/use-toast"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { config } from "@/lib/config"
+import { useI18n } from "@/components/i18n-provider"
+import { translateUpperOperationsText } from "@/components/upper-operations-arabic-layer"
 
 export default function OperationsPage() {
   const router = useRouter()
   const { uidData } = useOwnerUid()
   const { toast } = useToast()
+  const { locale } = useI18n()
+  const tr = (value: string) => translateUpperOperationsText(locale, value)
   const [mounted, setMounted] = useState(false)
   const [globalAnalytics, setGlobalAnalytics] = useState<{ totalMerchants: number; activeMerchants: number; totalPayments: number; totalVolume: number } | null>(null)
   const [overviewAsOf, setOverviewAsOf] = useState<string | null>(null)
@@ -143,8 +147,8 @@ export default function OperationsPage() {
       <div className="min-h-screen flex items-center justify-center px-4">
         <Card className="w-full max-w-md border-red-500/50">
           <CardHeader>
-            <CardTitle className="text-red-600">Access Denied</CardTitle>
-            <CardDescription>You do not have permission to access the Operations Console.</CardDescription>
+            <CardTitle className="text-red-600">{tr("Access Denied")}</CardTitle>
+            <CardDescription>{tr("You do not have permission to access the Operations Console.")}</CardDescription>
           </CardHeader>
           <CardContent>
             <Button
@@ -168,26 +172,26 @@ export default function OperationsPage() {
     <div className="min-h-screen pb-6 pt-4">
       <div className="max-w-4xl mx-auto px-4 space-y-6">
         <div className="mb-2">
-          <h1 className="text-3xl font-bold">Operations Console</h1>
-          <p className="text-sm text-muted-foreground mt-1">Platform management and monitoring</p>
+          <h1 className="text-3xl font-bold">{tr("Operations Console")}</h1>
+          <p className="text-sm text-muted-foreground mt-1">{tr("Platform management and monitoring")}</p>
         </div>
 
         {/* M10: incident mode and observability. Read-only; never a financial authority. */}
         <Card className={incident?.overall === "healthy" ? "border-green-500/50" : incident?.overall === "maintenance" ? "border-blue-500/50" : incident?.overall === "degraded" ? "border-amber-500/60" : "border-yellow-500/60"}>
           <CardHeader>
-            <CardTitle className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Activity className="h-5 w-5"/>System Health</span><span className="text-sm font-semibold uppercase">{incidentLoading ? "CHECKING" : incident?.overall ?? "UNKNOWN"}</span></CardTitle>
-            <CardDescription>{incident?.reason ?? "Reading authoritative operational evidence…"}</CardDescription>
+            <CardTitle className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Activity className="h-5 w-5"/>{tr("System Health")}</span><span className="text-sm font-semibold uppercase">{tr(incidentLoading ? "CHECKING" : incident?.overall ?? "UNKNOWN")}</span></CardTitle>
+            <CardDescription>{tr(incident?.reason ?? "Reading authoritative operational evidence…")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-              <div><div className="text-muted-foreground">Settlement open</div><div className="text-xl font-bold">{incident?.financial?.settlementOpen ?? "—"}</div></div>
-              <div><div className="text-muted-foreground">Failures</div><div className="text-xl font-bold">{incident?.financial?.settlementFailed ?? "—"}</div></div>
-              <div><div className="text-muted-foreground">Refund pending</div><div className="text-xl font-bold">{incident?.financial?.refundPending ?? "—"}</div></div>
-              <div><div className="text-muted-foreground">Manual review</div><div className="text-xl font-bold">{incident?.financial?.manualReview ?? "—"}</div></div>
-              <div><div className="text-muted-foreground">Recovery active</div><div className="text-xl font-bold">{incident?.recovery?.active ?? "—"}</div></div>
-              <div><div className="text-muted-foreground">Wallet ready</div><div className="text-xl font-bold">{incident?.recovery?.ready ?? "—"}</div></div>
-              <div><div className="text-muted-foreground">Worker wake</div><div className="text-sm font-semibold">{incident?.recovery?.wakeFresh === true ? "Fresh" : incident?.recovery?.wakeFresh === false ? "Stale" : "Unknown"}</div></div>
-              <div><div className="text-muted-foreground">Control</div><div className="text-sm font-semibold">{incident?.control.available ? (incident.control.killSwitchEnabled ? "Maintenance" : "Online") : "Unknown"}</div></div>
+              <div><div className="text-muted-foreground">{tr("Settlement open")}</div><div className="text-xl font-bold">{incident?.financial?.settlementOpen ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">{tr("Failures")}</div><div className="text-xl font-bold">{incident?.financial?.settlementFailed ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">{tr("Refund pending")}</div><div className="text-xl font-bold">{incident?.financial?.refundPending ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">{tr("Manual review")}</div><div className="text-xl font-bold">{incident?.financial?.manualReview ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">{tr("Recovery active")}</div><div className="text-xl font-bold">{incident?.recovery?.active ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">{tr("Wallet ready")}</div><div className="text-xl font-bold">{incident?.recovery?.ready ?? "—"}</div></div>
+              <div><div className="text-muted-foreground">{tr("Worker wake")}</div><div className="text-sm font-semibold">{tr(incident?.recovery?.wakeFresh === true ? "Fresh" : incident?.recovery?.wakeFresh === false ? "Stale" : "Unknown")}</div></div>
+              <div><div className="text-muted-foreground">{tr("Control")}</div><div className="text-sm font-semibold">{tr(incident?.control.available ? (incident.control.killSwitchEnabled ? "Maintenance" : "Online") : "Unknown")}</div></div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>{incident ? `as of ${new Date(incident.asOf).toLocaleString()}${incident.recovery?.lastWakeAt ? ` · last wake ${new Date(incident.recovery.lastWakeAt).toLocaleString()}` : ""}` : "Loading…"}</span>
@@ -207,19 +211,19 @@ export default function OperationsPage() {
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
-                <div className="text-sm text-muted-foreground mb-1">Merchants</div>
+                <div className="text-sm text-muted-foreground mb-1">{tr("Merchants")}</div>
                 <div className="text-3xl font-bold">{overviewLoading ? "…" : globalAnalytics?.totalMerchants ?? "—"}</div>
               </div>
               <div>
-                <div className="text-sm text-muted-foreground mb-1">Active</div>
+                <div className="text-sm text-muted-foreground mb-1">{tr("Active")}</div>
                 <div className="text-3xl font-bold text-accent">{overviewLoading ? "…" : globalAnalytics?.activeMerchants ?? "—"}</div>
               </div>
               <div>
-                <div className="text-sm text-muted-foreground mb-1">Payments</div>
+                <div className="text-sm text-muted-foreground mb-1">{tr("Payments")}</div>
                 <div className="text-3xl font-bold">{overviewLoading ? "…" : globalAnalytics?.totalPayments ?? "—"}</div>
               </div>
               <div>
-                <div className="text-sm text-muted-foreground mb-1">Volume</div>
+                <div className="text-sm text-muted-foreground mb-1">{tr("Volume")}</div>
                 <div className="text-3xl font-bold text-primary">
                   {overviewLoading ? "…" : globalAnalytics ? `${globalAnalytics.totalVolume.toFixed(2)} π` : "—"}
                 </div>
@@ -242,7 +246,7 @@ export default function OperationsPage() {
               <Stethoscope className="h-5 w-5" />
               Financial Operations Health
             </CardTitle>
-            <CardDescription>Authoritative read-only settlement, refund, and recovery signals</CardDescription>
+            <CardDescription>{tr("Authoritative read-only settlement, refund, and recovery signals")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {financialHealthError ? (
@@ -250,14 +254,14 @@ export default function OperationsPage() {
             ) : (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                  <div><div className="text-muted-foreground">Settled</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settled ?? "—"}</div></div>
-                  <div><div className="text-muted-foreground">Settlement open</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settlementOpen ?? "—"}</div></div>
-                  <div><div className="text-muted-foreground">Settlement failed</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settlementFailed ?? "—"}</div></div>
-                  <div><div className="text-muted-foreground">Refund pending</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.refundPending ?? "—"}</div></div>
-                  <div><div className="text-muted-foreground">Manual review</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.refundManualReview ?? "—"}</div></div>
-                  <div><div className="text-muted-foreground">Recovery active</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.recovery.active ?? "—"}</div></div>
-                  <div><div className="text-muted-foreground">Wallet ready</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.recovery.ready ?? "—"}</div></div>
-                  <div><div className="text-muted-foreground">Pi create pressure</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth ? (financialHealth.recovery.piCreateBackpressureActive ? "ACTIVE" : "Clear") : "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Settled")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settled ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Settlement open")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settlementOpen ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Settlement failed")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.settlementFailed ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Refund pending")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.refundPending ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Manual review")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.postgres.refundManualReview ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Recovery active")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.recovery.active ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Wallet ready")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth?.recovery.ready ?? "—"}</div></div>
+                  <div><div className="text-muted-foreground">{tr("Pi create pressure")}</div><div className="text-2xl font-bold">{financialHealthLoading ? "…" : financialHealth ? (financialHealth.recovery.piCreateBackpressureActive ? "ACTIVE" : "Clear") : "—"}</div></div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span>{financialHealth ? `PostgreSQL + Redis · as of ${new Date(financialHealth.asOf).toLocaleString()} · drain lease ${financialHealth.recovery.drainLeaseActive ? "active" : "idle"}` : "Loading authoritative financial health…"}</span>
@@ -279,7 +283,7 @@ export default function OperationsPage() {
                 <Stethoscope className="h-5 w-5 text-blue-500" />
                 System Diagnostics
               </CardTitle>
-              <CardDescription>Check health and troubleshoot issues</CardDescription>
+              <CardDescription>{tr("Check health and troubleshoot issues")}</CardDescription>
             </CardHeader>
             <CardContent>
               <Button
@@ -301,11 +305,11 @@ export default function OperationsPage() {
                 <AlertTriangle className="h-5 w-5" />
                 Emergency Payment Recovery
               </CardTitle>
-              <CardDescription>Clear stuck pending payments securely</CardDescription>
+              <CardDescription>{tr("Clear stuck pending payments securely")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                If payments are stuck and blocking the system, use the emergency recovery page to clear them securely with owner authentication.
+                {tr("If payments are stuck and blocking the system, use the emergency recovery page to clear them securely with owner authentication.")}
               </p>
               <Button
                 onClick={() => router.push("/emergency")}
@@ -327,7 +331,7 @@ export default function OperationsPage() {
                 <Globe className="h-5 w-5" />
                 Domain Management
               </CardTitle>
-              <CardDescription>Configure integration domains</CardDescription>
+              <CardDescription>{tr("Configure integration domains")}</CardDescription>
             </CardHeader>
             <CardContent>
               <Button
@@ -349,7 +353,7 @@ export default function OperationsPage() {
                 <Settings className="h-5 w-5" />
                 Control Panel
               </CardTitle>
-              <CardDescription>System operations and emergency kill switch</CardDescription>
+              <CardDescription>{tr("System operations and emergency kill switch")}</CardDescription>
             </CardHeader>
             <CardContent>
               <Button

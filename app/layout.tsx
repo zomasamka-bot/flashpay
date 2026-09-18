@@ -11,7 +11,6 @@ import { ErrorBoundary } from "@/components/error-boundary"
 import { PiSDKLoader } from "@/components/pi-sdk-loader"
 import { Analytics } from "@vercel/analytics/next"
 import { I18nProvider } from "@/components/i18n-provider"
-import { UpperOperationsArabicLayer } from "@/components/upper-operations-arabic-layer"
 
 // Database schema initialization moved to non-blocking background task
 // (Called in /app/api/pi/complete/route.ts when first payment completes)
@@ -49,7 +48,6 @@ html {
       <body>
         <ErrorBoundary>
           <I18nProvider>
-            <UpperOperationsArabicLayer />
             <PiSDKLoader>
               <TestnetIndicator />
               <DomainGuard>{children}</DomainGuard>

@@ -1,8 +1,5 @@
 "use client"
 
-import { useEffect, useRef } from "react"
-import { usePathname } from "next/navigation"
-import { useI18n } from "@/components/i18n-provider"
 
 const EXACT: Record<string, string> = {
   "FlashPay Owner Operations":"تشغيل FlashPay للمالك","Operational control plane":"طبقة التحكم التشغيلية","Operations":"التشغيل","Control":"التحكم","Profile":"الملف الشخصي","Testnet":"الشبكة التجريبية",
@@ -30,68 +27,13 @@ const WORDS: Array<[RegExp,string]> = [
   [/\bdomains enabled\b/gi,"نطاقات مفعّلة"],[/\bas of\b/gi,"حتى"],[/\blast wake\b/gi,"آخر استيقاظ"],[/\bdrain lease\b/gi,"قفل التصريف"],[/\bactive\b/gi,"نشط"],[/\bidle\b/gi,"خامل"],[/\bpass\b/gi,"ناجح"],[/\bfail\b/gi,"فشل"],[/\bwarn\b/gi,"تحذير"],[/\bunknown\b/gi,"غير معروف"],[/\bcomplete\b/gi,"مكتمل"],[/\bpayment\b/gi,"الدفع"],[/\brefund\b/gi,"الاسترداد"],[/\bstatus\b/gi,"الحالة"]
 ]
 
-const SCOPES = ["/operations", "/control-panel", "/diagnostics", "/emergency"]
-const originals = new WeakMap<Text, string>()
-const attrOriginals = new WeakMap<Element, Record<string,string>>()
-
-function translate(value:string){const trimmed=value.trim(); if(!trimmed)return value; let out=EXACT[trimmed] ?? trimmed; if(out===trimmed) for(const [re,to] of WORDS) out=out.replace(re,to); if(out===trimmed)return value; return value.replace(trimmed,out)}
-
-export function UpperOperationsArabicLayer(){
-  const pathname=usePathname(); const {locale}=useI18n(); const scoped=SCOPES.some(p=>pathname===p||pathname.startsWith(`${p}/`))
-  const applyingRef=useRef(false)
-  useEffect(()=>{
-    if(!scoped)return
-    const root=document.body
-    const apply=()=>{
-      if(applyingRef.current)return
-      applyingRef.current=true
-      try{
-        const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT); let node:Node|null
-        while((node=walker.nextNode())){
-          const t=node as Text; const parent=t.parentElement
-          if(!parent||["SCRIPT","STYLE","CODE"].includes(parent.tagName))continue
-          const current=t.nodeValue??""
-          let base=originals.get(t)
-          if(base===undefined){base=current; originals.set(t,base)}
-          else {
-            const rendered=locale==="ar"?translate(base):base
-            // React may reuse the same Text node for async data. If its value no longer
-            // matches what this presentation layer rendered, the application owns the
-            // new value; promote it to the new canonical source instead of restoring
-            // the stale loading/placeholder text.
-            if(current!==rendered){base=current; originals.set(t,base)}
-          }
-          const next=locale==="ar"?translate(base):base
-          if(t.nodeValue!==next)t.nodeValue=next
-        }
-        root.querySelectorAll("[placeholder],[aria-label],[title]").forEach(el=>{
-          let saved=attrOriginals.get(el)
-          if(!saved){saved={}; attrOriginals.set(el,saved)}
-          for(const a of ["placeholder","aria-label","title"]){
-            const current=el.getAttribute(a)
-            if(current===null)continue
-            const previous=saved[a]
-            if(previous===undefined)saved[a]=current
-            else {
-              const rendered=locale==="ar"?translate(previous):previous
-              if(current!==rendered)saved[a]=current
-            }
-            const base=saved[a]
-            const next=locale==="ar"?translate(base):base
-            if(current!==next)el.setAttribute(a,next)
-          }
-        })
-      } finally { applyingRef.current=false }
-    }
-    apply()
-    let queued=false
-    const observer=new MutationObserver(()=>{
-      if(applyingRef.current||queued)return
-      queued=true
-      queueMicrotask(()=>{queued=false;apply()})
-    })
-    observer.observe(root,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["placeholder","aria-label","title"]})
-    return()=>observer.disconnect()
-  },[locale,scoped])
-  return null
+export function translateUpperOperationsText(locale: string, value: string): string {
+  if (locale !== "ar") return value
+  const trimmed = value.trim()
+  if (!trimmed) return value
+  let translated = EXACT[trimmed] ?? trimmed
+  if (translated === trimmed) {
+    for (const [pattern, replacement] of WORDS) translated = translated.replace(pattern, replacement)
+  }
+  return translated === trimmed ? value : value.replace(trimmed, translated)
 }
