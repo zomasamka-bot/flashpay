@@ -34,6 +34,17 @@ export function useLoadPaymentHistory() {
           }
         )
 
+        if (response.status === 401) {
+          // A persisted merchant token can expire between sessions. Fail closed:
+          // discard the stale merchant authentication and let the existing
+          // explicit Pi authentication flow obtain a fresh token. Do not
+          // auto-authenticate or blindly retry from this background hook.
+          unifiedStore.clearMerchantAuth()
+          unifiedStore.updateWalletStatus({ isConnected: false })
+          CoreLogger.warn("useLoadPaymentHistory: Merchant authorization expired; fresh Pi authentication required")
+          return
+        }
+
         if (!response.ok) {
           CoreLogger.error("useLoadPaymentHistory: Failed to fetch history, status:", response.status)
           return
