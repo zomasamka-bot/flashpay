@@ -12,6 +12,55 @@ function validPaymentId(value: string | null): value is string {
   return typeof value === "string" && value.length >= 8 && value.length <= 128 && value === value.trim() && /^[A-Za-z0-9_-]+$/.test(value)
 }
 
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function compareHorizonBinding(horizon: Extract<Awaited<ReturnType<typeof readSettlementSubmitHorizonEvidence>>, { outcome: "READ" }>, payment: Payment) {
+  const transaction = isRecord(horizon.transaction) ? horizon.transaction : null
+  const operation = horizon.operations.length === 1 && isRecord(horizon.operations[0]) ? horizon.operations[0] : null
+  const expectedAmount = Number(payment.merchantAmount ?? payment.customerAmount)
+  const observedAmount = operation ? Number(operation.amount) : Number.NaN
+  const expectedMemo = String(payment.a2uPaymentId ?? "").substring(0, 28)
+  const checks = {
+    hashMatch: transaction?.hash === payment.a2uPreparedTxHash,
+    sequenceMatch: transaction?.source_account_sequence === payment.a2uPreparedSequence,
+    sourceMatch: transaction?.source_account === payment.a2uFromAddress,
+    successfulMatch: transaction?.successful === true,
+    memoTypeMatch: transaction?.memo_type === "text",
+    memoMatch: transaction?.memo === expectedMemo,
+    operationCountMatch: transaction?.operation_count === 1 && horizon.operations.length === 1,
+    operationShapeMatch: operation !== null,
+    typeMatch: operation?.type === "payment",
+    operationHashMatch: operation?.transaction_hash === payment.a2uPreparedTxHash,
+    operationSuccessfulMatch: operation?.transaction_successful === true,
+    fromMatch: operation?.from === payment.a2uFromAddress,
+    toMatch: operation?.to === payment.a2uToAddress,
+    assetMatch: operation?.asset_type === "native",
+    amountMatch: Number.isFinite(expectedAmount) && Number.isFinite(observedAmount) && observedAmount === expectedAmount,
+  }
+  const failedChecks = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name)
+  return {
+    verdict: failedChecks.length === 0 ? "ALL_BINDING_CHECKS_MATCH" : "BINDING_MISMATCH",
+    failedChecks,
+    checks,
+    expected: {
+      hash: payment.a2uPreparedTxHash, sequence: payment.a2uPreparedSequence, source: payment.a2uFromAddress,
+      memo: expectedMemo, operationCount: 1, type: "payment", from: payment.a2uFromAddress, to: payment.a2uToAddress,
+      assetType: "native", amount: Number.isFinite(expectedAmount) ? expectedAmount : null,
+    },
+    observed: {
+      hash: transaction?.hash ?? null, sequence: transaction?.source_account_sequence ?? null, source: transaction?.source_account ?? null,
+      successful: transaction?.successful ?? null, memoType: transaction?.memo_type ?? null, memo: transaction?.memo ?? null,
+      operationCount: transaction?.operation_count ?? null, returnedOperations: horizon.operations.length, type: operation?.type ?? null,
+      operationHash: operation?.transaction_hash ?? null, operationSuccessful: operation?.transaction_successful ?? null,
+      from: operation?.from ?? null, to: operation?.to ?? null, assetType: operation?.asset_type ?? null,
+      amount: Number.isFinite(observedAmount) ? observedAmount : operation?.amount ?? null,
+    },
+  }
+}
+
 function canonical(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value === value.trim()
 }
@@ -61,6 +110,8 @@ export async function GET(request: NextRequest) {
       diagnosis = observedSequence < preparedSequence ? "HASH_ABSENT_SEQUENCE_STILL_AVAILABLE" : "HASH_ABSENT_SEQUENCE_CONSUMED"
     }
 
+    const binding = horizon.outcome === "READ" ? compareHorizonBinding(horizon, payment) : null
+
     return NextResponse.json({
       paymentId,
       asOf: new Date().toISOString(),
@@ -81,6 +132,7 @@ export async function GET(request: NextRequest) {
         dbRecorded: payment.dbRecorded === true,
       },
       horizon: { outcome: horizon.outcome, observedSourceSequence },
+      binding,
       refund: { state: refund.state },
       safety: {
         readOnly: true,
