@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { config } from "@/lib/config"
 import { useOwnerUid } from "@/lib/use-owner-uid"
+import { useI18n } from "@/lib/i18n/provider"
+import { translateUpperOperationsText } from "@/components/upper-operations-arabic-layer"
 
 type Status = "pass" | "warn" | "fail" | "unknown"
 type Check = { status: Status; detail: string; latencyMs?: number; observedAt?: string; ageMs?: number }
@@ -31,6 +33,8 @@ function statusClasses(status: Status) {
 }
 
 export default function DiagnosticsPage() {
+  const { locale } = useI18n()
+  const tr = (value: string) => translateUpperOperationsText(locale, value)
   const router = useRouter()
   const { uidData } = useOwnerUid()
   const [mounted, setMounted] = useState(false)
@@ -75,13 +79,13 @@ export default function DiagnosticsPage() {
   if (!isOwner) return null
 
   return <div className="min-h-screen pb-20 pt-4"><div className="max-w-4xl mx-auto px-4 space-y-6">
-    <div className="flex items-center gap-3"><BackButton /><div><div className="flex items-center gap-2"><Stethoscope className="h-6 w-6 text-blue-600"/><h1 className="text-2xl font-bold">System Diagnostics</h1></div><p className="text-sm text-muted-foreground">Server-backed platform health with secondary device diagnostics</p></div></div>
+    <div className="flex items-center gap-3"><BackButton /><div><div className="flex items-center gap-2"><Stethoscope className="h-6 w-6 text-blue-600"/><h1 className="text-2xl font-bold">{tr('System Diagnostics')}</h1></div><p className="text-sm text-muted-foreground">{tr("Server-backed platform health with secondary device diagnostics")}</p></div></div>
 
-    <Card className="border-blue-500/40"><CardHeader><CardTitle className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Server className="h-5 w-5"/>Infrastructure Health</span><Button size="sm" variant="outline" onClick={() => void runServerDiagnostics()} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}/> Re-run</Button></CardTitle><CardDescription>Owner-authenticated, read-only checks. Unknown is never reported as healthy.</CardDescription></CardHeader><CardContent className="space-y-3">
-      {serverError ? <div className="p-4 rounded-lg border border-red-300 text-red-700">Infrastructure diagnostics unavailable. No healthy state is inferred.</div> : Object.entries(health?.checks ?? {}).map(([key, check]) => <div key={key} className={`p-4 border rounded-lg ${statusClasses(check.status)}`}><div className="flex items-start justify-between gap-3"><div className="flex gap-3">{check.status === "pass" ? <CheckCircle className="h-4 w-4 mt-0.5"/> : <AlertCircle className="h-4 w-4 mt-0.5"/>}<div><div className="font-semibold text-sm">{labels[key] ?? key}</div><div className="text-xs opacity-80 mt-1">{check.detail}</div>{typeof check.latencyMs === "number" && <div className="text-xs opacity-60 mt-1">{check.latencyMs} ms</div>}{check.observedAt && <div className="text-xs opacity-60 mt-1">Observed: {new Date(check.observedAt).toLocaleString()}</div>}</div></div><Badge className="capitalize">{check.status}</Badge></div></div>)}
-      <div className="text-xs text-muted-foreground">{loading ? "Checking authoritative dependencies…" : health ? `Overall: ${health.overall.toUpperCase()} · as of ${new Date(health.asOf).toLocaleString()}` : "Waiting for server diagnostics…"}</div>
+    <Card className="border-blue-500/40"><CardHeader><CardTitle className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Server className="h-5 w-5"/>{tr('Infrastructure Health')}</span><Button size="sm" variant="outline" onClick={() => void runServerDiagnostics()} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}/> {tr("Re-run")}</Button></CardTitle><CardDescription>{tr('Owner-authenticated, read-only checks. Unknown is never reported as healthy.')}</CardDescription></CardHeader><CardContent className="space-y-3">
+      {serverError ? <div className="p-4 rounded-lg border border-red-300 text-red-700">{tr('Infrastructure diagnostics unavailable. No healthy state is inferred.')}</div> : Object.entries(health?.checks ?? {}).map(([key, check]) => <div key={key} className={`p-4 border rounded-lg ${statusClasses(check.status)}`}><div className="flex items-start justify-between gap-3"><div className="flex gap-3">{check.status === "pass" ? <CheckCircle className="h-4 w-4 mt-0.5"/> : <AlertCircle className="h-4 w-4 mt-0.5"/>}<div><div className="font-semibold text-sm">{labels[key] ?? key}</div><div className="text-xs opacity-80 mt-1">{check.detail}</div>{typeof check.latencyMs === "number" && <div className="text-xs opacity-60 mt-1">{check.latencyMs} ms</div>}{check.observedAt && <div className="text-xs opacity-60 mt-1">{tr("Observed:")} {new Date(check.observedAt).toLocaleString()}</div>}</div></div><Badge className="capitalize">{check.status}</Badge></div></div>)}
+      <div className="text-xs text-muted-foreground">{loading ? tr("Checking authoritative dependencies…") : health ? `${tr("Overall:")} ${tr(health.overall.toUpperCase())} · ${tr("as of")} ${new Date(health.asOf).toLocaleString()}` : tr("Waiting for server diagnostics…")}</div>
     </CardContent></Card>
 
-    <Card><CardHeader><CardTitle className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Smartphone className="h-5 w-5"/>Device Diagnostics</span><Button size="sm" variant="outline" onClick={runDeviceDiagnostics}><RefreshCw className="h-4 w-4"/> Re-run</Button></CardTitle><CardDescription>Browser/device checks only; these do not prove platform or financial health.</CardDescription></CardHeader><CardContent className="space-y-3">{deviceChecks.map(check => <div key={check.name} className={`p-4 border rounded-lg ${statusClasses(check.status)}`}><div className="flex items-start justify-between gap-3"><div><div className="font-semibold text-sm">{check.name}</div><div className="text-xs opacity-80 mt-1">{check.message}</div></div><Badge className="capitalize">{check.status}</Badge></div></div>)}</CardContent></Card>
+    <Card><CardHeader><CardTitle className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Smartphone className="h-5 w-5"/>{tr('Device Diagnostics')}</span><Button size="sm" variant="outline" onClick={runDeviceDiagnostics}><RefreshCw className="h-4 w-4"/> {tr("Re-run")}</Button></CardTitle><CardDescription>{tr('Browser/device checks only; these do not prove platform or financial health.')}</CardDescription></CardHeader><CardContent className="space-y-3">{deviceChecks.map(check => <div key={check.name} className={`p-4 border rounded-lg ${statusClasses(check.status)}`}><div className="flex items-start justify-between gap-3"><div><div className="font-semibold text-sm">{check.name}</div><div className="text-xs opacity-80 mt-1">{check.message}</div></div><Badge className="capitalize">{check.status}</Badge></div></div>)}</CardContent></Card>
   </div></div>
 }
