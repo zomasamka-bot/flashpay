@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { config } from "@/lib/config"
 import { useOwnerUid } from "@/lib/use-owner-uid"
-import { useI18n } from "@/lib/i18n/provider"
+import { useI18n } from "@/components/i18n-provider"
 import { translateUpperOperationsText } from "@/components/upper-operations-arabic-layer"
 
 type Review = { paymentId:string; verdict:"Final"|"Recovering"|"Manual Review"|"Conflict"|"Unknown"; reason:string; asOf:string; createdAt?:string; updatedAt?:string; parties:Record<string,unknown>; canonical:Record<string,unknown>; database:Record<string,unknown>; refund:Record<string,unknown>; action:{allowed:false;canPruneFromQueue?:boolean;message:string} }

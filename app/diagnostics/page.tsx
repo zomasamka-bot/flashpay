@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { config } from "@/lib/config"
 import { useOwnerUid } from "@/lib/use-owner-uid"
-import { useI18n } from "@/lib/i18n/provider"
+import { useI18n } from "@/components/i18n-provider"
 import { translateUpperOperationsText } from "@/components/upper-operations-arabic-layer"
 
 type Status = "pass" | "warn" | "fail" | "unknown"

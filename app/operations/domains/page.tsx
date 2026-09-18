@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { Globe, Lock, Unlock, ExternalLink, RefreshCw } from "lucide-react"
 import { useDomains } from "@/lib/domains"
 import { useOwnerUid } from "@/lib/use-owner-uid"
-import { useI18n } from "@/lib/i18n/provider"
+import { useI18n } from "@/components/i18n-provider"
 import { translateUpperOperationsText } from "@/components/upper-operations-arabic-layer"
 import type { DomainControlState } from "@/lib/domain-control"
 

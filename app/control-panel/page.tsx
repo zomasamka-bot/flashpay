@@ -14,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertTriangle, Power, RefreshCw, CheckCircle2, ShieldAlert } from "lucide-react"
 import { useOwnerUid } from "@/lib/use-owner-uid"
-import { useI18n } from "@/lib/i18n/provider"
+import { useI18n } from "@/components/i18n-provider"
 import { translateUpperOperationsText } from "@/components/upper-operations-arabic-layer"
 import { OwnerOperationsHeader } from "@/components/owner-operations-header"
 
