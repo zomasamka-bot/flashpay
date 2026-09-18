@@ -3,14 +3,17 @@
  * OWNER UID ISOLATED STORE
  * ============================================================================
  *
- * This is a COMPLETELY SEPARATE storage system for owner operations.
+ * This is a COMPLETELY SEPARATE in-memory store for owner operations.
  * It does NOT interact with the payment system in any way.
  *
- * ISOLATION GUARANTEE:
+ * SECURITY / ISOLATION GUARANTEE:
+ * - Owner Pi access tokens are session-memory-only and are never persisted to
+ *   localStorage or other browser storage by this store.
+ * - Any legacy "flashpay_owner_uid" localStorage record is removed on client
+ *   initialization/clear so a token persisted by an older build is discarded.
  * - No imports from lib/operations.ts
  * - No imports from lib/use-payments.ts
  * - No imports from lib/payments-store.ts
- * - Independent localStorage key: "flashpay_owner_uid"
  * - Independent initialization
  * - Independent error handling
  */
@@ -25,25 +28,29 @@ export interface OwnerUidData {
   error: string | null
 }
 
-const OWNER_UID_STORAGE_KEY = "flashpay_owner_uid"
+const LEGACY_OWNER_UID_STORAGE_KEY = "flashpay_owner_uid"
 
 type StateListener = () => void
 
-class OwnerUidStore {
-  private data: OwnerUidData = {
-    uid: null,
-    accessToken: null,
-    walletAddress: null,
-    username: null,
-    lastUpdated: null,
-    status: "idle",
-    error: null,
-  }
+const createDefaultData = (): OwnerUidData => ({
+  uid: null,
+  accessToken: null,
+  walletAddress: null,
+  username: null,
+  lastUpdated: null,
+  status: "idle",
+  error: null,
+})
 
+class OwnerUidStore {
+  private data: OwnerUidData = createDefaultData()
   private listeners: Set<StateListener> = new Set()
 
   /**
-   * Initialize: Load from localStorage if available
+   * Initialize client storage boundary.
+   *
+   * Owner credentials deliberately do not survive a reload. Remove the legacy
+   * persisted record rather than hydrating it into memory.
    */
   initialize(): void {
     if (typeof window === "undefined") {
@@ -52,21 +59,15 @@ class OwnerUidStore {
     }
 
     try {
-      const stored = localStorage.getItem(OWNER_UID_STORAGE_KEY)
-      if (stored) {
-        this.data = JSON.parse(stored)
-        console.log("[OwnerUID] Loaded from localStorage")
-      } else {
-        console.log("[OwnerUID] No stored data found, using defaults")
-      }
+      localStorage.removeItem(LEGACY_OWNER_UID_STORAGE_KEY)
+      console.log("[OwnerUID] Owner credentials are memory-only; legacy storage cleared")
     } catch (err) {
-      console.error("[OwnerUID] Failed to load from localStorage:", err)
-      // Continue with defaults on error
+      console.error("[OwnerUID] Failed to clear legacy localStorage:", err)
     }
   }
 
   /**
-   * Set UID and related data
+   * Set UID and related data in memory for the current page session only.
    */
   setUid(uid: string, accessToken?: string, walletAddress?: string, username?: string): void {
     this.data.uid = uid
@@ -76,58 +77,55 @@ class OwnerUidStore {
     this.data.lastUpdated = Date.now()
     this.data.status = "success"
     this.data.error = null
-    this.persist()
     this.notifyListeners()
   }
 
   /**
-   * Get current UID data
+   * Get current UID data.
    */
   getUid(): OwnerUidData {
     return { ...this.data }
   }
 
   /**
-   * Set pending status
+   * Set pending status.
    */
   setPending(): void {
     this.data.status = "pending"
     this.data.error = null
-    this.persist()
     this.notifyListeners()
   }
 
   /**
-   * Set error
+   * Set error.
    */
   setError(error: string): void {
     this.data.status = "error"
     this.data.error = error
-    this.persist()
     this.notifyListeners()
     console.error("[OwnerUID] Error stored:", error)
   }
 
   /**
-   * Clear all data
+   * Clear all in-memory data and remove any legacy persisted owner record.
    */
   clear(): void {
-    this.data = {
-      uid: null,
-      accessToken: null,
-      walletAddress: null,
-      username: null,
-      lastUpdated: null,
-      status: "idle",
-      error: null,
+    this.data = createDefaultData()
+
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem(LEGACY_OWNER_UID_STORAGE_KEY)
+      } catch (err) {
+        console.error("[OwnerUID] Failed to clear legacy localStorage:", err)
+      }
     }
-    this.persist()
+
     this.notifyListeners()
-    console.log("[OwnerUID] Data cleared")
+    console.log("[OwnerUID] In-memory data cleared")
   }
 
   /**
-   * Subscribe to state changes
+   * Subscribe to state changes.
    */
   subscribe(listener: StateListener): () => void {
     this.listeners.add(listener)
@@ -137,34 +135,19 @@ class OwnerUidStore {
   }
 
   /**
-   * Notify all subscribers
+   * Notify all subscribers.
    */
   private notifyListeners(): void {
     this.listeners.forEach((listener) => {
       listener()
     })
   }
-
-  /**
-   * Persist to localStorage
-   */
-  private persist(): void {
-    if (typeof window === "undefined") {
-      return
-    }
-
-    try {
-      localStorage.setItem(OWNER_UID_STORAGE_KEY, JSON.stringify(this.data))
-    } catch (err) {
-      console.error("[OwnerUID] Failed to persist to localStorage:", err)
-    }
-  }
 }
 
-// Export singleton instance
+// Export singleton instance. The token exists only in this module instance.
 export const ownerUidStore = new OwnerUidStore()
 
-// Auto-initialize on module load
+// Auto-initialize on module load to remove credentials persisted by older builds.
 if (typeof window !== "undefined") {
   ownerUidStore.initialize()
 }
