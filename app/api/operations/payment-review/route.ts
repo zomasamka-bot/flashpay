@@ -18,6 +18,49 @@ function validPaymentId(value: string | null): value is string {
   return typeof value === "string" && value.length >= 8 && value.length <= 128 && value === value.trim() && /^[A-Za-z0-9_-]+$/.test(value)
 }
 
+const DEFAULT_PAGE_LIMIT = 50
+const MAX_PAGE_LIMIT = 100
+const REVIEW_CONCURRENCY = 8
+
+function parsePageLimit(value: string | null): number | null {
+  if (value === null) return DEFAULT_PAGE_LIMIT
+  if (!/^[0-9]+$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_PAGE_LIMIT ? parsed : null
+}
+
+function parseScanCursor(value: string | null): string | null {
+  if (value === null || value === "") return "0"
+  return /^[0-9]+$/.test(value) ? value : null
+}
+
+async function scanActivePaymentIds(cursor: string, limit: number): Promise<{ nextCursor: string; ids: string[] }> {
+  const result = await redis.eval<[string], [string, string[]]>(
+    "local r=redis.call('SSCAN',KEYS[1],ARGV[1],'COUNT',ARGV[2]); return {r[1],r[2]}",
+    [ACTIVE_KEY],
+    [cursor, String(limit)],
+  )
+  if (!Array.isArray(result) || result.length !== 2) throw new Error("Invalid active recovery scan result")
+  const nextCursor = String(result[0])
+  const rawIds = result[1]
+  if (!/^[0-9]+$/.test(nextCursor) || !Array.isArray(rawIds)) throw new Error("Invalid active recovery scan result")
+  return { nextCursor, ids: rawIds.filter((id): id is string => typeof id === "string" && validPaymentId(id)) }
+}
+
+async function mapBounded<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  async function worker() {
+    while (true) {
+      const index = next++
+      if (index >= items.length) return
+      results[index] = await mapper(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()))
+  return results
+}
+
 async function readPayment(paymentId: string): Promise<Payment | null> {
   const raw = await redis.get<unknown>(`payment:${paymentId}`)
   if (!raw) return null
@@ -75,11 +118,56 @@ export async function GET(request: NextRequest) {
       if (!payment) return NextResponse.json({ verdict: "Unknown", paymentId, reason: "Payment not found in canonical Redis" }, { status: 404 })
       return NextResponse.json(await buildReview(payment), { headers: { "Cache-Control": "no-store" } })
     }
-    const ids = (await redis.smembers(ACTIVE_KEY)).filter((id): id is string => validPaymentId(id)).slice(0, 250)
-    const reviews = (await Promise.all(ids.map(async id => { try { const p = await readPayment(id); return p ? await buildReview(p) : null } catch { return null } }))).filter((r): r is NonNullable<typeof r> => Boolean(r))
-    const dismissed = new Set((await redis.smembers(DISMISSED_KEY)).filter((id): id is string => validPaymentId(id)))
-    const visible = reviews.filter(r => !dismissed.has(r.paymentId) && (r.verdict !== "Final" || r.refund.state === "present")).sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-    return NextResponse.json({ available: true, asOf: new Date().toISOString(), items: visible, counts: { total: visible.length, recovering: visible.filter(x=>x.verdict==="Recovering").length, manualReview: visible.filter(x=>x.verdict==="Manual Review").length, conflicts: visible.filter(x=>x.verdict==="Conflict").length, unknown: visible.filter(x=>x.verdict==="Unknown").length, refunds: visible.filter(x=>x.refund.state==="present").length }, note: ids.length >= 250 ? "Showing the first 250 active recovery records." : null }, { headers: { "Cache-Control": "no-store" } })
+    const limit = parsePageLimit(url.searchParams.get("limit"))
+    const cursor = parseScanCursor(url.searchParams.get("cursor"))
+    if (limit === null) return NextResponse.json({ error: `limit must be an integer between 1 and ${MAX_PAGE_LIMIT}` }, { status: 400 })
+    if (cursor === null) return NextResponse.json({ error: "cursor must be an unsigned Redis SSCAN cursor" }, { status: 400 })
+
+    const [activeIndexedRaw, scanned] = await Promise.all([
+      redis.scard(ACTIVE_KEY),
+      scanActivePaymentIds(cursor, limit),
+    ])
+    const activeIndexed = Number(activeIndexedRaw)
+    if (!Number.isSafeInteger(activeIndexed) || activeIndexed < 0) throw new Error("Invalid active recovery cardinality")
+
+    const reviews = (await mapBounded(scanned.ids, REVIEW_CONCURRENCY, async id => {
+      try {
+        const payment = await readPayment(id)
+        return payment ? await buildReview(payment) : null
+      } catch {
+        return null
+      }
+    })).filter((review): review is NonNullable<typeof review> => Boolean(review))
+
+    // Dismissal is checked only for this bounded page; never materialize the full dismissed set.
+    const dismissalFlags = await mapBounded(reviews, REVIEW_CONCURRENCY, async review => {
+      try { return Number(await redis.sismember(DISMISSED_KEY, review.paymentId)) === 1 } catch { throw new Error("Dismissed review index unavailable") }
+    })
+    const visible = reviews.filter((review, index) => !dismissalFlags[index] && (review.verdict !== "Final" || review.refund.state === "present")).sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    return NextResponse.json({
+      available: true,
+      asOf: new Date().toISOString(),
+      items: visible,
+      counts: {
+        total: visible.length,
+        recovering: visible.filter(x=>x.verdict==="Recovering").length,
+        manualReview: visible.filter(x=>x.verdict==="Manual Review").length,
+        conflicts: visible.filter(x=>x.verdict==="Conflict").length,
+        unknown: visible.filter(x=>x.verdict==="Unknown").length,
+        refunds: visible.filter(x=>x.refund.state==="present").length,
+      },
+      visibility: {
+        activeIndexed,
+        scanned: scanned.ids.length,
+        pageVisible: visible.length,
+        cursor,
+        nextCursor: scanned.nextCursor,
+        complete: scanned.nextCursor === "0",
+        limit,
+        concurrency: REVIEW_CONCURRENCY,
+      },
+      note: scanned.nextCursor !== "0" ? "More active recovery records are available; continue with nextCursor." : null,
+    }, { headers: { "Cache-Control": "no-store" } })
   } catch { return NextResponse.json({ error: "Operational review unavailable", available: false }, { status: 503 }) }
 }
 
