@@ -32,7 +32,6 @@ export default function PaymentContentWithId({
   entry?: "pi" | "share"
 }) {
   // Debug: Log props received from server route
-  console.log("[v0][PaymentContentWithId] Component initialized with props:", { paymentId, urlAmount, urlNote, entry })
 
   const { toast } = useToast()
   const { t, locale, setLocale } = useI18n()
@@ -68,7 +67,6 @@ export default function PaymentContentWithId({
   const addDiagnostic = (message: string) => {
     const timestamp = new Date().toLocaleTimeString()
     setDiagnostics(prev => [...prev, `[${timestamp}] ${message}`])
-    console.log("[v0][Diagnostic]", message)
   }
 
   // Check if we have a stored payment ID from before auth (in case of redirect)
@@ -77,9 +75,6 @@ export default function PaymentContentWithId({
       const storedPaymentId = sessionStorage.getItem("flashpay_current_payment_id")
       
       if (storedPaymentId && storedPaymentId !== paymentId) {
-        console.warn("[v0][PaymentPage] ⚠️ Payment ID mismatch after navigation!")
-        console.warn("[v0][PaymentPage] Expected:", storedPaymentId)
-        console.warn("[v0][PaymentPage] Got:", paymentId)
       }
     }
   }, [paymentId])
@@ -92,21 +87,14 @@ export default function PaymentContentWithId({
       const urlAmount = urlParams.get("amount")
       const localeHint = urlParams.get("lang")?.toLowerCase()
       if (isAppLocale(localeHint)) setLocale(localeHint)
-      console.log("[v0][EntryMode] URL search string:", window.location.search)
-      console.log("[v0][EntryMode] Parsed entry param:", mode)
-      console.log("[v0][EntryMode] Parsed amount param:", urlAmount)
-      console.log("[v0][EntryMode] entry prop received:", entry)
       
       if (mode === "share" || mode === "pi") {
         setEntryMode(mode)
-        console.log("[v0][EntryMode] Detected entry mode from URL:", mode)
       } else if (urlAmount && !isNaN(parseFloat(urlAmount))) {
         // Default to 'pi' mode if amount is in URL but entry param missing
         // This handles QR codes that include amount but may lose entry param in some browsers
         setEntryMode("pi")
-        console.log("[v0][EntryMode] Auto-detected pi mode from amount param in URL")
       } else {
-        console.log("[v0][EntryMode] No entry mode detected, entry prop:", entry)
       }
     }
   }, [])
@@ -135,7 +123,6 @@ export default function PaymentContentWithId({
               merchantId: "unknown",
               accessToken: "",
             }
-            console.log("[v0] ✅ Showing provisional payment from URL params:", provisionalPayment)
             setPayment(provisionalPayment)
             setLoading(false)
             
@@ -148,7 +135,6 @@ export default function PaymentContentWithId({
               clearTimeout(timeoutId)
               
               if (serverPayment) {
-                console.log("[v0] ✅ Authoritative payment loaded:", serverPayment)
                 setPayment(serverPayment)
                 setAuthoritativeLoaded(true)
                 // Store in unifiedStore for payment execution
@@ -163,12 +149,10 @@ export default function PaymentContentWithId({
                   serverPayment.accessToken
                 )
               } else {
-                console.warn("[v0] ⚠️ Authoritative payment not available from server")
                 addDiagnostic("Server payment not available - using provisional data")
                 // Keep showing provisional payment, disable Pay button
               }
             } catch (fetchError) {
-              console.warn("[v0] ⚠️ Failed to fetch authoritative payment:", fetchError)
               addDiagnostic(`Failed to fetch payment from server: ${fetchError}`)
               // Keep showing provisional payment, disable Pay button
             }
@@ -187,7 +171,6 @@ export default function PaymentContentWithId({
           clearTimeout(timeoutId)
           
           if (serverPayment) {
-            console.log("[v0] ✅ Payment found from server:", serverPayment)
             setPayment(serverPayment)
             setAuthoritativeLoaded(true)
             unifiedStore.createPaymentWithId(
@@ -213,24 +196,19 @@ export default function PaymentContentWithId({
                 merchantId: "unknown",
                 accessToken: "",
               }
-              console.log("[v0] ✅ Created fallback payment from URL params:", fallbackPayment)
               setPayment(fallbackPayment)
             } else {
-              console.error("[v0] ❌ Invalid amount in URL parameters:", urlAmountStr)
               setPayment(null)
             }
           } else {
-            console.error("[v0] ❌ Payment NOT found and no URL parameters available")
             setPayment(null)
           }
         } catch (error) {
-          console.error("[v0] Error fetching payment:", error)
           setPayment(null)
         }
         
         setLoading(false)
       } catch (error) {
-        console.error("[v0] Error in fetchPayment:", error)
         setPayment(null)
         setLoading(false)
       }
@@ -407,7 +385,6 @@ export default function PaymentContentWithId({
   const startPostSubmitPolling = (txid: string, processingStatus?: "paid_to_app" | "settlement_pending") => {
     if (pollingStartedRef.current) return
     pollingStartedRef.current = true
-    console.log("[v0] Starting status polling...")
     let stopped = false
     let lastProcessingStatus: "paid_to_app" | "settlement_pending" | null = processingStatus ?? null
     let inFlight = false
@@ -415,11 +392,9 @@ export default function PaymentContentWithId({
       if (stopped || inFlight) return
       inFlight = true
       try {
-      console.log("[v0] Polling payment status...")
       const updated = await getPaymentFromServer(paymentId, true)
       if (stopped) return
       if (updated) {
-        console.log("[v0] Updated payment status:", updated.status)
         if (["settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
           setPayment(updated)
           stopped = true
@@ -434,7 +409,6 @@ export default function PaymentContentWithId({
         if (updated.status === "settled_to_merchant") {
           stopped = true
           clearInterval(pollInterval)
-          console.log("[v0] ✅ Payment confirmed and settled to merchant!")
           setPayment(updated)
           setIsPaying(false)
           toast({ title: t("pay.toast.successTitle"), description: t("pay.toast.successDesc") })
@@ -447,7 +421,6 @@ export default function PaymentContentWithId({
     setTimeout(() => {
       stopped = true
       clearInterval(pollInterval)
-      console.log("[v0] Stopping status polling after 15 minutes")
       if (lastProcessingStatus === null) setIsPaying(false)
     }, 900000)
   }
@@ -534,8 +507,6 @@ export default function PaymentContentWithId({
         } catch {
           // Preserve the existing generic failure handling below.
         }
-        console.log("[v0] ========== PAYMENT ERROR CALLBACK ==========")
-        console.log("[v0] Error:", error)
         toast({
           title: "Payment Failed",
           description: error,
@@ -549,7 +520,6 @@ export default function PaymentContentWithId({
         startPostSubmitPolling("", status)
       },
     )
-    console.log("[v0] executePayment called, waiting for callbacks...")
   }
 
   // If entry mode is "share", show bridge UI to open Pi Browser
@@ -660,23 +630,9 @@ export default function PaymentContentWithId({
 
   // CRITICAL: Log the origin context to diagnose app_id mismatches
   if (typeof window !== "undefined") {
-    console.log("[v0][QR-Generation] ===== QR CODE GENERATION CONTEXT =====")
-    console.log("[v0][QR-Generation] Merchant opened from:", window.location.origin)
-    console.log("[v0][QR-Generation] Merchant domain:", window.location.hostname)
-    console.log("[v0][QR-Generation] QR URL generated:", paymentQR)
-    console.log("[v0][QR-Generation]")
-    console.log("[v0][QR-Generation] When customer scans this QR:")
     const qrOrigin = paymentQR.match(/pi:\/\/([^\/]+)/)?.[1]
-    console.log("[v0][QR-Generation]   → Will redirect to:", `https://${qrOrigin}`)
-    console.log("[v0][QR-Generation]   → Customer will authenticate under:", qrOrigin)
-    console.log("[v0][QR-Generation]   → Merchant authenticated under:", window.location.hostname)
-    console.log("[v0][QR-Generation]")
     if (qrOrigin === window.location.hostname) {
-      console.log("[v0][QR-Generation] ✅ SAME DOMAIN - Merchant and Customer will use same app context")
     } else {
-      console.log("[v0][QR-Generation] ⚠️  DIFFERENT DOMAINS - This may cause app_id mismatch!")
-      console.log("[v0][QR-Generation]   Merchant:", window.location.hostname)
-      console.log("[v0][QR-Generation]   Customer:", qrOrigin)
     }
   }
 

@@ -137,11 +137,6 @@ export const createPiPayment = async (
 
   try {
     // LOG MERCHANT DATA FOR VERIFICATION
-    console.log("[v0][Pi SDK] ===== MERCHANT DATA VERIFICATION =====")
-    console.log("[v0][Pi SDK] paymentId:", paymentId)
-    console.log("[v0][Pi SDK] merchantId received:", merchantId, "TYPE:", typeof merchantId)
-    console.log("[v0][Pi SDK] merchantAddress received:", merchantAddress, "TYPE:", typeof merchantAddress)
-    console.log("[v0][Pi SDK] =============================================")
 
     CoreLogger.operation("Creating Pi payment", { 
       paymentId, 
@@ -166,19 +161,15 @@ export const createPiPayment = async (
       },
     }
 
-    console.log("[v0][Pi SDK] Metadata being sent to Pi SDK:", JSON.stringify(paymentData.metadata))
 
     window.Pi.createPayment(paymentData, {
       onReadyForServerApproval: (piPaymentId: string) => {
         // Prevent duplicate approval calls
         if (approvalSent) {
-          console.warn("[Pi SDK] Skipping duplicate onReadyForServerApproval call")
           return
         }
         approvalSent = true
 
-        console.log("[v0][Pi SDK] onReadyForServerApproval CALLBACK")
-        console.log("[v0][Pi SDK] Merchant data in callback - merchantId:", merchantId, "merchantAddress:", merchantAddress)
 
         CoreLogger.info("Payment ready for approval", { piPaymentId, paymentId, merchantId, merchantAddress })
 
@@ -197,7 +188,6 @@ export const createPiPayment = async (
           .then((response) => {
             if (response.ok) {
               CoreLogger.info("Payment approved on backend", { piPaymentId, paymentId })
-              console.log("[v0][Pi SDK] ✓ Payment approved - awaiting completion")
             } else {
               CoreLogger.error("Approval failed", { status: response.status, piPaymentId })
               onError(`Approval failed: ${response.statusText}`, false)
@@ -212,14 +202,10 @@ export const createPiPayment = async (
       onReadyForServerCompletion: (piPaymentId: string, txid: string) => {
         // Prevent duplicate completion calls
         if (completionSent) {
-          console.warn("[Pi SDK] Skipping duplicate onReadyForServerCompletion call")
           return
         }
         completionSent = true
 
-        console.log("[v0][Pi SDK] onReadyForServerCompletion CALLBACK")
-        console.log("[v0][Pi SDK] Received piPaymentId:", piPaymentId)
-        console.log("[v0][Pi SDK] Received txid:", txid)
 
         CoreLogger.info("Payment ready for completion", { piPaymentId, txid, paymentId, merchantId })
 
@@ -235,13 +221,11 @@ export const createPiPayment = async (
         })
           .then(async (response) => {
             const completeData = await response.json()
-            console.log("[v0][Pi SDK] /api/pi/complete response:", completeData)
 
             // CRITICAL: Processing states (paid_to_app, settlement_pending) are NOT errors
             // They indicate the payment is in progress and will eventually settle
             // Do NOT route them to error callback - client should continue polling
             if (completeData.status === "paid_to_app" || completeData.status === "settlement_pending") {
-              console.warn("[v0][Pi SDK] ⚠ Payment processing:", completeData.status)
               CoreLogger.info("Payment in processing state", { piPaymentId, txid, paymentId, status: completeData.status })
               // Processing states should be handled by polling or dedicated processing callback
               // Do NOT call onSuccess or onError - let client continue polling or use recovery flow
@@ -252,18 +236,14 @@ export const createPiPayment = async (
             // ONLY call onSuccess when settled_to_merchant
             // Pass the verified U2A txid from Pi Wallet callback to component
             if (completeData.success === true && completeData.status === "settled_to_merchant") {
-              console.log("[v0][Pi SDK] ✅ Settlement complete - calling onSuccess with U2A txid")
               CoreLogger.info("Payment settled to merchant", { piPaymentId, txid, paymentId })
-              console.log("[v0][Pi SDK] Passing U2A txid to component callback:", txid)
               // txid here is the verified transaction ID from Pi Wallet (U2A success)
               onSuccess(txid)
             } else if (completeData.status === "settlement_failed") {
-              console.error("[v0][Pi SDK] ❌ Settlement failed - requires manual review")
               CoreLogger.error("Settlement failed - blocking automated retry", { piPaymentId, txid, paymentId, a2uTxid: completeData.a2uTxid, horizonSuccessFlag: completeData.horizonSuccessFlag })
               // settlement_failed with a2uTxid and horizonSuccessFlag = terminal state requiring manual review
               onError("Settlement to merchant failed - requires manual review", false)
             } else {
-              console.error("[v0][Pi SDK] ❌ Unexpected completion status:", completeData.status)
               onError("Unexpected payment status: " + completeData.status, false)
             }
           })
@@ -298,28 +278,23 @@ export const authenticateCustomer = async (): Promise<{
   username?: string
   error?: string
 }> => {
-  console.log("[CUSTOMER-AUTH] authenticateCustomer() started")
   
   if (typeof window === "undefined" || !window.Pi || typeof window.Pi.authenticate !== "function") {
-    console.error("[CUSTOMER-AUTH] Pi SDK not available")
     CoreLogger.error("Pi SDK not available for authentication")
     return { success: false, error: "Pi SDK not available. Please open in Pi Browser." }
   }
 
   const walletStatus = unifiedStore.getWalletStatus()
   if (!walletStatus.isInitialized) {
-    console.error("[CUSTOMER-AUTH] Pi SDK not initialized")
     CoreLogger.error("Pi SDK not initialized")
     return { success: false, error: "Pi SDK not initialized. Please refresh and try again." }
   }
 
   try {
-    console.log("[CUSTOMER-AUTH] Requesting ['username','payments','wallet_address'] scopes from Pi.authenticate()...")
     CoreLogger.operation("Authenticating customer with Pi SDK (username + payments + wallet_address scopes)")
 
     const authPromise = window.Pi.authenticate(["username","payments","wallet_address"], async (payment: any) => {
       // Handle incomplete payment from Pi Network
-      console.log("[CUSTOMER-AUTH] Incomplete payment callback triggered")
       
       // Only attempt completion if both piPaymentId and txid exist
       const piPaymentId = payment?.identifier
@@ -364,32 +339,24 @@ export const authenticateCustomer = async (): Promise<{
 
     const authResult = await Promise.race([authPromise, timeoutPromise])
 
-    console.log("[CUSTOMER-AUTH] Pi.authenticate() returned:")
-    console.log("[CUSTOMER-AUTH] authResult.accessToken:", authResult?.accessToken ? "EXISTS" : "MISSING")
 
     if (!authResult) {
-      console.error("[CUSTOMER-AUTH] authResult is null/undefined")
       return { success: false, error: "Authentication failed - no response from Pi wallet" }
     }
 
     if (!authResult.user) {
-      console.error("[CUSTOMER-AUTH] authResult.user is missing")
       return { success: false, error: "Authentication failed - no user data from Pi wallet" }
     }
 
-    console.log("[CUSTOMER-AUTH] ✅ Authentication response received successfully")
     
     // Check if scopes array exists and has payments scope
     const hasExplicitScopes = authResult.user.scopes && Array.isArray(authResult.user.scopes)
     const hasPaymentsScope = hasExplicitScopes ? authResult.user.scopes.includes("payments") : true // Assume granted if not explicitly listed
     
     if (hasExplicitScopes) {
-      console.log("[CUSTOMER-AUTH] scopes array present:", authResult.user.scopes)
       if (!hasPaymentsScope) {
-        console.warn("[CUSTOMER-AUTH] 'payments' scope not in array, but proceeding anyway")
       }
     } else {
-      console.log("[CUSTOMER-AUTH] No scopes array in response - assuming 'payments' scope was granted")
     }
 
     // Update wallet status
@@ -404,7 +371,6 @@ export const authenticateCustomer = async (): Promise<{
     const uid = typeof authResult.user.uid === "string" ? authResult.user.uid.trim() : ""
     const username = typeof authResult.user.username === "string" ? authResult.user.username.trim() : ""
 
-    console.log("[CUSTOMER-AUTH] ✅ Authentication successful")
     return {
       success: true,
       accessToken: accessToken || undefined,
@@ -421,7 +387,6 @@ export const authenticateCustomer = async (): Promise<{
       error.message.includes("payment.*needs.*handled")
     )
     
-    console.error("[CUSTOMER-AUTH] ❌ Authentication error:", error instanceof Error ? error.message : error)
     CoreLogger.error("Customer authentication error", error)
     
     return {
@@ -442,41 +407,26 @@ export const authenticateMerchant = async (): Promise<{
   username?: string
   error?: string
 }> => {
-  console.log("[MERCHANT-AUTH] authenticateMerchant() called")
   
   // CRITICAL: Log window context to understand where app is running
-  console.log("[MERCHANT-AUTH] ===== ENVIRONMENT CONTEXT =====")
-  console.log("[MERCHANT-AUTH] typeof window:", typeof window)
-  console.log("[MERCHANT-AUTH] window.location.href:", typeof window !== "undefined" ? window.location.href : "N/A (no window)")
-  console.log("[MERCHANT-AUTH] document.referrer:", typeof document !== "undefined" ? document.referrer : "N/A (no document)")
-  console.log("[MERCHANT-AUTH] typeof window.Pi:", typeof window !== "undefined" ? typeof (window as any).Pi : "N/A")
-  console.log("[MERCHANT-AUTH]")
   
   // DETECT PI BROWSER ENVIRONMENT
   const isInPiBrowser = typeof window !== "undefined" && (window as any).Pi !== undefined
   const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "UNKNOWN"
   const isPiBrowserUserAgent = userAgent.includes("PiBrowser") || userAgent.includes("pi-browser")
   
-  console.log("[MERCHANT-AUTH] ===== PI BROWSER ENVIRONMENT CHECK =====")
-  console.log("[MERCHANT-AUTH] User-Agent:", userAgent)
-  console.log("[MERCHANT-AUTH] Pi SDK available:", isInPiBrowser)
-  console.log("[MERCHANT-AUTH] Detected as Pi Browser:", isPiBrowserUserAgent)
-  console.log("[MERCHANT-AUTH]")
   
   if (typeof window === "undefined" || !window.Pi || typeof window.Pi.authenticate !== "function") {
-    console.error("[MERCHANT-AUTH] Pi SDK not available")
     CoreLogger.error("Pi SDK not available for authentication")
     return { success: false, error: "Pi SDK not available. Please open in Pi Browser." }
   }
 
   const walletStatus = unifiedStore.getWalletStatus()
   if (!walletStatus.isInitialized) {
-    console.error("[MERCHANT-AUTH] Pi SDK not initialized")
     CoreLogger.error("Pi SDK not initialized")
     return { success: false, error: "Pi SDK not initialized. Please refresh and try again." }
   }
 
-  console.log("[MERCHANT-AUTH] Requesting scopes: ['username', 'payments', 'wallet_address']")
   
   try {
     CoreLogger.operation("Authenticating merchant with Pi SDK")
@@ -485,7 +435,6 @@ export const authenticateMerchant = async (): Promise<{
       ["username", "payments", "wallet_address"],
       async (payment: any) => {
     // Handle incomplete payment from Pi Network
-    console.log("[MERCHANT-AUTH] Incomplete payment callback triggered")
     
     // Only attempt completion if both piPaymentId and txid exist
     const piPaymentId = payment?.identifier
@@ -533,88 +482,54 @@ export const authenticateMerchant = async (): Promise<{
 
     const authResult = await Promise.race([authPromise, timeoutPromise])
     
-    console.log("[MERCHANT-AUTH] Pi.authenticate() returned successfully")
-    console.log("[MERCHANT-AUTH] authResult.accessToken:", authResult?.accessToken ? "EXISTS" : "MISSING")
 
     if (!authResult) {
-      console.error("[MERCHANT-AUTH] authResult is null/undefined")
       return { success: false, error: "Authentication failed - no response from Pi wallet" }
     }
 
     if (!authResult.user) {
-      console.error("[MERCHANT-AUTH] authResult.user is missing")
       return { success: false, error: "Authentication failed - no user data" }
     }
 
-    console.log("[MERCHANT-AUTH] ✅ Authentication response received successfully")
     
     // DETECT APP CONTEXT FROM AUTHENTICATION
-    console.log("[MERCHANT-AUTH]")
-    console.log("[MERCHANT-AUTH] ===== APP CONTEXT FROM AUTHENTICATION =====")
-    console.log("[MERCHANT-AUTH] authResult.user.app_id:", authResult.user.app_id || "NOT PROVIDED BY PI")
-    console.log("[MERCHANT-AUTH] authResult.user.username:", authResult.user.username)
-    console.log("[MERCHANT-AUTH] authResult.user.scopes:", JSON.stringify(authResult.user.scopes))
-    console.log("[MERCHANT-AUTH]")
-    console.log("[MERCHANT-AUTH] CRITICAL: The app_id above determines which app context the user is authenticated under")
-    console.log("[MERCHANT-AUTH] For A2U to work, PI_API_KEY must be registered under THIS EXACT app_id")
-    console.log("[MERCHANT-AUTH] If app_id differs from Developer Portal app, A2U will fail with user_not_found")
-    console.log("[MERCHANT-AUTH]")
     
     // Highlight the app_id for easy identification
     if (authResult.user.app_id) {
-      console.log("[MERCHANT-AUTH] ⚠️  IMPORTANT: App ID =", authResult.user.app_id)
-      console.log("[MERCHANT-AUTH] Save this value and compare with:")
-      console.log("[MERCHANT-AUTH]   → Pi Developer Portal app settings")
-      console.log("[MERCHANT-AUTH]   → PI_API_KEY app registration")
-      console.log("[MERCHANT-AUTH]")
     }
     
-    console.log("[MERCHANT-AUTH] NOTE: If app_id not provided, Pi Browser is using default app context")
-    console.log("[MERCHANT-AUTH] NOTE: The UID returned is scoped to this app context")
-    console.log("[MERCHANT-AUTH] NOTE: A2U createPayment uses PI_API_KEY which must belong to the SAME app")
-    console.log("[MERCHANT-AUTH]")
     
     // Check if scopes array exists
     const hasExplicitScopes = authResult.user.scopes && Array.isArray(authResult.user.scopes)
     
     if (hasExplicitScopes) {
-      console.log("[MERCHANT-AUTH] scopes array present:", authResult.user.scopes)
     } else {
-      console.log("[MERCHANT-AUTH] No scopes array in response - assuming permissions were granted")
     }
     
     // Extract UID from various possible field names
-    console.log("[MERCHANT-AUTH] Extracting UID from authResult.user...")
     
     const rawAuthUid = authResult.user.uid || authResult.user.userId || authResult.user.user_id || authResult.user.app_uid || authResult.user.appUid || ""
     
     if (!rawAuthUid || typeof rawAuthUid !== "string" || rawAuthUid.trim() === "") {
-      console.error("[MERCHANT-AUTH] ERROR: No valid UID extracted from authResult")
       return { success: false, error: "Authentication failed - no user ID returned from Pi Network" }
     }
     
-    console.log("[MERCHANT-AUTH] ✅ UID extracted successfully from Pi.authenticate()")
     
     // CRITICAL: Get the accessToken for verifying uid with Pi /v2/me
     const accessToken = authResult.accessToken
     if (!accessToken || typeof accessToken !== "string" || accessToken.trim() === "") {
-      console.error("[MERCHANT-AUTH] ERROR: No accessToken in authentication response")
       return { success: false, error: "Authentication failed - no access token returned" }
     }
     
-    console.log("[MERCHANT-AUTH] ✅ accessToken captured for verification")
     
     const username = authResult.user.username
     if (!username || typeof username !== "string" || username.trim() === "") {
-      console.error("[MERCHANT-AUTH] ERROR: No valid username in authentication response")
       return { success: false, error: "Authentication failed - no username" }
     }
     
-    console.log("[MERCHANT-AUTH] ✅ Username validated:", username)
     
     let walletAddress = authResult.user.wallet_address || ""
     
-    console.log("[MERCHANT-AUTH] Storing merchant data and accessToken...")
     unifiedStore.completeMerchantSetup(username, walletAddress, rawAuthUid)
     
     // Store the accessToken properly with persistence and notification
@@ -626,11 +541,8 @@ export const authenticateMerchant = async (): Promise<{
       isInitialized: true,
     })
 
-    console.log("[MERCHANT-AUTH] ✅ Authentication successful. Username =", username)
-    console.log("[MERCHANT-AUTH] accessToken stored. UID verification will happen during payment creation.")
     return { success: true, username }
   } catch (error) {
-    console.error("[MERCHANT-AUTH] ❌ Error:", error instanceof Error ? error.message : error)
     const isTimeout = error instanceof Error && error.message.includes("timeout")
     const isStuckPayment = error instanceof Error && (
       error.message.includes("pending payment") ||
@@ -641,11 +553,6 @@ export const authenticateMerchant = async (): Promise<{
     
     CoreLogger.error("Merchant authentication error", error)
     
-    console.error("[MERCHANT-AUTH] ========== AUTHENTICATION ERROR DETAILS ==========")
-    console.error("[MERCHANT-AUTH] Is timeout:", isTimeout)
-    console.error("[MERCHANT-AUTH] Is stuck payment:", isStuckPayment)
-    console.error("[MERCHANT-AUTH] Full error:", error instanceof Error ? error.message : String(error))
-    console.error("[MERCHANT-AUTH] ===================================================")
     
     return {
       success: false,
