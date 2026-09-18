@@ -6,7 +6,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { readSystemState, enableKillSwitch, disableKillSwitch, resetSystemState, StaleSystemControlRevisionError, type SystemState } from "@/lib/system-control"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
-import { appendOperationalAuditEvent, type OperationalAuditAction } from "@/lib/operational-audit"
 
 const NO_STORE = { "Cache-Control": "no-cache, no-store, must-revalidate" }
 const MAX_REASON_LENGTH = 240
@@ -82,10 +81,10 @@ export async function POST(request: NextRequest) {
     try {
       newState =
         typedAction === "enable"
-          ? await enableKillSwitch(message, auth.uid, expectedRevision)
+          ? await enableKillSwitch(message, auth.uid, expectedRevision, { requestId, reason, previousEnabled: previous.state.killSwitchEnabled })
           : typedAction === "disable"
-            ? await disableKillSwitch(auth.uid, expectedRevision)
-            : await resetSystemState(auth.uid, expectedRevision)
+            ? await disableKillSwitch(auth.uid, expectedRevision, { requestId, reason, previousEnabled: previous.state.killSwitchEnabled })
+            : await resetSystemState(auth.uid, expectedRevision, { requestId, reason, previousEnabled: previous.state.killSwitchEnabled })
     } catch (writeError) {
       if (writeError instanceof StaleSystemControlRevisionError) {
         const current = await readSystemState()
@@ -97,24 +96,6 @@ export async function POST(request: NextRequest) {
       throw writeError
     }
 
-    try {
-      await appendOperationalAuditEvent({
-        action: `control.${typedAction}` as OperationalAuditAction,
-        actorUid: auth.uid,
-        requestId,
-        previousRevision: previous.state.revision,
-        resultingRevision: newState.revision,
-        previousEnabled: previous.state.killSwitchEnabled,
-        resultingEnabled: newState.killSwitchEnabled,
-        reason,
-      })
-    } catch (auditError) {
-      console.error("[API] Control state changed but audit persistence failed:", auditError)
-      return NextResponse.json(
-        { error: "Control state changed but audit persistence is uncertain", requestId },
-        { status: 503, headers: NO_STORE }
-      )
-    }
 
     const responseMessage = typedAction === "enable"
       ? "Kill switch ACTIVATED"

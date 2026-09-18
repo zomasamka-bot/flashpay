@@ -1,6 +1,7 @@
 import "server-only"
 
 import { redis, isRedisConfigured } from "@/lib/redis"
+import { createOperationalAuditEvent, OPERATIONAL_AUDIT_KEY, OPERATIONAL_AUDIT_MAX_EVENTS, type OperationalAuditAction } from "@/lib/operational-audit"
 
 export interface DomainControlState {
   version: 1
@@ -71,10 +72,12 @@ end
 local expected = tonumber(ARGV[1])
 if currentRevision ~= expected then return 0 end
 redis.call('SET', KEYS[1], ARGV[2])
+redis.call('LPUSH', KEYS[2], ARGV[3])
+redis.call('LTRIM', KEYS[2], 0, tonumber(ARGV[4]) - 1)
 return 1
 `
 
-export async function setFlashPayDomainEnabled(enabled: boolean, updatedBy: string, expectedRevision: number): Promise<DomainControlState> {
+export async function setFlashPayDomainEnabled(enabled: boolean, updatedBy: string, expectedRevision: number, audit: { requestId: string; reason: string }): Promise<DomainControlState> {
   const current = await readDomainControlState()
   if (!current.ok) throw new Error("Domain control state unavailable")
   if (current.state.revision !== expectedRevision) throw new StaleDomainControlRevisionError()
@@ -90,14 +93,15 @@ export async function setFlashPayDomainEnabled(enabled: boolean, updatedBy: stri
     updatedAt: Date.now(),
     updatedBy,
   }
-  const result = await redis.eval(CAS_DOMAIN_CONTROL_SCRIPT, [DOMAIN_CONTROL_KEY], [String(expectedRevision), JSON.stringify(state)])
+  const event = createOperationalAuditEvent({ action: (enabled ? "domain.enable" : "domain.disable") as OperationalAuditAction, actorUid: updatedBy, requestId: audit.requestId, previousRevision: expectedRevision, resultingRevision: state.revision, previousEnabled: current.state.flashpayEnabled, resultingEnabled: enabled, reason: audit.reason })
+  const result = await redis.eval(CAS_DOMAIN_CONTROL_SCRIPT, [DOMAIN_CONTROL_KEY, OPERATIONAL_AUDIT_KEY], [String(expectedRevision), JSON.stringify(state), JSON.stringify(event), String(OPERATIONAL_AUDIT_MAX_EVENTS)])
   if (result === 0) throw new StaleDomainControlRevisionError()
   if (result !== 1) throw new Error("Domain control state is invalid")
   console.log(`[Domain Control] FlashPay domain ${enabled ? "ENABLED" : "DISABLED"}`)
   return state
 }
 
-export async function setDomainMasterUnlocked(masterUnlocked: boolean, updatedBy: string, expectedRevision: number): Promise<DomainControlState> {
+export async function setDomainMasterUnlocked(masterUnlocked: boolean, updatedBy: string, expectedRevision: number, audit: { requestId: string; reason: string }): Promise<DomainControlState> {
   if (!isRedisConfigured) throw new Error("Domain control Redis is not configured")
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected domain revision is required")
   const current = await readDomainControlState()
@@ -111,7 +115,8 @@ export async function setDomainMasterUnlocked(masterUnlocked: boolean, updatedBy
     updatedAt: Date.now(),
     updatedBy,
   }
-  const result = await redis.eval(CAS_DOMAIN_CONTROL_SCRIPT, [DOMAIN_CONTROL_KEY], [String(expectedRevision), JSON.stringify(state)])
+  const event = createOperationalAuditEvent({ action: (masterUnlocked ? "domain.master_unlock" : "domain.master_lock") as OperationalAuditAction, actorUid: updatedBy, requestId: audit.requestId, previousRevision: expectedRevision, resultingRevision: state.revision, previousEnabled: current.state.masterUnlocked, resultingEnabled: masterUnlocked, reason: audit.reason })
+  const result = await redis.eval(CAS_DOMAIN_CONTROL_SCRIPT, [DOMAIN_CONTROL_KEY, OPERATIONAL_AUDIT_KEY], [String(expectedRevision), JSON.stringify(state), JSON.stringify(event), String(OPERATIONAL_AUDIT_MAX_EVENTS)])
   if (result === 0) throw new StaleDomainControlRevisionError()
   if (result !== 1) throw new Error("Domain control state is invalid")
   console.log(`[Domain Control] Master lock ${masterUnlocked ? "UNLOCKED" : "LOCKED"}`)

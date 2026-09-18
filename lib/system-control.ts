@@ -4,6 +4,7 @@
  */
 
 import { redis, isRedisConfigured } from "./redis"
+import { createOperationalAuditEvent, OPERATIONAL_AUDIT_KEY, OPERATIONAL_AUDIT_MAX_EVENTS, type OperationalAuditAction } from "./operational-audit"
 
 export interface SystemState {
   version: 1
@@ -105,12 +106,14 @@ if ttl and ttl > 0 then
 else
   redis.call('SET', KEYS[1], ARGV[2])
 end
+redis.call('LPUSH', KEYS[2], ARGV[4])
+redis.call('LTRIM', KEYS[2], 0, tonumber(ARGV[5]) - 1)
 return 1
 `
 
-async function compareAndSetSystemState(expectedRevision: number, newState: SystemState, ttlSeconds = 0): Promise<SystemState> {
+async function compareAndSetSystemState(expectedRevision: number, newState: SystemState, auditEvent: string, ttlSeconds = 0): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
-  const result = await redis.eval(CAS_SYSTEM_STATE_SCRIPT, [SYSTEM_STATE_KEY], [String(expectedRevision), JSON.stringify(newState), String(ttlSeconds)])
+  const result = await redis.eval(CAS_SYSTEM_STATE_SCRIPT, [SYSTEM_STATE_KEY, OPERATIONAL_AUDIT_KEY], [String(expectedRevision), JSON.stringify(newState), String(ttlSeconds), auditEvent, String(OPERATIONAL_AUDIT_MAX_EVENTS)])
   if (result === 0) throw new StaleSystemControlRevisionError()
   if (result !== 1) throw new Error("System control state is invalid")
   return newState
@@ -123,9 +126,9 @@ export async function isAppActive(): Promise<boolean> {
   return result.ok ? !result.state.killSwitchEnabled : false
 }
 
-export async function enableKillSwitch(message?: string, toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
+export async function enableKillSwitch(message: string | undefined, toggledBy: string, expectedRevision: number, audit: { requestId: string; reason: string; previousEnabled: boolean }): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
-  if (expectedRevision === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
   const now = Date.now()
   const newState: SystemState = {
     version: 1,
@@ -136,14 +139,15 @@ export async function enableKillSwitch(message?: string, toggledBy?: string, exp
     toggledBy,
     expiresAt: now + KILL_SWITCH_TTL_SECONDS * 1000,
   }
-  const committed = await compareAndSetSystemState(expectedRevision, newState, KILL_SWITCH_TTL_SECONDS)
+  const event = createOperationalAuditEvent({ action: "control.enable", actorUid: toggledBy, requestId: audit.requestId, previousRevision: expectedRevision, resultingRevision: newState.revision, previousEnabled: audit.previousEnabled, resultingEnabled: true, reason: audit.reason })
+  const committed = await compareAndSetSystemState(expectedRevision, newState, JSON.stringify(event), KILL_SWITCH_TTL_SECONDS)
   console.log("[System Control] Kill switch ENABLED")
   return committed
 }
 
-export async function disableKillSwitch(toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
+export async function disableKillSwitch(toggledBy: string, expectedRevision: number, audit: { requestId: string; reason: string; previousEnabled: boolean }): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
-  if (expectedRevision === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
   const newState: SystemState = {
     version: 1,
     revision: expectedRevision + 1,
@@ -153,20 +157,22 @@ export async function disableKillSwitch(toggledBy?: string, expectedRevision?: n
     toggledBy,
     expiresAt: null,
   }
-  const committed = await compareAndSetSystemState(expectedRevision, newState)
+  const event = createOperationalAuditEvent({ action: "control.disable", actorUid: toggledBy, requestId: audit.requestId, previousRevision: expectedRevision, resultingRevision: newState.revision, previousEnabled: audit.previousEnabled, resultingEnabled: false, reason: audit.reason })
+  const committed = await compareAndSetSystemState(expectedRevision, newState, JSON.stringify(event))
   console.log("[System Control] Kill switch DISABLED")
   return committed
 }
 
-export async function resetSystemState(toggledBy?: string, expectedRevision?: number): Promise<SystemState> {
+export async function resetSystemState(toggledBy: string, expectedRevision: number, audit: { requestId: string; reason: string; previousEnabled: boolean }): Promise<SystemState> {
   if (!isRedisConfigured) throw new Error("System control Redis is not configured")
-  if (expectedRevision === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Valid expected system control revision is required")
   const newState: SystemState = {
     ...defaultState(),
     revision: expectedRevision + 1,
     toggledBy,
   }
-  const committed = await compareAndSetSystemState(expectedRevision, newState)
+  const event = createOperationalAuditEvent({ action: "control.reset", actorUid: toggledBy, requestId: audit.requestId, previousRevision: expectedRevision, resultingRevision: newState.revision, previousEnabled: audit.previousEnabled, resultingEnabled: newState.killSwitchEnabled, reason: audit.reason })
+  const committed = await compareAndSetSystemState(expectedRevision, newState, JSON.stringify(event))
   console.log("[System Control] Control state RESET to default")
   return committed
 }

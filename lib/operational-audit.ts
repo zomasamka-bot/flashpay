@@ -3,8 +3,8 @@ import "server-only"
 import { randomUUID } from "crypto"
 import { redis, isRedisConfigured } from "@/lib/redis"
 
-const AUDIT_KEY = "flashpay:operations:audit:v1"
-const MAX_EVENTS = 500
+export const OPERATIONAL_AUDIT_KEY = "flashpay:operations:audit:v1"
+export const OPERATIONAL_AUDIT_MAX_EVENTS = 500
 
 export type OperationalAuditAction = "control.enable" | "control.disable" | "control.reset" | "domain.enable" | "domain.disable" | "domain.master_unlock" | "domain.master_lock"
 
@@ -26,19 +26,24 @@ function safeReason(value: unknown): string {
   return value.trim().slice(0, 240)
 }
 
-export async function appendOperationalAuditEvent(input: Omit<OperationalAuditEvent, "eventId" | "createdAt" | "reason"> & { reason?: unknown }): Promise<void> {
-  if (!isRedisConfigured) throw new Error("Operational audit Redis is not configured")
 
-  const event: OperationalAuditEvent = {
+export function createOperationalAuditEvent(input: Omit<OperationalAuditEvent, "eventId" | "createdAt" | "reason"> & { reason?: unknown }): OperationalAuditEvent {
+  return {
     ...input,
     eventId: randomUUID(),
     createdAt: Date.now(),
     reason: safeReason(input.reason),
   }
+}
+
+export async function appendOperationalAuditEvent(input: Omit<OperationalAuditEvent, "eventId" | "createdAt" | "reason"> & { reason?: unknown }): Promise<void> {
+  if (!isRedisConfigured) throw new Error("Operational audit Redis is not configured")
+
+  const event = createOperationalAuditEvent(input)
 
   // Append-only bounded operational history. No financial identifiers, tokens, XDR or secrets.
-  await redis.lpush(AUDIT_KEY, JSON.stringify(event))
-  await redis.ltrim(AUDIT_KEY, 0, MAX_EVENTS - 1)
+  await redis.lpush(OPERATIONAL_AUDIT_KEY, JSON.stringify(event))
+  await redis.ltrim(OPERATIONAL_AUDIT_KEY, 0, OPERATIONAL_AUDIT_MAX_EVENTS - 1)
 }
 
 
@@ -53,6 +58,6 @@ export async function appendOperationalQueueAuditEvent(input: { actorUid: string
     createdAt: Date.now(),
     reason: safeReason(input.reason),
   }
-  await redis.lpush(AUDIT_KEY, JSON.stringify(event))
-  await redis.ltrim(AUDIT_KEY, 0, MAX_EVENTS - 1)
+  await redis.lpush(OPERATIONAL_AUDIT_KEY, JSON.stringify(event))
+  await redis.ltrim(OPERATIONAL_AUDIT_KEY, 0, OPERATIONAL_AUDIT_MAX_EVENTS - 1)
 }

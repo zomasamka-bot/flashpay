@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
 import { readDomainControlState, setFlashPayDomainEnabled, setDomainMasterUnlocked, StaleDomainControlRevisionError } from "@/lib/domain-control"
-import { appendOperationalAuditEvent } from "@/lib/operational-audit"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -31,16 +30,11 @@ export async function POST(request: NextRequest) {
     const previous = await readDomainControlState()
     if (!previous.ok) return NextResponse.json({ error: "Domain control state unavailable", reason: previous.reason }, { status: 503, headers: NO_STORE })
     if (previous.state.revision !== expectedRevision) return NextResponse.json({ error: "Domain state changed. Refresh before retrying.", code: "STALE_DOMAIN_REVISION", state: previous.state }, { status: 409, headers: NO_STORE })
-    const state = operation === "master"
-      ? await setDomainMasterUnlocked(record.masterUnlocked as boolean, auth.uid, expectedRevision)
-      : await setFlashPayDomainEnabled(record.enabled as boolean, auth.uid, expectedRevision)
     const requestId = request.headers.get("x-vercel-id") || crypto.randomUUID()
-    try {
-      await appendOperationalAuditEvent({ action: operation === "master" ? (state.masterUnlocked ? "domain.master_unlock" : "domain.master_lock") : (state.flashpayEnabled ? "domain.enable" : "domain.disable"), actorUid: auth.uid, requestId, previousRevision: previous.state.revision, resultingRevision: state.revision, previousEnabled: operation === "master" ? previous.state.masterUnlocked : previous.state.flashpayEnabled, resultingEnabled: operation === "master" ? state.masterUnlocked : state.flashpayEnabled, reason: operation === "master" ? "Domain control master lock" : "FlashPay domain availability control" })
-    } catch (auditError) {
-      console.error("[Domain Control] State changed but audit persistence failed:", auditError)
-      return NextResponse.json({ error: "Domain state changed but audit persistence is uncertain", state, requestId }, { status: 503, headers: NO_STORE })
-    }
+    const auditReason = operation === "master" ? "Domain control master lock" : "FlashPay domain availability control"
+    const state = operation === "master"
+      ? await setDomainMasterUnlocked(record.masterUnlocked as boolean, auth.uid, expectedRevision, { requestId, reason: auditReason })
+      : await setFlashPayDomainEnabled(record.enabled as boolean, auth.uid, expectedRevision, { requestId, reason: auditReason })
     return NextResponse.json({ success: true, state, requestId }, { status: 200, headers: NO_STORE })
   } catch (error) {
     if (error instanceof StaleDomainControlRevisionError) {
