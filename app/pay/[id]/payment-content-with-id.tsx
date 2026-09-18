@@ -508,7 +508,7 @@ export default function PaymentContentWithId({
           // Preserve the existing generic failure handling below.
         }
         toast({
-          title: "Payment Failed",
+          title: t("pay.toast.failedTitle"),
           description: error,
           variant: "destructive",
         })

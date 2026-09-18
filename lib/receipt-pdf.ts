@@ -30,9 +30,9 @@ export interface ReceiptPdfOptions {
 
 const encoder = new TextEncoder()
 
-function formatReceiptDateTime(value: string, locale: string): string {
+function formatReceiptDateTime(value: string, locale: string, unavailable: string): string {
   const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return "Unavailable"
+  if (!Number.isFinite(date.getTime())) return unavailable
   const formatter = new Intl.DateTimeFormat(locale, {
     day: "2-digit",
     month: "short",
@@ -214,7 +214,7 @@ function createReceiptCanvas(receipt: FlashPayReceiptView, options: ReceiptPdfOp
   drawLabel(ctx, labels.type, margin, detailsY, 390, direction)
   drawValue(ctx, receipt.transactionType === "refund" ? labels.refund : labels.payment, margin, detailsY + 66, 390, 40, direction)
   drawLabel(ctx, labels.dateTime, 630, detailsY, PAGE_WIDTH_PX - margin - 630, direction)
-  drawValue(ctx, formatReceiptDateTime(receipt.occurredAt, options.locale), 630, detailsY + 66, PAGE_WIDTH_PX - margin - 630, 34)
+  drawValue(ctx, formatReceiptDateTime(receipt.occurredAt, options.locale, labels.unavailable), 630, detailsY + 66, PAGE_WIDTH_PX - margin - 630, 34)
 
   let nextY = 1005
   if (receipt.note) {

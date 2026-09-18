@@ -8,9 +8,9 @@ import { Check, Copy, Download, Loader2, Share2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { useI18n } from "@/components/i18n-provider"
 
-function formatDateTime(value: string, locale: string): string {
+function formatDateTime(value: string, locale: string, unavailable: string): string {
   const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return "Unavailable"
+  if (!Number.isFinite(date.getTime())) return unavailable
   const formatter = new Intl.DateTimeFormat(locale, {
     day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
     hourCycle: "h23", numberingSystem: "latn",
@@ -19,10 +19,6 @@ function formatDateTime(value: string, locale: string): string {
   return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
 }
 
-const STATUS_LABEL: Record<FlashPayReceiptView["status"], string> = {
-  successful: "Payment successful", processing: "Processing", refunded: "Refunded", failed: "Payment failed",
-  cancelled: "Cancelled", needs_attention: "Needs attention",
-}
 
 type PiNativeBridge = {
   shareFile?: (file: File) => Promise<unknown> | unknown
@@ -287,7 +283,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
             receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt"),
             `${receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")} · ${receipt.flashPayPaymentId}\n${url}`,
           )
-          setShareError("This Pi Browser version cannot share the PDF as an attachment. Update Pi Browser to use native PDF sharing.")
+          setShareError(t("receipt.shareAttachmentUnavailable"))
           return
         } catch (error) {
           if (isAbortError(error)) return
@@ -299,7 +295,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         paymentId: receipt.flashPayPaymentId,
         failures: failures.slice(0, 4),
       })
-      setShareError("PDF sharing is unavailable in this Pi Browser version. Update Pi Browser or use Download PDF.")
+      setShareError(t("receipt.shareUnavailable"))
     } finally {
       setSharing(false)
     }
@@ -331,7 +327,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
 
         <div className="grid grid-cols-2 gap-4">
           <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.type")}</p><p className="mt-1 font-medium">{receipt.transactionType === "refund" ? t("receipt.refund") : t("receipt.payment")}</p></div>
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.dateTime")}</p><p className="mt-1 font-medium" dir="ltr" lang="en">{formatDateTime(receipt.occurredAt, locale)}</p></div>
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.dateTime")}</p><p className="mt-1 font-medium" dir="ltr" lang={locale}>{formatDateTime(receipt.occurredAt, locale, t("common.unavailable"))}</p></div>
         </div>
 
         {receipt.note && <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.note")}</p><p className="mt-1">{receipt.note}</p></div>}
