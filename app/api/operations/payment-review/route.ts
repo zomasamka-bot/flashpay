@@ -35,11 +35,7 @@ function parseScanCursor(value: string | null): string | null {
 }
 
 async function scanActivePaymentIds(cursor: string, limit: number): Promise<{ nextCursor: string; ids: string[] }> {
-  const result = await redis.eval<[string], [string, string[]]>(
-    "local r=redis.call('SSCAN',KEYS[1],ARGV[1],'COUNT',ARGV[2]); return {r[1],r[2]}",
-    [ACTIVE_KEY],
-    [cursor, String(limit)],
-  )
+  const result = await redis.sscan(ACTIVE_KEY, cursor, { count: limit })
   if (!Array.isArray(result) || result.length !== 2) throw new Error("Invalid active recovery scan result")
   const nextCursor = String(result[0])
   const rawIds = result[1]
