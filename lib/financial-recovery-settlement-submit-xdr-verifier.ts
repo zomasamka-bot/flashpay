@@ -104,11 +104,22 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
     if (operationChecks.some((check) => !check.passed)) return blocked("INTENT_MISMATCH", operationChecks)
 
     if (transaction.memo.type !== "text") return blocked("INTENT_MISMATCH", [{ check: "memoTypeMatch", passed: false, expected: "text", observed: transaction.memo.type }])
-    const memoValue = transaction.memo.value
-    if (typeof memoValue !== "string" && !Buffer.isBuffer(memoValue)) return blocked("INTENT_MISMATCH", [{ check: "memoValueShape", passed: false, expected: "string or Buffer", observed: typeof memoValue }])
-    const memo = typeof memoValue === "string" ? memoValue : memoValue.toString("utf8")
+    const memoValue: unknown = transaction.memo.value
     const expectedMemo = input.a2uPaymentId.substring(0, 28)
-    if (memo !== expectedMemo) return blocked("INTENT_MISMATCH", [{ check: "memoMatch", passed: false, expected: expectedMemo, observed: memo }])
+    const expectedMemoBytes = Buffer.from(expectedMemo, "utf8")
+    let memoMatches = false
+    let observedMemo: string
+    if (typeof memoValue === "string") {
+      memoMatches = memoValue === expectedMemo
+      observedMemo = memoValue
+    } else if (memoValue instanceof Uint8Array) {
+      const memoBytes = Buffer.from(memoValue)
+      memoMatches = memoBytes.equals(expectedMemoBytes)
+      observedMemo = memoMatches ? expectedMemo : `byte-length:${memoBytes.length}`
+    } else {
+      return blocked("INTENT_MISMATCH", [{ check: "memoValueShape", passed: false, expected: "string or Uint8Array", observed: memoValue === null ? "null" : typeof memoValue }])
+    }
+    if (!memoMatches) return blocked("INTENT_MISMATCH", [{ check: "memoMatch", passed: false, expected: expectedMemo, observed: observedMemo }])
 
     const signature = transaction.signatures[0]
     const keypair = StellarSDK.Keypair.fromPublicKey(input.fromAddress)
