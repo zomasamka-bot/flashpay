@@ -353,9 +353,10 @@ export default function HomePage() {
       return
     }
     try {
+      const shareText = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}: ${sharePaymentUrl}`
       await navigator.share({
         title: "FlashPay Invoice",
-        url: sharePaymentUrl,
+        text: shareText,
       })
     } catch (error) {
       if ((error as Error).name === "AbortError") return
