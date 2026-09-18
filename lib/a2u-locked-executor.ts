@@ -343,7 +343,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           if (
             !(transaction instanceof StellarSDK.Transaction) ||
             transaction.toXDR() !== intent.envelopeXdr ||
-            transaction.hash().toString("hex") !== intent.preparedHash ||
+            Buffer.from(transaction.hash()).toString("hex") !== intent.preparedHash ||
             transaction.sequence !== intent.preparedSequence ||
             transaction.source !== intent.fromAddress
           ) {

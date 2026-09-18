@@ -65,7 +65,7 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
   }
 
   try {
-    if (transaction.toXDR() !== input.envelopeXdr || transaction.hash().toString("hex") !== input.preparedHash || transaction.sequence !== input.preparedSequence || transaction.source !== input.fromAddress) return blocked("INTENT_MISMATCH")
+    if (transaction.toXDR() !== input.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.preparedHash || transaction.sequence !== input.preparedSequence || transaction.source !== input.fromAddress) return blocked("INTENT_MISMATCH")
     if (transaction.operations.length !== 1 || transaction.signatures.length !== 1) return blocked("INTENT_MISMATCH")
 
     const operation = transaction.operations[0]
