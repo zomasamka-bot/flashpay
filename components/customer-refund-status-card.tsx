@@ -65,23 +65,21 @@ function CopyButton({ value }: { value: string }) {
   )
 }
 
-const refundDateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23",
-  numberingSystem: "latn",
-})
-
-function formatLocalDateTime(value?: string | number | null): string | undefined {
+function formatLocalDateTime(locale: string, value?: string | number | null): string | undefined {
   if (value === undefined || value === null || value === "") return undefined
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return "Unavailable"
-  const parts = Object.fromEntries(refundDateTimeFormatter.formatToParts(date).map(({ type, value }) => [type, value]))
-  return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute}:${parts.second}`
+  const formatter = new Intl.DateTimeFormat(`${locale}-u-nu-latn`, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    numberingSystem: "latn",
+  })
+  return formatter.format(date)
 }
 
 function Detail({ label, value, copyable = false }: { label: string; value?: string | number | null; copyable?: boolean }) {
@@ -100,7 +98,7 @@ function Detail({ label, value, copyable = false }: { label: string; value?: str
 
 export default function CustomerRefundStatusCard({ presentation, status, audience = "customer" }: Props) {
   const [receiptCopied, setReceiptCopied] = useState(false)
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
 
   if (status === "loading") {
     return (
@@ -127,8 +125,8 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
     [t("refund.amount"), `${presentation.amount} ${presentation.currency}`],
     [t("refund.flashpayId"), presentation.paymentId],
     [t("refund.statusLabel"), statusLabel],
-    [t("refund.requestedAt"), formatLocalDateTime(presentation.requestedAt)],
-    [t("refund.completedAt"), formatLocalDateTime(presentation.finalization.completedAt)],
+    [t("refund.requestedAt"), formatLocalDateTime(locale, presentation.requestedAt)],
+    [t("refund.completedAt"), formatLocalDateTime(locale, presentation.finalization.completedAt)],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "")
 
   const copyReceipt = async () => {
@@ -154,9 +152,9 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
       <dl className="mt-2">
         <Detail label={t("refund.amount")} value={`${presentation.amount} ${presentation.currency}`} />
         <Detail label={t("refund.flashpayId")} value={presentation.paymentId} copyable />
-        <Detail label={t("refund.requestedAt")} value={formatLocalDateTime(presentation.requestedAt)} />
-        <Detail label={t("refund.completedAt")} value={formatLocalDateTime(presentation.finalization.completedAt)} />
-        <Detail label={t("refund.finalizedAt")} value={formatLocalDateTime(presentation.finalization.finalizedAt)} />
+        <Detail label={t("refund.requestedAt")} value={formatLocalDateTime(locale, presentation.requestedAt)} />
+        <Detail label={t("refund.completedAt")} value={formatLocalDateTime(locale, presentation.finalization.completedAt)} />
+        <Detail label={t("refund.finalizedAt")} value={formatLocalDateTime(locale, presentation.finalization.finalizedAt)} />
       </dl>
     </section>
   )

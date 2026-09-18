@@ -52,7 +52,7 @@ interface MerchantDashboardSummary {
 }
 
 export default function MerchantPaymentsPage() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const router = useRouter()
   const merchant = useMerchant()
 
@@ -256,13 +256,14 @@ export default function MerchantPaymentsPage() {
 
   const formatDate = (dateStr: string) => {
     try {
-      return new Date(dateStr).toLocaleDateString("en-US", {
+      return new Intl.DateTimeFormat(`${locale}-u-nu-latn`, {
         month: "short",
         day: "numeric",
         year: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-      })
+        numberingSystem: "latn",
+      }).format(new Date(dateStr))
     } catch {
       return dateStr
     }
