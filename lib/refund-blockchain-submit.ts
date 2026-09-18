@@ -55,7 +55,7 @@ export function verifyRefundPreparedSubmitXdr(input: RefundPreparedSubmitXdrInpu
     if (normalizedMemo !== input.refundPaymentId) return blocked
     const keypair = Keypair.fromPublicKey(input.fromAddress)
     const signature = transaction.signatures[0]
-    if (!signature.hint().equals(keypair.signatureHint()) || !keypair.verify(transaction.hash(), signature.signature())) return blocked
+    if (!Buffer.from(signature.hint.toBytes()).equals(Buffer.from(keypair.signatureHint())) || !keypair.verify(transaction.hash(), signature.signature.toBytes())) return blocked
     return { outcome: "VERIFIED_INTENT", reference: input, moneyMovementProven: false, authorizesFinancialAction: false }
   } catch {
     return blocked
