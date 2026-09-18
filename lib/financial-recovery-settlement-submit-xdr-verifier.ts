@@ -78,7 +78,12 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
 
     const signature = transaction.signatures[0]
     const keypair = StellarSDK.Keypair.fromPublicKey(input.fromAddress)
-    if (!signature.hint().equals(keypair.signatureHint()) || !keypair.verify(transaction.hash(), signature.signature())) return blocked("SIGNATURE_INVALID")
+    const signatureHint = signature.hint.toBytes()
+    const signatureBytes = signature.signature.toBytes()
+    if (
+      !Buffer.from(signatureHint).equals(Buffer.from(keypair.signatureHint())) ||
+      !keypair.verify(transaction.hash(), signatureBytes)
+    ) return blocked("SIGNATURE_INVALID")
   } catch {
     return blocked("INTENT_MISMATCH")
   }
