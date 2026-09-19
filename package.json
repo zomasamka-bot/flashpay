@@ -11,7 +11,8 @@
     "certify:nfin7": "node scripts/verify-nfin7-horizon-refund-proof.mjs",
     "certify:nfin8": "node scripts/verify-nfin8-pi-finality-ambiguity.mjs",
     "certify:nfin9": "node scripts/verify-nfin9-settlement-db-identity.mjs",
-    "certify:nfin10a": "node scripts/verify-nfin10a-settlement-schema.mjs"
+    "certify:nfin10a": "node scripts/verify-nfin10a-settlement-schema.mjs",
+    "certify:nfin10b": "node scripts/verify-nfin10b-stage1-durability.mjs"
   },
   "overrides": {
     "react": "^19",

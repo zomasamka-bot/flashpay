@@ -229,6 +229,126 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   return txidIndex !== null
 }
 
+export type SettlementStage1CheckpointResult =
+  | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/**
+ * N-FIN-10B: first monotonic durable writer.
+ *
+ * Scope is deliberately limited to the A2U-created boundary. It may create a
+ * checkpoint or replay the exact same checkpoint; it can never replace durable
+ * identity, regress/advance a later stage, or authorize blockchain movement.
+ */
+export async function recordSettlementA2UCreatedCheckpoint(params: {
+  paymentId: string
+  merchantId: string
+  merchantUid: string
+  customerAmount: number
+  merchantAmount: number
+  a2uPaymentId: string
+  a2uFromAddress: string
+  a2uToAddress: string
+}): Promise<SettlementStage1CheckpointResult> {
+  const canonicalText = (value: string) => typeof value === 'string' && value.length > 0 && value === value.trim()
+  if (
+    !canonicalText(params.paymentId) ||
+    !canonicalText(params.merchantId) ||
+    !canonicalText(params.merchantUid) ||
+    !canonicalText(params.a2uPaymentId) ||
+    !canonicalText(params.a2uFromAddress) ||
+    !canonicalText(params.a2uToAddress) ||
+    typeof params.customerAmount !== 'number' ||
+    !Number.isFinite(params.customerAmount) ||
+    params.customerAmount <= 0 ||
+    typeof params.merchantAmount !== 'number' ||
+    !Number.isFinite(params.merchantAmount) ||
+    params.merchantAmount !== params.customerAmount
+  ) {
+    return { outcome: 'CONFLICT', error: 'Settlement Stage1 checkpoint input is invalid' }
+  }
+
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+
+    const rows = await client.begin(async (tx: any) => {
+      const inserted = await tx`
+        INSERT INTO settlement_checkpoints (
+          payment_id, version, stage, merchant_id, merchant_uid,
+          customer_amount, merchant_amount, app_commission,
+          a2u_payment_id, a2u_from_address, a2u_to_address
+        )
+        VALUES (
+          ${params.paymentId}, 1, 'a2u_created', ${params.merchantId}, ${params.merchantUid},
+          ${params.customerAmount}, ${params.merchantAmount}, 0,
+          ${params.a2uPaymentId}, ${params.a2uFromAddress}, ${params.a2uToAddress}
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING version
+      `
+      if (inserted.length === 1) return [{ ...inserted[0], inserted: true }]
+
+      // Replay is accepted only when every durable identity/accounting field is exact.
+      // A later stage is intentionally accepted only if it carries this exact Stage1 identity.
+      return await tx`
+        SELECT version, stage, merchant_id, merchant_uid,
+               customer_amount, merchant_amount, app_commission,
+               a2u_payment_id, a2u_from_address, a2u_to_address,
+               prepared_envelope_xdr, prepared_tx_hash, prepared_sequence,
+               a2u_txid, horizon_fee_stroops, horizon_confirmed_at,
+               pi_completed_at, db_finalized_at
+        FROM settlement_checkpoints
+        WHERE payment_id = ${params.paymentId}
+           OR a2u_payment_id = ${params.a2uPaymentId}
+        FOR UPDATE
+      `
+    })
+
+    if (!Array.isArray(rows) || rows.length !== 1 || typeof rows[0] !== 'object' || rows[0] === null) {
+      return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable identity is ambiguous or conflicting' }
+    }
+    const row = rows[0] as Record<string, unknown>
+    const version = Number(row.version)
+    if (!Number.isSafeInteger(version) || version < 1) {
+      return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable version is invalid' }
+    }
+    if (row.inserted === true) return { outcome: 'RECORDED', version }
+
+    let storedCustomerAmount: number
+    let storedMerchantAmount: number
+    let storedAppCommission: number
+    try {
+      storedCustomerAmount = normalizePostgresNumeric(row.customer_amount, 'settlement.customer_amount')
+      storedMerchantAmount = normalizePostgresNumeric(row.merchant_amount, 'settlement.merchant_amount')
+      storedAppCommission = normalizePostgresNumeric(row.app_commission, 'settlement.app_commission')
+    } catch {
+      return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable accounting is invalid' }
+    }
+
+    const validStage = typeof row.stage === 'string' && [
+      'a2u_created', 'prepared', 'horizon_confirmed', 'pi_completed', 'db_finalized'
+    ].includes(row.stage)
+    if (
+      !validStage ||
+      row.merchant_id !== params.merchantId ||
+      row.merchant_uid !== params.merchantUid ||
+      storedCustomerAmount !== params.customerAmount ||
+      storedMerchantAmount !== params.merchantAmount ||
+      storedAppCommission !== 0 ||
+      row.a2u_payment_id !== params.a2uPaymentId ||
+      row.a2u_from_address !== params.a2uFromAddress ||
+      row.a2u_to_address !== params.a2uToAddress
+    ) {
+      return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable identity/accounting mismatch' }
+    }
+    return { outcome: 'REPLAYED', version }
+  } catch (error) {
+    console.error('[DB] Settlement Stage1 durable checkpoint outcome is uncertain:', error)
+    return { outcome: 'INDETERMINATE', error: 'Settlement Stage1 durable checkpoint outcome is uncertain' }
+  }
+}
+
 export async function ensureRefundAccountingTable(): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
   const result = await query(`

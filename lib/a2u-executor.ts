@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic } from "@/lib/db"
+import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -273,8 +273,23 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
         settlementFailureState: "none",
       }
-      // Replace ctx.payment with fully merged record returned from persist
+      // Preserve the existing Redis checkpoint first. Then require the exact same
+      // Stage1 identity to become durable in PostgreSQL before Stage2 can execute.
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage1Updates)
+      const durableStage1 = await recordSettlementA2UCreatedCheckpoint({
+        paymentId: ctx.paymentId,
+        merchantId: ctx.payment.merchantId,
+        merchantUid: ctx.merchantUid,
+        customerAmount: ctx.customerAmount,
+        merchantAmount: Number(stageResult.data.a2uPayment.amount),
+        a2uPaymentId,
+        a2uFromAddress: stageResult.data.a2uPayment.from_address,
+        a2uToAddress: stageResult.data.a2uPayment.to_address,
+      })
+      if (durableStage1.outcome !== "RECORDED" && durableStage1.outcome !== "REPLAYED") {
+        console.error("[A2U Stage1] Durable checkpoint not proven:", durableStage1.outcome)
+        return { ok: false, status: "settlement_pending", error: "A2U Stage1 durable checkpoint not proven" }
+      }
       if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery===false && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
         console.log("[P7 TEST] Stage1-only interruption 0.14")
         return { ok:false,status:"settlement_pending",error:"Temporary Stage1-only interruption test" }
