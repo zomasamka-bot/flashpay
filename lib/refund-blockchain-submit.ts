@@ -50,9 +50,15 @@ export function verifyRefundPreparedSubmitXdr(input: RefundPreparedSubmitXdrInpu
     if (operation.type !== "payment" || operation.source !== undefined || !operation.asset.isNative() || operation.destination !== input.toAddress || operation.amount !== input.amount.toFixed(7)) return blocked
     const memo = transaction.memo
     if (memo.type !== "text") return blocked
-    const memoValue = memo.value
-    const normalizedMemo = typeof memoValue === "string" ? memoValue : Buffer.isBuffer(memoValue) ? memoValue.toString("utf8") : null
-    if (normalizedMemo !== input.refundPaymentId) return blocked
+    const memoValue: unknown = memo.value
+    const expectedMemoBytes = Buffer.from(input.refundPaymentId, "utf8")
+    if (typeof memoValue === "string") {
+      if (memoValue !== input.refundPaymentId) return blocked
+    } else if (memoValue instanceof Uint8Array) {
+      if (!Buffer.from(memoValue).equals(expectedMemoBytes)) return blocked
+    } else {
+      return blocked
+    }
     const keypair = Keypair.fromPublicKey(input.fromAddress)
     const signature = transaction.signatures[0]
     if (!Buffer.from(signature.hint.toBytes()).equals(Buffer.from(keypair.signatureHint())) || !keypair.verify(transaction.hash(), signature.signature.toBytes())) return blocked
