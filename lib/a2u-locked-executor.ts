@@ -3,6 +3,7 @@ import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
+import { getSettlementCheckpointAuthoritative } from "@/lib/db"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
@@ -128,10 +129,19 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     console.log("[A2U Locked Executor] ✓ Lock acquired")
 
     // Inside lock: reload LATEST payment checkpoint
-    const paymentData = await redis.get(`payment:${paymentId}`)
+    let paymentData = await redis.get(`payment:${paymentId}`)
+    if (!paymentData && params.isRecovery === true) {
+      const durable = await getSettlementCheckpointAuthoritative(paymentId)
+      if (durable.outcome === "FOUND") {
+        const d=durable.checkpoint, moved=d.stage==="horizon_confirmed"||d.stage==="pi_completed"||d.stage==="db_finalized", piDone=d.stage==="pi_completed"||d.stage==="db_finalized", dbDone=d.stage==="db_finalized", prepared=d.stage!=="a2u_created"
+        const projection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:"",amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:"",status:dbDone?"settled_to_merchant":moved||prepared?"settlement_pending":"paid_to_app",createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:"none",appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{})}
+        await redis.set(`payment:${paymentId}`,JSON.stringify(projection))
+        paymentData=await redis.get(`payment:${paymentId}`)
+      }
+    }
     if (!paymentData) {
-      console.error("[A2U Locked Executor] Payment not found after lock acquisition")
-      return { ok: false, status: 404, error: "Payment not found" }
+      console.error("[A2U Locked Executor] Payment projection unavailable after durable recovery")
+      return { ok: false, status: 409, error: "Payment state could not be durably reconstructed" }
     }
 
     let latestPayment: Payment
@@ -409,8 +419,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 400, error: "Invalid payment record" }
     }
 
-    if (!latestPayment.accessToken || typeof latestPayment.accessToken !== "string") {
-      console.error("[A2U Locked Executor] Invalid accessToken in latest checkpoint")
+    if (!latestPayment.a2uPaymentId && (!latestPayment.accessToken || typeof latestPayment.accessToken !== "string")) {
+      console.error("[A2U Locked Executor] accessToken required before A2U creation")
       return { ok: false, status: 400, error: "Invalid payment record" }
     }
 

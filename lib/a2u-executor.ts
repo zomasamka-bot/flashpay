@@ -164,8 +164,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   if (!ctx.merchantUid || typeof ctx.merchantUid !== 'string') {
     return { ok: false, status: "invalid_context", error: "merchantUid required and must be string" }
   }
-  if (!ctx.accessToken || typeof ctx.accessToken !== 'string') {
-    return { ok: false, status: "invalid_context", error: "accessToken required and must be string" }
+  if (!ctx.payment.a2uPaymentId && (!ctx.accessToken || typeof ctx.accessToken !== 'string')) {
+    return { ok: false, status: "invalid_context", error: "accessToken required before A2U creation" }
   }
   if (typeof ctx.customerAmount !== 'number' || !Number.isFinite(ctx.customerAmount)) {
     return { ok: false, status: "invalid_context", error: "customerAmount required and must be finite number" }
@@ -282,6 +282,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         merchantUid: ctx.merchantUid,
         customerAmount: ctx.customerAmount,
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
+        u2aIdentifier: ctx.payment.piPaymentId!,
+        u2aTxid: ctx.payment.u2aTxid!,
         a2uPaymentId,
         a2uFromAddress: stageResult.data.a2uPayment.from_address,
         a2uToAddress: stageResult.data.a2uPayment.to_address,

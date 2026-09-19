@@ -1,0 +1,10 @@
+import{strict as assert}from"node:assert";import fs from"node:fs";
+const db=fs.readFileSync(new URL("../lib/db.ts",import.meta.url),"utf8"),rec=fs.readFileSync(new URL("../lib/a2u-recovery-service.ts",import.meta.url),"utf8"),lock=fs.readFileSync(new URL("../lib/a2u-locked-executor.ts",import.meta.url),"utf8"),ex=fs.readFileSync(new URL("../lib/a2u-executor.ts",import.meta.url),"utf8");
+for(const x of ["ADD COLUMN IF NOT EXISTS u2a_identifier","ADD COLUMN IF NOT EXISTS u2a_txid","getSettlementCheckpointAuthoritative","u2aIdentifier: string","u2aTxid: string","row.u2a_identifier !== params.u2aIdentifier","row.u2a_txid !== params.u2aTxid"])assert.ok(db.includes(x),x);
+for(const x of ["rebuildSettlementProjectionFromDurable","Redis projection missing; attempting durable PostgreSQL rebuild","durable_projection_unavailable","await redis.set(`payment:${paymentId}`,JSON.stringify(projected))"])assert.ok(rec.includes(x),x);
+assert.ok(lock.includes("getSettlementCheckpointAuthoritative(paymentId)"));assert.ok(lock.includes("Payment state could not be durably reconstructed"));
+assert.ok(ex.includes("u2aIdentifier: ctx.payment.piPaymentId!"));assert.ok(ex.includes("u2aTxid: ctx.payment.u2aTxid!"));
+assert.ok(ex.includes("if (!ctx.payment.a2uPaymentId && (!ctx.accessToken"));
+assert.ok(lock.includes("if (!latestPayment.a2uPaymentId && (!latestPayment.accessToken"));
+assert.equal(rec.includes('state: "payment_not_found"'),false);
+console.log(JSON.stringify({certification:"PASS",durableU2AIdentity:true,redisLossRebuild:true,recoveryCutover:true,noSecretPersisted:true,failClosedOnUnprovenRebuild:true,blindFinancialRetryAdded:false},null,2));

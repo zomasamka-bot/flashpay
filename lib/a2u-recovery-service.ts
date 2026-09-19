@@ -6,6 +6,7 @@ import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
 import { persistCheckpointMerged } from "@/lib/a2u-executor"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
+import { getSettlementCheckpointAuthoritative } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -149,6 +150,35 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
   }
 }
 
+
+async function rebuildSettlementProjectionFromDurable(paymentId:string):Promise<Payment|null>{
+  const durable=await getSettlementCheckpointAuthoritative(paymentId)
+  if(durable.outcome!=='FOUND')return null
+  const d=durable.checkpoint
+  const moved=d.stage==='horizon_confirmed'||d.stage==='pi_completed'||d.stage==='db_finalized'
+  const piDone=d.stage==='pi_completed'||d.stage==='db_finalized'
+  const dbDone=d.stage==='db_finalized'
+  const prepared=d.stage!=='a2u_created'
+  const projected:Payment={
+    id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',
+    amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,
+    note:'',status:dbDone?'settled_to_merchant':moved||prepared?'settlement_pending':'paid_to_app',
+    createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,
+    a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,
+    settlementFailureState:'none',appCommission:0,
+    ...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),
+    ...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,
+      appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,
+      requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{}),
+    ...(dbDone?{settledAt:new Date().toISOString()}:{}),
+  }
+  await redis.set(`payment:${paymentId}`,JSON.stringify(projected))
+  const readback=await redis.get(`payment:${paymentId}`)
+  const parsed=readback?(typeof readback==='string'?JSON.parse(readback):readback):null
+  if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==d.a2uPaymentId||parsed.piPaymentId!==d.u2aIdentifier||parsed.u2aTxid!==d.u2aTxid)return null
+  return parsed as Payment
+}
+
 /**
  * MINIMAL ORCHESTRATOR - classify state and delegate only
  * Returns unified response via buildA2USuccessResponse (never marks success here)
@@ -162,22 +192,18 @@ export async function executeA2URecovery(
   // Load canonical Payment
   const paymentKey = `payment:${paymentId}`
   const paymentData = await redis.get(paymentKey)
-
+  let payment: Payment
   if (!paymentData) {
-    console.error(
-      "[A2U Recovery] ❌ Payment not found in Redis:",
-      paymentId
-    )
-    return {
-      status: "manual_review_required",
-      state: "payment_not_found",
-      paymentId,
-      details: { error: "Payment not found in Redis" },
+    console.warn("[A2U Recovery] Redis projection missing; attempting durable PostgreSQL rebuild:", paymentId)
+    const rebuilt = await rebuildSettlementProjectionFromDurable(paymentId)
+    if (!rebuilt) {
+      return {status:"manual_review_required",state:"durable_projection_unavailable",paymentId,details:{error:"Redis projection missing and durable Settlement authority could not prove a safe rebuild"}}
     }
+    payment = rebuilt
+  } else {
+    try { payment = (typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData) as Payment }
+    catch { return {status:"manual_review_required",state:"payment_projection_invalid",paymentId,details:{error:"Redis payment projection is invalid"}} }
   }
-
-  const payment: Payment =
-    typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
 
   if (payment.id !== paymentId) {
     return { status: "manual_review_required", state: "payment_identity_mismatch", paymentId, details: { error: "Payment identity mismatch" } }

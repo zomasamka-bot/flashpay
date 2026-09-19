@@ -152,6 +152,8 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
       customer_amount NUMERIC(18, 8) NOT NULL CHECK (customer_amount > 0),
       merchant_amount NUMERIC(18, 8) CHECK (merchant_amount > 0),
       app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0),
+      u2a_identifier TEXT,
+      u2a_txid TEXT,
       a2u_payment_id TEXT,
       a2u_from_address TEXT,
       a2u_to_address TEXT,
@@ -201,6 +203,15 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   `)
   if (table === null) return false
 
+  // N-FIN-10E: existing installations must gain the U2A identity needed to
+  // reconstruct a Settlement projection after Redis loss. No token/secret is stored.
+  const u2aIdentityColumns = await query(`
+    ALTER TABLE settlement_checkpoints
+      ADD COLUMN IF NOT EXISTS u2a_identifier TEXT,
+      ADD COLUMN IF NOT EXISTS u2a_txid TEXT
+  `)
+  if (u2aIdentityColumns === null) return false
+
   const stageIndex = await query(`
     CREATE INDEX IF NOT EXISTS idx_settlement_checkpoints_stage_updated
     ON settlement_checkpoints(stage, updated_at ASC)
@@ -246,6 +257,8 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
   merchantUid: string
   customerAmount: number
   merchantAmount: number
+  u2aIdentifier: string
+  u2aTxid: string
   a2uPaymentId: string
   a2uFromAddress: string
   a2uToAddress: string
@@ -255,6 +268,8 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     !canonicalText(params.paymentId) ||
     !canonicalText(params.merchantId) ||
     !canonicalText(params.merchantUid) ||
+    !canonicalText(params.u2aIdentifier) ||
+    !/^[0-9a-f]{64}$/.test(params.u2aTxid) ||
     !canonicalText(params.a2uPaymentId) ||
     !canonicalText(params.a2uFromAddress) ||
     !canonicalText(params.a2uToAddress) ||
@@ -277,11 +292,13 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
         INSERT INTO settlement_checkpoints (
           payment_id, version, stage, merchant_id, merchant_uid,
           customer_amount, merchant_amount, app_commission,
+          u2a_identifier, u2a_txid,
           a2u_payment_id, a2u_from_address, a2u_to_address
         )
         VALUES (
           ${params.paymentId}, 1, 'a2u_created', ${params.merchantId}, ${params.merchantUid},
           ${params.customerAmount}, ${params.merchantAmount}, 0,
+          ${params.u2aIdentifier}, ${params.u2aTxid},
           ${params.a2uPaymentId}, ${params.a2uFromAddress}, ${params.a2uToAddress}
         )
         ON CONFLICT DO NOTHING
@@ -294,6 +311,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       return await tx`
         SELECT version, stage, merchant_id, merchant_uid,
                customer_amount, merchant_amount, app_commission,
+               u2a_identifier, u2a_txid,
                a2u_payment_id, a2u_from_address, a2u_to_address,
                prepared_envelope_xdr, prepared_tx_hash, prepared_sequence,
                a2u_txid, horizon_fee_stroops, horizon_confirmed_at,
@@ -336,6 +354,8 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       storedCustomerAmount !== params.customerAmount ||
       storedMerchantAmount !== params.merchantAmount ||
       storedAppCommission !== 0 ||
+      row.u2a_identifier !== params.u2aIdentifier ||
+      row.u2a_txid !== params.u2aTxid ||
       row.a2u_payment_id !== params.a2uPaymentId ||
       row.a2u_from_address !== params.a2uFromAddress ||
       row.a2u_to_address !== params.a2uToAddress
@@ -347,6 +367,67 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     console.error('[DB] Settlement Stage1 durable checkpoint outcome is uncertain:', error)
     return { outcome: 'INDETERMINATE', error: 'Settlement Stage1 durable checkpoint outcome is uncertain' }
   }
+}
+
+export type SettlementDurableCheckpointRead =
+  | { outcome: 'FOUND'; checkpoint: {
+      paymentId:string; version:number; stage:'a2u_created'|'prepared'|'horizon_confirmed'|'pi_completed'|'db_finalized';
+      merchantId:string; merchantUid:string; customerAmount:number; merchantAmount:number;
+      u2aIdentifier:string; u2aTxid:string; a2uPaymentId:string; a2uFromAddress:string; a2uToAddress:string;
+      preparedEnvelopeXdr?:string; preparedTxHash?:string; preparedSequence?:string;
+      a2uTxid?:string; horizonFeeStroops?:number
+    }}
+  | { outcome: 'ABSENT' }
+  | { outcome: 'INDETERMINATE'; error:string }
+
+export async function getSettlementCheckpointAuthoritative(paymentId:string):Promise<SettlementDurableCheckpointRead>{
+  if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
+    return{outcome:'INDETERMINATE',error:'Invalid settlement payment identity'}
+  try{
+    const client=await getPostgresClient()
+    if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client`
+      SELECT payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+        u2a_identifier,u2a_txid,a2u_payment_id,a2u_from_address,a2u_to_address,
+        prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid,horizon_fee_stroops,
+        horizon_confirmed_at,pi_completed_at,db_finalized_at
+      FROM settlement_checkpoints WHERE payment_id=${paymentId}
+    `
+    if(rows.length===0)return{outcome:'ABSENT'}
+    if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Settlement durable identity is ambiguous'}
+    const r=rows[0] as Record<string,unknown>
+    const text=(v:unknown)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+    const version=Number(r.version),stage=r.stage
+    let ca,ma,ac
+    try{ca=normalizePostgresNumeric(r.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'settlement.app_commission')}
+    catch{return{outcome:'INDETERMINATE',error:'Settlement durable accounting invalid'}}
+    if(!Number.isSafeInteger(version)||version<1||!['a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized'].includes(String(stage))||
+      !text(r.payment_id)||r.payment_id!==paymentId||!text(r.merchant_id)||!text(r.merchant_uid)||ca<=0||ma!==ca||ac!==0||
+      !text(r.u2a_identifier)||typeof r.u2a_txid!=='string'||!/^[0-9a-f]{64}$/.test(r.u2a_txid)||
+      !text(r.a2u_payment_id)||!text(r.a2u_from_address)||!text(r.a2u_to_address))
+      return{outcome:'INDETERMINATE',error:'Settlement durable base identity invalid'}
+    const advanced=['prepared','horizon_confirmed','pi_completed','db_finalized'].includes(String(stage))
+    if(advanced&&(!text(r.prepared_envelope_xdr)||typeof r.prepared_tx_hash!=='string'||!/^[0-9a-f]{64}$/.test(r.prepared_tx_hash)||
+      !/^[1-9][0-9]*$/.test(String(r.prepared_sequence))))
+      return{outcome:'INDETERMINATE',error:'Settlement durable prepared evidence invalid'}
+    const moved=['horizon_confirmed','pi_completed','db_finalized'].includes(String(stage))
+    let fee:number|undefined
+    if(moved){
+      if(typeof r.a2u_txid!=='string'||!/^[0-9a-f]{64}$/.test(r.a2u_txid)||r.a2u_txid!==r.prepared_tx_hash||r.horizon_confirmed_at==null)
+        return{outcome:'INDETERMINATE',error:'Settlement durable Horizon evidence invalid'}
+      try{fee=normalizePostgresNumeric(r.horizon_fee_stroops,'settlement.horizon_fee_stroops')}catch{return{outcome:'INDETERMINATE',error:'Settlement durable Horizon fee invalid'}}
+      if(!Number.isSafeInteger(fee)||fee<0)return{outcome:'INDETERMINATE',error:'Settlement durable Horizon fee invalid'}
+    }
+    if(['pi_completed','db_finalized'].includes(String(stage))&&r.pi_completed_at==null)return{outcome:'INDETERMINATE',error:'Settlement durable Pi finality invalid'}
+    if(stage==='db_finalized'&&r.db_finalized_at==null)return{outcome:'INDETERMINATE',error:'Settlement durable DB finality invalid'}
+    return{outcome:'FOUND',checkpoint:{
+      paymentId,version,stage:stage as any,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,
+      customerAmount:ca,merchantAmount:ma,u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,
+      a2uPaymentId:r.a2u_payment_id as string,a2uFromAddress:r.a2u_from_address as string,a2uToAddress:r.a2u_to_address as string,
+      ...(advanced?{preparedEnvelopeXdr:r.prepared_envelope_xdr as string,preparedTxHash:r.prepared_tx_hash as string,preparedSequence:String(r.prepared_sequence)}:{}),
+      ...(moved?{a2uTxid:r.a2u_txid as string,horizonFeeStroops:fee}:{}),
+    }}
+  }catch(e){console.error('[DB] Settlement durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement durable read uncertain'}}
 }
 
 export type SettlementDurableAdvanceResult =
