@@ -9,7 +9,8 @@
     "start": "next start",
     "certify:nfin6": "node scripts/verify-nfin6-10k-capacity.mjs",
     "certify:nfin7": "node scripts/verify-nfin7-horizon-refund-proof.mjs",
-    "certify:nfin8": "node scripts/verify-nfin8-pi-finality-ambiguity.mjs"
+    "certify:nfin8": "node scripts/verify-nfin8-pi-finality-ambiguity.mjs",
+    "certify:nfin9": "node scripts/verify-nfin9-settlement-db-identity.mjs"
   },
   "overrides": {
     "react": "^19",

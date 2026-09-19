@@ -1264,7 +1264,9 @@ export async function recordA2UTransactionAtomic(params: {
         // On conflict, verify amounts match (idempotency check)
         // All required columns must exist before transaction begins
         const existingReceiptCheck = await tx`
-          SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount FROM receipts 
+          SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount,
+                 u2a_identifier, u2a_txid, a2u_identifier, a2u_txid
+          FROM receipts
           WHERE transaction_id = ${actualTransactionId} LIMIT 1
         `
         
@@ -1276,6 +1278,21 @@ export async function recordA2UTransactionAtomic(params: {
           const storedMerchantAmount = normalizePostgresNumeric(existing.merchant_amount, 'existing.merchant_amount')
           const storedHorizonFeeCharged = normalizePostgresNumeric(existing.horizon_fee_charged, 'existing.horizon_fee_charged')
           const storedAppCommission = normalizePostgresNumeric(existing.app_commission, 'existing.app_commission')
+
+
+          // N-FIN-9: replay is valid only for the exact same durable financial identity.
+          if (existing.u2a_identifier !== params.u2aIdentifier) {
+            throw new Error('Idempotency violation: receipt has different u2aIdentifier')
+          }
+          if (existing.u2a_txid !== params.u2aTxid) {
+            throw new Error('Idempotency violation: receipt has different u2aTxid')
+          }
+          if (existing.a2u_identifier !== params.a2uIdentifier) {
+            throw new Error('Idempotency violation: receipt has different a2uIdentifier')
+          }
+          if (existing.a2u_txid !== params.a2uTxid) {
+            throw new Error('Idempotency violation: receipt has different a2uTxid')
+          }
           
           if (storedCustomerAmount !== customerAmount) {
             throw new Error(`Idempotency violation: receipt has different customerAmount: ${storedCustomerAmount} vs ${customerAmount}`)
@@ -1412,6 +1429,31 @@ export async function recordA2UTransactionAtomic(params: {
       const normalizedCommittedAppCommission = normalizePostgresNumeric(committedAppCommissionRaw, 'committedAppCommission')
       const normalizedCommittedMerchantAmount = normalizePostgresNumeric(committedMerchantAmountRaw, 'committedMerchantAmount')
       const normalizedCommittedAppNetImpact = normalizePostgresNumeric(committedAppNetImpactRaw, 'committedAppNetImpact')
+
+
+      // N-FIN-9: the authoritative post-COMMIT read must match the expected
+      // financial identity and accounting exactly; validity of field types alone is insufficient.
+      if (
+        committedU2aIdentifier !== params.u2aIdentifier ||
+        committedU2aTxid !== params.u2aTxid ||
+        committedA2uIdentifier !== params.a2uIdentifier ||
+        committedA2uTxid !== params.a2uTxid ||
+        committedMerchantId !== params.merchantId ||
+        committedMerchantUid !== params.merchantUid
+      ) {
+        console.error('[DB] CRITICAL: Committed row identity mismatch')
+        return { success: false, error: 'Transaction row validation failed - committed identity mismatch' }
+      }
+      if (
+        normalizedCommittedCustomerAmount !== customerAmount ||
+        normalizedCommittedHorizonFeeCharged !== horizonFeeCharged ||
+        normalizedCommittedAppCommission !== appCommission ||
+        normalizedCommittedMerchantAmount !== merchantAmount ||
+        normalizedCommittedAppNetImpact !== appNetImpact
+      ) {
+        console.error('[DB] CRITICAL: Committed row accounting mismatch')
+        return { success: false, error: 'Transaction row validation failed - committed accounting mismatch' }
+      }
       
       if (
         !Number.isFinite(normalizedCommittedCustomerAmount) ||
