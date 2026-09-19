@@ -143,12 +143,13 @@ export async function verifyRefundBlockchainEvidence(input: Input): Promise<Refu
   const tx = txResult.body
   if (tx.successful !== true || typeof tx.hash !== "string" || tx.hash !== txid ||
     typeof tx.id !== "string" || tx.id !== txid || tx.source_account !== payment.from_address ||
-    tx.memo !== payment.identifier) return { outcome: "INDETERMINATE" }
+    tx.memo_type !== "text" || tx.memo !== payment.identifier || tx.operation_count !== 1) return { outcome: "INDETERMINATE" }
 
   const records = operationsResult.body._embedded
   if (!isRecord(records) || !Array.isArray(records.records) || records.records.length !== 1) return { outcome: "INDETERMINATE" }
   const operation = records.records[0]
-  if (!isRecord(operation) || operation.type !== "payment" || operation.asset_type !== "native" ||
+  if (!isRecord(operation) || operation.type !== "payment" || operation.transaction_hash !== txid ||
+    operation.transaction_successful !== true || operation.asset_type !== "native" ||
     operation.source_account !== payment.from_address || operation.from !== payment.from_address ||
     operation.to !== payment.to_address) return { outcome: "INDETERMINATE" }
   const checkpointStroops = stroops(checkpoint.amount)

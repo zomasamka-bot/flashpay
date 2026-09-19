@@ -7,7 +7,8 @@
     "dev": "next dev",
     "lint": "eslint .",
     "start": "next start",
-    "certify:nfin6": "node scripts/verify-nfin6-10k-capacity.mjs"
+    "certify:nfin6": "node scripts/verify-nfin6-10k-capacity.mjs",
+    "certify:nfin7": "node scripts/verify-nfin7-horizon-refund-proof.mjs"
   },
   "overrides": {
     "react": "^19",
