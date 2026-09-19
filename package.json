@@ -6,7 +6,8 @@
     "build": "node scripts/run-financial-recovery-build-verifier.mjs && next build",
     "dev": "next dev",
     "lint": "eslint .",
-    "start": "next start"
+    "start": "next start",
+    "certify:nfin6": "node scripts/verify-nfin6-10k-capacity.mjs"
   },
   "overrides": {
     "react": "^19",

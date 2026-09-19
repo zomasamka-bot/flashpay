@@ -21,6 +21,8 @@ const WALLET_DRAIN_BURST_LIMIT: number | null = null
 const WALLET_DRAIN_BURST_BUDGET_MS = 60_000
 const IMMEDIATE_DRAIN_KICK_KEY = "flashpay:settlement:immediate-drain-kick:v1"
 const READY_SEQUENCE_KEY = "flashpay:settlement:ready:v1:sequence"
+const READY_BASELINE_SCAN_SEEN_KEY = "flashpay:settlement:ready:v1:authority-baseline-scan-seen"
+const READY_BASELINE_COVERAGE_KEY = "flashpay:settlement:ready:v1:authority-baseline-coverage"
 const CONTINUATION_MODE = "continuation-kick"
 const IMMEDIATE_DRAIN_MODE = "immediate-drain"
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
@@ -655,6 +657,8 @@ export async function POST(request: NextRequest) {
   let activeSetSize = 0
   let scanStartToken = "c:0"
   let scanNextToken = "c:0"
+  let readyBaselineAlreadyCertified = false
+  let readyBaselineCoverageCertified = false
   try {
     const markers = await Promise.all([
       redis.get("flashpay:recovery:active-payments:v1:bootstrap"),
@@ -665,7 +669,18 @@ export async function POST(request: NextRequest) {
 
     const storedCursor = await redis.get("flashpay:recovery:active-payments:v1:scan-cursor")
     if (storedCursor !== null && (typeof storedCursor !== "string" || !/^c:[0-9]+$/.test(storedCursor))) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
+    const [storedReadyBaseline, storedReadyBaselineCoverage] = await Promise.all([
+      redis.get("flashpay:settlement:ready:v1:authority-baseline"),
+      redis.get(READY_BASELINE_COVERAGE_KEY),
+    ])
+    if (storedReadyBaseline !== null && storedReadyBaseline !== "done") return NextResponse.json({ error: "Settlement ready authority unavailable" }, { status: 503 })
+    if (storedReadyBaselineCoverage !== null && storedReadyBaselineCoverage !== "done") return NextResponse.json({ error: "Settlement ready authority unavailable" }, { status: 503 })
+    readyBaselineAlreadyCertified = storedReadyBaseline === "done"
+    readyBaselineCoverageCertified = readyBaselineAlreadyCertified || storedReadyBaselineCoverage === "done"
     scanStartToken = storedCursor ?? "c:0"
+    if (!readyBaselineCoverageCertified && scanStartToken === "c:0") {
+      try { await redis.del(READY_BASELINE_SCAN_SEEN_KEY) } catch { return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 }) }
+    }
     let pageCursor = scanStartToken.slice(2)
     const activePaymentIds: string[] = []
     const seenActivePaymentIds = new Set<string>()
@@ -1060,6 +1075,18 @@ export async function POST(request: NextRequest) {
   }
 
 
+  if (!readyBaselineCoverageCertified && readyResidencySourceValid === true && readyResidencyMissing !== null && readyResidencyBackfilled !== null && readyResidencyBackfilled === readyResidencyMissing) {
+    try {
+      const observedActiveIds = keys.map((key) => key.slice("payment:".length))
+      for (let batchStart = 0; batchStart < observedActiveIds.length; batchStart += 200) {
+        const batch = observedActiveIds.slice(batchStart, batchStart + 200)
+        if (batch.length > 0) await redis.eval<string[], number>("for _,id in ipairs(ARGV) do redis.call('SADD',KEYS[1],id) end; return #ARGV", [READY_BASELINE_SCAN_SEEN_KEY], batch)
+      }
+    } catch {
+      readyResidencySourceValid = false
+    }
+  }
+
   let readyLegacyQuarantineAttempted = 0
   let readyLegacyQuarantineSucceeded = 0
   for (const paymentId of readyLegacyQuarantineIds) {
@@ -1069,7 +1096,20 @@ export async function POST(request: NextRequest) {
 
   const discoveryDurationMs = Date.now() - discoveryStartedAt
 
-  const readyAuthorityCertified = readyResidencySourceValid === true && scanNextToken === "c:0" && Number.isSafeInteger(activeSetSize) && activeSetSize >= 0 && keys.length === activeSetSize && readyResidencyMissing === 0 && readyResidencyBackfilled === 0
+  let readyAuthorityCertified = readyBaselineCoverageCertified
+  if (!readyBaselineCoverageCertified && readyResidencySourceValid === true && scanNextToken === "c:0" && Number.isSafeInteger(activeSetSize) && activeSetSize >= 0 && readyResidencyMissing !== null && readyResidencyBackfilled !== null && readyResidencyBackfilled === readyResidencyMissing) {
+    try {
+      const exactBaselineCoverage = await redis.eval<[], number>("local missing=redis.call('SDIFFSTORE',KEYS[3],KEYS[1],KEYS[2]); local stale=redis.call('SDIFFSTORE',KEYS[4],KEYS[2],KEYS[1]); redis.call('DEL',KEYS[3]); redis.call('DEL',KEYS[4]); if missing==0 and stale==0 then redis.call('SET',KEYS[5],'done'); return 1 end; return 0", ["flashpay:recovery:active-payments:v1", READY_BASELINE_SCAN_SEEN_KEY, `${READY_BASELINE_SCAN_SEEN_KEY}:missing`, `${READY_BASELINE_SCAN_SEEN_KEY}:stale`, READY_BASELINE_COVERAGE_KEY], [])
+      if (exactBaselineCoverage !== 0 && exactBaselineCoverage !== 1) throw new Error("Invalid settlement ready baseline coverage")
+      readyAuthorityCertified = exactBaselineCoverage === 1
+      if (readyAuthorityCertified) {
+        readyBaselineCoverageCertified = true
+        try { await redis.del(READY_BASELINE_SCAN_SEEN_KEY) } catch { console.warn("[P7H CAPACITY] settlement ready baseline scan cleanup unavailable") }
+      }
+    } catch {
+      console.warn("[P7H CAPACITY] settlement ready baseline coverage unavailable")
+    }
+  }
   const readySchedulerUsable = readyAuthorityCertified && readyRotationStart === "r:0" && readyStrictlyIncreasing === true && readyClassInvalid === 0 && readyEligibleSetParity === true && readyFreshSetParity === true && readyReconcilingSetParity === true && readyShadowEligibleIds !== null && readyShadowPostHorizonIds !== null && readyShadowRetryableIds !== null && readyShadowFreshIds !== null && readyShadowFreshCreateIds !== null && readyShadowStage1OnlyIds !== null && readyShadowReconcilingIds !== null
   let readyBaselineCertified: boolean | null = null
   try {
@@ -1079,6 +1119,9 @@ export async function POST(request: NextRequest) {
       console.warn("[P7H CAPACITY] settlement ready authority baseline mismatch")
     } else {
       readyBaselineCertified = baselineResult === 1
+      if (!readyBaselineAlreadyCertified && readyBaselineCertified) {
+        try { await redis.del(READY_BASELINE_SCAN_SEEN_KEY); await redis.del(READY_BASELINE_COVERAGE_KEY) } catch { console.warn("[P7H CAPACITY] settlement ready baseline cleanup unavailable") }
+      }
     }
   } catch {
     console.warn("[P7H CAPACITY] settlement ready authority baseline unavailable")
