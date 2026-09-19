@@ -206,6 +206,12 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
     if (result.successful !== true || result.hash !== preparedHash) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
     return { outcome: "CONFIRMED_TX", txid: result.hash }
   } catch (error) {
+    try {
+      const after = await readRefundPreparedRecoveryEvidence({ checkpoint: prepared.checkpoint, payment: input.payment })
+      if (after.outcome === "VERIFIED" && after.reference.preparedHash === preparedHash && after.reference.preparedSequence === preparedSequence && after.reference.refundPaymentId === input.payment.identifier && after.reference.fromAddress === input.payment.from_address && after.reference.toAddress === input.payment.to_address && after.reference.amount === input.payment.amount) return { outcome: "CONFIRMED_TX", txid: preparedHash }
+    } catch {
+      return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
+    }
     return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
   }
 }
