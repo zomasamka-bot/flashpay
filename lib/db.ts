@@ -125,6 +125,110 @@ export async function query(text: string, values?: unknown[]) {
 /**
  * Initialize database schema on first run
  */
+/**
+ * N-FIN-10A durable settlement authority schema.
+ *
+ * IMPORTANT: this stage is schema-only. No financial execution or recovery path
+ * reads from or writes to this table yet. Later N-FIN-10 stages will add a single
+ * monotonic CAS writer before any recovery cutover.
+ */
+export async function ensureSettlementCheckpointTable(): Promise<boolean> {
+  if (!process.env.DATABASE_URL) return false
+
+  const table = await query(`
+    CREATE TABLE IF NOT EXISTS settlement_checkpoints (
+      payment_id TEXT PRIMARY KEY,
+      version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
+      stage TEXT NOT NULL CHECK (stage IN (
+        'payment_identity',
+        'a2u_created',
+        'prepared',
+        'horizon_confirmed',
+        'pi_completed',
+        'db_finalized'
+      )),
+      merchant_id TEXT NOT NULL CHECK (length(btrim(merchant_id)) > 0),
+      merchant_uid TEXT NOT NULL CHECK (length(btrim(merchant_uid)) > 0),
+      customer_amount NUMERIC(18, 8) NOT NULL CHECK (customer_amount > 0),
+      merchant_amount NUMERIC(18, 8) CHECK (merchant_amount > 0),
+      app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0),
+      a2u_payment_id TEXT,
+      a2u_from_address TEXT,
+      a2u_to_address TEXT,
+      prepared_envelope_xdr TEXT,
+      prepared_tx_hash TEXT CHECK (prepared_tx_hash IS NULL OR prepared_tx_hash ~ '^[0-9a-f]{64}$'),
+      prepared_sequence NUMERIC(30, 0) CHECK (prepared_sequence IS NULL OR prepared_sequence > 0),
+      a2u_txid TEXT CHECK (a2u_txid IS NULL OR a2u_txid ~ '^[0-9a-f]{64}$'),
+      horizon_fee_stroops BIGINT CHECK (horizon_fee_stroops IS NULL OR horizon_fee_stroops >= 0),
+      horizon_confirmed_at TIMESTAMP,
+      pi_completed_at TIMESTAMP,
+      db_finalized_at TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      CHECK (merchant_amount IS NULL OR merchant_amount = customer_amount),
+      CHECK (
+        stage NOT IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')
+        OR a2u_payment_id IS NOT NULL
+      ),
+      CHECK (
+        stage NOT IN ('prepared','horizon_confirmed','pi_completed','db_finalized')
+        OR (
+          a2u_from_address IS NOT NULL AND
+          a2u_to_address IS NOT NULL AND
+          prepared_envelope_xdr IS NOT NULL AND
+          prepared_tx_hash IS NOT NULL AND
+          prepared_sequence IS NOT NULL
+        )
+      ),
+      CHECK (
+        stage NOT IN ('horizon_confirmed','pi_completed','db_finalized')
+        OR (
+          a2u_txid IS NOT NULL AND
+          prepared_tx_hash = a2u_txid AND
+          horizon_fee_stroops IS NOT NULL AND
+          horizon_confirmed_at IS NOT NULL
+        )
+      ),
+      CHECK (
+        stage NOT IN ('pi_completed','db_finalized')
+        OR pi_completed_at IS NOT NULL
+      ),
+      CHECK (
+        stage <> 'db_finalized'
+        OR db_finalized_at IS NOT NULL
+      )
+    )
+  `)
+  if (table === null) return false
+
+  const stageIndex = await query(`
+    CREATE INDEX IF NOT EXISTS idx_settlement_checkpoints_stage_updated
+    ON settlement_checkpoints(stage, updated_at ASC)
+  `)
+  if (stageIndex === null) return false
+
+  const a2uPaymentIndex = await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_settlement_checkpoints_a2u_payment_id
+    ON settlement_checkpoints(a2u_payment_id)
+    WHERE a2u_payment_id IS NOT NULL
+  `)
+  if (a2uPaymentIndex === null) return false
+
+  const preparedHashIndex = await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_settlement_checkpoints_prepared_tx_hash
+    ON settlement_checkpoints(prepared_tx_hash)
+    WHERE prepared_tx_hash IS NOT NULL
+  `)
+  if (preparedHashIndex === null) return false
+
+  const txidIndex = await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_settlement_checkpoints_a2u_txid
+    ON settlement_checkpoints(a2u_txid)
+    WHERE a2u_txid IS NOT NULL
+  `)
+  return txidIndex !== null
+}
+
 export async function ensureRefundAccountingTable(): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
   const result = await query(`
@@ -359,6 +463,12 @@ export async function initializeSchema() {
         FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
       )
     `)
+
+    // N-FIN-10A: create the durable Settlement authority schema only.
+    // No Settlement runtime path uses it until the later monotonic-writer stage.
+    if (!(await ensureSettlementCheckpointTable())) {
+      throw new Error('Settlement checkpoint schema initialization failed')
+    }
 
     // Create durable refund intent/checkpoint records.
     // The unique payment and idempotency constraints prevent duplicate refunds.
