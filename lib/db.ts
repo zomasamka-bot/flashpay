@@ -444,11 +444,11 @@ export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:st
 }
 
 export async function recordSettlementDbFinalizedCheckpoint(params:{
-  paymentId:string;a2uPaymentId:string;a2uTxid:string;merchantId:string;merchantUid:string;
+  paymentId:string;u2aIdentifier:string;u2aTxid:string;a2uPaymentId:string;a2uTxid:string;merchantId:string;merchantUid:string;
   customerAmount:number;merchantAmount:number;horizonFeeCharged:number;appCommission:number
 }):Promise<SettlementDurableAdvanceResult>{
   const feeStroops=params.horizonFeeCharged*10_000_000
-  if(!params.paymentId||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid)||!params.merchantId||!params.merchantUid||
+  if(!params.paymentId||!params.u2aIdentifier||!/^[0-9a-f]{64}$/.test(params.u2aTxid)||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid)||!params.merchantId||!params.merchantUid||
     !Number.isFinite(params.customerAmount)||params.customerAmount<=0||params.merchantAmount!==params.customerAmount||params.appCommission!==0||
     !Number.isSafeInteger(feeStroops)||feeStroops<0)return{outcome:'CONFLICT',error:'Settlement DB-finality input invalid'}
   try{
@@ -459,8 +459,8 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
         AND customer_amount=${params.customerAmount} AND merchant_amount=${params.merchantAmount} AND app_commission=0
         AND a2u_payment_id=${params.a2uPaymentId} AND a2u_txid=${params.a2uTxid} AND prepared_tx_hash=${params.a2uTxid}
         AND horizon_fee_stroops=${feeStroops} AND horizon_confirmed_at IS NOT NULL AND pi_completed_at IS NOT NULL AND db_finalized_at IS NULL
-        AND EXISTS(SELECT 1 FROM receipts r WHERE r.u2a_identifier=${params.paymentId} AND r.a2u_identifier=${params.a2uPaymentId}
-          AND r.a2u_txid=${params.a2uTxid} AND r.customer_amount=${params.customerAmount} AND r.merchant_amount=${params.merchantAmount}
+        AND EXISTS(SELECT 1 FROM receipts r WHERE r.u2a_identifier=${params.u2aIdentifier} AND r.u2a_txid=${params.u2aTxid}
+          AND r.a2u_identifier=${params.a2uPaymentId} AND r.a2u_txid=${params.a2uTxid} AND r.customer_amount=${params.customerAmount} AND r.merchant_amount=${params.merchantAmount}
           AND r.horizon_fee_charged=${params.horizonFeeCharged} AND r.app_commission=0)
         RETURNING version,stage`
       if(a.length===1)return[{...a[0],advanced:true}]

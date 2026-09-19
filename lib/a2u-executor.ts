@@ -612,8 +612,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] ✓ DB reconciliation verified - all canonical identifiers match, transactionId:", dbResult.transactionId)
     
     const durableDbFinality = await recordSettlementDbFinalizedCheckpoint({
-      paymentId:ctx.paymentId,a2uPaymentId:ctx.payment.a2uPaymentId!,a2uTxid:ctx.payment.a2uTxid!,
-      merchantId:ctx.payment.merchantId,merchantUid:ctx.payment.merchantUid,
+      paymentId:ctx.paymentId,u2aIdentifier:ctx.payment.piPaymentId!,u2aTxid:ctx.payment.u2aTxid!,
+      a2uPaymentId:ctx.payment.a2uPaymentId!,a2uTxid:ctx.payment.a2uTxid!,
+      merchantId:ctx.payment.merchantId,merchantUid:ctx.merchantUid,
       customerAmount:ctx.payment.customerAmount!,merchantAmount:ctx.payment.merchantAmount!,
       horizonFeeCharged:ctx.payment.horizonFeeCharged!,appCommission:ctx.payment.appCommission!
     })

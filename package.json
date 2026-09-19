@@ -14,7 +14,8 @@
     "certify:nfin10a": "node scripts/verify-nfin10a-settlement-schema.mjs",
     "certify:nfin10b": "node scripts/verify-nfin10b-stage1-durability.mjs",
     "certify:nfin10c": "node scripts/verify-nfin10c-prepared-horizon-durability.mjs",
-    "certify:nfin10d": "node scripts/verify-nfin10d-pi-db-finality.mjs"
+    "certify:nfin10d": "node scripts/verify-nfin10d-pi-db-finality.mjs",
+    "certify:nfin10d-build-fix": "node scripts/verify-nfin10d-build-fix.mjs"
   },
   "overrides": {
     "react": "^19",
