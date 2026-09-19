@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint } from "@/lib/db"
+import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -451,9 +451,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       piCompletionPending: false,
       paidAt: new Date().toISOString(),
     }
-    // Replace ctx.payment with fully merged record
+    const durablePi = await recordSettlementPiCompletedCheckpoint({paymentId:ctx.paymentId,a2uPaymentId,a2uTxid:txidFromHorizon})
+    if(durablePi.outcome!=="RECORDED"&&durablePi.outcome!=="REPLAYED")
+      return {ok:false,status:"settlement_pending",error:"Pi-completed durable checkpoint not proven"}
+    // Replace ctx.payment with fully merged record only after durable Pi finality is proven.
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage3Updates)
-    console.log("[A2U Executor] ✓ Pi /complete succeeded")
+    console.log("[A2U Executor] ✓ Pi /complete and durable finality succeeded")
   } else {
     console.log("[A2U Executor] STAGE 3: Skipping Pi /complete - already piCompleted")
   }
@@ -608,8 +611,16 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
 
     console.log("[A2U Executor] ✓ DB reconciliation verified - all canonical identifiers match, transactionId:", dbResult.transactionId)
     
-    // Only NOW persist final markers after successful verification
-    // Persist Stage 4: dbRecorded, settledAt, settled_to_merchant status after confirmed commit (crash-safe merge)
+    const durableDbFinality = await recordSettlementDbFinalizedCheckpoint({
+      paymentId:ctx.paymentId,a2uPaymentId:ctx.payment.a2uPaymentId!,a2uTxid:ctx.payment.a2uTxid!,
+      merchantId:ctx.payment.merchantId,merchantUid:ctx.payment.merchantUid,
+      customerAmount:ctx.payment.customerAmount!,merchantAmount:ctx.payment.merchantAmount!,
+      horizonFeeCharged:ctx.payment.horizonFeeCharged!,appCommission:ctx.payment.appCommission!
+    })
+    if(durableDbFinality.outcome!=="RECORDED"&&durableDbFinality.outcome!=="REPLAYED")
+      return {ok:false,status:"settlement_pending",error:"DB-finalized durable checkpoint not proven"}
+
+    // Only NOW persist final markers after successful DB and durable-authority verification
     const stage4Updates = {
       dbRecorded: true,
       status: "settled_to_merchant" as const,

@@ -419,6 +419,66 @@ export async function recordSettlementHorizonCheckpoint(params:{paymentId:string
   }catch(e){console.error('[DB] Settlement Horizon checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement Horizon checkpoint uncertain'}}
 }
 
+export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:string;a2uPaymentId:string;a2uTxid:string}):Promise<SettlementDurableAdvanceResult>{
+  if(!params.paymentId||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid))
+    return{outcome:'CONFLICT',error:'Settlement Pi checkpoint input invalid'}
+  try{
+    const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client.begin(async(tx:any)=>{
+      const a=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='pi_completed',pi_completed_at=NOW(),updated_at=NOW()
+        WHERE payment_id=${params.paymentId} AND stage='horizon_confirmed' AND a2u_payment_id=${params.a2uPaymentId}
+        AND a2u_txid=${params.a2uTxid} AND prepared_tx_hash=${params.a2uTxid}
+        AND horizon_confirmed_at IS NOT NULL AND pi_completed_at IS NULL RETURNING version,stage`
+      if(a.length===1)return[{...a[0],advanced:true}]
+      return await tx`SELECT version,stage,a2u_payment_id,a2u_txid,prepared_tx_hash,horizon_confirmed_at,pi_completed_at
+        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} OR a2u_payment_id=${params.a2uPaymentId} OR a2u_txid=${params.a2uTxid} FOR UPDATE`
+    })
+    if(!Array.isArray(rows)||rows.length!==1||!rows[0])return{outcome:'CONFLICT',error:'Settlement Pi durable identity ambiguous'}
+    const r=rows[0] as Record<string,unknown>,v=Number(r.version);if(!Number.isSafeInteger(v)||v<4)return{outcome:'CONFLICT',error:'Settlement Pi durable version invalid'}
+    if(r.advanced===true)return{outcome:'RECORDED',version:v}
+    if(!(typeof r.stage==='string'&&['pi_completed','db_finalized'].includes(r.stage))||r.a2u_payment_id!==params.a2uPaymentId||
+      r.a2u_txid!==params.a2uTxid||r.prepared_tx_hash!==params.a2uTxid||r.horizon_confirmed_at==null||r.pi_completed_at==null)
+      return{outcome:'CONFLICT',error:'Settlement Pi durable evidence mismatch'}
+    return{outcome:'REPLAYED',version:v}
+  }catch(e){console.error('[DB] Settlement Pi checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement Pi checkpoint uncertain'}}
+}
+
+export async function recordSettlementDbFinalizedCheckpoint(params:{
+  paymentId:string;a2uPaymentId:string;a2uTxid:string;merchantId:string;merchantUid:string;
+  customerAmount:number;merchantAmount:number;horizonFeeCharged:number;appCommission:number
+}):Promise<SettlementDurableAdvanceResult>{
+  const feeStroops=params.horizonFeeCharged*10_000_000
+  if(!params.paymentId||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid)||!params.merchantId||!params.merchantUid||
+    !Number.isFinite(params.customerAmount)||params.customerAmount<=0||params.merchantAmount!==params.customerAmount||params.appCommission!==0||
+    !Number.isSafeInteger(feeStroops)||feeStroops<0)return{outcome:'CONFLICT',error:'Settlement DB-finality input invalid'}
+  try{
+    const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client.begin(async(tx:any)=>{
+      const a=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='db_finalized',db_finalized_at=NOW(),updated_at=NOW()
+        WHERE payment_id=${params.paymentId} AND stage='pi_completed' AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
+        AND customer_amount=${params.customerAmount} AND merchant_amount=${params.merchantAmount} AND app_commission=0
+        AND a2u_payment_id=${params.a2uPaymentId} AND a2u_txid=${params.a2uTxid} AND prepared_tx_hash=${params.a2uTxid}
+        AND horizon_fee_stroops=${feeStroops} AND horizon_confirmed_at IS NOT NULL AND pi_completed_at IS NOT NULL AND db_finalized_at IS NULL
+        AND EXISTS(SELECT 1 FROM receipts r WHERE r.u2a_identifier=${params.paymentId} AND r.a2u_identifier=${params.a2uPaymentId}
+          AND r.a2u_txid=${params.a2uTxid} AND r.customer_amount=${params.customerAmount} AND r.merchant_amount=${params.merchantAmount}
+          AND r.horizon_fee_charged=${params.horizonFeeCharged} AND r.app_commission=0)
+        RETURNING version,stage`
+      if(a.length===1)return[{...a[0],advanced:true}]
+      return await tx`SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+        a2u_payment_id,a2u_txid,prepared_tx_hash,horizon_fee_stroops,pi_completed_at,db_finalized_at
+        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} OR a2u_payment_id=${params.a2uPaymentId} OR a2u_txid=${params.a2uTxid} FOR UPDATE`
+    })
+    if(!Array.isArray(rows)||rows.length!==1||!rows[0])return{outcome:'CONFLICT',error:'Settlement DB-finality durable identity ambiguous'}
+    const r=rows[0] as Record<string,unknown>,v=Number(r.version);if(!Number.isSafeInteger(v)||v<5)return{outcome:'CONFLICT',error:'Settlement DB-finality durable version invalid'}
+    if(r.advanced===true)return{outcome:'RECORDED',version:v}
+    let ca,ma,ac,fs;try{ca=normalizePostgresNumeric(r.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'settlement.app_commission');fs=normalizePostgresNumeric(r.horizon_fee_stroops,'settlement.horizon_fee_stroops')}catch{return{outcome:'CONFLICT',error:'Settlement DB-finality durable accounting invalid'}}
+    if(r.stage!=='db_finalized'||r.merchant_id!==params.merchantId||r.merchant_uid!==params.merchantUid||ca!==params.customerAmount||ma!==params.merchantAmount||ac!==0||
+      r.a2u_payment_id!==params.a2uPaymentId||r.a2u_txid!==params.a2uTxid||r.prepared_tx_hash!==params.a2uTxid||fs!==feeStroops||r.pi_completed_at==null||r.db_finalized_at==null)
+      return{outcome:'CONFLICT',error:'Settlement DB-finality durable evidence mismatch'}
+    return{outcome:'REPLAYED',version:v}
+  }catch(e){console.error('[DB] Settlement DB-finality checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement DB-finality checkpoint uncertain'}}
+}
+
 export async function ensureRefundAccountingTable(): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
   const result = await query(`
