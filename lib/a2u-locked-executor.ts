@@ -3,7 +3,7 @@ import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
-import { getSettlementCheckpointAuthoritative } from "@/lib/db"
+import { getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
@@ -127,6 +127,11 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     }
 
     console.log("[A2U Locked Executor] ✓ Lock acquired")
+
+    const durableAuthority = await verifySettlementRefundAuthorityExclusion(paymentId)
+    if (durableAuthority.outcome !== "CLEAR") {
+      return { ok:false, status:409, error:durableAuthority.error }
+    }
 
     // Inside lock: reload LATEST payment checkpoint
     let paymentData = await redis.get(`payment:${paymentId}`)

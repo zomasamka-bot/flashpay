@@ -430,6 +430,56 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
   }catch(e){console.error('[DB] Settlement durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement durable read uncertain'}}
 }
 
+export type SettlementOutstandingPage =
+  | { outcome:'FOUND'; paymentIds:string[] }
+  | { outcome:'INDETERMINATE'; error:string }
+
+export async function listOutstandingSettlementCheckpointIds(limit:number):Promise<SettlementOutstandingPage>{
+  if(!Number.isSafeInteger(limit)||limit<1||limit>200)return{outcome:'INDETERMINATE',error:'Invalid Settlement outstanding page limit'}
+  try{
+    const client=await getPostgresClient()
+    if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client`
+      SELECT payment_id FROM settlement_checkpoints
+      WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
+      ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}
+    `
+    if(!Array.isArray(rows))return{outcome:'INDETERMINATE',error:'Settlement outstanding durable read invalid'}
+    const ids:string[]=[]
+    for(const row of rows){
+      const id=(row as Record<string,unknown>).payment_id
+      if(typeof id!=='string'||id.trim()===''||id!==id.trim()||ids.includes(id))
+        return{outcome:'INDETERMINATE',error:'Settlement outstanding durable identity invalid'}
+      ids.push(id)
+    }
+    return{outcome:'FOUND',paymentIds:ids}
+  }catch(e){console.error('[DB] Settlement outstanding durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement outstanding durable read uncertain'}}
+}
+
+export type SettlementRefundAuthorityCheck =
+  | { outcome:'CLEAR' }
+  | { outcome:'CONFLICT'|'INDETERMINATE'; error:string }
+
+export async function verifySettlementRefundAuthorityExclusion(paymentId:string):Promise<SettlementRefundAuthorityCheck>{
+  if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
+    return{outcome:'INDETERMINATE',error:'Invalid payment identity'}
+  try{
+    const client=await getPostgresClient()
+    if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client`
+      SELECT
+        (SELECT count(*) FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage<>'db_finalized') AS settlement_count,
+        (SELECT count(*) FROM refund_checkpoints WHERE payment_id=${paymentId} AND status IN ('pending','submitted','completed')) AS refund_count
+    `
+    if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Cross-authority durable read invalid'}
+    const settlementCount=Number((rows[0] as any).settlement_count),refundCount=Number((rows[0] as any).refund_count)
+    if(!Number.isSafeInteger(settlementCount)||!Number.isSafeInteger(refundCount)||settlementCount<0||refundCount<0)
+      return{outcome:'INDETERMINATE',error:'Cross-authority durable counts invalid'}
+    if(settlementCount>0&&refundCount>0)return{outcome:'CONFLICT',error:'Settlement and Refund durable authorities conflict'}
+    return{outcome:'CLEAR'}
+  }catch(e){console.error('[DB] Cross-authority durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Cross-authority durable read uncertain'}}
+}
+
 export type SettlementDurableAdvanceResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }

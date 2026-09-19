@@ -16,7 +16,8 @@
     "certify:nfin10c": "node scripts/verify-nfin10c-prepared-horizon-durability.mjs",
     "certify:nfin10d": "node scripts/verify-nfin10d-pi-db-finality.mjs",
     "certify:nfin10d-build-fix": "node scripts/verify-nfin10d-build-fix.mjs",
-    "certify:nfin10e": "node scripts/verify-nfin10e-redis-rebuild-recovery-cutover.mjs"
+    "certify:nfin10e": "node scripts/verify-nfin10e-redis-rebuild-recovery-cutover.mjs",
+    "certify:nfin10f": "node scripts/verify-nfin10f-durable-repopulation-cross-authority.mjs"
   },
   "overrides": {
     "react": "^19",

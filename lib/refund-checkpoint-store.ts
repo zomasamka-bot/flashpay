@@ -1,5 +1,5 @@
 import { redis, isRedisConfigured } from './redis'
-import { query } from './db'
+import { query, verifySettlementRefundAuthorityExclusion } from './db'
 import type { Payment, RefundAuditEvent, RefundCheckpoint } from './types'
 
 const redisKey = (refundId: string) => `flashpay:refund:checkpoint:${refundId}`
@@ -8,6 +8,8 @@ const paymentOperationLockKey = (paymentId: string) => `flashpay:payment:operati
 
 export async function acquirePaymentOperationLock(paymentId: string, owner: string): Promise<boolean> {
   if (!isRedisConfigured) return false
+  const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
+  if(authority.outcome!=="CLEAR")return false
   const result = await redis.set(paymentOperationLockKey(paymentId), owner, { nx: true, ex: 60 * 60 * 24 * 30 })
   return result === 'OK'
 }

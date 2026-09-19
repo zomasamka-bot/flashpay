@@ -6,7 +6,7 @@ import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
 import { persistCheckpointMerged } from "@/lib/a2u-executor"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
-import { getSettlementCheckpointAuthoritative } from "@/lib/db"
+import { getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -188,6 +188,11 @@ export async function executeA2URecovery(
   schedulerWalletPaymentId?: string | null
 ): Promise<RecoveryResult> {
   console.log("[A2U Recovery] 🔍 Starting orchestrator for:", paymentId)
+
+  const durableAuthority = await verifySettlementRefundAuthorityExclusion(paymentId)
+  if (durableAuthority.outcome !== "CLEAR") {
+    return {status:"manual_review_required",state:"durable_authority_conflict",paymentId,details:{error:durableAuthority.error}}
+  }
 
   // Load canonical Payment
   const paymentKey = `payment:${paymentId}`

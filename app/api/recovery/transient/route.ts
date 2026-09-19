@@ -5,7 +5,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass, runAutomaticRefundPreparationStep, runAutomaticRefundFinalizationStep } from "@/lib/refund-auto-orchestrator"
-import { query } from "@/lib/db"
+import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
@@ -42,6 +42,34 @@ local current = redis.call("GET", KEYS[1])
 if current ~= ARGV[1] then return 0 end
 return redis.call("EXPIRE", KEYS[1], ARGV[2])
 `
+
+async function repopulateDurableSettlementWork():Promise<{repopulated:number;conflicts:number}>{
+  const page=await listOutstandingSettlementCheckpointIds(200)
+  if(page.outcome!=='FOUND')throw new Error(page.error)
+  let repopulated=0,conflicts=0
+  for(const paymentId of page.paymentIds){
+    const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
+    if(authority.outcome!=='CLEAR'){conflicts++;continue}
+    const existing=await redis.get(`payment:${paymentId}`)
+    if(existing){await redis.sadd("flashpay:recovery:active-payments:v1",paymentId);continue}
+    const durable=await getSettlementCheckpointAuthoritative(paymentId)
+    if(durable.outcome!=='FOUND')throw new Error('Durable Settlement projection unavailable')
+    const d=durable.checkpoint,moved=d.stage==='horizon_confirmed'||d.stage==='pi_completed',piDone=d.stage==='pi_completed',prepared=d.stage!=='a2u_created'
+    const projection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:'',status:moved||prepared?'settlement_pending':'paid_to_app',createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:'none',appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone,dbRecorded:false}:{})}
+    const encoded=JSON.stringify(projection)
+    const created=await redis.set(`payment:${paymentId}`,encoded,{nx:true})
+    if(created==='OK')repopulated++
+    await redis.sadd("flashpay:recovery:active-payments:v1",paymentId)
+    const current=await redis.get(`payment:${paymentId}`)
+    const parsed=parsePayment(current)
+    if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==d.a2uPaymentId)throw new Error('Durable Settlement repopulation readback failed')
+    // Ready ordering is restored only for Stage1+ work; Redis assigns the next monotonic sequence.
+    const seq=await redis.incr(READY_SEQUENCE_KEY)
+    if(!Number.isSafeInteger(seq)||seq<1)throw new Error('Settlement ready sequence unavailable')
+    await redis.zadd("flashpay:settlement:ready:v1",{score:seq,member:paymentId})
+  }
+  return{repopulated,conflicts}
+}
 
 type DrainLease = {
   state: "acquired"
@@ -657,6 +685,11 @@ export async function POST(request: NextRequest) {
   let activeSetSize = 0
   let scanStartToken = "c:0"
   let scanNextToken = "c:0"
+  // N-FIN-10F: periodic wake repairs lost Redis projections/index membership from durable PostgreSQL authority.
+  // Conflicting Settlement/Refund durable ownership is never scheduled.
+  try { await repopulateDurableSettlementWork() }
+  catch { return NextResponse.json({ error: "Durable Settlement work repopulation unavailable" }, { status: 503 }) }
+
   let readyBaselineAlreadyCertified = false
   let readyBaselineCoverageCertified = false
   try {
