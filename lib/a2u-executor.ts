@@ -1093,13 +1093,22 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
 
     if (!response.ok) {
       const errorText = await response.text()
+      // Any failed /complete response can be ambiguous: Pi may have completed the payment
+      // before the error response was observed. Reconcile the exact payment/txid first;
+      // never retry /complete blindly.
+      if (await refetchCompleted()) {
+        console.log("[A2U Stage3] Pi /complete non-OK response reconciled as completed")
+        return { ok: true }
+      }
       if (response.status === 400 && errorText.includes("already_completed")) {
-        console.log("[A2U Stage3] Payment already_completed - refetching to validate")
-        if (await refetchCompleted()) return { ok: true }
         return { ok: false, error: "Pi already_completed state unverified", userFacingStatus: "settlement_pending" }
       }
-      console.error("[A2U Stage3] Pi /complete failed:", errorText)
-      return { ok: false, error: "Pi /complete failed", userFacingStatus: "error" }
+      console.error("[A2U Stage3] Pi /complete failed and completion was not verified:", errorText)
+      return {
+        ok: false,
+        error: "Pi /complete failed and completion was not verified",
+        userFacingStatus: responseStatusRetryable(response.status) ? "settlement_pending" : "error",
+      }
     }
 
     const responseBody: unknown = await response.clone().json().catch(() => null)
@@ -1110,8 +1119,12 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
     console.log("[A2U Stage3] ✓ Pi /complete succeeded and verified")
     return { ok: true }
   } catch (error) {
-    console.error("[A2U Stage3] Exception:", error)
-    return { ok: false, error: String(error), userFacingStatus: "error" }
+    console.error("[A2U Stage3] /complete transport exception; reconciling exact completion state:", error)
+    if (await refetchCompleted()) {
+      console.log("[A2U Stage3] Pi /complete transport exception reconciled as completed")
+      return { ok: true }
+    }
+    return { ok: false, error: "Pi /complete transport outcome unverified", userFacingStatus: "settlement_pending" }
   }
 }
 
