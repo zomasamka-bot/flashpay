@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint } from "@/lib/db"
+import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -911,6 +911,13 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   const preparedSequence = transaction.sequence
   if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
   ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr, a2uPreparedTxHash: preparedHash, a2uPreparedSequence: preparedSequence, status: "settlement_pending" as const })
+  const durablePrepared = await recordSettlementPreparedCheckpoint({
+    paymentId:ctx.paymentId,merchantId:ctx.payment.merchantId,merchantUid:ctx.merchantUid,
+    customerAmount:ctx.customerAmount,merchantAmount:amount,a2uPaymentId,a2uFromAddress:appPublicKey,a2uToAddress:toAddress,
+    preparedEnvelopeXdr,preparedTxHash:preparedHash,preparedSequence
+  })
+  if(durablePrepared.outcome!=="RECORDED"&&durablePrepared.outcome!=="REPLAYED")
+    return {ok:false,error:"Prepared A2U durable checkpoint not proven",userFacingStatus:"settlement_pending"}
   const preparedOwnerReplaced = await replacePiWalletIntent(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId }, { kind: "settlement_prepared", paymentId: ctx.paymentId, preparedHash, preparedSequence })
   if (!preparedOwnerReplaced) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
   const preparedOwner = await readPiWalletIntent(appPublicKey)
@@ -1045,7 +1052,16 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     }
     
     // Convert stroops to Pi (1 Pi = 10,000,000 stroops)
+    if (!Number.isSafeInteger(feeChargedAsNumber)) {
+      return { ok: false, error: "Horizon transaction fee_charged is not an exact integer stroop value", userFacingStatus: "error" }
+    }
     const horizonFeeCharged = feeChargedAsNumber / 10_000_000
+    const durableHorizon = await recordSettlementHorizonCheckpoint({
+      paymentId:ctx.paymentId,a2uPaymentId,preparedTxHash:preparedHash,preparedSequence:transaction.sequence,
+      a2uTxid:txidFromHorizon,horizonFeeStroops:feeChargedAsNumber
+    })
+    if(durableHorizon.outcome!=="RECORDED"&&durableHorizon.outcome!=="REPLAYED")
+      return {ok:false,error:"Horizon durable checkpoint not proven",userFacingStatus:"settlement_pending"}
     
     console.log("[A2U Stage2] ✓ Fee verified from Horizon:", horizonFeeCharged)
     // Return txid and fee for persisting in executeA2U
