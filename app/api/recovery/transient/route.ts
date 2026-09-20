@@ -5,7 +5,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass, runAutomaticRefundPreparationStep, runAutomaticRefundFinalizationStep } from "@/lib/refund-auto-orchestrator"
-import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
+import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion, repairF1LegacyCompletedCanonicalReceipts } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
@@ -34,6 +34,7 @@ const RECOVERY_WAKE_HEALTH_KEY = "flashpay:operations:recovery-last-wake:v1"
 const F1_BALANCE_DIAGNOSTIC_ONCE_KEY = "flashpay:diagnostic:f1-balance-integrity:v1:ec3295"
 const F1_FORENSIC_ATTRIBUTION_ONCE_KEY = "flashpay:diagnostic:f1-forensic-attribution:v1:fa1f5"
 const F1_ROOT_CAUSE_CERT_ONCE_KEY = "flashpay:diagnostic:f1-root-cause-cert:v1:8f4a22"
+const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d6"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -918,6 +919,81 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         if (claimed) { try { await redis.del(F1_ROOT_CAUSE_CERT_ONCE_KEY) } catch {} }
         console.error("[F1F ROOT CAUSE CERTIFICATION] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
+
+  // F1G guarded historical repair: external movement proof first, then one atomic DB classification repair.
+  // It never creates/submits/completes A2U, never changes merchant_balances, and never touches legacy unsettled.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(F1_GUARDED_REPAIR_ONCE_KEY, "running", { nx: true, ex: 15 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+        if (!serverConfig.piApiKey) throw new Error("F1G Pi API authority unavailable")
+        const candidateRows = await query(`
+          SELECT r.id receipt_id,t.payment_id,r.a2u_identifier,r.a2u_txid,r.merchant_amount
+          FROM receipts r JOIN transactions t ON t.id=r.transaction_id
+          WHERE r.merchant_id='hazemaboria' AND r.settlement_status='completed'
+            AND r.customer_amount IS NOT NULL AND r.merchant_amount IS NOT NULL
+            AND r.u2a_identifier IS NOT NULL AND r.u2a_txid IS NOT NULL
+            AND r.a2u_identifier IS NOT NULL AND r.a2u_txid IS NOT NULL
+          ORDER BY r.id
+        `)
+        if (!Array.isArray(candidateRows) || candidateRows.length !== 3) throw new Error("F1G certified candidate set changed")
+        const candidates = candidateRows.map((raw) => {
+          if (!raw || typeof raw !== "object") throw new Error("F1G candidate shape invalid")
+          const row = raw as Record<string, unknown>
+          const merchantAmount = Number(row.merchant_amount)
+          if (typeof row.receipt_id !== "string" || typeof row.payment_id !== "string" || typeof row.a2u_identifier !== "string" ||
+              typeof row.a2u_txid !== "string" || !/^[0-9a-f]{64}$/.test(row.a2u_txid) || !Number.isFinite(merchantAmount) || merchantAmount <= 0)
+            throw new Error("F1G candidate identity invalid")
+          return { receiptId: row.receipt_id, paymentId: row.payment_id, a2uIdentifier: row.a2u_identifier, a2uTxid: row.a2u_txid, merchantAmount }
+        })
+        const candidateAmount = candidates.reduce((sum, row) => sum + row.merchantAmount, 0)
+        if (Math.abs(candidateAmount - 3.2) > 1e-9) throw new Error("F1G certified candidate amount changed")
+
+        for (const candidate of candidates) {
+          const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(candidate.a2uIdentifier)}`, {
+            method: "GET", headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" }, cache: "no-store",
+          })
+          if (!piResponse.ok) throw new Error(`F1G Pi authority unavailable (${piResponse.status})`)
+          const dto = asRecord(await piResponse.json().catch(() => null))
+          const status = dto ? asRecord(dto.status) : null
+          const transaction = dto ? asRecord(dto.transaction) : null
+          if (!dto || dto.identifier !== candidate.a2uIdentifier || dto.direction !== "app_to_user" || Number(dto.amount) !== candidate.merchantAmount ||
+              transaction?.txid !== candidate.a2uTxid || status?.transaction_verified !== true || status?.developer_completed !== true ||
+              status?.cancelled === true || status?.user_cancelled === true)
+            throw new Error("F1G Pi movement identity not proven")
+
+          const horizonResponse = await fetch(`https://api.testnet.minepi.com/transactions/${candidate.a2uTxid}`, { cache: "no-store" })
+          if (!horizonResponse.ok) throw new Error(`F1G Horizon authority unavailable (${horizonResponse.status})`)
+          const horizon = asRecord(await horizonResponse.json().catch(() => null))
+          if (!horizon || horizon.hash !== candidate.a2uTxid || horizon.successful !== true)
+            throw new Error("F1G Horizon movement not proven")
+        }
+
+        const repaired = await repairF1LegacyCompletedCanonicalReceipts({ merchantId: "hazemaboria", receipts: candidates, expectedCandidateAmount: 3.2 })
+        if (repaired.outcome !== "REPAIRED" && repaired.outcome !== "ALREADY_REPAIRED") throw new Error(`F1G DB repair blocked: ${repaired.error}`)
+        const proof = await query(`
+          SELECT b.settled stored_settled,
+                 COALESCE(SUM(r.merchant_amount) FILTER (WHERE r.settlement_status='settled_to_merchant'),0) canonical_settled,
+                 b.unsettled stored_unsettled,
+                 COUNT(*) FILTER (WHERE r.settlement_status='completed' AND r.customer_amount IS NOT NULL AND r.merchant_amount IS NOT NULL AND r.a2u_identifier IS NOT NULL AND r.a2u_txid IS NOT NULL) canonical_completed_remaining
+          FROM merchant_balances b LEFT JOIN receipts r ON r.merchant_id=b.merchant_id
+          WHERE b.merchant_id='hazemaboria' GROUP BY b.merchant_id,b.settled,b.unsettled
+        `)
+        if (!Array.isArray(proof) || proof.length !== 1) throw new Error("F1G post-repair proof unavailable")
+        const post = proof[0] as Record<string, unknown>
+        if (Number(post.stored_settled) !== Number(post.canonical_settled) || Number(post.canonical_completed_remaining) !== 0)
+          throw new Error("F1G post-repair settled invariant failed")
+        console.log("[F1G GUARDED REPAIR] complete", { outcome: repaired.outcome, repairedCount: repaired.repairedCount, repairedAmount: repaired.repairedAmount, storedSettled: post.stored_settled, canonicalSettled: post.canonical_settled, storedUnsettled: post.stored_unsettled, externalAuthority: "Pi+Horizon", merchantBalanceMutation: false, legacyUnsettledMutation: false })
+        await redis.set(F1_GUARDED_REPAIR_ONCE_KEY, "done", { ex: 30 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(F1_GUARDED_REPAIR_ONCE_KEY) } catch {} }
+        console.error("[F1G GUARDED REPAIR] failed", error instanceof Error ? error.message : String(error))
       }
     })
   } catch {}

@@ -1203,6 +1203,95 @@ export async function getTransactionsByMerchant(
   }
 }
 
+
+export type F1LegacyCompletedRepairResult =
+  | { outcome: 'REPAIRED' | 'ALREADY_REPAIRED'; repairedCount: number; repairedAmount: number }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/**
+ * F1G one-shot historical classification repair.
+ * This never creates, submits, completes, refunds, or replays financial movement.
+ * It may only reclassify the exact externally-proven legacy canonical receipts from
+ * `completed` to `settled_to_merchant`, while proving merchant_balances already
+ * contains the same amount. Any changed/ambiguous state fails closed.
+ */
+export async function repairF1LegacyCompletedCanonicalReceipts(params: {
+  merchantId: string
+  receipts: Array<{ receiptId: string; paymentId: string; a2uIdentifier: string; a2uTxid: string; merchantAmount: number }>
+  expectedCandidateAmount: number
+}): Promise<F1LegacyCompletedRepairResult> {
+  if (!process.env.DATABASE_URL) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+  if (params.merchantId !== 'hazemaboria' || params.receipts.length !== 3 || params.expectedCandidateAmount !== 3.2)
+    return { outcome: 'CONFLICT', error: 'F1G repair identity is not the certified target' }
+  const ids = params.receipts.map((r) => r.receiptId)
+  if (new Set(ids).size !== ids.length || params.receipts.some((r) => !r.receiptId || !r.paymentId || !r.a2uIdentifier || !/^[0-9a-f]{64}$/.test(r.a2uTxid) || !Number.isFinite(r.merchantAmount) || r.merchantAmount <= 0))
+    return { outcome: 'CONFLICT', error: 'F1G repair evidence is invalid' }
+  const evidenceAmount = params.receipts.reduce((sum, r) => sum + r.merchantAmount, 0)
+  if (Math.abs(evidenceAmount - params.expectedCandidateAmount) > 1e-9)
+    return { outcome: 'CONFLICT', error: 'F1G repair evidence amount mismatch' }
+
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    return await client.begin(async (tx: any) => {
+      const rows = await tx`
+        SELECT r.id, t.payment_id, r.merchant_id, r.amount, r.customer_amount, r.merchant_amount,
+               r.horizon_fee_charged, r.app_commission, r.app_net_impact, r.settlement_status,
+               r.u2a_identifier, r.u2a_txid, r.a2u_identifier, r.a2u_txid
+        FROM receipts r JOIN transactions t ON t.id=r.transaction_id
+        WHERE r.id = ANY(${tx.array(ids)}::uuid[])
+        ORDER BY r.id
+        FOR UPDATE OF r
+      `
+      if (!Array.isArray(rows) || rows.length !== 3) throw new Error('F1G target rows changed or missing')
+
+      let candidateAmount = 0
+      let alreadySettled = 0
+      for (const row of rows as Record<string, unknown>[]) {
+        const expected = params.receipts.find((r) => r.receiptId === row.id)
+        if (!expected || row.merchant_id !== params.merchantId || row.payment_id !== expected.paymentId ||
+            row.u2a_identifier !== expected.paymentId || row.a2u_identifier !== expected.a2uIdentifier || row.a2u_txid !== expected.a2uTxid)
+          throw new Error('F1G durable identity changed')
+        const amount = normalizePostgresNumeric(row.amount, 'f1g.amount')
+        const customerAmount = normalizePostgresNumeric(row.customer_amount, 'f1g.customer_amount')
+        const merchantAmount = normalizePostgresNumeric(row.merchant_amount, 'f1g.merchant_amount')
+        const appCommission = normalizePostgresNumeric(row.app_commission, 'f1g.app_commission')
+        if (amount !== expected.merchantAmount || customerAmount !== expected.merchantAmount || merchantAmount !== expected.merchantAmount || appCommission !== 0)
+          throw new Error('F1G accounting identity changed')
+        if (row.settlement_status === 'settled_to_merchant') alreadySettled += 1
+        else if (row.settlement_status !== 'completed') throw new Error('F1G target status changed')
+        candidateAmount += merchantAmount
+      }
+      if (Math.abs(candidateAmount - params.expectedCandidateAmount) > 1e-9) throw new Error('F1G target amount changed')
+      if (alreadySettled !== 0 && alreadySettled !== 3) throw new Error('F1G partial prior repair detected')
+
+      const balanceRows = await tx`SELECT settled FROM merchant_balances WHERE merchant_id=${params.merchantId} FOR UPDATE`
+      if (!Array.isArray(balanceRows) || balanceRows.length !== 1) throw new Error('F1G merchant balance unavailable')
+      const storedSettled = normalizePostgresNumeric(balanceRows[0].settled, 'f1g.stored_settled')
+      const canonicalRows = await tx`
+        SELECT COALESCE(SUM(merchant_amount),0) settled
+        FROM receipts WHERE merchant_id=${params.merchantId} AND settlement_status='settled_to_merchant'
+      `
+      if (!Array.isArray(canonicalRows) || canonicalRows.length !== 1) throw new Error('F1G canonical settled unavailable')
+      const canonicalSettled = normalizePostgresNumeric(canonicalRows[0].settled, 'f1g.canonical_settled')
+      const expectedStored = alreadySettled === 3 ? canonicalSettled : canonicalSettled + params.expectedCandidateAmount
+      if (Math.abs(storedSettled - expectedStored) > 1e-9) throw new Error('F1G merchant balance precondition mismatch')
+      if (alreadySettled === 3) return { outcome: 'ALREADY_REPAIRED' as const, repairedCount: 0, repairedAmount: 0 }
+
+      const updated = await tx`
+        UPDATE receipts SET settlement_status='settled_to_merchant'
+        WHERE id = ANY(${tx.array(ids)}::uuid[]) AND settlement_status='completed'
+        RETURNING id
+      `
+      if (!Array.isArray(updated) || updated.length !== 3) throw new Error('F1G atomic repair cardinality mismatch')
+      return { outcome: 'REPAIRED' as const, repairedCount: 3, repairedAmount: params.expectedCandidateAmount }
+    })
+  } catch (error) {
+    console.error('[F1G DB REPAIR] fail-closed', error instanceof Error ? error.message : String(error))
+    return { outcome: 'INDETERMINATE', error: 'F1G repair outcome is uncertain' }
+  }
+}
+
 /**
  * Get merchant balance
  */
