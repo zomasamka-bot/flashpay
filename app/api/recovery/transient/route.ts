@@ -999,7 +999,8 @@ export async function POST(request: NextRequest) {
         }
 
         const repaired = await repairF1LegacyCompletedCanonicalReceipts({ merchantId: "hazemaboria", receipts: candidates, expectedCandidateAmount: 3.2 })
-        if (repaired.outcome !== "REPAIRED" && repaired.outcome !== "ALREADY_REPAIRED") throw new Error(`F1G DB repair blocked: ${repaired.error}`)
+        if (repaired.outcome === "CONFLICT" || repaired.outcome === "INDETERMINATE")
+          throw new Error(`F1G DB repair blocked: ${repaired.error}`)
         const proof = await query(`
           SELECT b.settled stored_settled,
                  COALESCE(SUM(r.merchant_amount) FILTER (WHERE r.settlement_status='settled_to_merchant'),0) canonical_settled,
