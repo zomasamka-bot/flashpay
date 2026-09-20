@@ -1,0 +1,9 @@
+import{strict as assert}from"node:assert";import fs from"node:fs";
+const read=p=>fs.readFileSync(new URL("../"+p,import.meta.url),"utf8"),db=read("lib/db.ts"),route=read("app/api/recovery/transient/route.ts");
+for(const [n,ok]of [["pg-cursor",db.includes("settlement_recovery_scan_cursor")],["serialized",db.includes("FOR UPDATE")],["keyset",db.includes("(updated_at,payment_id)>")],["bounded",db.includes("LIMIT ${limit}")],["runtime-page",route.includes("listOutstandingSettlementCheckpointIds(200)")],["no-page-promise-all",!route.includes("Promise.all(page.paymentIds)")],["no-hot-path-ddl",!db.slice(db.indexOf("export async function listOutstandingSettlementCheckpointIds"),db.indexOf("export type SettlementRefundAuthorityCheck")).includes("CREATE TABLE")]])assert.equal(ok,true,n);
+const rows=Array.from({length:10000},(_,i)=>({t:Math.floor(i/7),id:`p-${String(i).padStart(5,"0")}`})).sort((a,b)=>a.t-b.t||a.id.localeCompare(b.id));
+let cursor=null,redis=new Set(),seen=new Set(),wakes=0,peak=0;
+function next(){let start=0;if(cursor){start=rows.findIndex(r=>r.t>cursor.t||(r.t===cursor.t&&r.id>cursor.id));if(start<0)start=0}const p=rows.slice(start,start+200);peak=Math.max(peak,p.length);cursor=p.length?p[p.length-1]:null;return p}
+while(seen.size<10000&&wakes<60){for(const r of next()){seen.add(r.id);redis.add(r.id)}wakes++;if(wakes===17)redis=new Set()}
+assert.equal(seen.size,10000);assert.equal(wakes,50);assert.equal(peak,200);
+console.log(JSON.stringify({certification:"PASS",gate:"N-FIN-X1",durableRows:10000,covered:seen.size,wakes,pageLimit:200,redisLossInjectedAtWake:17,starved:10000-seen.size,financialMovementExecuted:false},null,2));

@@ -22,7 +22,8 @@
     "certify:nfin10h": "node scripts/verify-nfin10h-final-production-readiness.mjs",
     "certify:nfin11": "node scripts/verify-nfin11-financial-kernel-matrix.mjs",
     "certify:nfin12": "node scripts/verify-nfin12-cross-system-finality.mjs",
-    "certify:nfin13": "node scripts/verify-nfin13-final-financial-certification.mjs"
+    "certify:nfin13": "node scripts/verify-nfin13-final-financial-certification.mjs",
+    "certify:nfinx1": "node scripts/verify-nfinx1-durable-drain-progression.mjs"
   },
   "overrides": {
     "react": "^19",

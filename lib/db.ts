@@ -237,7 +237,25 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
     ON settlement_checkpoints(a2u_txid)
     WHERE a2u_txid IS NOT NULL
   `)
-  return txidIndex !== null
+  if (txidIndex === null) return false
+
+  // N-FIN-X1: PostgreSQL-owned recovery rotation cursor. This is durability
+  // metadata only; it never authorizes or records financial movement.
+  const recoveryCursor = await query(`
+    CREATE TABLE IF NOT EXISTS settlement_recovery_scan_cursor (
+      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton = TRUE),
+      last_updated_at TIMESTAMP,
+      last_payment_id TEXT,
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `)
+  if (recoveryCursor === null) return false
+  const recoveryCursorSeed = await query(`
+    INSERT INTO settlement_recovery_scan_cursor(singleton)
+    VALUES(TRUE)
+    ON CONFLICT(singleton) DO NOTHING
+  `)
+  return recoveryCursorSeed !== null
 }
 
 export type SettlementStage1CheckpointResult =
@@ -431,28 +449,57 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
 }
 
 export type SettlementOutstandingPage =
-  | { outcome:'FOUND'; paymentIds:string[] }
+  | { outcome:'FOUND'; paymentIds:string[]; nextCursor:string|null; wrapped:boolean }
   | { outcome:'INDETERMINATE'; error:string }
 
+/**
+ * N-FIN-X1: bounded durable rotation over outstanding Settlement checkpoints.
+ * Cursor authority is PostgreSQL, never Redis, so Redis loss cannot reset every
+ * wake to the same first 200 rows. Advancement is serialized and wraps only
+ * after the ordered outstanding set is exhausted.
+ */
 export async function listOutstandingSettlementCheckpointIds(limit:number):Promise<SettlementOutstandingPage>{
   if(!Number.isSafeInteger(limit)||limit<1||limit>200)return{outcome:'INDETERMINATE',error:'Invalid Settlement outstanding page limit'}
   try{
     const client=await getPostgresClient()
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
-    const rows=await client`
-      SELECT payment_id FROM settlement_checkpoints
-      WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
-      ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}
-    `
-    if(!Array.isArray(rows))return{outcome:'INDETERMINATE',error:'Settlement outstanding durable read invalid'}
+    const result=await client.begin(async(tx:any)=>{
+      const cr=await tx`SELECT last_updated_at,last_payment_id FROM settlement_recovery_scan_cursor WHERE singleton=TRUE FOR UPDATE`
+      if(cr.length!==1)throw new Error('Settlement recovery cursor unavailable')
+      const c=cr[0] as Record<string,unknown>
+      const has=c.last_updated_at!=null&&typeof c.last_payment_id==='string'&&c.last_payment_id.length>0
+      let rows=has
+        ? await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
+            WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
+              AND (updated_at,payment_id)>(${c.last_updated_at},${c.last_payment_id})
+            ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
+        : await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
+            WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
+            ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
+      let wrapped=false
+      if(rows.length===0&&has){
+        wrapped=true
+        rows=await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
+          WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
+          ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
+      }
+      if(rows.length===0){
+        await tx`UPDATE settlement_recovery_scan_cursor SET last_updated_at=NULL,last_payment_id=NULL,updated_at=NOW() WHERE singleton=TRUE`
+        return{rows,wrapped,nextCursor:null}
+      }
+      const tail=rows[rows.length-1] as Record<string,unknown>
+      if(tail.updated_at==null||typeof tail.payment_id!=='string'||tail.payment_id.length===0)throw new Error('Settlement recovery cursor tail invalid')
+      await tx`UPDATE settlement_recovery_scan_cursor SET last_updated_at=${tail.updated_at},last_payment_id=${tail.payment_id},updated_at=NOW() WHERE singleton=TRUE`
+      return{rows,wrapped,nextCursor:String(tail.payment_id)}
+    })
+    if(!result||!Array.isArray(result.rows))return{outcome:'INDETERMINATE',error:'Settlement outstanding durable read invalid'}
     const ids:string[]=[]
-    for(const row of rows){
+    for(const row of result.rows){
       const id=(row as Record<string,unknown>).payment_id
-      if(typeof id!=='string'||id.trim()===''||id!==id.trim()||ids.includes(id))
-        return{outcome:'INDETERMINATE',error:'Settlement outstanding durable identity invalid'}
+      if(typeof id!=='string'||id.trim()===''||id!==id.trim()||ids.includes(id))return{outcome:'INDETERMINATE',error:'Settlement outstanding durable identity invalid'}
       ids.push(id)
     }
-    return{outcome:'FOUND',paymentIds:ids}
+    return{outcome:'FOUND',paymentIds:ids,nextCursor:result.nextCursor,wrapped:result.wrapped===true}
   }catch(e){console.error('[DB] Settlement outstanding durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement outstanding durable read uncertain'}}
 }
 
