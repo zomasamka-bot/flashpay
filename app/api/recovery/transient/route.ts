@@ -5,7 +5,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass, runAutomaticRefundPreparationStep, runAutomaticRefundFinalizationStep } from "@/lib/refund-auto-orchestrator"
-import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion, repairF1LegacyCompletedCanonicalReceipts } from "@/lib/db"
+import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, listRecoverableU2AIngressCheckpointIds, getDurableU2AIngressAuthoritative, recordSettlementU2ACompletedCheckpoint, verifySettlementRefundAuthorityExclusion, repairF1LegacyCompletedCanonicalReceipts } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
@@ -49,6 +49,150 @@ local current = redis.call("GET", KEYS[1])
 if current ~= ARGV[1] then return 0 end
 return redis.call("EXPIRE", KEYS[1], ARGV[2])
 `
+
+type DurableU2AIngressRepopulation = {
+  scanned:number
+  repopulated:number
+  healed:number
+  indexed:number
+  deferredNoAccessToken:number
+  verifiedOnly:number
+  piCompletionReconciled:number
+  piReadUncertain:number
+  conflicts:number
+}
+
+/**
+ * F2-3: PostgreSQL-driven rediscovery for pre-A2U U2A ingress.
+ *
+ * This function never calls Pi/Horizon and never creates Settlement/Refund
+ * movement. It can restore a missing Redis projection from exact durable U2A
+ * identity. Ready/active execution indexes are restored only when the original
+ * Redis projection still carries a valid accessToken and the fully rebuilt
+ * payment passes the existing fresh-settlement predicate. A projection rebuilt
+ * after complete Redis loss intentionally remains movement-deferred until F2-4
+ * removes the access-token dependency from Settlement creation.
+ */
+async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopulation>{
+  const page=await listRecoverableU2AIngressCheckpointIds(200)
+  if(page.outcome!=='FOUND')throw new Error(page.error)
+  const result:DurableU2AIngressRepopulation={scanned:page.paymentIds.length,repopulated:0,healed:0,indexed:0,deferredNoAccessToken:0,verifiedOnly:0,piCompletionReconciled:0,piReadUncertain:0,conflicts:0}
+  for(const paymentId of page.paymentIds){
+    const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
+    if(authority.outcome!=='CLEAR'||authority.refundActive){result.conflicts++;continue}
+    let durable=await getDurableU2AIngressAuthoritative(paymentId)
+    if(durable.outcome==='ABSENT')continue // It may have advanced to the existing Stage1+ recovery lane concurrently.
+    if(durable.outcome!=='FOUND')throw new Error(durable.error)
+
+    // Crash window closure: Pi /complete may have succeeded while the HTTP response
+    // or the following PostgreSQL completion write was lost. Reconcile by GET only;
+    // never call Pi /complete here and never create/submit blockchain movement.
+    if(durable.checkpoint.completedAt===null){
+      if(!serverConfig.piApiKey){result.piReadUncertain++;continue}
+      let piResponse:Response
+      try{
+        piResponse=await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(durable.checkpoint.u2aIdentifier)}`,{
+          method:'GET',headers:{Authorization:`Key ${serverConfig.piApiKey}`,Accept:'application/json'},cache:'no-store',redirect:'error',
+        })
+      }catch{result.piReadUncertain++;continue}
+      if(!piResponse.ok){result.piReadUncertain++;continue}
+      const dto=asRecord(await piResponse.json().catch(()=>null)),status=dto?asRecord(dto.status):null,transaction=dto?asRecord(dto.transaction):null,metadata=dto?asRecord(dto.metadata):null
+      const payerUid=dto&&typeof dto.user_uid==='string'&&dto.user_uid.trim()!==''&&dto.user_uid===dto.user_uid.trim()?dto.user_uid:''
+      if(!dto||dto.identifier!==durable.checkpoint.u2aIdentifier||dto.direction!=='user_to_app'||Number(dto.amount)!==durable.checkpoint.customerAmount||
+        metadata?.paymentId!==paymentId||transaction?.txid!==durable.checkpoint.u2aTxid||payerUid!==durable.checkpoint.payerUid||
+        status?.developer_approved!==true||status?.transaction_verified!==true||status?.cancelled===true||status?.user_cancelled===true){
+        result.conflicts++;continue
+      }
+      if(status?.developer_completed===true){
+        const completion=await recordSettlementU2ACompletedCheckpoint({
+          paymentId,merchantId:durable.checkpoint.merchantId,merchantUid:durable.checkpoint.merchantUid,customerAmount:durable.checkpoint.customerAmount,
+          u2aIdentifier:durable.checkpoint.u2aIdentifier,u2aTxid:durable.checkpoint.u2aTxid,payerUid:durable.checkpoint.payerUid,
+        })
+        if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){result.conflicts++;continue}
+        result.piCompletionReconciled++
+        durable=await getDurableU2AIngressAuthoritative(paymentId)
+        if(durable.outcome!=='FOUND'||durable.checkpoint.completedAt===null){result.conflicts++;continue}
+      }
+    }
+
+    const d=durable.checkpoint
+    let existing=parsePayment(await redis.get(`payment:${paymentId}`))
+
+    if(existing&&(existing.status==='settlement_pending'||existing.status==='settled_to_merchant'||existing.a2uPaymentId!==undefined||existing.a2uTxid!==undefined||existing.a2uPreparedEnvelopeXdr!==undefined||existing.a2uPreparedTxHash!==undefined||existing.a2uPreparedSequence!==undefined||existing.horizonSuccessFlag===true||existing.piCompletionPending===true||existing.piCompleted===true||existing.requiresDbReconciliation===true||existing.dbRecorded===true)){
+      const advanced=await getSettlementCheckpointAuthoritative(paymentId)
+      if(advanced.outcome==='FOUND')continue
+      result.conflicts++
+      continue
+    }
+
+    if(existing){
+      const healed=await redis.eval<[string,string,string,string,string,string,string,string,string],number>(`
+local raw=redis.call('GET',KEYS[1]); if not raw then return 0 end
+local ok,current=pcall(cjson.decode,raw); if not ok or type(current)~='table' then return -1 end
+local amount=tonumber(ARGV[4]); if not amount then return -1 end
+if current.id~=ARGV[1] or current.merchantId~=ARGV[2] or current.merchantUid~=ARGV[3] or current.amount~=amount then return -1 end
+if current.customerAmount~=nil and current.customerAmount~=amount then return -1 end
+if current.piPaymentId~=nil and current.piPaymentId~=ARGV[5] then return -1 end
+if current.u2aTxid~=nil and current.u2aTxid~=ARGV[6] then return -1 end
+if current.payerUid~=nil and current.payerUid~=ARGV[7] then return -1 end
+if current.status~='pending' and current.status~='paid_to_app' then return -1 end
+if current.a2uPaymentId~=nil or current.a2uTxid~=nil or current.a2uPreparedEnvelopeXdr~=nil or current.a2uPreparedTxHash~=nil or current.a2uPreparedSequence~=nil then return -1 end
+if current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return -1 end
+if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundProof~=nil or current.refundStatus~=nil then return -1 end
+current.customerAmount=amount; current.piPaymentId=ARGV[5]; current.u2aTxid=ARGV[6]; current.payerUid=ARGV[7]; current.payerUidSource='verified_u2a'
+if current.payerUidCapturedAt==nil then current.payerUidCapturedAt=ARGV[8] end
+if ARGV[9]~='' then current.status='paid_to_app'; if current.paidAt==nil then current.paidAt=ARGV[9] end; if current.settlementDispatchRequestedAt==nil then current.settlementDispatchRequestedAt=current.paidAt end end
+redis.call('SET',KEYS[1],cjson.encode(current)); return 1
+`,[`payment:${paymentId}`],[paymentId,d.merchantId,d.merchantUid,String(d.customerAmount),d.u2aIdentifier,d.u2aTxid,d.payerUid,d.verifiedAt,d.completedAt??''])
+      if(healed!==1){result.conflicts++;continue}
+      result.healed++
+    }else{
+      const projection:Payment={
+        id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',amount:d.customerAmount,customerAmount:d.customerAmount,
+        note:'',status:d.completedAt?'paid_to_app':'pending',createdAt:d.createdAt,piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,
+        payerUid:d.payerUid,payerUidSource:'verified_u2a',payerUidCapturedAt:d.verifiedAt,
+        ...(d.completedAt?{paidAt:d.completedAt,settlementDispatchRequestedAt:d.completedAt}:{}),
+      }
+      const created=await redis.set(`payment:${paymentId}`,JSON.stringify(projection),{nx:true})
+      if(created==='OK')result.repopulated++
+    }
+
+    const readback=parsePayment(await redis.get(`payment:${paymentId}`))
+    if(!readback||readback.id!==paymentId||readback.merchantId!==d.merchantId||readback.merchantUid!==d.merchantUid||readback.amount!==d.customerAmount||
+      readback.customerAmount!==d.customerAmount||readback.piPaymentId!==d.u2aIdentifier||readback.u2aTxid!==d.u2aTxid||readback.payerUid!==d.payerUid||readback.payerUidSource!=='verified_u2a'){
+      result.conflicts++;continue
+    }
+    if(!d.completedAt){result.verifiedOnly++;continue}
+
+    // No new financial authority is invented here. Only an already executable
+    // original Redis projection may regain lost active/ready membership.
+    if(isFreshSettlementDispatchCandidate(readback,Date.now())){
+      const indexed=await redis.eval<[string],number>(`
+local id=ARGV[1]
+redis.call('SADD',KEYS[1],id)
+if redis.call('ZSCORE',KEYS[2],id) then return 1 end
+local sequence=redis.call('GET',KEYS[3])
+if not sequence then
+  local top=redis.call('ZRANGE',KEYS[2],-1,-1,'WITHSCORES')
+  if #top~=0 and #top~=2 then return -1 end
+  local base=0
+  if #top==2 then base=tonumber(top[2]); if not base or base<0 or base~=math.floor(base) then return -1 end end
+  redis.call('SET',KEYS[3],base)
+end
+local nextSequence=redis.call('INCR',KEYS[3])
+redis.call('ZADD',KEYS[2],'NX',nextSequence,id)
+return 2
+`,['flashpay:recovery:active-payments:v1','flashpay:settlement:ready:v1',READY_SEQUENCE_KEY],[paymentId])
+      if(indexed!==1&&indexed!==2)throw new Error('F2-3 ready index reconstruction unavailable')
+      result.indexed++
+    }else{
+      // A projection recreated after total Redis loss has accessToken="" by design.
+      // It is durable/discoverable but must not be financially executable before F2-4.
+      result.deferredNoAccessToken++
+    }
+  }
+  return result
+}
 
 async function repopulateDurableSettlementWork():Promise<{repopulated:number;conflicts:number}>{
   const page=await listOutstandingSettlementCheckpointIds(200)
@@ -1534,10 +1678,18 @@ export async function POST(request: NextRequest) {
   let activeSetSize = 0
   let scanStartToken = "c:0"
   let scanNextToken = "c:0"
-  // N-FIN-10F: periodic wake repairs lost Redis projections/index membership from durable PostgreSQL authority.
-  // Conflicting Settlement/Refund durable ownership is never scheduled.
-  try { await repopulateDurableSettlementWork() }
-  catch { return NextResponse.json({ error: "Durable Settlement work repopulation unavailable" }, { status: 503 }) }
+  // N-FIN-10F + F2-3: periodic wake repairs both Stage1+ Settlement work and
+  // verified pre-A2U U2A ingress from PostgreSQL authority. F2-3 performs no
+  // Pi/Horizon/Settlement/Refund movement; fully lost Redis projections remain
+  // execution-deferred until F2-4 removes the access-token dependency.
+  let durableU2AIngressRepopulation:DurableU2AIngressRepopulation
+  try {
+    await repopulateDurableSettlementWork()
+    durableU2AIngressRepopulation=await repopulateDurableU2AIngressWork()
+  } catch {
+    return NextResponse.json({ error: "Durable financial work repopulation unavailable" }, { status: 503 })
+  }
+  console.log("[F2-3 DURABLE REDISCOVERY]", durableU2AIngressRepopulation)
 
   let readyBaselineAlreadyCertified = false
   let readyBaselineCoverageCertified = false

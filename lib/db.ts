@@ -261,7 +261,26 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
     VALUES(TRUE)
     ON CONFLICT(singleton) DO NOTHING
   `)
-  return recoveryCursorSeed !== null
+  if (recoveryCursorSeed === null) return false
+
+  // F2-3: independent PostgreSQL-owned cursor for pre-A2U durable U2A ingress
+  // rediscovery. It is intentionally separate from the Settlement Stage1+ cursor
+  // so neither recovery lane can starve or advance the other.
+  const u2aIngressRecoveryCursor = await query(`
+    CREATE TABLE IF NOT EXISTS u2a_ingress_recovery_scan_cursor (
+      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton = TRUE),
+      last_updated_at TIMESTAMP,
+      last_payment_id TEXT,
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `)
+  if (u2aIngressRecoveryCursor === null) return false
+  const u2aIngressRecoveryCursorSeed = await query(`
+    INSERT INTO u2a_ingress_recovery_scan_cursor(singleton)
+    VALUES(TRUE)
+    ON CONFLICT(singleton) DO NOTHING
+  `)
+  return u2aIngressRecoveryCursorSeed !== null
 }
 
 export type SettlementPaymentIdentityCheckpointResult =
@@ -569,6 +588,121 @@ export async function recordSettlementU2ACompletedCheckpoint(params: {
       return{outcome:'CONFLICT',error:'Settlement U2A completed durable identity mismatch'}
     return{outcome:'REPLAYED',version}
   }catch(error){console.error('[DB] Settlement U2A completed checkpoint uncertain:',error);return{outcome:'INDETERMINATE',error:'Settlement U2A completed checkpoint uncertain'}}
+}
+
+export type DurableU2AIngressRead =
+  | { outcome:'FOUND'; checkpoint:{
+      paymentId:string; version:number; merchantId:string; merchantUid:string; customerAmount:number;
+      u2aIdentifier:string; u2aTxid:string; payerUid:string;
+      createdAt:string; verifiedAt:string; completedAt:string|null;
+    }}
+  | { outcome:'ABSENT' }
+  | { outcome:'INDETERMINATE'; error:string }
+
+/**
+ * F2-3 authoritative pre-A2U read.
+ *
+ * Only a payment_identity row with exact verified U2A evidence is exposed. A2U
+ * movement fields must still be absent, so this authority can rebuild Redis
+ * ingress state but can never prove or authorize merchant movement.
+ */
+export async function getDurableU2AIngressAuthoritative(paymentId:string):Promise<DurableU2AIngressRead>{
+  if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
+    return{outcome:'INDETERMINATE',error:'Invalid durable U2A ingress payment identity'}
+  try{
+    const client=await getPostgresClient()
+    if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client`
+      SELECT payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+             u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at,created_at,
+             a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,
+             a2u_txid,horizon_fee_stroops,horizon_confirmed_at,pi_completed_at,db_finalized_at
+      FROM settlement_checkpoints WHERE payment_id=${paymentId}
+    `
+    if(rows.length===0)return{outcome:'ABSENT'}
+    if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Durable U2A ingress identity is ambiguous'}
+    const r=rows[0] as Record<string,unknown>
+    // Once Stage1+ exists, the existing Settlement durable recovery lane is authoritative.
+    if(r.stage!=='payment_identity')return{outcome:'ABSENT'}
+    const text=(v:unknown)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+    const iso=(v:unknown):string|null=>{
+      if(v instanceof Date&&!Number.isNaN(v.getTime()))return v.toISOString()
+      if(typeof v==='string'&&v.trim()!==''&&Number.isFinite(Date.parse(v)))return new Date(v).toISOString()
+      return null
+    }
+    const version=Number(r.version)
+    let ca:number,ma:number,ac:number
+    try{ca=normalizePostgresNumeric(r.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'settlement.app_commission')}
+    catch{return{outcome:'INDETERMINATE',error:'Durable U2A ingress accounting invalid'}}
+    const createdAt=iso(r.created_at),verifiedAt=iso(r.u2a_verified_at),completedAt=r.u2a_completed_at==null?null:iso(r.u2a_completed_at)
+    if(!Number.isSafeInteger(version)||version<2||!text(r.payment_id)||r.payment_id!==paymentId||!text(r.merchant_id)||!text(r.merchant_uid)||
+      ca<=0||ma!==ca||ac!==0||!text(r.u2a_identifier)||typeof r.u2a_txid!=='string'||!/^[0-9a-f]{64}$/.test(r.u2a_txid)||
+      !text(r.payer_uid)||createdAt===null||verifiedAt===null||(r.u2a_completed_at!=null&&completedAt===null)||
+      r.a2u_payment_id!=null||r.a2u_from_address!=null||r.a2u_to_address!=null||r.prepared_envelope_xdr!=null||r.prepared_tx_hash!=null||
+      r.prepared_sequence!=null||r.a2u_txid!=null||r.horizon_fee_stroops!=null||r.horizon_confirmed_at!=null||r.pi_completed_at!=null||r.db_finalized_at!=null)
+      return{outcome:'INDETERMINATE',error:'Durable U2A ingress authority invalid'}
+    if(completedAt!==null&&version<3)return{outcome:'INDETERMINATE',error:'Durable U2A completed version invalid'}
+    return{outcome:'FOUND',checkpoint:{paymentId,version,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,customerAmount:ca,
+      u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,payerUid:r.payer_uid as string,createdAt,verifiedAt,completedAt}}
+  }catch(error){console.error('[DB] Durable U2A ingress read uncertain:',error);return{outcome:'INDETERMINATE',error:'Durable U2A ingress read uncertain'}}
+}
+
+export type DurableU2AIngressOutstandingPage =
+  | { outcome:'FOUND'; paymentIds:string[]; nextCursor:string|null; wrapped:boolean }
+  | { outcome:'INDETERMINATE'; error:string }
+
+/**
+ * F2-3 bounded PostgreSQL rotation over verified pre-A2U ingress rows. The
+ * cursor is durable and independent of Redis, so loss of Redis keys/indexes
+ * cannot make these rows undiscoverable and a large persistent head cannot
+ * permanently starve later rows.
+ */
+export async function listRecoverableU2AIngressCheckpointIds(limit:number):Promise<DurableU2AIngressOutstandingPage>{
+  if(!Number.isSafeInteger(limit)||limit<1||limit>200)return{outcome:'INDETERMINATE',error:'Invalid U2A ingress recovery page limit'}
+  try{
+    const client=await getPostgresClient()
+    if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const result=await client.begin(async(tx:any)=>{
+      const cursorRows=await tx`SELECT last_updated_at,last_payment_id FROM u2a_ingress_recovery_scan_cursor WHERE singleton=TRUE FOR UPDATE`
+      if(cursorRows.length!==1)throw new Error('U2A ingress recovery cursor unavailable')
+      const cursor=cursorRows[0] as Record<string,unknown>
+      const hasCursor=cursor.last_updated_at!=null&&typeof cursor.last_payment_id==='string'&&cursor.last_payment_id.length>0
+      let rows=hasCursor
+        ? await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
+            WHERE stage='payment_identity' AND u2a_identifier IS NOT NULL AND u2a_txid IS NOT NULL AND payer_uid IS NOT NULL AND u2a_verified_at IS NOT NULL
+              AND a2u_payment_id IS NULL AND a2u_txid IS NULL AND prepared_tx_hash IS NULL AND prepared_sequence IS NULL
+              AND (updated_at,payment_id)>(${cursor.last_updated_at},${cursor.last_payment_id})
+            ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
+        : await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
+            WHERE stage='payment_identity' AND u2a_identifier IS NOT NULL AND u2a_txid IS NOT NULL AND payer_uid IS NOT NULL AND u2a_verified_at IS NOT NULL
+              AND a2u_payment_id IS NULL AND a2u_txid IS NULL AND prepared_tx_hash IS NULL AND prepared_sequence IS NULL
+            ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
+      let wrapped=false
+      if(rows.length===0&&hasCursor){
+        wrapped=true
+        rows=await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
+          WHERE stage='payment_identity' AND u2a_identifier IS NOT NULL AND u2a_txid IS NOT NULL AND payer_uid IS NOT NULL AND u2a_verified_at IS NOT NULL
+            AND a2u_payment_id IS NULL AND a2u_txid IS NULL AND prepared_tx_hash IS NULL AND prepared_sequence IS NULL
+          ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
+      }
+      if(rows.length===0){
+        await tx`UPDATE u2a_ingress_recovery_scan_cursor SET last_updated_at=NULL,last_payment_id=NULL,updated_at=NOW() WHERE singleton=TRUE`
+        return{rows,wrapped,nextCursor:null}
+      }
+      const tail=rows[rows.length-1] as Record<string,unknown>
+      if(tail.updated_at==null||typeof tail.payment_id!=='string'||tail.payment_id.trim()===''||tail.payment_id!==tail.payment_id.trim())throw new Error('U2A ingress recovery cursor tail invalid')
+      await tx`UPDATE u2a_ingress_recovery_scan_cursor SET last_updated_at=${tail.updated_at},last_payment_id=${tail.payment_id},updated_at=NOW() WHERE singleton=TRUE`
+      return{rows,wrapped,nextCursor:String(tail.payment_id)}
+    })
+    if(!result||!Array.isArray(result.rows))return{outcome:'INDETERMINATE',error:'U2A ingress recovery page invalid'}
+    const ids:string[]=[]
+    for(const row of result.rows){
+      const id=(row as Record<string,unknown>).payment_id
+      if(typeof id!=='string'||id.trim()===''||id!==id.trim()||ids.includes(id))return{outcome:'INDETERMINATE',error:'U2A ingress recovery identity invalid'}
+      ids.push(id)
+    }
+    return{outcome:'FOUND',paymentIds:ids,nextCursor:result.nextCursor,wrapped:result.wrapped===true}
+  }catch(error){console.error('[DB] U2A ingress durable rotation uncertain:',error);return{outcome:'INDETERMINATE',error:'U2A ingress durable rotation uncertain'}}
 }
 
 export type SettlementStage1CheckpointResult =
