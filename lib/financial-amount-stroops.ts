@@ -20,3 +20,9 @@ export function exactStroopAmountMatch(stellarAmount: unknown, expectedPi: numbe
   const expected = numberToExactPositiveStroops(expectedPi)
   return observed !== null && expected !== null && observed === expected
 }
+
+export function exactPositiveStroopsToStellarAmount(stroops: number): string | null {
+  if (!Number.isSafeInteger(stroops) || stroops <= 0) return null
+  const digits = String(stroops).padStart(8, "0")
+  return `${digits.slice(0, -7)}.${digits.slice(-7)}`
+}

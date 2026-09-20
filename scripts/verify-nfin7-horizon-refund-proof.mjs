@@ -32,7 +32,7 @@ const preparedPredicates = [
   'operation.transaction_hash !== expected.preparedHash',
   'operation.transaction_successful !== true',
   'operation.asset_type !== "native"',
-  'parseStroops(operation.amount) !== stroops(expected.amount)',
+  '!exactStroopAmountMatch(operation.amount, expected.amount)',
 ]
 for (const predicate of preparedPredicates) {
   assert.ok(source.includes(predicate), `Prepared Horizon binding missing predicate: ${predicate}`)

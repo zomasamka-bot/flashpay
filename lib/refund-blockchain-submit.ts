@@ -18,6 +18,7 @@ import { readSettlementSubmitHorizonEvidence } from "./financial-recovery-settle
 import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefundPreparedSubmit, readRefundPreparedSubmitState, readRefundBlockchainSubmitAuthorizationState } from "./refund-checkpoint-store"
 import { readPiWalletIntent } from "./pi-wallet-submit-lock"
 import { classifyRefundPreparedSequence, evaluateRefundPreparedHorizonBinding } from "./refund-blockchain-evidence"
+import { exactPositiveStroopsToStellarAmount, exactStroopAmountMatch, numberToExactPositiveStroops } from "./financial-amount-stroops"
 
 export type RefundBlockchainSubmitResult =
   | { outcome: "CONFIRMED_TX"; txid: string }
@@ -47,7 +48,7 @@ export function verifyRefundPreparedSubmitXdr(input: RefundPreparedSubmitXdrInpu
     const transaction = TransactionBuilder.fromXDR(input.envelopeXdr, "Pi Testnet")
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.preparedHash || transaction.sequence !== input.preparedSequence || transaction.source !== input.fromAddress || transaction.timeBounds?.minTime !== "0" || transaction.timeBounds?.maxTime !== "0" || transaction.signatures.length !== 1 || transaction.operations.length !== 1) return blocked
     const operation = transaction.operations[0]
-    if (operation.type !== "payment" || operation.source !== undefined || !operation.asset.isNative() || operation.destination !== input.toAddress || operation.amount !== input.amount.toFixed(7)) return blocked
+    if (operation.type !== "payment" || operation.source !== undefined || !operation.asset.isNative() || operation.destination !== input.toAddress || !exactStroopAmountMatch(operation.amount, input.amount)) return blocked
     const memo = transaction.memo
     if (memo.type !== "text") return blocked
     const memoValue: unknown = memo.value
@@ -69,7 +70,7 @@ export function verifyRefundPreparedSubmitXdr(input: RefundPreparedSubmitXdrInpu
 }
 
 function isValidPositiveAmount(value: number): boolean {
-  return Number.isFinite(value) && value > 0 && Number.isSafeInteger(value * 10_000_000)
+  return numberToExactPositiveStroops(value) !== null
 }
 
 function isExactInput({ checkpoint, payment }: Input): boolean {
@@ -172,13 +173,17 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
     return { outcome: "FAILED", code: "source_load_failed", message: error instanceof Error ? error.message : "Refund source loading failed" }
   }
 
+  const refundAmountStroops = numberToExactPositiveStroops(input.payment.amount)
+  const refundStellarAmount = refundAmountStroops === null ? null : exactPositiveStroopsToStellarAmount(refundAmountStroops)
+  if (refundAmountStroops === null || refundStellarAmount === null) return { outcome: "FAILED", code: "invalid_input", message: "Refund amount is not an exact positive stroop amount" }
+
   let transaction: ReturnType<TransactionBuilder["build"]>
   try {
     transaction = new TransactionBuilder(source, {
       fee: baseFee.toString(),
       networkPassphrase: input.payment.network,
     })
-      .addOperation(Operation.payment({ destination: input.payment.to_address, asset: Asset.native(), amount: input.payment.amount.toFixed(7) }))
+      .addOperation(Operation.payment({ destination: input.payment.to_address, asset: Asset.native(), amount: refundStellarAmount }))
       .addMemo(Memo.text(input.payment.identifier))
       .setTimeout(TimeoutInfinite)
       .build()
