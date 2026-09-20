@@ -36,6 +36,7 @@ const F1_FORENSIC_ATTRIBUTION_ONCE_KEY = "flashpay:diagnostic:f1-forensic-attrib
 const F1_ROOT_CAUSE_CERT_ONCE_KEY = "flashpay:diagnostic:f1-root-cause-cert:v1:8f4a22"
 const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d6"
 const F1_FINAL_LEGACY_CLOSURE_ONCE_KEY = "flashpay:repair:f1-final-legacy-closure:v1:0594908"
+const F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY = "flashpay:diagnostic:f1-orphan-forensic-proof:v1:d1a0ae"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -1170,6 +1171,189 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         if (claimed) { try { await redis.del(F1_FINAL_LEGACY_CLOSURE_ONCE_KEY) } catch {} }
         console.error("[F1H FINAL LEGACY CLOSURE] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
+
+  // F1 orphan forensic proof (read-only): independently correlate the historical 0.1 Pi U2A
+  // against Pi + Horizon + PostgreSQL. It never creates/submits/completes/refunds a payment,
+  // and it never mutates PostgreSQL accounting or merchant balances.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY, "running", { nx: true, ex: 15 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+        if (!serverConfig.piApiKey) throw new Error("F1 orphan proof Pi API key unavailable")
+
+        const orphanPaymentId = "eQU604TLlEn2O86i00o5jUhM1HAD"
+        const orphanTxid = "f1eeef175d5f301f5f0a60ccb49507e49926e8df590e3ff5f8e3f376096956a3"
+        const orphanMerchantId = "mariamBoesha"
+        const orphanAmount = "0.1000000"
+        const horizonBase = "https://api.testnet.minepi.com"
+
+        const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(orphanPaymentId)}`, {
+          method: "GET", headers: { Authorization: `Key ${serverConfig.piApiKey}`, Accept: "application/json" }, cache: "no-store", redirect: "error",
+        })
+        if (!piResponse.ok) throw new Error(`F1 orphan proof Pi U2A HTTP ${piResponse.status}`)
+        const piU2A = asRecord(await piResponse.json().catch(() => null))
+        const piStatus = piU2A ? asRecord(piU2A.status) : null
+        const piTransaction = piU2A ? asRecord(piU2A.transaction) : null
+        const piUser = piU2A ? asRecord(piU2A.user) : null
+        const payerUid = typeof piU2A?.user_uid === "string" ? piU2A.user_uid : typeof piUser?.uid === "string" ? piUser.uid : null
+        if (!piU2A || piU2A.identifier !== orphanPaymentId || piU2A.direction !== "user_to_app" || Number(piU2A.amount) !== 0.1 ||
+            piTransaction?.txid !== orphanTxid || piStatus?.transaction_verified !== true || piStatus?.developer_completed !== true ||
+            piStatus?.cancelled === true || piStatus?.user_cancelled === true || !payerUid)
+          throw new Error("F1 orphan proof Pi U2A authority mismatch")
+
+        const txResponse = await fetch(`${horizonBase}/transactions/${orphanTxid}`, { cache: "no-store", redirect: "error" })
+        if (!txResponse.ok) throw new Error(`F1 orphan proof Horizon U2A tx HTTP ${txResponse.status}`)
+        const horizonTx = asRecord(await txResponse.json().catch(() => null))
+        if (!horizonTx || horizonTx.hash !== orphanTxid || horizonTx.successful !== true) throw new Error("F1 orphan proof Horizon U2A tx mismatch")
+        const txLinks = asRecord(horizonTx._links)
+        const opsLink = txLinks ? asRecord(txLinks.operations) : null
+        const rawOpsHref = typeof opsLink?.href === "string" ? opsLink.href : ""
+        const opsHref = rawOpsHref.replace(/\{[^}]*\}$/, "")
+        const expectedOpsHref = `${horizonBase}/transactions/${orphanTxid}/operations`
+        if (opsHref !== expectedOpsHref) throw new Error("F1 orphan proof Horizon operations link mismatch")
+        const opsResponse = await fetch(opsHref, { cache: "no-store", redirect: "error" })
+        if (!opsResponse.ok) throw new Error(`F1 orphan proof Horizon U2A ops HTTP ${opsResponse.status}`)
+        const opsBody = asRecord(await opsResponse.json().catch(() => null))
+        const embedded = opsBody ? asRecord(opsBody._embedded) : null
+        const u2aOps = embedded && Array.isArray(embedded.records) ? embedded.records.map(asRecord).filter((v): v is Record<string, unknown> => v !== null) : []
+        const u2aPaymentOps = u2aOps.filter((op) => op.type === "payment" && op.asset_type === "native" && op.amount === orphanAmount)
+        if (u2aPaymentOps.length !== 1) throw new Error("F1 orphan proof Horizon U2A payment operation mismatch")
+        const u2aOp = u2aPaymentOps[0]
+        const payerAddress = typeof u2aOp.from === "string" ? u2aOp.from : null
+        const appAddress = typeof u2aOp.to === "string" ? u2aOp.to : null
+        if (!payerAddress || !appAddress || payerAddress === appAddress) throw new Error("F1 orphan proof U2A addresses unavailable")
+
+        const dbRows = await query(`
+          SELECT t.id,t.payment_id,t.merchant_id,t.merchant_uid,t.amount,t.status,t.created_at,t.completed_at,
+                 (SELECT COUNT(*)::int FROM receipts r WHERE r.transaction_id=t.id) receipt_count,
+                 (SELECT COUNT(*)::int FROM settlement_requests sr WHERE sr.transaction_id=t.id) settlement_request_count,
+                 (SELECT COUNT(*)::int FROM settlement_checkpoints sc WHERE sc.payment_id=t.payment_id) settlement_checkpoint_count,
+                 (SELECT COUNT(*)::int FROM refund_checkpoints rc WHERE rc.payment_id=t.payment_id) refund_checkpoint_count,
+                 (SELECT COUNT(*)::int FROM refund_accounting_records ra WHERE ra.payment_id=t.payment_id) refund_accounting_count
+          FROM transactions t WHERE t.payment_id=$1
+        `, [orphanPaymentId])
+        if (!Array.isArray(dbRows) || dbRows.length !== 1 || !dbRows[0] || typeof dbRows[0] !== "object") throw new Error("F1 orphan proof DB identity unavailable")
+        const db = dbRows[0] as Record<string, unknown>
+        if (db.merchant_id !== orphanMerchantId || Number(db.amount) !== 0.1 || Number(db.receipt_count) !== 0) throw new Error("F1 orphan proof DB identity mismatch")
+
+        // Search the app account's subsequent successful transactions. A candidate is not accepted merely
+        // because it is 0.1 Pi: its memo must resolve to a Pi A2U whose authoritative payer UID/amount/direction
+        // matches this U2A, and refund metadata must bind back to this exact payment for REFUNDED_TO_PAYER.
+        const u2aLedger = typeof horizonTx.ledger === "number" ? horizonTx.ledger : null
+        if (!u2aLedger) throw new Error("F1 orphan proof U2A ledger unavailable")
+        const u2aPagingToken = typeof horizonTx.paging_token === "string" && horizonTx.paging_token.length > 0 ? horizonTx.paging_token : null
+        if (!u2aPagingToken) throw new Error("F1 orphan proof U2A paging token unavailable")
+        let nextUrl: string | null = `${horizonBase}/accounts/${encodeURIComponent(appAddress)}/transactions?order=asc&limit=200&cursor=${encodeURIComponent(u2aPagingToken)}`
+        const outboundCandidates: Array<Record<string, unknown>> = []
+        let pages = 0
+        while (nextUrl && pages < 25) {
+          pages++
+          const pageResponse = await fetch(nextUrl, { cache: "no-store", redirect: "error" })
+          if (!pageResponse.ok) throw new Error(`F1 orphan proof Horizon account page HTTP ${pageResponse.status}`)
+          const pageBody = asRecord(await pageResponse.json().catch(() => null))
+          const pageEmbedded = pageBody ? asRecord(pageBody._embedded) : null
+          const records = pageEmbedded && Array.isArray(pageEmbedded.records) ? pageEmbedded.records.map(asRecord).filter((v): v is Record<string, unknown> => v !== null) : []
+          for (const candidateTx of records) {
+            const ledger = typeof candidateTx.ledger === "number" ? candidateTx.ledger : null
+            if (!ledger || ledger <= u2aLedger || candidateTx.successful !== true || typeof candidateTx.hash !== "string") continue
+            const createdAt = typeof candidateTx.created_at === "string" ? Date.parse(candidateTx.created_at) : NaN
+            const u2aCreatedAt = typeof horizonTx.created_at === "string" ? Date.parse(horizonTx.created_at) : NaN
+            if (!Number.isFinite(createdAt) || !Number.isFinite(u2aCreatedAt) || createdAt - u2aCreatedAt > 30 * 24 * 60 * 60_000) continue
+            const candidateHash = candidateTx.hash
+            const candidateOpsResponse = await fetch(`${horizonBase}/transactions/${candidateHash}/operations`, { cache: "no-store", redirect: "error" })
+            if (!candidateOpsResponse.ok) throw new Error(`F1 orphan proof Horizon candidate ops HTTP ${candidateOpsResponse.status}`)
+            const candidateOpsBody = asRecord(await candidateOpsResponse.json().catch(() => null))
+            const candidateEmbedded = candidateOpsBody ? asRecord(candidateOpsBody._embedded) : null
+            const candidateOps = candidateEmbedded && Array.isArray(candidateEmbedded.records) ? candidateEmbedded.records.map(asRecord).filter((v): v is Record<string, unknown> => v !== null) : []
+            const exactReturn = candidateOps.find((op) => op.type === "payment" && op.asset_type === "native" && op.from === appAddress && op.to === payerAddress && op.amount === orphanAmount)
+            if (!exactReturn) continue
+            const memo = candidateTx.memo_type === "text" && typeof candidateTx.memo === "string" && candidateTx.memo.trim() === candidateTx.memo ? candidateTx.memo : null
+            let piA2U: Record<string, unknown> | null = null
+            if (memo) {
+              const candidatePiResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(memo)}`, {
+                method: "GET", headers: { Authorization: `Key ${serverConfig.piApiKey}`, Accept: "application/json" }, cache: "no-store", redirect: "error",
+              })
+              if (candidatePiResponse.ok) piA2U = asRecord(await candidatePiResponse.json().catch(() => null))
+            }
+            const candidateMetadata = piA2U ? asRecord(piA2U.metadata) : null
+            const candidateStatus = piA2U ? asRecord(piA2U.status) : null
+            const candidateTransaction = piA2U ? asRecord(piA2U.transaction) : null
+            const candidateUser = piA2U ? asRecord(piA2U.user) : null
+            const candidateUid = typeof piA2U?.user_uid === "string" ? piA2U.user_uid : typeof candidateUser?.uid === "string" ? candidateUser.uid : null
+            const piExact = !!piA2U && piA2U.identifier === memo && piA2U.direction === "app_to_user" && Number(piA2U.amount) === 0.1 && candidateUid === payerUid &&
+              candidateTransaction?.txid === candidateHash && candidateStatus?.transaction_verified === true && candidateStatus?.developer_completed === true &&
+              candidateStatus?.cancelled !== true && candidateStatus?.user_cancelled !== true
+            const refundExact = piExact && candidateMetadata?.type === "refund" && candidateMetadata?.paymentId === orphanPaymentId
+            outboundCandidates.push({ txid: candidateHash, memo, piIdentifier: piA2U?.identifier ?? null, piExact, refundExact, metadata: candidateMetadata })
+          }
+          const links = pageBody ? asRecord(pageBody._links) : null
+          const next = links ? asRecord(links.next) : null
+          const href = typeof next?.href === "string" ? next.href : null
+          if (!href || records.length < 200) nextUrl = null
+          else if (!href.startsWith(`${horizonBase}/`)) throw new Error("F1 orphan proof Horizon pagination origin mismatch")
+          else nextUrl = href
+        }
+
+        const exactRefunds = outboundCandidates.filter((candidate) => candidate.refundExact === true)
+        const exactPiReturns = outboundCandidates.filter((candidate) => candidate.piExact === true)
+        const verdict = exactRefunds.length === 1 ? "REFUNDED_TO_PAYER" : exactRefunds.length > 1 ? "INDETERMINATE" : exactPiReturns.length > 0 ? "INDETERMINATE" : "NO_REFUND_PROVEN"
+
+        const finalRows = await query(`
+          WITH canonical AS (
+            SELECT merchant_id,COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status='settled_to_merchant'),0) canonical_settled
+            FROM receipts GROUP BY merchant_id
+          ), all_merchants AS (
+            SELECT merchant_id FROM merchant_balances UNION SELECT merchant_id FROM canonical
+          )
+          SELECT
+            (SELECT COUNT(*)::int FROM merchant_balances WHERE unsettled<>0) nonzero_unsettled_count,
+            (SELECT COALESCE(SUM(unsettled),0) FROM merchant_balances) total_unsettled,
+            (SELECT COUNT(*)::int FROM all_merchants m LEFT JOIN merchant_balances b ON b.merchant_id=m.merchant_id LEFT JOIN canonical c ON c.merchant_id=m.merchant_id WHERE COALESCE(b.settled,0)<>COALESCE(c.canonical_settled,0)) settled_mismatch_count,
+            (SELECT COUNT(*)::int FROM (SELECT payment_id FROM transactions GROUP BY payment_id HAVING COUNT(*)>1) d) duplicate_payment_id_count,
+            (SELECT COUNT(*)::int FROM (SELECT transaction_id FROM receipts GROUP BY transaction_id HAVING COUNT(*)>1) d) duplicate_receipt_transaction_id_count,
+            (SELECT COUNT(*)::int FROM transactions t LEFT JOIN receipts r ON r.transaction_id=t.id WHERE r.id IS NULL) orphan_transaction_count
+        `)
+        if (!Array.isArray(finalRows) || finalRows.length !== 1 || !finalRows[0] || typeof finalRows[0] !== "object") throw new Error("F1 final accounting proof unavailable")
+        const final = finalRows[0] as Record<string, unknown>
+
+        console.log("[F1 ORPHAN FORENSIC PROOF] complete", {
+          verdict,
+          orphanPaymentId,
+          orphanU2aTxid: orphanTxid,
+          amount: 0.1,
+          merchantId: orphanMerchantId,
+          payerUid,
+          payerAddress,
+          appAddress,
+          horizonU2aLedger: u2aLedger,
+          searchedPages: pages,
+          exactReturnCandidateCount: outboundCandidates.length,
+          exactPiReturnCount: exactPiReturns.length,
+          exactRefundCount: exactRefunds.length,
+          candidates: outboundCandidates,
+          db: {
+            receiptCount: Number(db.receipt_count), settlementRequestCount: Number(db.settlement_request_count),
+            settlementCheckpointCount: Number(db.settlement_checkpoint_count), refundCheckpointCount: Number(db.refund_checkpoint_count),
+            refundAccountingCount: Number(db.refund_accounting_count),
+          },
+          finalAccounting: {
+            nonzeroUnsettledCount: Number(final.nonzero_unsettled_count), totalUnsettled: Number(final.total_unsettled),
+            settledMismatchCount: Number(final.settled_mismatch_count), duplicatePaymentIdCount: Number(final.duplicate_payment_id_count),
+            duplicateReceiptTransactionIdCount: Number(final.duplicate_receipt_transaction_id_count), orphanTransactionCount: Number(final.orphan_transaction_count),
+          },
+          financialMutation: false,
+          blockchainMovement: false,
+        })
+        await redis.set(F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY, "done", { ex: 30 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY) } catch {} }
+        console.error("[F1 ORPHAN FORENSIC PROOF] failed", error instanceof Error ? error.message : String(error))
       }
     })
   } catch {}
