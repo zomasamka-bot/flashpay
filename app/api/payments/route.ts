@@ -158,8 +158,8 @@ export async function POST(request: NextRequest) {
     const durableIdentityTimingStartedAt = Date.now()
     const durableIdentity = await recordSettlementPaymentIdentityCheckpoint({
       paymentId: payment.id,
-      merchantId: payment.merchantId,
-      merchantUid: payment.merchantUid,
+      merchantId: trustedMerchantId,
+      merchantUid: verifiedMerchantUid,
       customerAmount: payment.amount,
     })
     if (durableIdentity.outcome !== "RECORDED") {
