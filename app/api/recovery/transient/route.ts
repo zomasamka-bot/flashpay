@@ -974,9 +974,13 @@ export async function POST(request: NextRequest) {
           if (!horizon || horizon.hash !== candidate.a2uTxid || horizon.successful !== true)
             throw new Error("F1G Horizon transaction not proven")
           const operationsHref = asRecord(asRecord(horizon._links)?.operations)?.href
-          if (typeof operationsHref !== "string" || !operationsHref.startsWith("https://api.testnet.minepi.com/transactions/"))
+          const expectedOperationsUrl = `https://api.testnet.minepi.com/transactions/${candidate.a2uTxid}/operations`
+          if (typeof operationsHref !== "string")
             throw new Error("F1G Horizon operations authority unavailable")
-          const operationsResponse = await fetch(operationsHref, { cache: "no-store" })
+          const operationsUrl = operationsHref.replace(/\{[^}]*\}$/, "")
+          if (operationsUrl !== expectedOperationsUrl)
+            throw new Error("F1G Horizon operations authority mismatch")
+          const operationsResponse = await fetch(expectedOperationsUrl, { cache: "no-store" })
           if (!operationsResponse.ok) throw new Error(`F1G Horizon operations unavailable (${operationsResponse.status})`)
           const operationsDto = asRecord(await operationsResponse.json().catch(() => null))
           const embedded = operationsDto ? asRecord(operationsDto._embedded) : null
