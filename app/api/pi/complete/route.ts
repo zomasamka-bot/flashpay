@@ -2,6 +2,7 @@ import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
+import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -18,11 +19,12 @@ const IMMEDIATE_DRAIN_MODE = "immediate-drain"
  * Receives Pi payment identifier and txid from Pi Wallet callback.
  * 
  * AUTHORITATIVE U2A COMPLETION FLOW:
- * 1. Verify U2A payment from Pi API (validation only)
- * 2. If not developer_completed, call Pi /v2/payments/{piPaymentId}/complete, then refetch and validate
- * 3. Load and validate all required fields (merchantUid validated before any A2U execution)
- * 4. Atomically persist verified U2A state and durable ready/active recovery indexing
- * 5. Return canonical processing/final response from authoritative Redis state
+ * 1. Verify U2A payment from Pi API and exact FlashPay identity
+ * 2. Durably checkpoint verified U2A identifier/txid/payer in PostgreSQL BEFORE Pi /complete
+ * 3. If not developer_completed, call Pi /v2/payments/{piPaymentId}/complete, then refetch and validate
+ * 4. Durably checkpoint Pi developer completion in PostgreSQL BEFORE Redis projection
+ * 5. Atomically persist verified U2A state and durable ready/active recovery indexing in Redis
+ * 6. Return canonical processing/final response from authoritative Redis state
  * 
  * Settlement execution is intentionally decoupled from U2A ingress.
  * The transient drain/recovery worker owns asynchronous A2U settlement execution.
@@ -119,6 +121,32 @@ export async function POST(request: NextRequest) {
     const prePayment: Payment = typeof preStoredPayment === "string" ? JSON.parse(preStoredPayment) : preStoredPayment
     if (prePayment.id !== preFlashPaymentId || typeof piPayment.amount !== "number" || !Number.isFinite(piPayment.amount) || piPayment.amount <= 0 || typeof prePayment.amount !== "number" || !Number.isFinite(prePayment.amount) || prePayment.amount <= 0 || piPayment.amount !== prePayment.amount || (prePayment.piPaymentId && prePayment.piPaymentId !== piPayment.identifier)) return NextResponse.json({ error: "Payment validation failed" }, { status: 400 })
 
+    const preMerchantId = typeof prePayment.merchantId === "string" && prePayment.merchantId.length > 0 && prePayment.merchantId === prePayment.merchantId.trim() ? prePayment.merchantId : ""
+    const preMerchantUid = typeof prePayment.merchantUid === "string" && prePayment.merchantUid.length > 0 && prePayment.merchantUid === prePayment.merchantUid.trim() ? prePayment.merchantUid : ""
+    const verifiedPayerUid = typeof piPayment.user_uid === "string" && piPayment.user_uid.length > 0 && piPayment.user_uid === piPayment.user_uid.trim() ? piPayment.user_uid : ""
+    if (!preMerchantId || !preMerchantUid || !verifiedPayerUid) {
+      console.error("[F2-2 U2A DURABLE] pre-completion identity invalid")
+      return NextResponse.json({ error: "Payment identity verification failed" }, { status: 400 })
+    }
+
+    // F2-2 crash boundary: the blockchain U2A identity is durable before Pi /complete.
+    // If PostgreSQL is unavailable or the immutable F2-1 identity disagrees, fail closed
+    // while developer_completed is still false so Pi's incomplete-payment recovery remains available.
+    const durableU2AVerified = await recordSettlementU2AVerifiedCheckpoint({
+      paymentId: preFlashPaymentId,
+      merchantId: preMerchantId,
+      merchantUid: preMerchantUid,
+      customerAmount: prePayment.amount,
+      u2aIdentifier: piPayment.identifier,
+      u2aTxid: canonicalTxid,
+      payerUid: verifiedPayerUid,
+    })
+    if (durableU2AVerified.outcome !== "RECORDED" && durableU2AVerified.outcome !== "REPLAYED") {
+      console.error("[F2-2 U2A DURABLE] verified checkpoint unavailable", { paymentId: preFlashPaymentId, outcome: durableU2AVerified.outcome })
+      return NextResponse.json({ error: "Payment durability unavailable", code: "U2A_VERIFIED_DURABILITY_UNAVAILABLE" }, { status: 503 })
+    }
+    console.log("[F2-2 U2A DURABLE] verified", { paymentId: preFlashPaymentId, version: durableU2AVerified.version, outcome: durableU2AVerified.outcome })
+
     // If not developer_completed, call Pi /complete endpoint and refetch
     let finalPiPayment = piPayment
     if (piPayment.status?.developer_completed !== true) {
@@ -188,6 +216,44 @@ export async function POST(request: NextRequest) {
     } else {
       console.log("[Pi Complete] Payment already developer_completed - skipping Pi /complete call")
     }
+
+    // F2-2: common post-completion authority validation also covers a retry where
+    // Pi was already developer_completed before this request arrived.
+    const finalPayerUid = typeof finalPiPayment.user_uid === "string" && finalPiPayment.user_uid.length > 0 && finalPiPayment.user_uid === finalPiPayment.user_uid.trim() ? finalPiPayment.user_uid : ""
+    if (
+      finalPiPayment.identifier !== piPaymentId ||
+      finalPiPayment.direction !== "user_to_app" ||
+      finalPiPayment.metadata?.paymentId !== preFlashPaymentId ||
+      finalPiPayment.status?.developer_approved !== true ||
+      finalPiPayment.status?.transaction_verified !== true ||
+      finalPiPayment.status?.developer_completed !== true ||
+      finalPiPayment.status?.cancelled === true ||
+      finalPiPayment.status?.user_cancelled === true ||
+      finalPiPayment.transaction?.txid !== canonicalTxid ||
+      typeof finalPiPayment.amount !== "number" || !Number.isFinite(finalPiPayment.amount) || finalPiPayment.amount !== prePayment.amount ||
+      !finalPayerUid || finalPayerUid !== verifiedPayerUid
+    ) {
+      console.error("[F2-2 U2A DURABLE] post-completion Pi authority mismatch")
+      return NextResponse.json({ error: "Payment completion authority mismatch" }, { status: 409 })
+    }
+
+    // F2-2 second crash boundary: once Pi reports developer_completed=true, record
+    // that fact durably before touching the Redis payment projection or ready queue.
+    const durableU2ACompleted = await recordSettlementU2ACompletedCheckpoint({
+      paymentId: preFlashPaymentId,
+      merchantId: preMerchantId,
+      merchantUid: preMerchantUid,
+      customerAmount: prePayment.amount,
+      u2aIdentifier: piPaymentId,
+      u2aTxid: canonicalTxid,
+      payerUid: verifiedPayerUid,
+    })
+    if (durableU2ACompleted.outcome !== "RECORDED" && durableU2ACompleted.outcome !== "REPLAYED") {
+      console.error("[F2-2 U2A DURABLE] completed checkpoint unavailable", { paymentId: preFlashPaymentId, outcome: durableU2ACompleted.outcome })
+      return NextResponse.json({ error: "Payment completion durability unavailable", code: "U2A_COMPLETED_DURABILITY_UNAVAILABLE" }, { status: 503 })
+    }
+    console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
+
     console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
 
     // Derive flashPaymentId from metadata BEFORE loading Redis (internal app identifier)
@@ -291,18 +357,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment in incompatible state" }, { status: 400 })
     }
 
-    // Persist payer UID only from the verified final Pi U2A response.
-    const verifiedPayerUid = typeof finalPiPayment.user_uid === "string"
-      ? finalPiPayment.user_uid
-      : typeof finalPiPayment.user?.uid === "string" ? finalPiPayment.user.uid : undefined
-    if (verifiedPayerUid) {
-      if (payment.payerUid && payment.payerUid !== verifiedPayerUid) {
-        return NextResponse.json({ error: "Payer identity conflict" }, { status: 400 })
-      }
-      payment.payerUid = verifiedPayerUid
-      payment.payerUidSource = "verified_u2a"
-      payment.payerUidCapturedAt = payment.payerUidCapturedAt || new Date().toISOString()
+    // Persist the same payer UID already bound to the durable F2-2 U2A authority.
+    if (payment.payerUid && payment.payerUid !== finalPayerUid) {
+      return NextResponse.json({ error: "Payer identity conflict" }, { status: 400 })
     }
+    payment.payerUid = finalPayerUid
+    payment.payerUidSource = "verified_u2a"
+    payment.payerUidCapturedAt = payment.payerUidCapturedAt || new Date().toISOString()
 
     // Persist canonical piPaymentId from Pi identifier
     payment.piPaymentId = piPaymentIdCanonical
