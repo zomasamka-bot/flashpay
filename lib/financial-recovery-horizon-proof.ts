@@ -1,3 +1,5 @@
+import { exactStroopAmountMatch, numberToExactPositiveStroops } from "./financial-amount-stroops"
+
 export type HorizonProofInput = Readonly<{
   source: "HORIZON_TX_OPS" | null
   transaction: unknown
@@ -51,7 +53,8 @@ export function evaluateFinancialRecoveryHorizonProof(input: HorizonProofInput):
     !fromAddress.trim() ||
     !toAddress.trim() ||
     !Number.isFinite(amount) ||
-    amount <= 0
+    amount <= 0 ||
+    numberToExactPositiveStroops(amount) === null
   ) {
     return indeterminate("INVALID_INPUT")
   }
@@ -77,8 +80,7 @@ export function evaluateFinancialRecoveryHorizonProof(input: HorizonProofInput):
     operation.from !== fromAddress ||
     operation.to !== toAddress ||
     operation.asset_type !== "native" ||
-    !Number.isFinite(Number(operation.amount)) ||
-    Number(operation.amount) !== amount
+    !exactStroopAmountMatch(operation.amount, amount)
   ) {
     return indeterminate("MALFORMED_OR_MISMATCH")
   }

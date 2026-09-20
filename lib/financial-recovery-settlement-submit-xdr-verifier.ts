@@ -1,4 +1,5 @@
 import * as StellarSDK from "@stellar/stellar-sdk"
+import { exactStroopAmountMatch, numberToExactPositiveStroops } from "./financial-amount-stroops"
 
 export type SettlementSubmitXdrVerifierInput = Readonly<{
   envelopeXdr: string
@@ -69,6 +70,7 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
     { check: "fromAddressCanonical", passed: typeof input.fromAddress === "string" && !!input.fromAddress.trim() && input.fromAddress === input.fromAddress.trim() },
     { check: "toAddressCanonical", passed: typeof input.toAddress === "string" && !!input.toAddress.trim() && input.toAddress === input.toAddress.trim() },
     { check: "amountPositiveFinite", passed: typeof input.amount === "number" && Number.isFinite(input.amount) && input.amount > 0, expected: "positive finite number", observed: input.amount },
+    { check: "amountExactStroops", passed: numberToExactPositiveStroops(input.amount) !== null, expected: "positive exact safe-integer stroop amount", observed: input.amount },
   ]
   if (inputChecks.some((check) => !check.passed)) return blocked("INVALID_INPUT", inputChecks)
 
@@ -98,8 +100,7 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
       { check: "operationSourceImplicit", passed: operation.source === undefined, expected: "undefined", observed: operation.source ?? "undefined" },
       { check: "assetNative", passed: operation.type === "payment" && operation.asset.isNative(), expected: "native", observed: operation.type === "payment" ? (operation.asset.isNative() ? "native" : operation.asset.getCode()) : operation.type },
       { check: "destinationMatch", passed: operation.type === "payment" && operation.destination === input.toAddress, expected: input.toAddress, observed: operation.type === "payment" ? operation.destination : operation.type },
-      { check: "amountNumeric", passed: operation.type === "payment" && Number.isFinite(Number(operation.amount)), expected: "finite number", observed: operation.type === "payment" ? operation.amount : operation.type },
-      { check: "amountMatch", passed: operation.type === "payment" && Number(operation.amount) === input.amount, expected: input.amount, observed: operation.type === "payment" ? Number(operation.amount) : operation.type },
+      { check: "amountCanonicalStroops", passed: operation.type === "payment" && exactStroopAmountMatch(operation.amount, input.amount), expected: numberToExactPositiveStroops(input.amount), observed: operation.type === "payment" ? operation.amount : operation.type },
     ]
     if (operationChecks.some((check) => !check.passed)) return blocked("INTENT_MISMATCH", operationChecks)
 

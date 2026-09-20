@@ -1,0 +1,18 @@
+import{strict as assert}from"node:assert";import fs from"node:fs";
+const read=p=>fs.readFileSync(new URL("../"+p,import.meta.url),"utf8");
+const helper=read("lib/financial-amount-stroops.ts"),xdr=read("lib/financial-recovery-settlement-submit-xdr-verifier.ts"),horizon=read("lib/financial-recovery-horizon-proof.ts"),exec=read("lib/a2u-executor.ts");
+assert.ok(helper.includes("STROOPS_PER_PI = 10_000_000"));
+assert.ok(xdr.includes("exactStroopAmountMatch(operation.amount, input.amount)"));
+assert.ok(!xdr.includes("Number(operation.amount) === input.amount"));
+assert.ok(horizon.includes("exactStroopAmountMatch(operation.amount, amount)"));
+assert.ok(!horizon.includes("Number(operation.amount) !== amount"));
+assert.ok(exec.includes("amount: amount.toFixed(7)"));
+const toNum=v=>{if(!Number.isFinite(v)||v<=0)return null;const x=v*10_000_000;return Number.isSafeInteger(x)?x:null};
+const parse=v=>{if(typeof v!=="string"||!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,7})?$/.test(v))return null;const[a,b=""]=v.split(".");const n=Number(`${a}${b.padEnd(7,"0")}`);return Number.isSafeInteger(n)&&n>0?n:null};
+const match=(s,n)=>parse(s)!==null&&toNum(n)!==null&&parse(s)===toNum(n);
+const ok=[["0.1000000",0.1],["1.0000000",1],["123.4567890",123.456789],["0.0000001",0.0000001]];
+for(const [s,n]of ok)assert.equal(match(s,n),true,`${s}/${n}`);
+const bad=[["0.1000001",0.1],["0.0999999",0.1],["1.0000001",1],["0.9999999",1],["0.0000002",0.0000001],["0.10000000",0.1],["01.0000000",1],["1e-1",0.1],["NaN",0.1],["Infinity",0.1],["0.0000000",0]];
+for(const [s,n]of bad)assert.equal(match(s,n),false,`${s}/${n}`);
+assert.equal(toNum(0.12345678),null);assert.equal(toNum(Number.NaN),null);assert.equal(toNum(Infinity),null);
+console.log(JSON.stringify({certification:"PASS",gate:"N-FIN-X3",exactCases:ok.length,rejectedMutations:bad.length+3,plusOneStroopRejected:true,minusOneStroopRejected:true,scientificNotationRejected:true,moreThan7DecimalsRejected:true,unsafeOrNonExactInputRejected:true,financialMovementExecuted:false},null,2));

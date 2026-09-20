@@ -5,6 +5,7 @@ import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
+import { numberToExactPositiveStroops } from "@/lib/financial-amount-stroops"
 
 /**
  * UNIFIED A2U EXECUTOR - Single source of truth for ALL A2U execution paths
@@ -914,7 +915,8 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   const feeAsString = String(Math.floor(feeCharged))
   console.log("[A2U Stage2] Building transaction")
   const builder = new StellarSDK.TransactionBuilder(sourceAccount, { fee: feeAsString, networkPassphrase: "Pi Testnet" })
-  builder.addOperation(StellarSDK.Operation.payment({ destination: toAddress, asset: StellarSDK.Asset.native(), amount: amount.toString() }))
+  if (numberToExactPositiveStroops(amount) === null) return { ok: false, error: "Settlement amount is not an exact positive stroop value", userFacingStatus: "error" }
+  builder.addOperation(StellarSDK.Operation.payment({ destination: toAddress, asset: StellarSDK.Asset.native(), amount: amount.toFixed(7) }))
   builder.addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0, 28)))
   builder.setTimeout(StellarSDK.TimeoutInfinite)
   const transaction = builder.build()
