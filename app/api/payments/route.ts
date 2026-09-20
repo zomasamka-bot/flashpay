@@ -8,6 +8,7 @@ import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/re
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
+import { recordSettlementPaymentIdentityCheckpoint } from "@/lib/db"
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -144,11 +145,33 @@ export async function POST(request: NextRequest) {
     console.log("[API]   - payment.createdAt:", payment.createdAt, "TYPE:", typeof payment.createdAt)
     console.log("[API] ========================================")
 
-    try {
-      if (!isKvConfigured) {
-        throw new Error("Redis not configured - cannot store payment")
-      }
+    if (!isKvConfigured) {
+      return NextResponse.json(
+        { error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
 
+    // F2-1: PostgreSQL durable identity is established before Redis can expose a
+    // payment to the client. No access token, Pi payment, Settlement movement, or
+    // Refund movement is persisted or authorized by this checkpoint.
+    const durableIdentityTimingStartedAt = Date.now()
+    const durableIdentity = await recordSettlementPaymentIdentityCheckpoint({
+      paymentId: payment.id,
+      merchantId: payment.merchantId,
+      merchantUid: payment.merchantUid,
+      customerAmount: payment.amount,
+    })
+    if (durableIdentity.outcome !== "RECORDED") {
+      console.error("[F2-1 PAYMENT IDENTITY] durable checkpoint unavailable", { paymentId, outcome: durableIdentity.outcome })
+      return NextResponse.json(
+        { error: "Payment durability unavailable", code: "PAYMENT_IDENTITY_DURABILITY_UNAVAILABLE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
+    console.log("[F2-1 PAYMENT IDENTITY] durable", { paymentId, version: durableIdentity.version, durationMs: Date.now() - durableIdentityTimingStartedAt })
+
+    try {
       const kvKey = `payment:${paymentId}`
       
       // CRITICAL: Ensure merchantId and createdAt are present before serialization

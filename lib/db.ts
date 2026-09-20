@@ -258,6 +258,106 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   return recoveryCursorSeed !== null
 }
 
+export type SettlementPaymentIdentityCheckpointResult =
+  | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/**
+ * F2-1: durable pre-U2A payment identity.
+ *
+ * This is an identity/accounting checkpoint only. It stores no access token,
+ * authorizes no Settlement or Refund movement, and performs no blockchain work.
+ * New payment creation accepts only RECORDED so a generated payment ID can never
+ * alias an older flow; REPLAYED exists only to make the writer itself monotonic
+ * and fail-safe under an uncertain caller retry.
+ */
+export async function recordSettlementPaymentIdentityCheckpoint(params: {
+  paymentId: string
+  merchantId: string
+  merchantUid: string
+  customerAmount: number
+}): Promise<SettlementPaymentIdentityCheckpointResult> {
+  const canonicalText = (value: string) => typeof value === 'string' && value.length > 0 && value === value.trim()
+  if (
+    !canonicalText(params.paymentId) ||
+    !canonicalText(params.merchantId) ||
+    !canonicalText(params.merchantUid) ||
+    typeof params.customerAmount !== 'number' ||
+    !Number.isFinite(params.customerAmount) ||
+    params.customerAmount <= 0
+  ) {
+    return { outcome: 'CONFLICT', error: 'Settlement payment identity input is invalid' }
+  }
+
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+
+    const rows = await client.begin(async (tx: any) => {
+      const inserted = await tx`
+        INSERT INTO settlement_checkpoints (
+          payment_id, version, stage, merchant_id, merchant_uid,
+          customer_amount, merchant_amount, app_commission
+        )
+        VALUES (
+          ${params.paymentId}, 1, 'payment_identity', ${params.merchantId}, ${params.merchantUid},
+          ${params.customerAmount}, ${params.customerAmount}, 0
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING version
+      `
+      if (inserted.length === 1) return [{ ...inserted[0], inserted: true }]
+
+      return await tx`
+        SELECT version, stage, merchant_id, merchant_uid,
+               customer_amount, merchant_amount, app_commission
+        FROM settlement_checkpoints
+        WHERE payment_id = ${params.paymentId}
+        FOR UPDATE
+      `
+    })
+
+    if (!Array.isArray(rows) || rows.length !== 1 || typeof rows[0] !== 'object' || rows[0] === null) {
+      return { outcome: 'CONFLICT', error: 'Settlement payment identity is ambiguous or conflicting' }
+    }
+    const row = rows[0] as Record<string, unknown>
+    const version = Number(row.version)
+    if (!Number.isSafeInteger(version) || version < 1) {
+      return { outcome: 'CONFLICT', error: 'Settlement payment identity durable version is invalid' }
+    }
+    if (row.inserted === true) return { outcome: 'RECORDED', version }
+
+    let storedCustomerAmount: number
+    let storedMerchantAmount: number
+    let storedAppCommission: number
+    try {
+      storedCustomerAmount = normalizePostgresNumeric(row.customer_amount, 'settlement.customer_amount')
+      storedMerchantAmount = normalizePostgresNumeric(row.merchant_amount, 'settlement.merchant_amount')
+      storedAppCommission = normalizePostgresNumeric(row.app_commission, 'settlement.app_commission')
+    } catch {
+      return { outcome: 'CONFLICT', error: 'Settlement payment identity durable accounting is invalid' }
+    }
+
+    const validStage = typeof row.stage === 'string' && [
+      'payment_identity', 'a2u_created', 'prepared', 'horizon_confirmed', 'pi_completed', 'db_finalized'
+    ].includes(row.stage)
+    if (
+      !validStage ||
+      row.merchant_id !== params.merchantId ||
+      row.merchant_uid !== params.merchantUid ||
+      storedCustomerAmount !== params.customerAmount ||
+      storedMerchantAmount !== params.customerAmount ||
+      storedAppCommission !== 0
+    ) {
+      return { outcome: 'CONFLICT', error: 'Settlement payment identity durable identity/accounting mismatch' }
+    }
+    return { outcome: 'REPLAYED', version }
+  } catch (error) {
+    console.error('[DB] Settlement payment identity checkpoint outcome is uncertain:', error)
+    return { outcome: 'INDETERMINATE', error: 'Settlement payment identity checkpoint outcome is uncertain' }
+  }
+}
+
 export type SettlementStage1CheckpointResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
@@ -306,6 +406,46 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
 
     const rows = await client.begin(async (tx: any) => {
+      // F2-1 compatibility: a new flow now has a durable payment_identity row before
+      // Redis is allowed to expose it. Advance that exact immutable identity into
+      // the first movement-capable Settlement stage with a single guarded CAS update.
+      const advancedFromIdentity = await tx`
+        UPDATE settlement_checkpoints
+        SET version = version + 1,
+            stage = 'a2u_created',
+            u2a_identifier = ${params.u2aIdentifier},
+            u2a_txid = ${params.u2aTxid},
+            a2u_payment_id = ${params.a2uPaymentId},
+            a2u_from_address = ${params.a2uFromAddress},
+            a2u_to_address = ${params.a2uToAddress},
+            updated_at = NOW()
+        WHERE payment_id = ${params.paymentId}
+          AND version = 1
+          AND stage = 'payment_identity'
+          AND merchant_id = ${params.merchantId}
+          AND merchant_uid = ${params.merchantUid}
+          AND customer_amount = ${params.customerAmount}
+          AND merchant_amount = ${params.merchantAmount}
+          AND app_commission = 0
+          AND u2a_identifier IS NULL
+          AND u2a_txid IS NULL
+          AND a2u_payment_id IS NULL
+          AND a2u_from_address IS NULL
+          AND a2u_to_address IS NULL
+          AND prepared_envelope_xdr IS NULL
+          AND prepared_tx_hash IS NULL
+          AND prepared_sequence IS NULL
+          AND a2u_txid IS NULL
+          AND horizon_fee_stroops IS NULL
+          AND horizon_confirmed_at IS NULL
+          AND pi_completed_at IS NULL
+          AND db_finalized_at IS NULL
+        RETURNING version
+      `
+      if (advancedFromIdentity.length === 1) return [{ ...advancedFromIdentity[0], advancedFromIdentity: true }]
+
+      // Backward compatibility for a payment created before F2-1: if no durable
+      // payment_identity exists, retain the prior exact Stage1 insert behavior.
       const inserted = await tx`
         INSERT INTO settlement_checkpoints (
           payment_id, version, stage, merchant_id, merchant_uid,
@@ -349,7 +489,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     if (!Number.isSafeInteger(version) || version < 1) {
       return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable version is invalid' }
     }
-    if (row.inserted === true) return { outcome: 'RECORDED', version }
+    if (row.inserted === true || row.advancedFromIdentity === true) return { outcome: 'RECORDED', version }
 
     let storedCustomerAmount: number
     let storedMerchantAmount: number
@@ -526,7 +666,7 @@ export async function readSettlementRefundAuthority(paymentId:string):Promise<Se
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
       SELECT
-        EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage<>'db_finalized') AS settlement_active,
+        EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')) AS settlement_active,
         EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${paymentId} AND status<>'manual_review_required') AS refund_active
     `
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Cross-authority durable read invalid'}
