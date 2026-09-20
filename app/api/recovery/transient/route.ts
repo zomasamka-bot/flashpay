@@ -33,6 +33,7 @@ const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
 const RECOVERY_WAKE_HEALTH_KEY = "flashpay:operations:recovery-last-wake:v1"
 const F1_BALANCE_DIAGNOSTIC_ONCE_KEY = "flashpay:diagnostic:f1-balance-integrity:v1:ec3295"
 const F1_FORENSIC_ATTRIBUTION_ONCE_KEY = "flashpay:diagnostic:f1-forensic-attribution:v1:fa1f5"
+const F1_ROOT_CAUSE_CERT_ONCE_KEY = "flashpay:diagnostic:f1-root-cause-cert:v1:8f4a22"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -793,6 +794,130 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         if (claimed) { try { await redis.del(F1_FORENSIC_ATTRIBUTION_ONCE_KEY) } catch {} }
         console.error("[F1E FORENSIC ATTRIBUTION PROOF] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
+
+  // F1F temporary root-cause certification hook: SELECT-only and one PostgreSQL statement snapshot.
+  // It proves the exact relationship between legacy unsettled state, canonical settled receipts,
+  // the single orphan transaction, and the one proven settled drift before any repair is allowed.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(F1_ROOT_CAUSE_CERT_ONCE_KEY, "running", { nx: true, ex: 10 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+        const rows = await query(`
+          WITH receipt_rollup AS (
+            SELECT r.merchant_id,
+                   COALESCE(SUM(r.merchant_amount) FILTER (WHERE r.settlement_status='settled_to_merchant'),0) canonical_settled,
+                   COALESCE(SUM(r.amount) FILTER (WHERE r.settlement_status IS DISTINCT FROM 'settled_to_merchant'),0) nonsettled_receipt_amount,
+                   COALESCE(SUM(r.amount) FILTER (WHERE r.settlement_status IS DISTINCT FROM 'settled_to_merchant' AND r.merchant_amount IS NULL),0) legacy_nonsettled_receipt_amount,
+                   COUNT(*) FILTER (WHERE r.settlement_status IS DISTINCT FROM 'settled_to_merchant') nonsettled_receipt_count,
+                   COUNT(*) FILTER (WHERE r.settlement_status IS DISTINCT FROM 'settled_to_merchant' AND r.merchant_amount IS NULL) legacy_nonsettled_receipt_count
+            FROM receipts r GROUP BY r.merchant_id
+          ),
+          balance_reconciliation AS (
+            SELECT b.merchant_id, b.settled stored_settled, b.unsettled stored_unsettled, b.last_updated,
+                   COALESCE(rr.canonical_settled,0) canonical_settled,
+                   b.settled-COALESCE(rr.canonical_settled,0) settled_delta,
+                   COALESCE(rr.nonsettled_receipt_amount,0) nonsettled_receipt_amount,
+                   COALESCE(rr.legacy_nonsettled_receipt_amount,0) legacy_nonsettled_receipt_amount,
+                   b.unsettled-COALESCE(rr.nonsettled_receipt_amount,0) unsettled_vs_all_nonsettled_delta,
+                   b.unsettled-COALESCE(rr.legacy_nonsettled_receipt_amount,0) unsettled_vs_legacy_nonsettled_delta,
+                   COALESCE(rr.nonsettled_receipt_count,0) nonsettled_receipt_count,
+                   COALESCE(rr.legacy_nonsettled_receipt_count,0) legacy_nonsettled_receipt_count
+            FROM merchant_balances b LEFT JOIN receipt_rollup rr ON rr.merchant_id=b.merchant_id
+          ),
+          orphan_transactions AS (
+            SELECT t.id,t.payment_id,t.merchant_id,t.merchant_uid,t.amount,t.status,t.reference,t.created_at,t.completed_at
+            FROM transactions t LEFT JOIN receipts r ON r.transaction_id=t.id WHERE r.id IS NULL
+          ),
+          hazem_receipts AS (
+            SELECT t.payment_id,t.amount transaction_amount,t.status transaction_status,t.created_at transaction_created_at,t.completed_at,
+                   r.id receipt_id,r.amount receipt_amount,r.customer_amount,r.merchant_amount,r.horizon_fee_charged,r.app_commission,r.app_net_impact,
+                   r.settlement_status,r.u2a_identifier,r.u2a_txid,r.a2u_identifier,r.a2u_txid,r.created_at receipt_created_at,
+                   CASE WHEN r.merchant_amount IS NOT NULL AND r.customer_amount IS NOT NULL AND r.u2a_identifier IS NOT NULL AND r.u2a_txid IS NOT NULL AND r.a2u_identifier IS NOT NULL AND r.a2u_txid IS NOT NULL THEN 'canonical-shape' ELSE 'legacy-shape' END record_shape
+            FROM transactions t JOIN receipts r ON r.transaction_id=t.id WHERE t.merchant_id='hazemaboria'
+          ),
+          hazem_settled AS (
+            SELECT * FROM hazem_receipts WHERE settlement_status='settled_to_merchant'
+          ),
+          hazem_nonsettled AS (
+            SELECT * FROM hazem_receipts WHERE settlement_status IS DISTINCT FROM 'settled_to_merchant'
+          ),
+          hazem_shape_status AS (
+            SELECT record_shape,COALESCE(settlement_status,'<NULL>') settlement_status,COUNT(*) row_count,
+                   COALESCE(SUM(receipt_amount),0) receipt_amount_sum,COALESCE(SUM(merchant_amount),0) merchant_amount_sum,
+                   MIN(receipt_created_at) first_receipt_at,MAX(receipt_created_at) last_receipt_at
+            FROM hazem_receipts GROUP BY record_shape,settlement_status
+          ),
+          hazem_settled_by_day AS (
+            SELECT receipt_created_at::date day,COUNT(*) row_count,COALESCE(SUM(merchant_amount),0) merchant_amount_sum,
+                   MIN(receipt_created_at) first_receipt_at,MAX(receipt_created_at) last_receipt_at
+            FROM hazem_settled GROUP BY receipt_created_at::date
+          ),
+          exact_delta_candidates AS (
+            SELECT payment_id,merchant_amount,receipt_created_at,a2u_identifier,a2u_txid
+            FROM hazem_settled
+            WHERE merchant_amount = (SELECT settled_delta FROM balance_reconciliation WHERE merchant_id='hazemaboria')
+          ),
+          duplicate_a2u AS (
+            SELECT a2u_identifier,COUNT(*) row_count,COALESCE(SUM(merchant_amount),0) merchant_amount_sum
+            FROM receipts WHERE a2u_identifier IS NOT NULL GROUP BY a2u_identifier HAVING COUNT(*)>1
+          ),
+          duplicate_a2u_txid AS (
+            SELECT a2u_txid,COUNT(*) row_count,COALESCE(SUM(merchant_amount),0) merchant_amount_sum
+            FROM receipts WHERE a2u_txid IS NOT NULL GROUP BY a2u_txid HAVING COUNT(*)>1
+          ),
+          constraints AS (
+            SELECT conrelid::regclass::text table_name,conname,contype,pg_get_constraintdef(oid) definition
+            FROM pg_constraint WHERE conrelid IN ('transactions'::regclass,'receipts'::regclass,'merchant_balances'::regclass)
+            ORDER BY conrelid::regclass::text,conname
+          )
+          SELECT jsonb_build_object(
+            'balanceReconciliation',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY abs(x.settled_delta) DESC,x.merchant_id) FROM balance_reconciliation x WHERE x.settled_delta<>0 OR x.stored_unsettled<>0),'[]'::jsonb),
+            'orphanTransactions',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.created_at) FROM orphan_transactions x),'[]'::jsonb),
+            'hazemShapeStatus',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.first_receipt_at) FROM hazem_shape_status x),'[]'::jsonb),
+            'hazemSettledByDay',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.day) FROM hazem_settled_by_day x),'[]'::jsonb),
+            'hazemSettledLedger',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.receipt_created_at,x.payment_id) FROM hazem_settled x),'[]'::jsonb),
+            'hazemNonsettledLedger',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.receipt_created_at,x.payment_id) FROM hazem_nonsettled x),'[]'::jsonb),
+            'exactDeltaCandidates',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.receipt_created_at) FROM exact_delta_candidates x),'[]'::jsonb),
+            'duplicateA2uIdentifiers',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.a2u_identifier) FROM duplicate_a2u x),'[]'::jsonb),
+            'duplicateA2uTxids',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.a2u_txid) FROM duplicate_a2u_txid x),'[]'::jsonb),
+            'constraints',COALESCE((SELECT jsonb_agg(to_jsonb(x)) FROM constraints x),'[]'::jsonb)
+          ) proof
+        `)
+        if (!Array.isArray(rows) || rows.length !== 1 || !rows[0] || typeof rows[0] !== "object" || !("proof" in rows[0])) throw new Error("F1F root-cause proof indeterminate")
+        const proof = (rows[0] as Record<string, unknown>).proof
+        if (!proof || typeof proof !== "object" || Array.isArray(proof)) throw new Error("F1F root-cause proof shape invalid")
+        const p = proof as Record<string, unknown>
+        const required = ["balanceReconciliation","orphanTransactions","hazemShapeStatus","hazemSettledByDay","hazemSettledLedger","hazemNonsettledLedger","exactDeltaCandidates","duplicateA2uIdentifiers","duplicateA2uTxids","constraints"] as const
+        for (const key of required) if (!Array.isArray(p[key])) throw new Error(`F1F ${key} invalid`)
+        console.log("[F1F ROOT CAUSE SUMMARY]", {
+          balanceReconciliationCount: (p.balanceReconciliation as unknown[]).length,
+          orphanTransactionCount: (p.orphanTransactions as unknown[]).length,
+          exactDeltaCandidateCount: (p.exactDeltaCandidates as unknown[]).length,
+          duplicateA2uIdentifierCount: (p.duplicateA2uIdentifiers as unknown[]).length,
+          duplicateA2uTxidCount: (p.duplicateA2uTxids as unknown[]).length,
+          readOnly: true,
+        })
+        for (const row of p.balanceReconciliation as unknown[]) console.log("[F1F BALANCE RECONCILIATION]", row)
+        for (const row of p.orphanTransactions as unknown[]) console.log("[F1F ORPHAN]", row)
+        for (const row of p.hazemShapeStatus as unknown[]) console.log("[F1F HAZEM SHAPE STATUS]", row)
+        for (const row of p.hazemSettledByDay as unknown[]) console.log("[F1F HAZEM SETTLED DAY]", row)
+        for (const row of p.hazemSettledLedger as unknown[]) console.log("[F1F HAZEM SETTLED LEDGER]", row)
+        for (const row of p.hazemNonsettledLedger as unknown[]) console.log("[F1F HAZEM NONSETTLED LEDGER]", row)
+        for (const row of p.exactDeltaCandidates as unknown[]) console.log("[F1F EXACT DELTA CANDIDATE]", row)
+        for (const row of p.duplicateA2uIdentifiers as unknown[]) console.log("[F1F DUPLICATE A2U IDENTIFIER]", row)
+        for (const row of p.duplicateA2uTxids as unknown[]) console.log("[F1F DUPLICATE A2U TXID]", row)
+        for (const row of p.constraints as unknown[]) console.log("[F1F CONSTRAINT]", row)
+        console.log("[F1F ROOT CAUSE CERTIFICATION] complete", { readOnly: true })
+        await redis.set(F1_ROOT_CAUSE_CERT_ONCE_KEY, "done", { ex: 7 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(F1_ROOT_CAUSE_CERT_ONCE_KEY) } catch {} }
+        console.error("[F1F ROOT CAUSE CERTIFICATION] failed", error instanceof Error ? error.message : String(error))
       }
     })
   } catch {}
