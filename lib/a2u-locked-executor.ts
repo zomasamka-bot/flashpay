@@ -3,7 +3,7 @@ import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
-import { getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
+import { getSettlementCheckpointAuthoritative, getDurableU2AIngressAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
@@ -11,6 +11,7 @@ import { logSettlementSubmitRuntimeDiagnostic } from "@/lib/settlement-submit-ru
 import { acquirePiWalletSubmitLock, readPiWalletIntent, replacePiWalletIntent, releasePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
+import { serverConfig } from "@/lib/server-config"
 
 /**
  * SHARED CONCURRENCY LOCK FOR A2U EXECUTION
@@ -37,11 +38,61 @@ interface LockedExecutorParams {
   schedulerWalletPaymentId?: string | null
 }
 
+function hasUsableAccessToken(payment: Payment): boolean {
+  return typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim()
+}
+
+function hasRecoverableMerchantProjectionAuthority(payment: Payment): boolean {
+  return hasUsableAccessToken(payment) || payment.accessToken === ""
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Payment): Promise<boolean> {
+  if (!serverConfig.isPiApiKeyConfigured || payment.accessToken !== "") return false
+  const durable = await getDurableU2AIngressAuthoritative(paymentId)
+  if (durable.outcome !== "FOUND" || durable.checkpoint.completedAt === null) return false
+  const d = durable.checkpoint
+  if (
+    payment.id !== d.paymentId ||
+    payment.merchantId !== d.merchantId || payment.merchantUid !== d.merchantUid ||
+    payment.amount !== d.customerAmount || payment.customerAmount !== d.customerAmount ||
+    payment.piPaymentId !== d.u2aIdentifier || payment.u2aTxid !== d.u2aTxid ||
+    payment.payerUid !== d.payerUid || payment.payerUidSource !== "verified_u2a" ||
+    payment.payerUidCapturedAt !== d.verifiedAt || payment.paidAt !== d.completedAt ||
+    payment.settlementDispatchRequestedAt !== d.completedAt ||
+    payment.status !== "paid_to_app"
+  ) return false
+
+  let response: Response
+  try {
+    response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(d.u2aIdentifier)}`, {
+      method: "GET",
+      headers: { Authorization: `Key ${serverConfig.piApiKey}`, Accept: "application/json" },
+      cache: "no-store",
+      redirect: "error",
+    })
+  } catch { return false }
+  if (!response.ok) return false
+  const dto = asRecord(await response.json().catch(() => null))
+  const metadata = dto ? asRecord(dto.metadata) : null
+  const transaction = dto ? asRecord(dto.transaction) : null
+  const status = dto ? asRecord(dto.status) : null
+  return dto !== null &&
+    dto.identifier === d.u2aIdentifier && dto.direction === "user_to_app" &&
+    dto.amount === d.customerAmount && dto.user_uid === d.payerUid &&
+    metadata?.paymentId === paymentId && transaction?.txid === d.u2aTxid && transaction?.verified === true &&
+    status?.developer_approved === true && status?.transaction_verified === true && status?.developer_completed === true &&
+    status?.cancelled !== true && status?.user_cancelled !== true
+}
+
 function isSettlementDispatchCandidate(payment: Payment, now: number): boolean {
   const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
   const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
   const u2aTxid = payment.u2aTxid
-  return payment.status === "paid_to_app" && Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && payment.settlementDispatchRequestedAt === payment.paidAt && dispatchAt <= now && typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 && typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && payment.amount === payment.customerAmount && typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() && typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() && typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() && typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim() && typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" && typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now && typeof u2aTxid === "string" && u2aTxid === u2aTxid.trim() && /^[0-9a-f]{64}$/.test(u2aTxid) && payment.a2uTxid === undefined && payment.settlementFailureState === undefined && payment.retryCount === undefined && payment.lastAttemptAt === undefined && payment.nextRetryAt === undefined && payment.a2uPaymentId === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined && payment.a2uToAddress === undefined && payment.merchantAmount === undefined && payment.horizonFeeCharged === undefined && payment.appCommission === undefined && payment.appNetImpact === undefined && payment.a2uErrorCode === undefined && payment.a2uErrorMessage === undefined && payment.a2uErrorBody === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined && payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundStatus === undefined && payment.refundFailureCode === undefined && payment.refundProof === undefined && (payment.payerRefundEligible === undefined || payment.payerRefundEligible === false) && (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) && (payment.piCompletionPending === undefined || payment.piCompletionPending === false) && (payment.piCompleted === undefined || payment.piCompleted === false) && (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false) && (payment.dbRecorded === undefined || payment.dbRecorded === false)
+  return payment.status === "paid_to_app" && Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && payment.settlementDispatchRequestedAt === payment.paidAt && dispatchAt <= now && typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 && typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && payment.amount === payment.customerAmount && typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() && typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() && typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() && hasRecoverableMerchantProjectionAuthority(payment) && typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" && typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now && typeof u2aTxid === "string" && u2aTxid === u2aTxid.trim() && /^[0-9a-f]{64}$/.test(u2aTxid) && payment.a2uTxid === undefined && payment.settlementFailureState === undefined && payment.retryCount === undefined && payment.lastAttemptAt === undefined && payment.nextRetryAt === undefined && payment.a2uPaymentId === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined && payment.a2uToAddress === undefined && payment.merchantAmount === undefined && payment.horizonFeeCharged === undefined && payment.appCommission === undefined && payment.appNetImpact === undefined && payment.a2uErrorCode === undefined && payment.a2uErrorMessage === undefined && payment.a2uErrorBody === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined && payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundStatus === undefined && payment.refundFailureCode === undefined && payment.refundProof === undefined && (payment.payerRefundEligible === undefined || payment.payerRefundEligible === false) && (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) && (payment.piCompletionPending === undefined || payment.piCompletionPending === false) && (payment.piCompleted === undefined || payment.piCompleted === false) && (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false) && (payment.dbRecorded === undefined || payment.dbRecorded === false)
 }
 
 function isSettlementReconcileCandidate(payment: Payment, now: number): boolean {
@@ -50,7 +101,7 @@ function isSettlementReconcileCandidate(payment: Payment, now: number): boolean 
   const lastAttemptAt = typeof payment.lastAttemptAt === "string" && payment.lastAttemptAt.trim() !== "" && payment.lastAttemptAt === payment.lastAttemptAt.trim() ? Date.parse(payment.lastAttemptAt) : NaN
   const nextRetryAt = payment.nextRetryAt === undefined ? NaN : typeof payment.nextRetryAt === "string" && payment.nextRetryAt.trim() !== "" && payment.nextRetryAt === payment.nextRetryAt.trim() ? Date.parse(payment.nextRetryAt) : NaN
   const u2aTxid = payment.u2aTxid
-  const common = payment.status === "paid_to_app" && Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && payment.settlementDispatchRequestedAt === payment.paidAt && dispatchAt <= now && Number.isFinite(lastAttemptAt) && lastAttemptAt >= paidAt && typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 && typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && payment.amount === payment.customerAmount && typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() && typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() && typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() && typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim() && typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" && typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now && typeof u2aTxid === "string" && u2aTxid === u2aTxid.trim() && /^[0-9a-f]{64}$/.test(u2aTxid) && payment.a2uTxid === undefined && payment.a2uPaymentId === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined && payment.a2uToAddress === undefined && payment.merchantAmount === undefined && payment.horizonFeeCharged === undefined && payment.appCommission === undefined && payment.appNetImpact === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined && payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundFailureCode === undefined && payment.refundProof === undefined && (payment.payerRefundEligible === undefined || payment.payerRefundEligible === false) && (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) && (payment.piCompletionPending === undefined || payment.piCompletionPending === false) && (payment.piCompleted === undefined || payment.piCompleted === false) && (payment.dbRecorded === undefined || payment.dbRecorded === false) && (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false)
+  const common = payment.status === "paid_to_app" && Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && payment.settlementDispatchRequestedAt === payment.paidAt && dispatchAt <= now && Number.isFinite(lastAttemptAt) && lastAttemptAt >= paidAt && typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 && typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && payment.amount === payment.customerAmount && typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() && typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() && typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() && hasRecoverableMerchantProjectionAuthority(payment) && typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" && typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now && typeof u2aTxid === "string" && u2aTxid === u2aTxid.trim() && /^[0-9a-f]{64}$/.test(u2aTxid) && payment.a2uTxid === undefined && payment.a2uPaymentId === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined && payment.a2uToAddress === undefined && payment.merchantAmount === undefined && payment.horizonFeeCharged === undefined && payment.appCommission === undefined && payment.appNetImpact === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined && payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundFailureCode === undefined && payment.refundProof === undefined && (payment.payerRefundEligible === undefined || payment.payerRefundEligible === false) && (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) && (payment.piCompletionPending === undefined || payment.piCompletionPending === false) && (payment.piCompleted === undefined || payment.piCompleted === false) && (payment.dbRecorded === undefined || payment.dbRecorded === false) && (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false)
   const freshAttempt = payment.settlementFailureState === "reconciling" && payment.retryCount === 1 && payment.nextRetryAt === undefined && lastAttemptAt <= now - 660000 && payment.refundStatus === undefined && payment.a2uErrorCode === undefined && payment.a2uErrorMessage === undefined && payment.a2uErrorBody === undefined
   const retryAttempt = payment.settlementFailureState === "reconciling" && typeof payment.retryCount === "number" && Number.isInteger(payment.retryCount) && payment.retryCount >= 2 && Number.isFinite(nextRetryAt) && nextRetryAt <= lastAttemptAt && lastAttemptAt <= now - 660000 && (payment.refundStatus === undefined || payment.refundStatus === "not_started") && (payment.a2uErrorCode === undefined || typeof payment.a2uErrorCode === "string" && payment.a2uErrorCode.trim() !== "") && (payment.a2uErrorMessage === undefined || typeof payment.a2uErrorMessage === "string" && payment.a2uErrorMessage.trim() !== "") && (payment.a2uErrorBody === undefined || typeof payment.a2uErrorBody === "string" && payment.a2uErrorBody.trim() !== "")
   return common && (freshAttempt || retryAttempt)
@@ -181,6 +232,17 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     const refundLookup = await findRefundCheckpointByPaymentId(paymentId)
     if (refundLookup.state !== 'absent' && params.recoveryOperation !== "SETTLEMENT_CREATE") {
       return { ok: false, status: 409, error: refundLookup.state === 'present' ? "Refund operation owns this payment" : "Refund state could not be verified" }
+    }
+
+    let merchantAuthority: "access_token" | "durable_u2a" = "access_token"
+    if (!latestPayment.a2uPaymentId && !hasUsableAccessToken(latestPayment)) {
+      const recoveryMayCreate = params.isRecovery === true &&
+        (params.recoveryOperation === "SETTLEMENT_DISPATCH" || params.recoveryOperation === "SETTLEMENT_RECONCILE" || params.recoveryOperation === "SETTLEMENT_CREATE")
+      if (!recoveryMayCreate || latestPayment.accessToken !== "" || !(await verifyF24DurableMerchantAuthority(paymentId, latestPayment))) {
+        return { ok: false, status: 409, error: "Durable merchant authority could not be verified" }
+      }
+      merchantAuthority = "durable_u2a"
+      console.log("[F2-4 DURABLE MERCHANT AUTHORITY] verified", { paymentId, merchantId: latestPayment.merchantId, merchantUid: latestPayment.merchantUid, recoveryOperation: params.recoveryOperation })
     }
 
     if (params.recoveryOperation === "SETTLEMENT_DISPATCH") {
@@ -443,8 +505,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 400, error: "Invalid payment record" }
     }
 
-    if (!latestPayment.a2uPaymentId && (!latestPayment.accessToken || typeof latestPayment.accessToken !== "string")) {
-      console.error("[A2U Locked Executor] accessToken required before A2U creation")
+    if (!latestPayment.a2uPaymentId && merchantAuthority === "access_token" && !hasUsableAccessToken(latestPayment)) {
+      console.error("[A2U Locked Executor] accessToken required before non-recovery A2U creation")
       return { ok: false, status: 400, error: "Invalid payment record" }
     }
 
@@ -492,6 +554,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         payment: latestPayment,
         merchantUid: latestPayment.merchantUid,
         accessToken: latestPayment.accessToken,
+        merchantAuthority,
         customerAmount: typeof latestPayment.customerAmount === "number" && Number.isFinite(latestPayment.customerAmount)
           ? latestPayment.customerAmount
           : latestPayment.amount,

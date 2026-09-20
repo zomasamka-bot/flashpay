@@ -65,13 +65,11 @@ type DurableU2AIngressRepopulation = {
 /**
  * F2-3: PostgreSQL-driven rediscovery for pre-A2U U2A ingress.
  *
- * This function never calls Pi/Horizon and never creates Settlement/Refund
- * movement. It can restore a missing Redis projection from exact durable U2A
- * identity. Ready/active execution indexes are restored only when the original
- * Redis projection still carries a valid accessToken and the fully rebuilt
- * payment passes the existing fresh-settlement predicate. A projection rebuilt
- * after complete Redis loss intentionally remains movement-deferred until F2-4
- * removes the access-token dependency from Settlement creation.
+ * This function never creates Settlement/Refund blockchain movement. It can
+ * restore a missing Redis projection from exact durable U2A identity. F2-4 lets
+ * a fully reconstructed accessToken="" projection regain ready membership; the
+ * locked executor still must prove exact PostgreSQL + Pi server authority before
+ * any A2U creation is allowed.
  */
 async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopulation>{
   const page=await listRecoverableU2AIngressCheckpointIds(200)
@@ -186,8 +184,8 @@ return 2
       if(indexed!==1&&indexed!==2)throw new Error('F2-3 ready index reconstruction unavailable')
       result.indexed++
     }else{
-      // A projection recreated after total Redis loss has accessToken="" by design.
-      // It is durable/discoverable but must not be financially executable before F2-4.
+      // Not a canonical fresh-dispatch projection. No financial authority is
+      // inferred here; leave it discoverable but unscheduled.
       result.deferredNoAccessToken++
     }
   }
@@ -501,6 +499,14 @@ function readyOtherDiagnosticFingerprint(payment: Payment): string {
 }
 
 
+function hasSettlementMerchantProjectionAuthority(payment: Payment): boolean {
+  if (typeof payment.accessToken !== "string") return false
+  // Non-empty token = normal authenticated projection. Empty string is the exact
+  // F2-3 total-Redis-loss placeholder and is only executable after F2-4 durable
+  // PostgreSQL + Pi proof inside the shared payment-operation lock.
+  return payment.accessToken === "" || (payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim())
+}
+
 function readyOtherFreshPrerequisiteFingerprint(payment: Payment, now: number): string {
   const missing: string[] = []
   const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
@@ -510,7 +516,7 @@ function readyOtherFreshPrerequisiteFingerprint(payment: Payment, now: number): 
   if (!(typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim())) missing.push("piId")
   if (!(typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim())) missing.push("merchantId")
   if (!(typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim())) missing.push("merchantUid")
-  if (!(typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim())) missing.push("accessToken")
+  if (!hasSettlementMerchantProjectionAuthority(payment)) missing.push("merchantAuthority")
   if (!(typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim())) missing.push("payerUid")
   if (payment.payerUidSource !== "verified_u2a") missing.push("payerSource")
   if (!(typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now)) missing.push("payerAt")
@@ -647,7 +653,7 @@ function isFreshSettlementDispatchCandidate(payment: Payment, now: number): bool
     typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() &&
     typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() &&
     typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() &&
-    typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim() &&
+    hasSettlementMerchantProjectionAuthority(payment) &&
     typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() &&
     payment.payerUidSource === "verified_u2a" &&
     typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now &&
@@ -676,7 +682,7 @@ function isStaleFreshReconcilingCandidate(payment: Payment, now: number): boolea
     typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() &&
     typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() &&
     typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() &&
-    typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim() &&
+    hasSettlementMerchantProjectionAuthority(payment) &&
     typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() &&
     payment.payerUidSource === "verified_u2a" &&
     typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now &&
@@ -707,7 +713,7 @@ function isStaleRetryReconcilingCandidate(payment: Payment, now: number): boolea
     typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() &&
     typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() &&
     typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() &&
-    typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim() &&
+    hasSettlementMerchantProjectionAuthority(payment) &&
     typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() &&
     payment.payerUidSource === "verified_u2a" &&
     typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now &&
