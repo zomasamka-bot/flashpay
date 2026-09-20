@@ -972,7 +972,30 @@ export async function POST(request: NextRequest) {
           if (!horizonResponse.ok) throw new Error(`F1G Horizon authority unavailable (${horizonResponse.status})`)
           const horizon = asRecord(await horizonResponse.json().catch(() => null))
           if (!horizon || horizon.hash !== candidate.a2uTxid || horizon.successful !== true)
-            throw new Error("F1G Horizon movement not proven")
+            throw new Error("F1G Horizon transaction not proven")
+          const operationsHref = asRecord(asRecord(horizon._links)?.operations)?.href
+          if (typeof operationsHref !== "string" || !operationsHref.startsWith("https://api.testnet.minepi.com/transactions/"))
+            throw new Error("F1G Horizon operations authority unavailable")
+          const operationsResponse = await fetch(operationsHref, { cache: "no-store" })
+          if (!operationsResponse.ok) throw new Error(`F1G Horizon operations unavailable (${operationsResponse.status})`)
+          const operationsDto = asRecord(await operationsResponse.json().catch(() => null))
+          const embedded = operationsDto ? asRecord(operationsDto._embedded) : null
+          const records = embedded?.records
+          if (!Array.isArray(records)) throw new Error("F1G Horizon operations shape invalid")
+          const matchingPayments = records.filter((raw): raw is Record<string, unknown> => {
+            const op = asRecord(raw)
+            if (!op || op.type !== "payment" || op.transaction_hash !== candidate.a2uTxid) return false
+            const amount = Number(op.amount)
+            return Number.isFinite(amount) && Math.abs(amount - candidate.merchantAmount) <= 1e-9
+          })
+          if (matchingPayments.length !== 1) throw new Error("F1G Horizon payment amount not uniquely proven")
+          const paymentOperation = matchingPayments[0]
+          if (typeof paymentOperation.from !== "string" || typeof paymentOperation.to !== "string" || paymentOperation.from === paymentOperation.to)
+            throw new Error("F1G Horizon payment endpoints invalid")
+          if (typeof dto.from_address === "string" && paymentOperation.from !== dto.from_address)
+            throw new Error("F1G Horizon source does not match Pi authority")
+          if (typeof dto.to_address !== "string" || paymentOperation.to !== dto.to_address)
+            throw new Error("F1G Horizon destination does not match Pi authority")
         }
 
         const repaired = await repairF1LegacyCompletedCanonicalReceipts({ merchantId: "hazemaboria", receipts: candidates, expectedCandidateAmount: 3.2 })

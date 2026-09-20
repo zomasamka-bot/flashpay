@@ -1247,7 +1247,9 @@ export async function repairF1LegacyCompletedCanonicalReceipts(params: {
 
       let candidateAmount = 0
       let alreadySettled = 0
-      for (const row of rows as Record<string, unknown>[]) {
+      for (const rawRow of rows) {
+        if (!rawRow || typeof rawRow !== 'object' || Array.isArray(rawRow)) throw new Error('F1G durable row shape invalid')
+        const row = rawRow as Record<string, unknown>
         const expected = params.receipts.find((r) => r.receiptId === row.id)
         if (!expected || row.merchant_id !== params.merchantId || row.payment_id !== expected.paymentId ||
             row.u2a_identifier !== expected.paymentId || row.a2u_identifier !== expected.a2uIdentifier || row.a2u_txid !== expected.a2uTxid)
