@@ -1459,37 +1459,6 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
 }
 
 /**
- * Update merchant balance
- */
-export async function updateMerchantBalance(
-  merchantId: string,
-  settled: number,
-  unsettled: number
-): Promise<MerchantBalanceRow | null> {
-  if (!process.env.DATABASE_URL) return null
-
-  try {
-    const result = await query(
-      `INSERT INTO merchant_balances (merchant_id, settled, unsettled, last_updated)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (merchant_id) DO UPDATE
-       SET settled = merchant_balances.settled + EXCLUDED.settled,
-           unsettled = merchant_balances.unsettled + EXCLUDED.unsettled,
-           last_updated = NOW()
-       RETURNING *`,
-      [merchantId, settled, unsettled]
-    )
-    if (!Array.isArray(result) || result.length === 0) return null
-    const row = result[0]
-    if (typeof row !== 'object' || row === null) return null
-    return row as MerchantBalanceRow
-  } catch (error) {
-    console.error('[DB] updateMerchantBalance failed:', error)
-    return null
-  }
-}
-
-/**
  * Record a settlement transfer to merchant
  */
 export async function recordSettlementTransfer(
