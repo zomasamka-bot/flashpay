@@ -461,6 +461,12 @@ export type SettlementOutstandingPage =
 export async function listOutstandingSettlementCheckpointIds(limit:number):Promise<SettlementOutstandingPage>{
   if(!Number.isSafeInteger(limit)||limit<1||limit>200)return{outcome:'INDETERMINATE',error:'Invalid Settlement outstanding page limit'}
   try{
+    // N-FIN-X1 production schema repair: initialize the already-defined durable
+    // settlement schema before the cursor is read. The helper is idempotent
+    // (CREATE/ALTER/INDEX IF NOT EXISTS + seed ON CONFLICT DO NOTHING).
+    // No financial state or payment status is mutated here.
+    const schemaReady=await ensureSettlementCheckpointTable()
+    if(!schemaReady)return{outcome:'INDETERMINATE',error:'Settlement durable schema unavailable'}
     const client=await getPostgresClient()
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const result=await client.begin(async(tx:any)=>{
