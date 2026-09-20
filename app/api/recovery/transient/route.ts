@@ -32,6 +32,7 @@ const DRAIN_LEASE_TTL_SECONDS = 900
 const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
 const RECOVERY_WAKE_HEALTH_KEY = "flashpay:operations:recovery-last-wake:v1"
 const F1_BALANCE_DIAGNOSTIC_ONCE_KEY = "flashpay:diagnostic:f1-balance-integrity:v1:ec3295"
+const F1_FORENSIC_ATTRIBUTION_ONCE_KEY = "flashpay:diagnostic:f1-forensic-attribution:v1:fa1f5"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -670,6 +671,128 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         if (claimed) { try { await redis.del(F1_BALANCE_DIAGNOSTIC_ONCE_KEY) } catch {} }
         console.error("[F1D2 BALANCE INTEGRITY PROOF] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
+
+  // F1E temporary forensic certification hook: one PostgreSQL SELECT statement = one statement snapshot.
+  // It attributes the proven materialized-balance drift without mutating PostgreSQL or recovery state.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(F1_FORENSIC_ATTRIBUTION_ONCE_KEY, "running", { nx: true, ex: 10 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+        const rows = await query(`
+          WITH canonical AS (
+            SELECT merchant_id,
+                   COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status = 'settled_to_merchant'), 0) AS canonical_settled,
+                   COUNT(*) FILTER (WHERE settlement_status = 'settled_to_merchant') AS settled_receipts,
+                   COUNT(*) FILTER (WHERE settlement_status <> 'settled_to_merchant' OR settlement_status IS NULL) AS nonsettled_receipts
+            FROM receipts
+            GROUP BY merchant_id
+          ),
+          drift_merchants AS (
+            SELECT m.merchant_id,
+                   COALESCE(b.settled, 0) AS stored_settled,
+                   COALESCE(c.canonical_settled, 0) AS canonical_settled,
+                   COALESCE(b.settled, 0) - COALESCE(c.canonical_settled, 0) AS settled_delta,
+                   COALESCE(b.unsettled, 0) AS stored_unsettled,
+                   COALESCE(c.settled_receipts, 0) AS settled_receipts,
+                   COALESCE(c.nonsettled_receipts, 0) AS nonsettled_receipts
+            FROM (SELECT merchant_id FROM merchant_balances UNION SELECT merchant_id FROM canonical) m
+            LEFT JOIN merchant_balances b ON b.merchant_id = m.merchant_id
+            LEFT JOIN canonical c ON c.merchant_id = m.merchant_id
+            WHERE COALESCE(b.settled, 0) <> COALESCE(c.canonical_settled, 0)
+               OR COALESCE(b.unsettled, 0) <> 0
+          ),
+          affected_ledger AS (
+            SELECT t.merchant_id, t.payment_id, t.amount AS transaction_amount, t.status AS transaction_status,
+                   t.created_at AS transaction_created_at, t.completed_at,
+                   r.id AS receipt_id, r.merchant_amount, r.customer_amount, r.amount AS receipt_amount,
+                   r.settlement_status, r.u2a_identifier, r.u2a_txid, r.a2u_identifier, r.a2u_txid, r.created_at AS receipt_created_at
+            FROM transactions t
+            LEFT JOIN receipts r ON r.transaction_id = t.id
+            WHERE t.merchant_id IN (SELECT merchant_id FROM drift_merchants)
+          ),
+          orphan_transactions AS (
+            SELECT t.id, t.payment_id, t.merchant_id, t.amount, t.status, t.created_at, t.completed_at
+            FROM transactions t LEFT JOIN receipts r ON r.transaction_id = t.id
+            WHERE r.id IS NULL
+          ),
+          refund_overlap AS (
+            SELECT ra.payment_id, ra.refund_id, ra.amount AS refund_amount, t.merchant_id,
+                   r.settlement_status, r.merchant_amount, r.a2u_txid AS settlement_txid, ra.refund_txid
+            FROM refund_accounting_records ra
+            JOIN transactions t ON t.payment_id = ra.payment_id
+            JOIN receipts r ON r.transaction_id = t.id
+            WHERE r.settlement_status = 'settled_to_merchant'
+          ),
+          receipt_statuses AS (
+            SELECT COALESCE(settlement_status, '<NULL>') AS status, COUNT(*) AS count,
+                   COALESCE(SUM(merchant_amount), 0) AS merchant_amount_sum
+            FROM receipts GROUP BY settlement_status
+          ),
+          constraints AS (
+            SELECT conrelid::regclass::text AS table_name, conname, contype, pg_get_constraintdef(oid) AS definition
+            FROM pg_constraint
+            WHERE conrelid IN ('transactions'::regclass,'receipts'::regclass,'merchant_balances'::regclass)
+            ORDER BY conrelid::regclass::text, conname
+          )
+          SELECT jsonb_build_object(
+            'driftMerchantCount', (SELECT COUNT(*) FROM drift_merchants),
+            'settledDriftMerchantCount', (SELECT COUNT(*) FROM drift_merchants WHERE settled_delta <> 0),
+            'unsettledNonzeroMerchantCount', (SELECT COUNT(*) FROM drift_merchants WHERE stored_unsettled <> 0),
+            'totalSettledDelta', (SELECT COALESCE(SUM(settled_delta),0) FROM drift_merchants),
+            'totalStoredUnsettled', (SELECT COALESCE(SUM(stored_unsettled),0) FROM drift_merchants),
+            'orphanTransactionCount', (SELECT COUNT(*) FROM orphan_transactions),
+            'refundSettledOverlapCount', (SELECT COUNT(*) FROM refund_overlap),
+            'settledReceiptNullMerchantAmountCount', (SELECT COUNT(*) FROM receipts WHERE settlement_status='settled_to_merchant' AND merchant_amount IS NULL),
+            'settledReceiptAmountMismatchCount', (SELECT COUNT(*) FROM receipts WHERE settlement_status='settled_to_merchant' AND merchant_amount IS NOT NULL AND amount <> merchant_amount),
+            'transactionReceiptMerchantMismatchCount', (SELECT COUNT(*) FROM transactions t JOIN receipts r ON r.transaction_id=t.id WHERE t.merchant_id <> r.merchant_id),
+            'driftMerchants', COALESCE((SELECT jsonb_agg(to_jsonb(d) ORDER BY abs(d.settled_delta) DESC, d.merchant_id) FROM drift_merchants d), '[]'::jsonb),
+            'affectedLedger', COALESCE((SELECT jsonb_agg(to_jsonb(a) ORDER BY a.merchant_id, a.transaction_created_at, a.payment_id) FROM affected_ledger a), '[]'::jsonb),
+            'orphanTransactions', COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.created_at, o.payment_id) FROM orphan_transactions o), '[]'::jsonb),
+            'refundSettledOverlaps', COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.payment_id) FROM refund_overlap x), '[]'::jsonb),
+            'receiptStatuses', COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.status) FROM receipt_statuses s), '[]'::jsonb),
+            'constraints', COALESCE((SELECT jsonb_agg(to_jsonb(c)) FROM constraints c), '[]'::jsonb)
+          ) AS proof
+        `)
+        if (!Array.isArray(rows) || rows.length !== 1 || !rows[0] || typeof rows[0] !== "object" || !("proof" in rows[0])) throw new Error("F1E forensic attribution indeterminate")
+        const proof = (rows[0] as Record<string, unknown>).proof
+        if (!proof || typeof proof !== "object" || Array.isArray(proof)) throw new Error("F1E forensic proof shape invalid")
+        const p = proof as Record<string, unknown>
+        const driftMerchants = Array.isArray(p.driftMerchants) ? p.driftMerchants : null
+        const affectedLedger = Array.isArray(p.affectedLedger) ? p.affectedLedger : null
+        const orphanTransactions = Array.isArray(p.orphanTransactions) ? p.orphanTransactions : null
+        const refundSettledOverlaps = Array.isArray(p.refundSettledOverlaps) ? p.refundSettledOverlaps : null
+        const receiptStatuses = Array.isArray(p.receiptStatuses) ? p.receiptStatuses : null
+        const constraints = Array.isArray(p.constraints) ? p.constraints : null
+        if (!driftMerchants || !affectedLedger || !orphanTransactions || !refundSettledOverlaps || !receiptStatuses || !constraints) throw new Error("F1E forensic proof arrays invalid")
+        console.log("[F1E FORENSIC SUMMARY]", {
+          driftMerchantCount: p.driftMerchantCount,
+          settledDriftMerchantCount: p.settledDriftMerchantCount,
+          unsettledNonzeroMerchantCount: p.unsettledNonzeroMerchantCount,
+          totalSettledDelta: p.totalSettledDelta,
+          totalStoredUnsettled: p.totalStoredUnsettled,
+          orphanTransactionCount: p.orphanTransactionCount,
+          refundSettledOverlapCount: p.refundSettledOverlapCount,
+          settledReceiptNullMerchantAmountCount: p.settledReceiptNullMerchantAmountCount,
+          settledReceiptAmountMismatchCount: p.settledReceiptAmountMismatchCount,
+          transactionReceiptMerchantMismatchCount: p.transactionReceiptMerchantMismatchCount,
+        })
+        for (const row of driftMerchants) console.log("[F1E DRIFT MERCHANT]", row)
+        for (const row of affectedLedger) console.log("[F1E AFFECTED LEDGER]", row)
+        for (const row of orphanTransactions) console.log("[F1E ORPHAN TRANSACTION]", row)
+        for (const row of refundSettledOverlaps) console.log("[F1E REFUND-SETTLED OVERLAP]", row)
+        for (const row of receiptStatuses) console.log("[F1E RECEIPT STATUS]", row)
+        for (const row of constraints) console.log("[F1E CONSTRAINT]", row)
+        console.log("[F1E FORENSIC ATTRIBUTION PROOF] complete", { readOnly: true })
+        await redis.set(F1_FORENSIC_ATTRIBUTION_ONCE_KEY, "done", { ex: 7 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(F1_FORENSIC_ATTRIBUTION_ONCE_KEY) } catch {} }
+        console.error("[F1E FORENSIC ATTRIBUTION PROOF] failed", error instanceof Error ? error.message : String(error))
       }
     })
   } catch {}
