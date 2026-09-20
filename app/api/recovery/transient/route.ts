@@ -35,6 +35,7 @@ const F1_BALANCE_DIAGNOSTIC_ONCE_KEY = "flashpay:diagnostic:f1-balance-integrity
 const F1_FORENSIC_ATTRIBUTION_ONCE_KEY = "flashpay:diagnostic:f1-forensic-attribution:v1:fa1f5"
 const F1_ROOT_CAUSE_CERT_ONCE_KEY = "flashpay:diagnostic:f1-root-cause-cert:v1:8f4a22"
 const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d6"
+const F1_FINAL_LEGACY_CLOSURE_ONCE_KEY = "flashpay:repair:f1-final-legacy-closure:v1:0594908"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -1022,6 +1023,153 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         if (claimed) { try { await redis.del(F1_GUARDED_REPAIR_ONCE_KEY) } catch {} }
         console.error("[F1G GUARDED REPAIR] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
+
+  // F1H final legacy closure:
+  // 1) zero only the obsolete pre-canonical `unsettled` materialization after proving every
+  //    current settled balance already equals the canonical settled receipt sum;
+  // 2) certify the single historical orphan against DB durable authorities + Pi.
+  // It never creates/submits/completes/refunds any movement and never changes `settled`.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(F1_FINAL_LEGACY_CLOSURE_ONCE_KEY, "running", { nx: true, ex: 15 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+
+        const repaired = await query(`
+          WITH locked AS (
+            SELECT merchant_id, settled, unsettled
+            FROM merchant_balances
+            WHERE unsettled <> 0
+            ORDER BY merchant_id
+            FOR UPDATE
+          ),
+          canonical AS (
+            SELECT merchant_id,
+                   COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status='settled_to_merchant'),0) canonical_settled
+            FROM receipts
+            GROUP BY merchant_id
+          ),
+          guard AS (
+            SELECT COUNT(*)::int row_count,
+                   COALESCE(SUM(l.unsettled),0) total_unsettled,
+                   COUNT(*) FILTER (WHERE l.settled <> COALESCE(c.canonical_settled,0))::int settled_mismatch_count
+            FROM locked l LEFT JOIN canonical c ON c.merchant_id=l.merchant_id
+          ),
+          updated AS (
+            UPDATE merchant_balances b
+            SET unsettled=0, last_updated=NOW()
+            FROM guard g
+            WHERE b.merchant_id IN (SELECT merchant_id FROM locked)
+              AND g.row_count=27
+              AND g.total_unsettled=139.60000000
+              AND g.settled_mismatch_count=0
+            RETURNING b.merchant_id
+          )
+          SELECT g.row_count,g.total_unsettled,g.settled_mismatch_count,
+                 (SELECT COUNT(*)::int FROM updated) updated_count
+          FROM guard g
+        `)
+        if (!Array.isArray(repaired) || repaired.length !== 1 || !repaired[0] || typeof repaired[0] !== "object")
+          throw new Error("F1H legacy unsettled repair proof unavailable")
+        const repairProof = repaired[0] as Record<string, unknown>
+        if (Number(repairProof.row_count) !== 27 || Number(repairProof.total_unsettled) !== 139.6 ||
+            Number(repairProof.settled_mismatch_count) !== 0 || Number(repairProof.updated_count) !== 27)
+          throw new Error("F1H legacy unsettled repair guard rejected")
+
+        const postRows = await query(`
+          WITH canonical AS (
+            SELECT merchant_id,
+                   COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status='settled_to_merchant'),0) canonical_settled
+            FROM receipts GROUP BY merchant_id
+          ),
+          all_merchants AS (
+            SELECT merchant_id FROM merchant_balances UNION SELECT merchant_id FROM canonical
+          )
+          SELECT
+            (SELECT COUNT(*)::int FROM merchant_balances WHERE unsettled<>0) nonzero_unsettled_count,
+            (SELECT COALESCE(SUM(unsettled),0) FROM merchant_balances) total_unsettled,
+            (SELECT COUNT(*)::int
+             FROM all_merchants m
+             LEFT JOIN merchant_balances b ON b.merchant_id=m.merchant_id
+             LEFT JOIN canonical c ON c.merchant_id=m.merchant_id
+             WHERE COALESCE(b.settled,0)<>COALESCE(c.canonical_settled,0)) settled_mismatch_count
+        `)
+        if (!Array.isArray(postRows) || postRows.length !== 1 || !postRows[0] || typeof postRows[0] !== "object")
+          throw new Error("F1H post-repair proof unavailable")
+        const post = postRows[0] as Record<string, unknown>
+        if (Number(post.nonzero_unsettled_count) !== 0 || Number(post.total_unsettled) !== 0 || Number(post.settled_mismatch_count) !== 0)
+          throw new Error("F1H post-repair accounting invariant failed")
+
+        const orphanRows = await query(`
+          SELECT t.id,t.payment_id,t.merchant_id,t.merchant_uid,t.amount,t.status,t.reference,t.created_at,t.completed_at,
+                 (SELECT COUNT(*)::int FROM receipts r WHERE r.transaction_id=t.id) receipt_count,
+                 (SELECT COUNT(*)::int FROM settlement_requests sr WHERE sr.transaction_id=t.id) settlement_request_count,
+                 (SELECT COUNT(*)::int FROM settlement_checkpoints sc WHERE sc.payment_id=t.payment_id) settlement_checkpoint_count,
+                 (SELECT COUNT(*)::int FROM refund_checkpoints rc WHERE rc.payment_id=t.payment_id) refund_checkpoint_count,
+                 (SELECT COUNT(*)::int FROM refund_accounting_records ra WHERE ra.payment_id=t.payment_id) refund_accounting_count
+          FROM transactions t
+          LEFT JOIN receipts r ON r.transaction_id=t.id
+          WHERE r.id IS NULL
+          ORDER BY t.created_at
+        `)
+        if (!Array.isArray(orphanRows) || orphanRows.length !== 1 || !orphanRows[0] || typeof orphanRows[0] !== "object")
+          throw new Error("F1H orphan identity changed")
+        const orphan = orphanRows[0] as Record<string, unknown>
+        if (orphan.id !== "8669e2bc-effc-4e76-8d24-d809025f2a92" ||
+            orphan.payment_id !== "eQU604TLlEn2O86i00o5jUhM1HAD" ||
+            orphan.merchant_id !== "mariamBoesha" || Number(orphan.amount) !== 0.1 ||
+            Number(orphan.receipt_count) !== 0)
+          throw new Error("F1H orphan certified identity mismatch")
+
+        let piAuthority: Record<string, unknown> | null = null
+        let piAuthorityStatus = 0
+        if (serverConfig.piApiKey) {
+          const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(String(orphan.payment_id))}`, {
+            method: "GET",
+            headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" },
+            cache: "no-store",
+          })
+          piAuthorityStatus = piResponse.status
+          if (piResponse.ok) piAuthority = asRecord(await piResponse.json().catch(() => null))
+        }
+
+        console.log("[F1H FINAL LEGACY CLOSURE] complete", {
+          obsoleteUnsettledRowsCleared: Number(repairProof.updated_count),
+          obsoleteUnsettledAmountCleared: Number(repairProof.total_unsettled),
+          postNonzeroUnsettledCount: Number(post.nonzero_unsettled_count),
+          postTotalUnsettled: Number(post.total_unsettled),
+          postSettledMismatchCount: Number(post.settled_mismatch_count),
+          merchantSettledMutation: false,
+          blockchainMovement: false,
+          orphan: {
+            id: orphan.id,
+            paymentId: orphan.payment_id,
+            merchantId: orphan.merchant_id,
+            amount: Number(orphan.amount),
+            status: orphan.status,
+            receiptCount: Number(orphan.receipt_count),
+            settlementRequestCount: Number(orphan.settlement_request_count),
+            settlementCheckpointCount: Number(orphan.settlement_checkpoint_count),
+            refundCheckpointCount: Number(orphan.refund_checkpoint_count),
+            refundAccountingCount: Number(orphan.refund_accounting_count),
+            piAuthorityStatus,
+            piIdentifier: piAuthority?.identifier ?? null,
+            piDirection: piAuthority?.direction ?? null,
+            piAmount: piAuthority?.amount ?? null,
+            piStatus: piAuthority ? asRecord(piAuthority.status) : null,
+            piTransaction: piAuthority ? asRecord(piAuthority.transaction) : null,
+          },
+          orphanMutation: false,
+        })
+        await redis.set(F1_FINAL_LEGACY_CLOSURE_ONCE_KEY, "done", { ex: 30 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(F1_FINAL_LEGACY_CLOSURE_ONCE_KEY) } catch {} }
+        console.error("[F1H FINAL LEGACY CLOSURE] failed", error instanceof Error ? error.message : String(error))
       }
     })
   } catch {}
