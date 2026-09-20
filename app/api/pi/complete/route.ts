@@ -10,6 +10,13 @@ export const runtime = "nodejs"
 
 const IMMEDIATE_DRAIN_KICK_KEY = "flashpay:settlement:immediate-drain-kick:v1"
 const IMMEDIATE_DRAIN_KICK_TTL_SECONDS = 90
+
+// F2-3 one-shot production fault injection. Exact test only: 0.15 Pi to
+// samahelkshawy, after durable U2A completion and before Redis ingress projection.
+// It deletes Redis projection/index membership only; PostgreSQL/Pi/Horizon are untouched.
+const F2_3_REDIS_LOSS_PROOF_ONCE_KEY = "flashpay:f2-3:redis-loss-proof:v1:0.15:samahelkshawy"
+const F2_3_REDIS_LOSS_PROOF_AMOUNT = 0.15
+const F2_3_REDIS_LOSS_PROOF_MERCHANT_ID = "samahelkshawy"
 const IMMEDIATE_DRAIN_MODE = "immediate-drain"
 
 /**
@@ -253,6 +260,56 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment completion durability unavailable", code: "U2A_COMPLETED_DURABILITY_UNAVAILABLE" }, { status: 503 })
     }
     console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
+
+    // F2-3 certification hook: simulate total Redis loss at the exact crash boundary
+    // that F2-3 is designed to recover. This is production-only, exact-amount,
+    // exact-merchant and one-shot. Durable PostgreSQL U2A evidence and Pi/Horizon
+    // state are never changed. No A2U/Refund execution occurs in this request.
+    if (
+      process.env.VERCEL_ENV === "production" &&
+      prePayment.amount === F2_3_REDIS_LOSS_PROOF_AMOUNT &&
+      preMerchantId === F2_3_REDIS_LOSS_PROOF_MERCHANT_ID
+    ) {
+      const injected = Number(await redis.eval(`
+local gate=redis.call('GET',KEYS[1])
+if gate then return 0 end
+local raw=redis.call('GET',KEYS[2])
+if not raw then return -1 end
+local ok,current=pcall(cjson.decode,raw)
+if not ok or type(current)~='table' then return -2 end
+if current.id~=ARGV[1] or current.merchantId~=ARGV[2] or tonumber(current.amount)~=tonumber(ARGV[3]) then return -3 end
+local armed=redis.call('SET',KEYS[1],ARGV[1],'NX','EX',ARGV[4])
+if not armed then return 0 end
+redis.call('DEL',KEYS[2])
+redis.call('SREM',KEYS[3],ARGV[1])
+redis.call('ZREM',KEYS[4],ARGV[1])
+return 1
+`, [
+        F2_3_REDIS_LOSS_PROOF_ONCE_KEY,
+        `payment:${preFlashPaymentId}`,
+        "flashpay:recovery:active-payments:v1",
+        "flashpay:settlement:ready:v1",
+      ], [preFlashPaymentId, preMerchantId, String(prePayment.amount), "86400"]))
+
+      if (injected < 0) {
+        console.error("[F2-3 FAULT INJECTION] refused", { paymentId: preFlashPaymentId, injected })
+        return NextResponse.json({ error: "F2-3 fault injection guard refused" }, { status: 409 })
+      }
+      if (injected === 1) {
+        console.warn("[F2-3 FAULT INJECTION] REDIS_PROJECTION_DELETED", {
+          paymentId: preFlashPaymentId,
+          amount: prePayment.amount,
+          merchantId: preMerchantId,
+          durableU2AVersion: durableU2ACompleted.version,
+          financialMutation: false,
+          blockchainMovement: false,
+        })
+        return NextResponse.json(
+          { error: "F2-3 certification fault injected", code: "F2_3_REDIS_LOSS_PROOF_INJECTED", paymentId: preFlashPaymentId },
+          { status: 503 },
+        )
+      }
+    }
 
     console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
 
