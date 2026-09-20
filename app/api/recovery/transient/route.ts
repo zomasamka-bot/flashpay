@@ -854,7 +854,7 @@ export async function POST(request: NextRequest) {
             FROM hazem_receipts GROUP BY record_shape,settlement_status
           ),
           hazem_settled_by_day AS (
-            SELECT receipt_created_at::date day,COUNT(*) row_count,COALESCE(SUM(merchant_amount),0) merchant_amount_sum,
+            SELECT receipt_created_at::date AS settled_date,COUNT(*) row_count,COALESCE(SUM(merchant_amount),0) merchant_amount_sum,
                    MIN(receipt_created_at) first_receipt_at,MAX(receipt_created_at) last_receipt_at
             FROM hazem_settled GROUP BY receipt_created_at::date
           ),
@@ -880,7 +880,7 @@ export async function POST(request: NextRequest) {
             'balanceReconciliation',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY abs(x.settled_delta) DESC,x.merchant_id) FROM balance_reconciliation x WHERE x.settled_delta<>0 OR x.stored_unsettled<>0),'[]'::jsonb),
             'orphanTransactions',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.created_at) FROM orphan_transactions x),'[]'::jsonb),
             'hazemShapeStatus',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.first_receipt_at) FROM hazem_shape_status x),'[]'::jsonb),
-            'hazemSettledByDay',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.day) FROM hazem_settled_by_day x),'[]'::jsonb),
+            'hazemSettledByDay',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.settled_date) FROM hazem_settled_by_day x),'[]'::jsonb),
             'hazemSettledLedger',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.receipt_created_at,x.payment_id) FROM hazem_settled x),'[]'::jsonb),
             'hazemNonsettledLedger',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.receipt_created_at,x.payment_id) FROM hazem_nonsettled x),'[]'::jsonb),
             'exactDeltaCandidates',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY x.receipt_created_at) FROM exact_delta_candidates x),'[]'::jsonb),
