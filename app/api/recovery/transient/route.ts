@@ -31,6 +31,7 @@ const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
 const DRAIN_LEASE_TTL_SECONDS = 900
 const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
 const RECOVERY_WAKE_HEALTH_KEY = "flashpay:operations:recovery-last-wake:v1"
+const F1_BALANCE_DIAGNOSTIC_ONCE_KEY = "flashpay:diagnostic:f1-balance-integrity:v1:ec3295"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -637,6 +638,41 @@ export async function POST(request: NextRequest) {
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
+
+  // F1D2 temporary certification hook: after this already-secret-authenticated wake,
+  // run the SELECT-only balance-integrity proof once and emit aggregate evidence to Vercel logs.
+  // It never writes PostgreSQL accounting state and never changes recovery decisions.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(F1_BALANCE_DIAGNOSTIC_ONCE_KEY, "running", { nx: true, ex: 10 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+        const [mismatches, duplicatePayments, duplicateReceipts, constraints, totals] = await Promise.all([
+          query(`WITH canonical AS (SELECT merchant_id, COALESCE(SUM(merchant_amount),0) canonical_settled FROM receipts WHERE settlement_status='settled_to_merchant' GROUP BY merchant_id), all_merchants AS (SELECT merchant_id FROM merchant_balances UNION SELECT merchant_id FROM canonical) SELECT m.merchant_id, COALESCE(b.settled,0) stored_settled, COALESCE(c.canonical_settled,0) canonical_settled, COALESCE(b.settled,0)-COALESCE(c.canonical_settled,0) settled_delta, COALESCE(b.unsettled,0) stored_unsettled FROM all_merchants m LEFT JOIN merchant_balances b ON b.merchant_id=m.merchant_id LEFT JOIN canonical c ON c.merchant_id=m.merchant_id WHERE COALESCE(b.settled,0)<>COALESCE(c.canonical_settled,0) OR COALESCE(b.unsettled,0)<>0 ORDER BY m.merchant_id`),
+          query(`SELECT payment_id, COUNT(*) duplicate_count FROM transactions GROUP BY payment_id HAVING COUNT(*)>1 ORDER BY payment_id`),
+          query(`SELECT transaction_id, COUNT(*) duplicate_count FROM receipts GROUP BY transaction_id HAVING COUNT(*)>1 ORDER BY transaction_id`),
+          query(`SELECT conrelid::regclass::text table_name, conname, contype, pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conrelid IN ('transactions'::regclass,'receipts'::regclass,'merchant_balances'::regclass) ORDER BY conrelid::regclass::text, conname`),
+          query(`SELECT (SELECT COUNT(*) FROM merchant_balances) merchant_balance_rows, (SELECT COUNT(*) FROM transactions) transaction_rows, (SELECT COUNT(*) FROM receipts) receipt_rows, (SELECT COUNT(*) FROM receipts WHERE settlement_status='settled_to_merchant') settled_receipt_rows`)
+        ])
+        if (![mismatches, duplicatePayments, duplicateReceipts, constraints, totals].every(Array.isArray)) throw new Error("F1D2 diagnostic indeterminate")
+        console.log("[F1D2 BALANCE INTEGRITY PROOF]", {
+          readOnly: true,
+          mismatchCount: mismatches!.length,
+          duplicatePaymentIdCount: duplicatePayments!.length,
+          duplicateReceiptTransactionIdCount: duplicateReceipts!.length,
+          totals: totals![0] ?? null,
+          mismatches,
+          constraints,
+        })
+        await redis.set(F1_BALANCE_DIAGNOSTIC_ONCE_KEY, "done", { ex: 7 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(F1_BALANCE_DIAGNOSTIC_ONCE_KEY) } catch {} }
+        console.error("[F1D2 BALANCE INTEGRITY PROOF] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
 
   // M7 telemetry only: schedule best-effort freshness evidence after trusted authentication.
   // It must never block, authorize, or alter financial recovery execution.
