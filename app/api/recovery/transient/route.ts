@@ -37,6 +37,7 @@ const F1_ROOT_CAUSE_CERT_ONCE_KEY = "flashpay:diagnostic:f1-root-cause-cert:v1:8
 const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d6"
 const F1_FINAL_LEGACY_CLOSURE_ONCE_KEY = "flashpay:repair:f1-final-legacy-closure:v1:0594908"
 const F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY = "flashpay:diagnostic:f1-orphan-forensic-proof:v1:d1a0ae"
+const F1_FINAL_ACCOUNTING_CERT_ONCE_KEY = "flashpay:diagnostic:f1-final-accounting-cert:v1:d2823a"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -1354,6 +1355,134 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         if (claimed) { try { await redis.del(F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY) } catch {} }
         console.error("[F1 ORPHAN FORENSIC PROOF] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
+
+  // F1 final merchant-accounting certification (read-only): classify the one exact pre-canonical
+  // historical U2A as a legacy exception without deleting it, inventing a receipt, crediting a merchant,
+  // refunding a payer, or changing any financial state. This closes only F1 merchant-accounting scope;
+  // it is not Plan N-FIN final certification and makes no claim about the historical movement's destination.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(F1_FINAL_ACCOUNTING_CERT_ONCE_KEY, "running", { nx: true, ex: 15 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+        if (!serverConfig.piApiKey) throw new Error("F1 final cert Pi API key unavailable")
+
+        const legacy = {
+          transactionId: "8669e2bc-effc-4e76-8d24-d809025f2a92",
+          paymentId: "eQU604TLlEn2O86i00o5jUhM1HAD",
+          merchantId: "mariamBoesha",
+          amount: 0.1,
+          u2aTxid: "f1eeef175d5f301f5f0a60ccb49507e49926e8df590e3ff5f8e3f376096956a3",
+        } as const
+
+        const legacyRows = await query(`
+          SELECT t.id,t.payment_id,t.merchant_id,t.amount,t.status,t.created_at,t.completed_at,
+                 (SELECT COUNT(*)::int FROM receipts r WHERE r.transaction_id=t.id) receipt_count,
+                 (SELECT COUNT(*)::int FROM settlement_requests sr WHERE sr.transaction_id=t.id) settlement_request_count,
+                 (SELECT COUNT(*)::int FROM settlement_checkpoints sc WHERE sc.payment_id=t.payment_id) settlement_checkpoint_count,
+                 (SELECT COUNT(*)::int FROM refund_checkpoints rc WHERE rc.payment_id=t.payment_id) refund_checkpoint_count,
+                 (SELECT COUNT(*)::int FROM refund_accounting_records ra WHERE ra.payment_id=t.payment_id) refund_accounting_count
+          FROM transactions t WHERE t.id=$1 AND t.payment_id=$2
+        `, [legacy.transactionId, legacy.paymentId])
+        if (!Array.isArray(legacyRows) || legacyRows.length !== 1 || !legacyRows[0] || typeof legacyRows[0] !== "object")
+          throw new Error("F1 final cert legacy identity unavailable")
+        const legacyDb = legacyRows[0] as Record<string, unknown>
+        const createdAtValue = legacyDb.created_at
+        const createdAtMs = createdAtValue instanceof Date ? createdAtValue.getTime() : typeof createdAtValue === "string" ? Date.parse(createdAtValue) : NaN
+        const preCanonicalCutoffMs = Date.parse("2026-07-01T00:00:00.000Z")
+        const noCanonicalDurableRecords = Number(legacyDb.receipt_count) === 0 && Number(legacyDb.settlement_request_count) === 0 &&
+          Number(legacyDb.settlement_checkpoint_count) === 0 && Number(legacyDb.refund_checkpoint_count) === 0 && Number(legacyDb.refund_accounting_count) === 0
+        if (legacyDb.merchant_id !== legacy.merchantId || Number(legacyDb.amount) !== legacy.amount || legacyDb.status !== "completed" ||
+            !Number.isFinite(createdAtMs) || createdAtMs >= preCanonicalCutoffMs || !noCanonicalDurableRecords)
+          throw new Error("F1 final cert legacy classification guard rejected")
+
+        const piResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(legacy.paymentId)}`, {
+          method: "GET", headers: { Authorization: `Key ${serverConfig.piApiKey}`, Accept: "application/json" }, cache: "no-store", redirect: "error",
+        })
+        if (!piResponse.ok) throw new Error(`F1 final cert Pi authority HTTP ${piResponse.status}`)
+        const piPayment = asRecord(await piResponse.json().catch(() => null))
+        const piStatus = piPayment ? asRecord(piPayment.status) : null
+        const piTransaction = piPayment ? asRecord(piPayment.transaction) : null
+        if (!piPayment || piPayment.identifier !== legacy.paymentId || piPayment.direction !== "user_to_app" || Number(piPayment.amount) !== legacy.amount ||
+            piTransaction?.txid !== legacy.u2aTxid || piStatus?.transaction_verified !== true || piStatus?.developer_completed !== true ||
+            piStatus?.cancelled === true || piStatus?.user_cancelled === true)
+          throw new Error("F1 final cert Pi authority mismatch")
+
+        const certRows = await query(`
+          WITH canonical AS (
+            SELECT merchant_id,COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status='settled_to_merchant'),0) canonical_settled
+            FROM receipts GROUP BY merchant_id
+          ), all_merchants AS (
+            SELECT merchant_id FROM merchant_balances UNION SELECT merchant_id FROM canonical
+          ), orphans AS (
+            SELECT t.id,t.payment_id FROM transactions t LEFT JOIN receipts r ON r.transaction_id=t.id WHERE r.id IS NULL
+          ), refund_overlap AS (
+            SELECT ra.payment_id
+            FROM refund_accounting_records ra
+            JOIN transactions t ON t.payment_id=ra.payment_id
+            JOIN receipts r ON r.transaction_id=t.id
+            WHERE r.settlement_status='settled_to_merchant'
+          )
+          SELECT
+            (SELECT COUNT(*)::int FROM merchant_balances WHERE unsettled<>0) nonzero_unsettled_count,
+            (SELECT COALESCE(SUM(unsettled),0) FROM merchant_balances) total_unsettled,
+            (SELECT COUNT(*)::int FROM all_merchants m LEFT JOIN merchant_balances b ON b.merchant_id=m.merchant_id LEFT JOIN canonical c ON c.merchant_id=m.merchant_id WHERE COALESCE(b.settled,0)<>COALESCE(c.canonical_settled,0)) settled_mismatch_count,
+            (SELECT COUNT(*)::int FROM (SELECT payment_id FROM transactions GROUP BY payment_id HAVING COUNT(*)>1) d) duplicate_payment_id_count,
+            (SELECT COUNT(*)::int FROM (SELECT transaction_id FROM receipts GROUP BY transaction_id HAVING COUNT(*)>1) d) duplicate_receipt_transaction_id_count,
+            (SELECT COUNT(*)::int FROM (SELECT a2u_identifier FROM receipts WHERE a2u_identifier IS NOT NULL GROUP BY a2u_identifier HAVING COUNT(*)>1) d) duplicate_a2u_identifier_count,
+            (SELECT COUNT(*)::int FROM (SELECT a2u_txid FROM receipts WHERE a2u_txid IS NOT NULL GROUP BY a2u_txid HAVING COUNT(*)>1) d) duplicate_a2u_txid_count,
+            (SELECT COUNT(*)::int FROM refund_overlap) refund_settled_overlap_count,
+            (SELECT COUNT(*)::int FROM orphans) raw_orphan_count,
+            (SELECT COUNT(*)::int FROM orphans WHERE id=$1 AND payment_id=$2) classified_legacy_orphan_count,
+            (SELECT COUNT(*)::int FROM orphans WHERE NOT (id=$1 AND payment_id=$2)) unclassified_orphan_count
+        `, [legacy.transactionId, legacy.paymentId])
+        if (!Array.isArray(certRows) || certRows.length !== 1 || !certRows[0] || typeof certRows[0] !== "object")
+          throw new Error("F1 final cert accounting proof unavailable")
+        const cert = certRows[0] as Record<string, unknown>
+        const pass = Number(cert.nonzero_unsettled_count) === 0 && Number(cert.total_unsettled) === 0 && Number(cert.settled_mismatch_count) === 0 &&
+          Number(cert.duplicate_payment_id_count) === 0 && Number(cert.duplicate_receipt_transaction_id_count) === 0 &&
+          Number(cert.duplicate_a2u_identifier_count) === 0 && Number(cert.duplicate_a2u_txid_count) === 0 && Number(cert.refund_settled_overlap_count) === 0 &&
+          Number(cert.raw_orphan_count) === 1 && Number(cert.classified_legacy_orphan_count) === 1 && Number(cert.unclassified_orphan_count) === 0
+        if (!pass) throw new Error("F1 final cert invariant rejected")
+
+        console.log("[F1 FINAL MERCHANT ACCOUNTING CERT] complete", {
+          verdict: "FULL_PASS_WITH_CLASSIFIED_LEGACY_EXCEPTION",
+          scope: "F1_MERCHANT_ACCOUNTING_ONLY",
+          planNFinFinalCertification: false,
+          legacyClassification: {
+            classification: "LEGACY_PRE_CANONICAL_U2A",
+            transactionId: legacy.transactionId,
+            paymentId: legacy.paymentId,
+            merchantId: legacy.merchantId,
+            amount: legacy.amount,
+            u2aTxid: legacy.u2aTxid,
+            piVerified: true,
+            canonicalReceiptCreated: false,
+            merchantBalanceCreditedByClassification: false,
+            refundCreatedByClassification: false,
+            blockchainMovementCreatedByClassification: false,
+            historicalMovementDestinationClaim: "NOT_ASSERTED",
+          },
+          accounting: {
+            nonzeroUnsettledCount: Number(cert.nonzero_unsettled_count), totalUnsettled: Number(cert.total_unsettled),
+            settledMismatchCount: Number(cert.settled_mismatch_count), duplicatePaymentIdCount: Number(cert.duplicate_payment_id_count),
+            duplicateReceiptTransactionIdCount: Number(cert.duplicate_receipt_transaction_id_count), duplicateA2uIdentifierCount: Number(cert.duplicate_a2u_identifier_count),
+            duplicateA2uTxidCount: Number(cert.duplicate_a2u_txid_count), refundSettledOverlapCount: Number(cert.refund_settled_overlap_count),
+            rawOrphanCount: Number(cert.raw_orphan_count), classifiedLegacyOrphanCount: Number(cert.classified_legacy_orphan_count),
+            unclassifiedOrphanCount: Number(cert.unclassified_orphan_count),
+          },
+          financialMutation: false,
+          blockchainMovement: false,
+        })
+        await redis.set(F1_FINAL_ACCOUNTING_CERT_ONCE_KEY, "done", { ex: 30 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(F1_FINAL_ACCOUNTING_CERT_ONCE_KEY) } catch {} }
+        console.error("[F1 FINAL MERCHANT ACCOUNTING CERT] failed", error instanceof Error ? error.message : String(error))
       }
     })
   } catch {}
