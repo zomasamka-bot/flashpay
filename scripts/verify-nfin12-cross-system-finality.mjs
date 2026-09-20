@@ -13,7 +13,7 @@ const matrix=[
 ["redis-loss-rebuild",recovery.includes("rebuildSettlementProjectionFromDurable")],
 ["lost-index-repopulation",route.includes("repopulateDurableSettlementWork")],
 ["wallet-sequence-evidence",db.includes("prepared_sequence")],
-["settlement-refund-exclusive",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")&&refundStore.includes('if(authority.outcome!=="CLEAR")return false')],
+["settlement-refund-exclusive",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")&&refundStore.includes('authority.settlementActive')],
 ["refund-prepared-recovery",refund.includes("prepared")&&refund.includes("Horizon")],
 ["unknown-authority-fail-closed",recovery.includes("durable_projection_unavailable")&&recovery.includes("durable_authority_conflict")],
 ["bounded-recovery",route.includes("listOutstandingSettlementCheckpointIds(200)")&&!route.includes("Promise.all(page.paymentIds)")],

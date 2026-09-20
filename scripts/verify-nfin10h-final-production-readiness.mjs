@@ -13,7 +13,7 @@ const invariants=[
 ["authoritative-rebuild",db.includes("getSettlementCheckpointAuthoritative")&&recovery.includes("rebuildSettlementProjectionFromDurable")],
 ["durable-repopulation",db.includes("listOutstandingSettlementCheckpointIds")&&route.includes("repopulateDurableSettlementWork")],
 ["cross-authority-exclusion",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")],
-["refund-gate",refund.includes('if(authority.outcome!=="CLEAR")return false')],
+["refund-gate",refund.includes('authority.settlementActive')],
 ["no-10k-promise-all",!route.includes("Promise.all(page.paymentIds")],
 ["horizon-hash-binding",db.includes("a2uTxid!==params.preparedTxHash")||db.includes("a2uTxid !== params.preparedTxHash")],
 ["u2a-durable-identity",db.includes("u2a_identifier")&&db.includes("u2a_txid")],

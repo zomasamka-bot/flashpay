@@ -14,7 +14,7 @@ const final=[
 ["db-finality-durable",db.includes("recordSettlementDbFinalizedCheckpoint")],
 ["authoritative-recovery",db.includes("getSettlementCheckpointAuthoritative")&&recovery.includes("rebuildSettlementProjectionFromDurable")],
 ["durable-work-repopulation",route.includes("repopulateDurableSettlementWork")&&route.includes("listOutstandingSettlementCheckpointIds(200)")],
-["settlement-refund-mutual-exclusion",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")&&refundStore.includes('if(authority.outcome!=="CLEAR")return false')],
+["settlement-refund-mutual-exclusion",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")&&refundStore.includes('authority.settlementActive')],
 ["refund-prepared-horizon-recovery",refund.includes("prepared")&&refund.includes("Horizon")],
 ["unknown-fails-closed",recovery.includes("durable_projection_unavailable")&&recovery.includes("durable_authority_conflict")],
 ["no-unbounded-10k-fanout",!route.includes("Promise.all(page.paymentIds)")],

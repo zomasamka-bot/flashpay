@@ -504,10 +504,15 @@ export async function listOutstandingSettlementCheckpointIds(limit:number):Promi
 }
 
 export type SettlementRefundAuthorityCheck =
-  | { outcome:'CLEAR' }
+  | { outcome:'CLEAR'; settlementActive:boolean; refundActive:boolean }
   | { outcome:'CONFLICT'|'INDETERMINATE'; error:string }
 
-export async function verifySettlementRefundAuthorityExclusion(paymentId:string):Promise<SettlementRefundAuthorityCheck>{
+/**
+ * N-FIN-X2 durable ownership read. This is deliberately descriptive: callers
+ * decide which opposite authority must be absent for the operation they are
+ * about to acquire/replay. Any unknown Refund status is treated as active.
+ */
+export async function readSettlementRefundAuthority(paymentId:string):Promise<SettlementRefundAuthorityCheck>{
   if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
     return{outcome:'INDETERMINATE',error:'Invalid payment identity'}
   try{
@@ -515,16 +520,20 @@ export async function verifySettlementRefundAuthorityExclusion(paymentId:string)
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
       SELECT
-        (SELECT count(*) FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage<>'db_finalized') AS settlement_count,
-        (SELECT count(*) FROM refund_checkpoints WHERE payment_id=${paymentId} AND status IN ('pending','submitted','completed')) AS refund_count
+        EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage<>'db_finalized') AS settlement_active,
+        EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${paymentId} AND status<>'manual_review_required') AS refund_active
     `
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Cross-authority durable read invalid'}
-    const settlementCount=Number((rows[0] as any).settlement_count),refundCount=Number((rows[0] as any).refund_count)
-    if(!Number.isSafeInteger(settlementCount)||!Number.isSafeInteger(refundCount)||settlementCount<0||refundCount<0)
-      return{outcome:'INDETERMINATE',error:'Cross-authority durable counts invalid'}
-    if(settlementCount>0&&refundCount>0)return{outcome:'CONFLICT',error:'Settlement and Refund durable authorities conflict'}
-    return{outcome:'CLEAR'}
+    const settlementActive=(rows[0] as any).settlement_active,refundActive=(rows[0] as any).refund_active
+    if(typeof settlementActive!=='boolean'||typeof refundActive!=='boolean')
+      return{outcome:'INDETERMINATE',error:'Cross-authority durable flags invalid'}
+    if(settlementActive&&refundActive)return{outcome:'CONFLICT',error:'Settlement and Refund durable authorities conflict'}
+    return{outcome:'CLEAR',settlementActive,refundActive}
   }catch(e){console.error('[DB] Cross-authority durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Cross-authority durable read uncertain'}}
+}
+
+export async function verifySettlementRefundAuthorityExclusion(paymentId:string):Promise<SettlementRefundAuthorityCheck>{
+  return readSettlementRefundAuthority(paymentId)
 }
 
 export type SettlementDurableAdvanceResult =

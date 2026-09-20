@@ -9,7 +9,7 @@ const gates=[
 ["settlement-durable-chain",["recordSettlementA2UCreatedCheckpoint","recordSettlementPreparedCheckpoint","recordSettlementHorizonCheckpoint","recordSettlementPiCompletedCheckpoint","recordSettlementDbFinalizedCheckpoint"].every(x=>db.includes(x))],
 ["redis-rebuild",recovery.includes("rebuildSettlementProjectionFromDurable")],
 ["outstanding-repopulation",route.includes("repopulateDurableSettlementWork")],
-["settlement-refund-exclusion",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")&&refundStore.includes('if(authority.outcome!=="CLEAR")return false')],
+["settlement-refund-exclusion",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")&&refundStore.includes('authority.settlementActive')],
 ["prepared-refund-reconciliation",refundSubmit.includes("prepared")&&refundSubmit.includes("Horizon")],
 ["bounded-10k",!route.includes("Promise.all(page.paymentIds)")&&route.includes("listOutstandingSettlementCheckpointIds(200)")],
 ["fail-closed-recovery",recovery.includes("durable_projection_unavailable")&&recovery.includes("durable_authority_conflict")],

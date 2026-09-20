@@ -1,5 +1,5 @@
 import { redis, isRedisConfigured } from './redis'
-import { query, verifySettlementRefundAuthorityExclusion } from './db'
+import { query, readSettlementRefundAuthority } from './db'
 import type { Payment, RefundAuditEvent, RefundCheckpoint } from './types'
 
 const redisKey = (refundId: string) => `flashpay:refund:checkpoint:${refundId}`
@@ -8,8 +8,10 @@ const paymentOperationLockKey = (paymentId: string) => `flashpay:payment:operati
 
 export async function acquirePaymentOperationLock(paymentId: string, owner: string): Promise<boolean> {
   if (!isRedisConfigured) return false
-  const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
-  if(authority.outcome!=="CLEAR")return false
+  // X2: a new Refund may never acquire ownership while a non-final durable
+  // Settlement authority exists. Existing Refund replay is handled separately.
+  const authority=await readSettlementRefundAuthority(paymentId)
+  if(authority.outcome!=="CLEAR"||authority.settlementActive)return false
   const result = await redis.set(paymentOperationLockKey(paymentId), owner, { nx: true, ex: 60 * 60 * 24 * 30 })
   return result === 'OK'
 }

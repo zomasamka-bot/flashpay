@@ -7,7 +7,7 @@ for(const x of ["recordSettlementA2UCreatedCheckpoint","recordSettlementPrepared
 for(const x of ["repopulateDurableSettlementWork","listOutstandingSettlementCheckpointIds(200)","redis.set(`payment:${paymentId}`,encoded,{nx:true})","redis.sadd(\"flashpay:recovery:active-payments:v1\"","redis.zadd(\"flashpay:settlement:ready:v1\""])assert.ok(route.includes(x),x);
 assert.ok(locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)"));
 assert.ok(recovery.includes("durable_authority_conflict"));
-assert.ok(refund.includes('if(authority.outcome!=="CLEAR")return false'));
+assert.ok(refund.includes('authority.settlementActive'));
 assert.ok(exec.includes("recordSettlementA2UCreatedCheckpoint"));
 assert.ok(exec.includes("recordSettlementPreparedCheckpoint"));
 assert.ok(exec.includes("recordSettlementHorizonCheckpoint"));

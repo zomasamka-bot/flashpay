@@ -6,6 +6,7 @@ import type { Payment, RefundCheckpoint, RefundAuditEvent } from '@/lib/types'
 import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
 import { getRefundReadiness } from '@/lib/refund-readiness'
+import { readSettlementRefundAuthority } from '@/lib/db'
 
 export type RefundIntentInternalResult = { status: number; body: unknown }
 
@@ -81,6 +82,14 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
   const refundId = randomUUID()
   const paymentLockAcquired = await acquirePaymentOperationLock(payment.id, refundId)
   if (!paymentLockAcquired) return { status: 409, body: { error: 'Payment is already being processed' } }
+  // X2: close the DB/Redis race. Settlement durable ownership may have appeared
+  // after the pre-lock authority read; re-check under the shared operation lock
+  // before idempotency claim or Refund checkpoint persistence.
+  const lockedAuthority = await readSettlementRefundAuthority(payment.id)
+  if (lockedAuthority.outcome !== 'CLEAR' || lockedAuthority.settlementActive) {
+    await releasePaymentOperationLock(payment.id, refundId)
+    return { status: 409, body: { error: 'Settlement authority owns this payment' } }
+  }
   const lockedStored = await redis.get(`payment:${paymentId}`)
   let lockedPaymentRecord: any
   try { lockedPaymentRecord = typeof lockedStored === 'string' ? JSON.parse(lockedStored) : lockedStored } catch {
