@@ -27,7 +27,8 @@
     "certify:nfinx2": "node scripts/verify-nfinx2-cross-authority-exclusion.mjs",
     "certify:nfinx3": "node scripts/verify-nfinx3-exact-stroops.mjs",
     "certify:nfinx4": "node scripts/verify-nfinx4-stellar-v17-operation-source.mjs",
-    "certify:nfinx5": "node scripts/verify-nfinx5-same-sha-adversarial-runtime-readiness.mjs"
+    "certify:nfinx5": "node scripts/verify-nfinx5-same-sha-adversarial-runtime-readiness.mjs",
+    "certify:nfinx6": "node scripts/verify-nfinx6-final-residual-uncertainty-closure.mjs"
   },
   "overrides": {
     "react": "^19",
