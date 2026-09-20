@@ -999,7 +999,7 @@ export async function POST(request: NextRequest) {
         }
 
         const repaired = await repairF1LegacyCompletedCanonicalReceipts({ merchantId: "hazemaboria", receipts: candidates, expectedCandidateAmount: 3.2 })
-        if (repaired.outcome === "CONFLICT" || repaired.outcome === "INDETERMINATE")
+        if ("error" in repaired)
           throw new Error(`F1G DB repair blocked: ${repaired.error}`)
         const proof = await query(`
           SELECT b.settled stored_settled,
