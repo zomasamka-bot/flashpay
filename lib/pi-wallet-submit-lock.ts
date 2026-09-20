@@ -11,6 +11,14 @@ end
 return 0
 `
 
+const RENEW_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+if current ~= ARGV[1] then return 0 end
+return redis.call("EXPIRE", KEYS[1], ARGV[2])
+`
+const SUBMIT_LOCK_TTL_SECONDS = 600
+const SUBMIT_LOCK_RENEW_INTERVAL_MS = 180_000
+
 export type PiWalletIntentOwner =
   | { kind: "settlement_claim"; paymentId: string }
   | { kind: "settlement_prepared"; paymentId: string; preparedHash: string; preparedSequence: string }
@@ -178,17 +186,37 @@ export async function acquirePiWalletSubmitLock(
   const token = crypto.randomUUID()
 
   try {
-    const acquired = await redis.set(key, token, { nx: true, ex: 600 })
+    const acquired = await redis.set(key, token, { nx: true, ex: SUBMIT_LOCK_TTL_SECONDS })
     if (acquired !== "OK") return null
   } catch {
     return null
   }
 
   let released = false
+  let renewalInFlight = false
+  const renewalTimer = setInterval(async () => {
+    if (released || renewalInFlight) return
+    renewalInFlight = true
+    try {
+      const renewed = await redis.eval<[string, string], number>(RENEW_SCRIPT, [key], [token, String(SUBMIT_LOCK_TTL_SECONDS)])
+      if (renewed !== 1) {
+        // Token ownership was lost. Never extend a successor's lock.
+        clearInterval(renewalTimer)
+      }
+    } catch {
+      // Fail closed at the Redis ownership layer: no blind SET/EXPIRE without token match.
+      // Durable wallet intent + Horizon reconciliation remain the movement authorities.
+    } finally {
+      renewalInFlight = false
+    }
+  }, SUBMIT_LOCK_RENEW_INTERVAL_MS)
+  renewalTimer.unref?.()
+
   return {
     release: async () => {
       if (released) return
       released = true
+      clearInterval(renewalTimer)
       try {
         await redis.eval(RELEASE_SCRIPT, [key], [token])
       } catch {

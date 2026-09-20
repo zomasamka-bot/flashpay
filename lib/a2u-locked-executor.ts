@@ -82,14 +82,33 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
   }
 
   let lockAcquired = false
+  let lockRenewalTimer: ReturnType<typeof setInterval> | null = null
+  let lockRenewalInFlight = false
   try {
     const lockResult = await redis.set(lockKey, lockToken, { nx: true, ex: lockTtl })
     lockAcquired = lockResult === "OK"
+    if (lockAcquired) {
+      lockRenewalTimer = setInterval(async () => {
+        if (lockRenewalInFlight) return
+        lockRenewalInFlight = true
+        try {
+          const renewed = await redis.eval<[string, string], number>(
+            'if redis.call("get",KEYS[1])~=ARGV[1] then return 0 end; return redis.call("expire",KEYS[1],ARGV[2])',
+            [lockKey], [lockToken, String(lockTtl)],
+          )
+          if (renewed !== 1 && lockRenewalTimer) { clearInterval(lockRenewalTimer); lockRenewalTimer = null }
+        } catch {
+          // Never renew without exact token ownership; durable authorities remain fail-closed.
+        } finally { lockRenewalInFlight = false }
+      }, 180_000)
+      lockRenewalTimer.unref?.()
+    }
   } catch (lockError) {
     console.error("[A2U Locked Executor] Lock acquisition error:", lockError)
   }
 
   const releaseLockAtomic = async () => {
+    if (lockRenewalTimer) { clearInterval(lockRenewalTimer); lockRenewalTimer = null }
     if (!lockAcquired || !isRedisConfigured) return
     try {
       const luaScript = `

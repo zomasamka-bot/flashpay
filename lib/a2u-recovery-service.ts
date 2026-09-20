@@ -101,6 +101,21 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
   const lockKey = `flashpay:payment:operation:${paymentId}`
   const lockToken = randomUUID()
   if (await redis.set(lockKey, lockToken, { nx: true, ex: 600 }) !== "OK") return "MANUAL_REVIEW"
+  let lockRenewalInFlight = false
+  const lockRenewalTimer = setInterval(async () => {
+    if (lockRenewalInFlight) return
+    lockRenewalInFlight = true
+    try {
+      const renewed = await redis.eval<[string, string], number>(
+        'if redis.call("get",KEYS[1])~=ARGV[1] then return 0 end; return redis.call("expire",KEYS[1],ARGV[2])',
+        [lockKey], [lockToken, "600"],
+      )
+      if (renewed !== 1) clearInterval(lockRenewalTimer)
+    } catch {
+      // Never renew without exact token ownership; recovery remains fail-closed.
+    } finally { lockRenewalInFlight = false }
+  }, 180_000)
+  lockRenewalTimer.unref?.()
   try {
     const latestData = await redis.get(`payment:${paymentId}`)
     const latest: Payment | null = latestData ? (typeof latestData === "string" ? JSON.parse(latestData) : latestData) : null
@@ -142,6 +157,7 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
     })
     return "CONFIRMED_NONE"
   } finally {
+    clearInterval(lockRenewalTimer)
     try {
       await redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", [lockKey], [lockToken])
     } catch (error) {
