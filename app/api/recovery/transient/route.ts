@@ -9,6 +9,7 @@ import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointA
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
+import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 import { serverConfig } from "@/lib/server-config"
 import type { Payment } from "@/lib/types"
 
@@ -38,6 +39,7 @@ const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d
 const F1_FINAL_LEGACY_CLOSURE_ONCE_KEY = "flashpay:repair:f1-final-legacy-closure:v1:0594908"
 const F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY = "flashpay:diagnostic:f1-orphan-forensic-proof:v1:d1a0ae"
 const F1_FINAL_ACCOUNTING_CERT_ONCE_KEY = "flashpay:diagnostic:f1-final-accounting-cert:v1:d2823a"
+const F2_6_CAS_RUNTIME_CERT_ONCE_KEY = "flashpay:diagnostic:f2-6-cas-runtime-cert:v1:3a16a8"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -801,6 +803,91 @@ export async function POST(request: NextRequest) {
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
+
+  // F2-6 one-shot runtime certification: synthetic Redis-only stale-writer race.
+  // No payment is indexed, no Pi/Horizon/PostgreSQL call is made, and the
+  // synthetic payment key is always deleted before the certification completes.
+  try {
+    after(async () => {
+      let claimed = false
+      const syntheticPaymentId = randomUUID()
+      const syntheticKey = `payment:${syntheticPaymentId}`
+      try {
+        const claim = await redis.set(F2_6_CAS_RUNTIME_CERT_ONCE_KEY, "running", { nx: true, ex: 10 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+
+        const createdAt = new Date().toISOString()
+        const base: Payment = {
+          id: syntheticPaymentId,
+          merchantId: "f2-6-runtime-cert",
+          merchantUid: "f2-6-runtime-cert",
+          accessToken: "",
+          redisProjectionVersion: 1,
+          amount: 0.0000001,
+          note: "base",
+          status: "pending",
+          createdAt,
+        }
+        const created = await redis.set(syntheticKey, JSON.stringify(base), { nx: true, ex: 5 * 60 })
+        if (created !== "OK") throw new Error("synthetic projection create failed")
+
+        const writerA: Payment = { ...base, note: "writer-a" }
+        const writerB: Payment = { ...base, note: "writer-b" }
+        const [a, b] = await Promise.all([
+          compareAndSwapPaymentProjection(syntheticPaymentId, base, writerA),
+          compareAndSwapPaymentProjection(syntheticPaymentId, base, writerB),
+        ])
+        const outcomes = [a.outcome, b.outcome]
+        const updatedCount = outcomes.filter((value) => value === "UPDATED").length
+        const conflictCount = outcomes.filter((value) => value === "CONFLICT").length
+        if (updatedCount !== 1 || conflictCount !== 1) throw new Error(`unexpected concurrent CAS outcomes: ${outcomes.join(",")}`)
+
+        const winnerRaw = await redis.get(syntheticKey)
+        const winner = parsePayment(winnerRaw)
+        if (!winner || winner.id !== syntheticPaymentId || winner.redisProjectionVersion !== 2 || (winner.note !== "writer-a" && winner.note !== "writer-b")) {
+          throw new Error("concurrent CAS winner readback invalid")
+        }
+        const winnerNote = winner.note
+
+        // The stale version-1 writer must still lose after the winner committed.
+        const staleAttempt = await compareAndSwapPaymentProjection(syntheticPaymentId, base, { ...base, note: "stale-writer" })
+        if (staleAttempt.outcome !== "CONFLICT") throw new Error(`stale writer was not fenced: ${staleAttempt.outcome}`)
+        const afterStale = parsePayment(await redis.get(syntheticKey))
+        if (!afterStale || afterStale.redisProjectionVersion !== 2 || afterStale.note !== winnerNote) throw new Error("stale writer changed projection")
+
+        // A writer holding the current version may advance exactly once.
+        const currentAdvance = await compareAndSwapPaymentProjection(syntheticPaymentId, afterStale, { ...afterStale, note: "current-writer" })
+        if (currentAdvance.outcome !== "UPDATED" || currentAdvance.payment.redisProjectionVersion !== 3 || currentAdvance.payment.note !== "current-writer") {
+          throw new Error("current writer did not advance fence")
+        }
+        const final = parsePayment(await redis.get(syntheticKey))
+        if (!final || final.redisProjectionVersion !== 3 || final.note !== "current-writer") throw new Error("final CAS readback invalid")
+
+        const deleted = await redis.del(syntheticKey)
+        if (deleted !== 1) throw new Error("synthetic projection cleanup failed")
+        console.log("[F2-6 CAS RUNTIME CERT]", {
+          verdict: "FULL_PASS",
+          synthetic: true,
+          financialMutation: false,
+          piCall: false,
+          horizonCall: false,
+          postgresCall: false,
+          concurrentUpdated: updatedCount,
+          concurrentConflicts: conflictCount,
+          staleWriterOutcome: staleAttempt.outcome,
+          winnerVersion: 2,
+          finalVersion: final.redisProjectionVersion,
+          syntheticKeyDeleted: true,
+        })
+        await redis.set(F2_6_CAS_RUNTIME_CERT_ONCE_KEY, "done", { ex: 7 * 24 * 60 * 60 })
+      } catch (error) {
+        try { await redis.del(syntheticKey) } catch {}
+        if (claimed) { try { await redis.del(F2_6_CAS_RUNTIME_CERT_ONCE_KEY) } catch {} }
+        console.error("[F2-6 CAS RUNTIME CERT] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
 
   // F1D2 temporary certification hook: after this already-secret-authenticated wake,
   // run the SELECT-only balance-integrity proof once and emit aggregate evidence to Vercel logs.
