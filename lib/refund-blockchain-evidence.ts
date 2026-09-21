@@ -102,7 +102,9 @@ export function classifyRefundPreparedSequence(input: ReturnType<typeof evaluate
 
 export async function verifyRefundBlockchainEvidence(input: Input): Promise<RefundBlockchainEvidenceResult> {
   const { checkpoint, payment } = input
-  if ((checkpoint.stage !== "wallet_submission_started" && checkpoint.stage !== "wallet_submission_confirmed") || checkpoint.status !== "pending" ||
+  const blockchainEvidenceStage = ['wallet_submission_started', 'wallet_submission_confirmed', 'payment_checkpoint_updated', 'accounting_recorded', 'audit_recorded'].includes(checkpoint.stage)
+  const blockchainEvidenceStatus = checkpoint.status === 'pending' || (checkpoint.stage === 'audit_recorded' && checkpoint.status === 'completed')
+  if (!blockchainEvidenceStage || !blockchainEvidenceStatus ||
     !checkpoint.refundPaymentId || checkpoint.refundPaymentId !== payment.identifier || checkpoint.paymentId !== payment.metadata.paymentId ||
     checkpoint.payerUid !== payment.user_uid || checkpoint.amount !== payment.amount || numberToExactPositiveStroops(checkpoint.amount) === null || numberToExactPositiveStroops(payment.amount) === null ||
     payment.network !== "Pi Testnet" || payment.direction !== "app_to_user" ||
