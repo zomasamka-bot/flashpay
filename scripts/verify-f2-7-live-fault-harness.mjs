@@ -55,6 +55,10 @@ assert.ok(refund.includes('[F2-7 SAME-SHA REDIS LOSS] refund terminal projection
 assert.equal(recovery.includes('F2_6_CAS_RUNTIME_CERT_ONCE_KEY'),false)
 assert.equal(recovery.includes('[F2-6 CAS RUNTIME CERT]'),false)
 
+
+assert.equal(a2u.includes('[F2-7 DURABLE PI RESUME]'),true,'durable Pi resume marker')
+assert.equal(a2u.includes('const durablePiReplay = await recordSettlementPiCompletedCheckpoint'),true,'already-completed Pi durable replay')
+assert.equal(a2u.includes('recoveredAlreadyCompleted: true'),true,'durable Pi replay fault coverage')
 console.log(JSON.stringify({
   certification:'PASS',
   gate:'F2-7-LIVE-FAULT-HARNESS-CODE-READINESS',

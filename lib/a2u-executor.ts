@@ -484,6 +484,24 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] ✓ Pi /complete and durable finality succeeded")
   } else {
     console.log("[A2U Executor] STAGE 3: Skipping Pi /complete - already piCompleted")
+    if (!a2uPaymentId || typeof a2uPaymentId !== "string" || !txidFromHorizon || typeof txidFromHorizon !== "string") {
+      return { ok: false, status: "settlement_pending", error: "Pi-completed durable checkpoint identity missing" }
+    }
+    // F2-7 crash closure: Redis/Pi may already say completed after a crash that
+    // happened before PostgreSQL advanced from horizon_confirmed -> pi_completed.
+    // Re-assert the durable Pi checkpoint idempotently before any DB reconciliation.
+    const durablePiReplay = await recordSettlementPiCompletedCheckpoint({
+      paymentId: ctx.paymentId,
+      a2uPaymentId,
+      a2uTxid: txidFromHorizon,
+    })
+    if (durablePiReplay.outcome !== "RECORDED" && durablePiReplay.outcome !== "REPLAYED") {
+      return { ok: false, status: "settlement_pending", error: "Pi-completed durable checkpoint not proven" }
+    }
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "durable_pi_before_db", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { a2uPaymentId, a2uTxid: txidFromHorizon, recoveredAlreadyCompleted: true } })) {
+      return { ok: false, status: "settlement_pending", error: "F2-7 intentional durable Pi interruption" }
+    }
+    console.log("[F2-7 DURABLE PI RESUME]", { paymentId: ctx.paymentId, a2uPaymentId, a2uTxid: txidFromHorizon, durableOutcome: durablePiReplay.outcome })
   }
 
   // SHARED ACCOUNTING CHECKPOINT: Ensure appNetImpact and appCommission are persisted before Stage 4
