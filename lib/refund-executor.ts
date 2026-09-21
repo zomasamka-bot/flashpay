@@ -396,6 +396,31 @@ export async function executeRefundAccounting(refundId: string): Promise<RefundE
   if (!checkpoint || checkpoint.paymentId !== initial.paymentId || checkpoint.idempotencyKey !== initial.idempotencyKey || checkpoint.payerUid !== initial.payerUid || checkpoint.amount !== initial.amount || checkpoint.refundPaymentId !== initial.refundPaymentId || checkpoint.refundTxid !== initial.refundTxid || (checkpoint.stage !== 'payment_checkpoint_updated' && checkpoint.stage !== 'accounting_recorded') || checkpoint.status !== 'pending' || typeof checkpoint.refundPaymentId !== 'string' || checkpoint.refundPaymentId.length === 0 || typeof checkpoint.refundTxid !== 'string' || checkpoint.refundTxid.length === 0) return { outcome: 'blocked', reason: 'invalid_stage' }
   const refundPaymentId = checkpoint.refundPaymentId
   const refundTxid = checkpoint.refundTxid
+
+  // F2-5 certification hook: one-shot Redis projection loss after the Refund
+  // blockchain identity is already durable. This never mutates PostgreSQL, Pi,
+  // Horizon, or refund identifiers; it only forces the normal durable rebuild
+  // gate below to prove that Redis is a reconstructable projection.
+  if (process.env.VERCEL_ENV === 'production' && checkpoint.amount === 0.1) {
+    const durableIngress = await getDurableU2AIngressAuthoritative(checkpoint.paymentId)
+    if (durableIngress.outcome === 'FOUND' && durableIngress.checkpoint.merchantId === 'hazemaboria') {
+      const hookKey = 'flashpay:f2-5:refund-redis-loss-proof:v1'
+      const armed = await redis.set(hookKey, `${checkpoint.paymentId}:${refundId}`, { nx: true, ex: 60 * 60 * 24 })
+      if (armed === 'OK') {
+        await redis.del(`payment:${checkpoint.paymentId}`)
+        console.warn('[F2-5 FAULT INJECTION] REDIS_PAYMENT_PROJECTION_DELETED', {
+          paymentId: checkpoint.paymentId,
+          refundId,
+          refundPaymentId,
+          refundTxid,
+          durableRefundStage: checkpoint.stage,
+          financialMutation: false,
+          blockchainMovement: false,
+        })
+      }
+    }
+  }
+
   const loadedPayment = await loadRefundPaymentProjection(checkpoint)
   if (loadedPayment.outcome !== 'FOUND') return { outcome: 'blocked', reason: loadedPayment.reason }
   const payment = loadedPayment.payment
