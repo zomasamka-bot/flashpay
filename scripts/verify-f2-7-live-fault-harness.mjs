@@ -59,6 +59,11 @@ assert.equal(recovery.includes('[F2-6 CAS RUNTIME CERT]'),false)
 assert.equal(a2u.includes('[F2-7 DURABLE PI RESUME]'),true,'durable Pi resume marker')
 assert.equal(a2u.includes('const durablePiReplay = await recordSettlementPiCompletedCheckpoint'),true,'already-completed Pi durable replay')
 assert.equal(a2u.includes('recoveredAlreadyCompleted: true'),true,'durable Pi replay fault coverage')
+assert.equal(a2u.includes('ensureRecoveredHorizonDurability'),true,'recovered Horizon durability helper')
+assert.equal(a2u.includes('[F2-7 DURABLE HORIZON RESUME]'),true,'durable Horizon resume marker')
+assert.equal(a2u.includes('recordSettlementHorizonCheckpoint({'),true,'durable Horizon replay/record')
+assert.equal(a2u.includes('.transactions().transaction(a2uTxid).call()'),true,'Horizon GET proof for prepared-stage recovery')
+assert.equal(a2u.includes('record.successful !== true'),true,'Horizon success proof')
 console.log(JSON.stringify({
   certification:'PASS',
   gate:'F2-7-LIVE-FAULT-HARNESS-CODE-READINESS',
@@ -72,5 +77,6 @@ console.log(JSON.stringify({
   f26TemporaryHookRemoved:true,
   terminalDbFinalizedRediscovery:true,
   u2aServerCompletionRecovery:true,
-  stage1OnlyDurableResume:true
+  stage1OnlyDurableResume:true,
+  durableHorizonResume:true
 },null,2))

@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint } from "@/lib/db"
+import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -442,6 +442,15 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged)
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
+    if (ctx.isRecovery) {
+      if (!a2uPaymentId || typeof a2uPaymentId !== "string") {
+        return { ok: false, status: "settlement_pending", error: "Recovered Horizon durable checkpoint identity missing" }
+      }
+      const durableHorizonResume = await ensureRecoveredHorizonDurability(ctx, a2uPaymentId, txidFromHorizon)
+      if (!durableHorizonResume.ok) {
+        return { ok: false, status: "settlement_pending", error: durableHorizonResume.error }
+      }
+    }
   }
 
   // STAGE 3: Complete Pi (skip if already piCompleted)
@@ -1179,6 +1188,130 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     }
   }
 }
+
+type RecoveredHorizonDurabilityResult =
+  | { ok: true; durableOutcome: "RECORDED" | "REPLAYED"; horizonFeeCharged: number }
+  | { ok: false; error: string }
+
+async function ensureRecoveredHorizonDurability(
+  ctx: ExecutorContext,
+  a2uPaymentId: string,
+  a2uTxid: string,
+): Promise<RecoveredHorizonDurabilityResult> {
+  if (!ctx.isRecovery || !/^[0-9a-f]{64}$/.test(a2uTxid)) {
+    return { ok: false, error: "Recovered Horizon durable checkpoint identity invalid" }
+  }
+  const durable = await getSettlementCheckpointAuthoritative(ctx.paymentId)
+  if (durable.outcome !== "FOUND") {
+    return { ok: false, error: "Recovered Horizon durable authority unavailable" }
+  }
+  const d = durable.checkpoint
+  if (
+    d.paymentId !== ctx.paymentId ||
+    d.merchantId !== ctx.payment.merchantId ||
+    d.merchantUid !== ctx.merchantUid ||
+    d.customerAmount !== ctx.customerAmount ||
+    d.merchantAmount !== ctx.customerAmount ||
+    d.a2uPaymentId !== a2uPaymentId ||
+    d.a2uFromAddress !== ctx.payment.a2uFromAddress ||
+    d.a2uToAddress !== ctx.payment.a2uToAddress
+  ) {
+    return { ok: false, error: "Recovered Horizon durable identity mismatch" }
+  }
+
+  if (d.stage === "prepared") {
+    if (
+      d.preparedTxHash !== a2uTxid ||
+      typeof d.preparedSequence !== "string" || !/^[1-9][0-9]*$/.test(d.preparedSequence) ||
+      typeof d.preparedEnvelopeXdr !== "string" || d.preparedEnvelopeXdr.trim() === "" || d.preparedEnvelopeXdr !== d.preparedEnvelopeXdr.trim()
+    ) {
+      return { ok: false, error: "Recovered Horizon prepared authority mismatch" }
+    }
+    try {
+      const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
+      const transactionRecord = await horizonServer.transactions().transaction(a2uTxid).call()
+      const record = transactionRecord as unknown as Record<string, unknown>
+      if (record.hash !== a2uTxid || record.successful !== true) {
+        return { ok: false, error: "Recovered Horizon transaction proof mismatch" }
+      }
+      const feeRaw = record.fee_charged
+      if (typeof feeRaw !== "number" && typeof feeRaw !== "string") {
+        return { ok: false, error: "Recovered Horizon fee proof invalid" }
+      }
+      const feeStroops = Number(feeRaw)
+      if (!Number.isSafeInteger(feeStroops) || feeStroops < 0) {
+        return { ok: false, error: "Recovered Horizon fee proof invalid" }
+      }
+      const durableHorizon = await recordSettlementHorizonCheckpoint({
+        paymentId: ctx.paymentId,
+        a2uPaymentId,
+        preparedTxHash: d.preparedTxHash,
+        preparedSequence: d.preparedSequence,
+        a2uTxid,
+        horizonFeeStroops: feeStroops,
+      })
+      if (durableHorizon.outcome !== "RECORDED" && durableHorizon.outcome !== "REPLAYED") {
+        return { ok: false, error: "Recovered Horizon durable checkpoint not proven" }
+      }
+      const horizonFeeCharged = feeStroops / 10_000_000
+      ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+        status: "settlement_pending",
+        a2uTxid,
+        horizonSuccessFlag: true,
+        horizonFeeCharged,
+        piCompletionPending: ctx.payment.piCompleted === true ? false : true,
+      })
+      console.log("[F2-7 DURABLE HORIZON RESUME]", {
+        paymentId: ctx.paymentId,
+        a2uPaymentId,
+        a2uTxid,
+        durableOutcome: durableHorizon.outcome,
+        horizonFeeCharged,
+      })
+      return { ok: true, durableOutcome: durableHorizon.outcome, horizonFeeCharged }
+    } catch (error) {
+      console.error("[F2-7 DURABLE HORIZON RESUME] Horizon proof uncertain", error)
+      return { ok: false, error: "Recovered Horizon transaction proof uncertain" }
+    }
+  }
+
+  if (d.stage === "horizon_confirmed" || d.stage === "pi_completed" || d.stage === "db_finalized") {
+    if (
+      d.preparedTxHash !== a2uTxid ||
+      d.a2uTxid !== a2uTxid ||
+      typeof d.preparedSequence !== "string" || !/^[1-9][0-9]*$/.test(d.preparedSequence) ||
+      typeof d.horizonFeeStroops !== "number" || !Number.isSafeInteger(d.horizonFeeStroops) || d.horizonFeeStroops < 0
+    ) {
+      return { ok: false, error: "Recovered Horizon durable evidence mismatch" }
+    }
+    const durableHorizon = await recordSettlementHorizonCheckpoint({
+      paymentId: ctx.paymentId,
+      a2uPaymentId,
+      preparedTxHash: d.preparedTxHash,
+      preparedSequence: d.preparedSequence,
+      a2uTxid,
+      horizonFeeStroops: d.horizonFeeStroops,
+    })
+    if (durableHorizon.outcome !== "RECORDED" && durableHorizon.outcome !== "REPLAYED") {
+      return { ok: false, error: "Recovered Horizon durable checkpoint not proven" }
+    }
+    const horizonFeeCharged = d.horizonFeeStroops / 10_000_000
+    ctx.payment = await persistCheckpointMerged(ctx.paymentId, {
+      status: d.stage === "db_finalized" ? "settled_to_merchant" : "settlement_pending",
+      a2uTxid,
+      horizonSuccessFlag: true,
+      horizonFeeCharged,
+      piCompletionPending: d.stage === "horizon_confirmed",
+      piCompleted: d.stage === "pi_completed" || d.stage === "db_finalized",
+      requiresDbReconciliation: d.stage === "pi_completed",
+      dbRecorded: d.stage === "db_finalized",
+    })
+    return { ok: true, durableOutcome: durableHorizon.outcome, horizonFeeCharged }
+  }
+
+  return { ok: false, error: "Recovered Horizon durable stage invalid" }
+}
+
 
 /**
  * STAGE 3: Call Pi /complete - TYPED DISCRIMINATED UNION
