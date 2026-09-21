@@ -9,6 +9,7 @@ const a2u=read('lib/a2u-executor.ts')
 const refund=read('lib/refund-executor.ts')
 const refundSubmit=read('lib/refund-blockchain-submit.ts')
 const db=read('lib/db.ts')
+const locked=read('lib/a2u-locked-executor.ts')
 
 const settlementPoints=[
 'u2a_verified_before_pi_complete','pi_complete_before_u2a_completed','u2a_completed_before_redis_projection',
@@ -41,6 +42,14 @@ assert.ok(recovery.includes("pi.status.developer_completed!==true"))
 assert.ok(recovery.includes("dbDone=d.stage==='db_finalized'"))
 assert.ok(recovery.includes("status:dbDone?'settled_to_merchant'"))
 assert.ok(db.includes("stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')"))
+assert.ok(locked.includes('async function verifyStage1OnlyDurableAuthority'))
+assert.ok(locked.includes('durable.checkpoint.stage !== "a2u_created"'))
+assert.ok(locked.includes('Settlement Stage1 durable authority could not be verified'))
+assert.ok(locked.includes('[F2-7 STAGE1 DURABLE RESUME]'))
+const stage1Fn=locked.slice(locked.indexOf('export function isStage1OnlySettlementDispatchCandidate'),locked.indexOf('async function verifyStage1OnlyDurableAuthority'))
+assert.equal(stage1Fn.includes('isSettlementReconcileCandidate('),false)
+assert.ok(stage1Fn.includes('payment.a2uPaymentId'))
+assert.ok(stage1Fn.includes('payment.a2uPreparedTxHash === undefined'))
 assert.ok(a2u.includes('[F2-7 SAME-SHA REDIS LOSS] settlement terminal projection deleted'))
 assert.ok(refund.includes('[F2-7 SAME-SHA REDIS LOSS] refund terminal projection deleted'))
 assert.equal(recovery.includes('F2_6_CAS_RUNTIME_CERT_ONCE_KEY'),false)
@@ -58,5 +67,6 @@ console.log(JSON.stringify({
   injectorExternalFinancialSideEffects:0,
   f26TemporaryHookRemoved:true,
   terminalDbFinalizedRediscovery:true,
-  u2aServerCompletionRecovery:true
+  u2aServerCompletionRecovery:true,
+  stage1OnlyDurableResume:true
 },null,2))

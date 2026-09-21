@@ -108,7 +108,49 @@ function isSettlementReconcileCandidate(payment: Payment, now: number): boolean 
 }
 
 export function isStage1OnlySettlementDispatchCandidate(payment: Payment, now: number): boolean {
-  return payment.status === "paid_to_app" && payment.settlementFailureState === "none" && typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim() && typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim() !== "" && payment.a2uFromAddress === payment.a2uFromAddress.trim() && typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim() !== "" && payment.a2uToAddress === payment.a2uToAddress.trim() && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount > 0 && payment.merchantAmount === payment.customerAmount && isSettlementReconcileCandidate({ ...payment, a2uPaymentId: undefined, a2uFromAddress: undefined, a2uToAddress: undefined, merchantAmount: undefined, settlementFailureState: "reconciling" }, now)
+  const dispatchAt = typeof payment.settlementDispatchRequestedAt === "string" && payment.settlementDispatchRequestedAt.trim() !== "" && payment.settlementDispatchRequestedAt === payment.settlementDispatchRequestedAt.trim() ? Date.parse(payment.settlementDispatchRequestedAt) : NaN
+  const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
+  const lastAttemptAt = typeof payment.lastAttemptAt === "string" && payment.lastAttemptAt.trim() !== "" && payment.lastAttemptAt === payment.lastAttemptAt.trim() ? Date.parse(payment.lastAttemptAt) : NaN
+  const u2aTxid = payment.u2aTxid
+  return payment.status === "paid_to_app" && payment.settlementFailureState === "none" &&
+    Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && payment.settlementDispatchRequestedAt === payment.paidAt && dispatchAt <= now &&
+    Number.isFinite(lastAttemptAt) && lastAttemptAt >= paidAt && lastAttemptAt <= now &&
+    typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 &&
+    typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount === payment.amount &&
+    typeof payment.piPaymentId === "string" && payment.piPaymentId.trim() !== "" && payment.piPaymentId === payment.piPaymentId.trim() &&
+    typeof payment.merchantId === "string" && payment.merchantId.trim() !== "" && payment.merchantId === payment.merchantId.trim() &&
+    typeof payment.merchantUid === "string" && payment.merchantUid.trim() !== "" && payment.merchantUid === payment.merchantUid.trim() &&
+    hasRecoverableMerchantProjectionAuthority(payment) &&
+    typeof payment.payerUid === "string" && payment.payerUid.trim() !== "" && payment.payerUid === payment.payerUid.trim() && payment.payerUidSource === "verified_u2a" &&
+    typeof payment.payerUidCapturedAt === "string" && payment.payerUidCapturedAt.trim() !== "" && payment.payerUidCapturedAt === payment.payerUidCapturedAt.trim() && Number.isFinite(Date.parse(payment.payerUidCapturedAt)) && Date.parse(payment.payerUidCapturedAt) <= now &&
+    typeof u2aTxid === "string" && /^[0-9a-f]{64}$/.test(u2aTxid) && u2aTxid === u2aTxid.trim() &&
+    typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim() &&
+    typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim() !== "" && payment.a2uFromAddress === payment.a2uFromAddress.trim() &&
+    typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim() !== "" && payment.a2uToAddress === payment.a2uToAddress.trim() &&
+    typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === payment.customerAmount &&
+    payment.a2uTxid === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined &&
+    payment.horizonFeeCharged === undefined && payment.appNetImpact === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined &&
+    payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundProof === undefined &&
+    (payment.refundStatus === undefined || payment.refundStatus === "not_started") && (payment.payerRefundEligible === undefined || payment.payerRefundEligible === false) &&
+    (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) &&
+    (payment.piCompletionPending === undefined || payment.piCompletionPending === false) &&
+    (payment.piCompleted === undefined || payment.piCompleted === false) &&
+    (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false) &&
+    (payment.dbRecorded === undefined || payment.dbRecorded === false)
+}
+
+async function verifyStage1OnlyDurableAuthority(paymentId: string, payment: Payment): Promise<boolean> {
+  const durable = await getSettlementCheckpointAuthoritative(paymentId)
+  if (durable.outcome !== "FOUND" || durable.checkpoint.stage !== "a2u_created") return false
+  const d = durable.checkpoint
+  return payment.id === d.paymentId &&
+    payment.merchantId === d.merchantId && payment.merchantUid === d.merchantUid &&
+    payment.customerAmount === d.customerAmount && payment.merchantAmount === d.merchantAmount &&
+    payment.piPaymentId === d.u2aIdentifier && payment.u2aTxid === d.u2aTxid &&
+    payment.a2uPaymentId === d.a2uPaymentId && payment.a2uFromAddress === d.a2uFromAddress && payment.a2uToAddress === d.a2uToAddress &&
+    payment.a2uTxid === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined &&
+    payment.horizonSuccessFlag !== true && payment.piCompleted !== true && payment.dbRecorded !== true &&
+    payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundStatus !== "completed"
 }
 
 /**
@@ -247,8 +289,20 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
 
     if (params.recoveryOperation === "SETTLEMENT_DISPATCH") {
       const now = Date.now()
-      if (!(params.isRecovery === true && latestPayment.id === paymentId && (isSettlementDispatchCandidate(latestPayment, now) || isStage1OnlySettlementDispatchCandidate(latestPayment, now)))) {
+      const freshDispatch = isSettlementDispatchCandidate(latestPayment, now)
+      const stage1OnlyDispatch = isStage1OnlySettlementDispatchCandidate(latestPayment, now)
+      if (!(params.isRecovery === true && latestPayment.id === paymentId && (freshDispatch || stage1OnlyDispatch))) {
         return { ok: false, status: 409, error: "Settlement dispatch proof could not be verified" }
+      }
+      // F2-7 closure: a Stage1-only Redis projection is executable only when
+      // PostgreSQL independently proves the exact same immutable A2U identity
+      // at durable stage=a2u_created. This deliberately ignores stale retry
+      // bookkeeping while refusing any prepared/Horizon/Refund evidence.
+      if (stage1OnlyDispatch) {
+        if (!(await verifyStage1OnlyDurableAuthority(paymentId, latestPayment))) {
+          return { ok: false, status: 409, error: "Settlement Stage1 durable authority could not be verified" }
+        }
+        console.log("[F2-7 STAGE1 DURABLE RESUME]", { paymentId, a2uPaymentId: latestPayment.a2uPaymentId })
       }
     }
 
