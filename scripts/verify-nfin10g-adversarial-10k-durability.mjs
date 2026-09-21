@@ -4,7 +4,7 @@ const db=read("lib/db.ts"),route=read("app/api/recovery/transient/route.ts"),exe
 const stages=["a2u_created","prepared","horizon_confirmed","pi_completed","db_finalized"];
 for(const s of stages)assert.ok(db.includes(s),`missing durable stage ${s}`);
 for(const x of ["recordSettlementA2UCreatedCheckpoint","recordSettlementPreparedCheckpoint","recordSettlementHorizonCheckpoint","recordSettlementPiCompletedCheckpoint","recordSettlementDbFinalizedCheckpoint","getSettlementCheckpointAuthoritative","listOutstandingSettlementCheckpointIds","verifySettlementRefundAuthorityExclusion"])assert.ok(db.includes(x),x);
-for(const x of ["repopulateDurableSettlementWork","listOutstandingSettlementCheckpointIds(200)","redis.set(`payment:${paymentId}`,encoded,{nx:true})","redis.sadd(\"flashpay:recovery:active-payments:v1\"","redis.zadd(\"flashpay:settlement:ready:v1\""])assert.ok(route.includes(x),x);
+for(const x of ["repopulateDurableSettlementWork","listOutstandingSettlementCheckpointIds(200)","redis.set(`payment:${paymentId}`,JSON.stringify(terminalProjection),{nx:true})","redis.sadd('flashpay:recovery:active-payments:v1'","redis.zadd('flashpay:settlement:ready:v1'"])assert.ok(route.includes(x),x);
 assert.ok(locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)"));
 assert.ok(recovery.includes("durable_authority_conflict"));
 assert.ok(refund.includes('authority.settlementActive'));
@@ -20,8 +20,8 @@ const crashWindows=[
 ["after-pi-complete-before-db",db.includes("recordSettlementPiCompletedCheckpoint")],
 ["after-db-commit-response-lost",db.includes("recordSettlementDbFinalizedCheckpoint")],
 ["redis-payment-lost",route.includes("getSettlementCheckpointAuthoritative(paymentId)")],
-["redis-active-index-lost",route.includes('redis.sadd("flashpay:recovery:active-payments:v1",paymentId)')],
-["redis-ready-index-lost",route.includes('redis.zadd("flashpay:settlement:ready:v1"')],
+["redis-active-index-lost",route.includes("redis.sadd('flashpay:recovery:active-payments:v1',paymentId)")],
+["redis-ready-index-lost",route.includes("redis.zadd('flashpay:settlement:ready:v1'")],
 ["settlement-refund-conflict",db.includes("Settlement and Refund durable authorities conflict")],
 ["authority-toctou",locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")],
 ];

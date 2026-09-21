@@ -1,6 +1,7 @@
 import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
+import { maybeInjectF27Fault } from "@/lib/f2-7-fault-injection"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint } from "@/lib/db"
 import type { Payment } from "@/lib/types"
@@ -147,6 +148,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment durability unavailable", code: "U2A_VERIFIED_DURABILITY_UNAVAILABLE" }, { status: 503 })
     }
     console.log("[F2-2 U2A DURABLE] verified", { paymentId: preFlashPaymentId, version: durableU2AVerified.version, outcome: durableU2AVerified.outcome })
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "u2a_verified_before_pi_complete", paymentId: preFlashPaymentId, merchantId: preMerchantId, merchantUid: preMerchantUid, amount: prePayment.amount, details: { piPaymentId, u2aTxid: canonicalTxid } })) {
+      return NextResponse.json({ error: "F2-7 intentional U2A verification interruption", code: "F2_7_U2A_VERIFIED_INTERRUPTION" }, { status: 503 })
+    }
 
     // If not developer_completed, call Pi /complete endpoint and refetch
     let finalPiPayment = piPayment
@@ -238,6 +242,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment completion authority mismatch" }, { status: 409 })
     }
 
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "pi_complete_before_u2a_completed", paymentId: preFlashPaymentId, merchantId: preMerchantId, merchantUid: preMerchantUid, amount: prePayment.amount, details: { piPaymentId, u2aTxid: canonicalTxid, developerCompleted: true } })) {
+      return NextResponse.json({ error: "F2-7 intentional Pi completion interruption", code: "F2_7_PI_COMPLETE_INTERRUPTION" }, { status: 503 })
+    }
+
     // F2-2 second crash boundary: once Pi reports developer_completed=true, record
     // that fact durably before touching the Redis payment projection or ready queue.
     const durableU2ACompleted = await recordSettlementU2ACompletedCheckpoint({
@@ -254,6 +262,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment completion durability unavailable", code: "U2A_COMPLETED_DURABILITY_UNAVAILABLE" }, { status: 503 })
     }
     console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "u2a_completed_before_redis_projection", paymentId: preFlashPaymentId, merchantId: preMerchantId, merchantUid: preMerchantUid, amount: prePayment.amount, details: { durableVersion: durableU2ACompleted.version } })) {
+      return NextResponse.json({ error: "F2-7 intentional durable U2A completion interruption", code: "F2_7_U2A_COMPLETED_INTERRUPTION" }, { status: 503 })
+    }
 
     console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
 

@@ -19,6 +19,8 @@ import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefund
 import { readPiWalletIntent } from "./pi-wallet-submit-lock"
 import { classifyRefundPreparedSequence, evaluateRefundPreparedHorizonBinding } from "./refund-blockchain-evidence"
 import { exactPositiveStroopsToStellarAmount, exactStroopAmountMatch, numberToExactPositiveStroops } from "./financial-amount-stroops"
+import { getDurableU2AIngressAuthoritative } from "./db"
+import { maybeInjectF27Fault, type F27RefundFaultPoint } from "./f2-7-fault-injection"
 
 export type RefundBlockchainSubmitResult =
   | { outcome: "CONFIRMED_TX"; txid: string }
@@ -39,6 +41,12 @@ type RefundPreparedSubmitXdrInput = {
   fromAddress: string
   toAddress: string
   amount: number
+}
+
+async function maybeInjectRefundSubmitFault(checkpoint: RefundCheckpoint, point: F27RefundFaultPoint, details?: Record<string, string | number | boolean | null>): Promise<boolean> {
+  const durable = await getDurableU2AIngressAuthoritative(checkpoint.paymentId)
+  if (durable.outcome !== "FOUND" || durable.checkpoint.completedAt === null || durable.checkpoint.payerUid !== checkpoint.payerUid || durable.checkpoint.customerAmount !== checkpoint.amount) return false
+  return maybeInjectF27Fault({ lane: "refund", point, paymentId: checkpoint.paymentId, merchantId: durable.checkpoint.merchantId, merchantUid: durable.checkpoint.merchantUid, amount: checkpoint.amount, details })
 }
 
 export function verifyRefundPreparedSubmitXdr(input: RefundPreparedSubmitXdrInput): { outcome: "VERIFIED_INTENT" | "BLOCKED"; reference: RefundPreparedSubmitXdrInput | null; moneyMovementProven: false; authorizesFinancialAction: false } {
@@ -130,8 +138,10 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     if (xdr.outcome !== "VERIFIED_INTENT") return blocked
     const transaction = TransactionBuilder.fromXDR(input.gate.prepared.envelopeXdr, "Pi Testnet")
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.gate.prepared.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.gate.prepared.preparedHash || transaction.sequence !== input.gate.prepared.preparedSequence || transaction.source !== input.payment.from_address) return blocked
+    if (await maybeInjectRefundSubmitFault(input.gate.prepared.checkpoint, "refund_prepared_before_horizon_submit", { refundPaymentId: input.payment.identifier, preparedHash: input.gate.prepared.preparedHash, replay: true })) return { outcome: "FAILED", code: "submit_failed", message: "F2-7 intentional prepared refund interruption" }
     const server = new Horizon.Server(HORIZON_URL)
     await server.submitTransaction(transaction)
+    if (await maybeInjectRefundSubmitFault(input.gate.prepared.checkpoint, "refund_horizon_success_before_tx_checkpoint", { refundPaymentId: input.payment.identifier, refundTxid: input.gate.prepared.preparedHash, replay: true })) return { outcome: "FAILED", code: "submit_failed", message: "F2-7 intentional post-Horizon refund interruption" }
     if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
       console.log("[P7 TEST] Refund post-replay-submit 0.10")
       return { outcome: "FAILED", code: "submit_failed", message: "P7 refund post-replay-submit test" }
@@ -205,10 +215,12 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
 
   const authorization = await authorizeRefundBlockchainSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence, "system")
   if (!authorization || authorization.authorizedNow !== true) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+  if (await maybeInjectRefundSubmitFault(input.checkpoint, "refund_prepared_before_horizon_submit", { refundPaymentId: input.payment.identifier, preparedHash })) return { outcome: "FAILED", code: "submit_failed", message: "F2-7 intentional prepared refund interruption" }
 
   try {
     const result = await server.submitTransaction(transaction)
     if (result.successful !== true || result.hash !== preparedHash) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+    if (await maybeInjectRefundSubmitFault(input.checkpoint, "refund_horizon_success_before_tx_checkpoint", { refundPaymentId: input.payment.identifier, refundTxid: result.hash })) return { outcome: "FAILED", code: "submit_failed", message: "F2-7 intentional post-Horizon refund interruption" }
     return { outcome: "CONFIRMED_TX", txid: result.hash }
   } catch (error) {
     try {

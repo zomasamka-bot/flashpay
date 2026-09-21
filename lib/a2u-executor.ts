@@ -34,6 +34,7 @@ import { reconcileIncompleteA2UPayment, isPiA2UPayment as isReconciledPiA2UPayme
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
+import { maybeInjectF27Fault } from "@/lib/f2-7-fault-injection"
 
 /**
  * Pi A2U Payment API Response - Strict type definition
@@ -271,6 +272,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
     // Discriminated union: ok: true includes a2uPaymentId
     a2uPaymentId = stageResult.data.a2uPaymentId
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "a2u_created_before_local_checkpoint", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { a2uPaymentId } })) {
+      return { ok: false, status: "settlement_pending", error: "F2-7 intentional A2U-create interruption" }
+    }
     ctx.payment.a2uPaymentId = a2uPaymentId
 
     // Persist Stage 1: a2uPaymentId immediately after creation (crash-safe merge)
@@ -301,6 +305,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       if (durableStage1.outcome !== "RECORDED" && durableStage1.outcome !== "REPLAYED") {
         console.error("[A2U Stage1] Durable checkpoint not proven:", durableStage1.outcome)
         return { ok: false, status: "settlement_pending", error: "A2U Stage1 durable checkpoint not proven" }
+      }
+      if (await maybeInjectF27Fault({ lane: "settlement", point: "a2u_checkpoint_before_prepared", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { a2uPaymentId } })) {
+        return { ok: false, status: "settlement_pending", error: "F2-7 intentional durable A2U checkpoint interruption" }
       }
       if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery===false && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
         console.log("[P7 TEST] Stage1-only interruption 0.14")
@@ -457,6 +464,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: piResult.error,
       }
     }
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "pi_complete_before_durable_checkpoint", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { a2uPaymentId, a2uTxid: txidFromHorizon } })) {
+      return { ok: false, status: "settlement_pending", error: "F2-7 intentional Pi-complete interruption" }
+    }
     // Persist Stage 3: piCompleted and timestamp after confirmed or already-completed Pi state (crash-safe merge)
     const stage3Updates = {
       piCompleted: true,
@@ -466,6 +476,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     const durablePi = await recordSettlementPiCompletedCheckpoint({paymentId:ctx.paymentId,a2uPaymentId,a2uTxid:txidFromHorizon})
     if(durablePi.outcome!=="RECORDED"&&durablePi.outcome!=="REPLAYED")
       return {ok:false,status:"settlement_pending",error:"Pi-completed durable checkpoint not proven"}
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "durable_pi_before_db", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { a2uPaymentId, a2uTxid: txidFromHorizon } })) {
+      return { ok: false, status: "settlement_pending", error: "F2-7 intentional durable Pi interruption" }
+    }
     // Replace ctx.payment with fully merged record only after durable Pi finality is proven.
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage3Updates)
     console.log("[A2U Executor] ✓ Pi /complete and durable finality succeeded")
@@ -622,6 +635,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
 
     console.log("[A2U Executor] ✓ DB reconciliation verified - all canonical identifiers match, transactionId:", dbResult.transactionId)
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "db_commit_before_durable_finality", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { transactionId: dbResult.transactionId } })) {
+      return { ok: false, status: "settlement_pending", error: "F2-7 intentional post-DB interruption" }
+    }
     
     const durableDbFinality = await recordSettlementDbFinalizedCheckpoint({
       paymentId:ctx.paymentId,u2aIdentifier:ctx.payment.piPaymentId!,u2aTxid:ctx.payment.u2aTxid!,
@@ -632,6 +648,11 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     })
     if(durableDbFinality.outcome!=="RECORDED"&&durableDbFinality.outcome!=="REPLAYED")
       return {ok:false,status:"settlement_pending",error:"DB-finalized durable checkpoint not proven"}
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "db_finality_before_redis_final", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { durableDbFinality: true } })) {
+      const deleted = await redis.del(`payment:${ctx.paymentId}`)
+      console.warn("[F2-7 SAME-SHA REDIS LOSS] settlement terminal projection deleted", { paymentId: ctx.paymentId, deleted })
+      return { ok: false, status: "settlement_pending", error: "F2-7 intentional terminal Redis-loss interruption" }
+    }
 
     // Only NOW persist final markers after successful DB and durable-authority verification
     const stage4Updates = {
@@ -1057,6 +1078,10 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     if (!prepared.ok) return prepared
     const { transaction, preparedHash } = prepared
 
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "prepared_before_horizon_submit", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { preparedHash } })) {
+      return { ok: false, error: "F2-7 intentional prepared-before-Horizon interruption", userFacingStatus: "settlement_pending" }
+    }
+
     if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
       console.log("[A2U TEST] Stage2 prepared checkpoint fault point 0.11")
       return { ok: false, error: "Temporary Stage2 prepared checkpoint fault", userFacingStatus: "settlement_pending" }
@@ -1066,6 +1091,9 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)
     if (!moved.ok) return moved
     const txidFromHorizon = moved.txidFromHorizon
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "horizon_success_before_durable_checkpoint", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { a2uTxid: txidFromHorizon, preparedHash } })) {
+      return { ok: false, error: "F2-7 intentional post-Horizon interruption", userFacingStatus: "settlement_pending" }
+    }
     if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
       console.log("[A2U TEST] Stage2 post-submit fault point 0.12")
       return { ok: false, error: "Temporary Stage2 post-submit fault", userFacingStatus: "settlement_pending" }
@@ -1098,6 +1126,9 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     })
     if(durableHorizon.outcome!=="RECORDED"&&durableHorizon.outcome!=="REPLAYED")
       return {ok:false,error:"Horizon durable checkpoint not proven",userFacingStatus:"settlement_pending"}
+    if (await maybeInjectF27Fault({ lane: "settlement", point: "horizon_checkpoint_before_pi_complete", paymentId: ctx.paymentId, merchantId: ctx.payment.merchantId, merchantUid: ctx.merchantUid, amount: ctx.customerAmount, details: { a2uTxid: txidFromHorizon } })) {
+      return { ok: false, error: "F2-7 intentional durable Horizon interruption", userFacingStatus: "settlement_pending" }
+    }
     
     console.log("[A2U Stage2] ✓ Fee verified from Horizon:", horizonFeeCharged)
     // Return txid and fee for persisting in executeA2U

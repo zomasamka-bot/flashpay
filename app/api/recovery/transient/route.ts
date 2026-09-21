@@ -11,6 +11,7 @@ import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 import { serverConfig } from "@/lib/server-config"
+import { maybeInjectF27Fault } from "@/lib/f2-7-fault-injection"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -39,7 +40,6 @@ const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d
 const F1_FINAL_LEGACY_CLOSURE_ONCE_KEY = "flashpay:repair:f1-final-legacy-closure:v1:0594908"
 const F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY = "flashpay:diagnostic:f1-orphan-forensic-proof:v1:d1a0ae"
 const F1_FINAL_ACCOUNTING_CERT_ONCE_KEY = "flashpay:diagnostic:f1-final-accounting-cert:v1:d2823a"
-const F2_6_CAS_RUNTIME_CERT_ONCE_KEY = "flashpay:diagnostic:f2-6-cas-runtime-cert:v1:3a16a8"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -84,35 +84,52 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
     if(durable.outcome==='ABSENT')continue // It may have advanced to the existing Stage1+ recovery lane concurrently.
     if(durable.outcome!=='FOUND')throw new Error(durable.error)
 
-    // Crash window closure: Pi /complete may have succeeded while the HTTP response
-    // or the following PostgreSQL completion write was lost. Reconcile by GET only;
-    // never call Pi /complete here and never create/submit blockchain movement.
+    // F2-7 closes both U2A crash windows from durable exact identity. The worker
+    // may call Pi /complete only after GET-proving the exact durable payment/txid,
+    // then it refetches and trusts only Pi's resulting developer_completed state.
     if(durable.checkpoint.completedAt===null){
+      const ingress=durable.checkpoint
       if(!serverConfig.piApiKey){result.piReadUncertain++;continue}
-      let piResponse:Response
-      try{
-        piResponse=await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(durable.checkpoint.u2aIdentifier)}`,{
-          method:'GET',headers:{Authorization:`Key ${serverConfig.piApiKey}`,Accept:'application/json'},cache:'no-store',redirect:'error',
-        })
-      }catch{result.piReadUncertain++;continue}
-      if(!piResponse.ok){result.piReadUncertain++;continue}
-      const dto=asRecord(await piResponse.json().catch(()=>null)),status=dto?asRecord(dto.status):null,transaction=dto?asRecord(dto.transaction):null,metadata=dto?asRecord(dto.metadata):null
-      const payerUid=dto&&typeof dto.user_uid==='string'&&dto.user_uid.trim()!==''&&dto.user_uid===dto.user_uid.trim()?dto.user_uid:''
-      if(!dto||dto.identifier!==durable.checkpoint.u2aIdentifier||dto.direction!=='user_to_app'||Number(dto.amount)!==durable.checkpoint.customerAmount||
-        metadata?.paymentId!==paymentId||transaction?.txid!==durable.checkpoint.u2aTxid||payerUid!==durable.checkpoint.payerUid||
-        status?.developer_approved!==true||status?.transaction_verified!==true||status?.cancelled===true||status?.user_cancelled===true){
-        result.conflicts++;continue
+      const readExactPiU2A=async():Promise<{dto:Record<string,unknown>;status:Record<string,unknown>;transaction:Record<string,unknown>}|null>=>{
+        let response:Response
+        try{
+          response=await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(ingress.u2aIdentifier)}`,{
+            method:'GET',headers:{Authorization:`Key ${serverConfig.piApiKey}`,Accept:'application/json'},cache:'no-store',redirect:'error',
+          })
+        }catch{return null}
+        if(!response.ok)return null
+        const dto=asRecord(await response.json().catch(()=>null)),status=dto?asRecord(dto.status):null,transaction=dto?asRecord(dto.transaction):null,metadata=dto?asRecord(dto.metadata):null
+        const payerUid=dto&&typeof dto.user_uid==='string'&&dto.user_uid.trim()!==''&&dto.user_uid===dto.user_uid.trim()?dto.user_uid:''
+        if(!dto||!status||!transaction||dto.identifier!==ingress.u2aIdentifier||dto.direction!=='user_to_app'||Number(dto.amount)!==ingress.customerAmount||
+          metadata?.paymentId!==paymentId||transaction.txid!==ingress.u2aTxid||transaction.verified!==true||payerUid!==ingress.payerUid||
+          status.developer_approved!==true||status.transaction_verified!==true||status.cancelled===true||status.user_cancelled===true)return null
+        return{dto,status,transaction}
       }
-      if(status?.developer_completed===true){
-        const completion=await recordSettlementU2ACompletedCheckpoint({
-          paymentId,merchantId:durable.checkpoint.merchantId,merchantUid:durable.checkpoint.merchantUid,customerAmount:durable.checkpoint.customerAmount,
-          u2aIdentifier:durable.checkpoint.u2aIdentifier,u2aTxid:durable.checkpoint.u2aTxid,payerUid:durable.checkpoint.payerUid,
-        })
-        if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){result.conflicts++;continue}
-        result.piCompletionReconciled++
-        durable=await getDurableU2AIngressAuthoritative(paymentId)
-        if(durable.outcome!=='FOUND'||durable.checkpoint.completedAt===null){result.conflicts++;continue}
+      let pi=await readExactPiU2A()
+      if(!pi){result.piReadUncertain++;continue}
+      if(pi.status.developer_completed!==true){
+        if(await maybeInjectF27Fault({lane:'settlement',point:'u2a_verified_before_pi_complete',paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,amount:ingress.customerAmount,details:{recovery:true}})){
+          result.verifiedOnly++;continue
+        }
+        try{
+          await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(ingress.u2aIdentifier)}/complete`,{
+            method:'POST',headers:{Authorization:`Key ${serverConfig.piApiKey}`,'Content-Type':'application/json'},body:JSON.stringify({txid:ingress.u2aTxid}),cache:'no-store',redirect:'error',
+          })
+        }catch{}
+        // A lost/non-2xx response is never treated as truth; refetch exact Pi state.
+        pi=await readExactPiU2A()
+        if(!pi||pi.status.developer_completed!==true){result.piReadUncertain++;continue}
       }
+      if(await maybeInjectF27Fault({lane:'settlement',point:'pi_complete_before_u2a_completed',paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,amount:ingress.customerAmount,details:{recovery:true,developerCompleted:true}}))continue
+      const completion=await recordSettlementU2ACompletedCheckpoint({
+        paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,customerAmount:ingress.customerAmount,
+        u2aIdentifier:ingress.u2aIdentifier,u2aTxid:ingress.u2aTxid,payerUid:ingress.payerUid,
+      })
+      if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){result.conflicts++;continue}
+      if(await maybeInjectF27Fault({lane:'settlement',point:'u2a_completed_before_redis_projection',paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,amount:ingress.customerAmount,details:{recovery:true,durableVersion:completion.version}}))continue
+      result.piCompletionReconciled++
+      durable=await getDurableU2AIngressAuthoritative(paymentId)
+      if(durable.outcome!=='FOUND'||durable.checkpoint.completedAt===null){result.conflicts++;continue}
     }
 
     const d=durable.checkpoint
@@ -203,24 +220,43 @@ async function repopulateDurableSettlementWork():Promise<{repopulated:number;con
   let repopulated=0,conflicts=0
   for(const paymentId of page.paymentIds){
     const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
-    if(authority.outcome!=='CLEAR'){conflicts++;continue}
-    const existing=await redis.get(`payment:${paymentId}`)
-    if(existing){await redis.sadd("flashpay:recovery:active-payments:v1",paymentId);continue}
+    if(authority.outcome!=='CLEAR'||authority.refundActive){conflicts++;continue}
     const durable=await getSettlementCheckpointAuthoritative(paymentId)
     if(durable.outcome!=='FOUND')throw new Error('Durable Settlement projection unavailable')
-    const d=durable.checkpoint,moved=d.stage==='horizon_confirmed'||d.stage==='pi_completed',piDone=d.stage==='pi_completed',prepared=d.stage!=='a2u_created'
-    const projection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:'',status:moved||prepared?'settlement_pending':'paid_to_app',createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:'none',appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone,dbRecorded:false}:{})}
-    const encoded=JSON.stringify(projection)
-    const created=await redis.set(`payment:${paymentId}`,encoded,{nx:true})
+    const d=durable.checkpoint
+    const dbDone=d.stage==='db_finalized'
+    const moved=d.stage==='horizon_confirmed'||d.stage==='pi_completed'||dbDone
+    const piDone=d.stage==='pi_completed'||dbDone
+    const prepared=d.stage!=='a2u_created'
+    const terminalProjection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:'',status:dbDone?'settled_to_merchant':moved||prepared?'settlement_pending':'paid_to_app',createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:'none',appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:false,piCompleted:true,requiresDbReconciliation:!dbDone,dbRecorded:dbDone}:{})}
+    const rawExisting=await redis.get(`payment:${paymentId}`)
+    const existing=parsePayment(rawExisting)
+    if(dbDone){
+      if(existing){
+        if(existing.id!==d.paymentId||existing.merchantId!==d.merchantId||existing.merchantUid!==d.merchantUid||existing.piPaymentId!==d.u2aIdentifier||existing.u2aTxid!==d.u2aTxid||existing.a2uPaymentId!==d.a2uPaymentId||existing.a2uTxid!==d.a2uTxid||existing.refundPaymentId!==undefined||existing.refundTxid!==undefined){conflicts++;continue}
+        if(existing.status!=='settled_to_merchant'||existing.dbRecorded!==true||existing.requiresDbReconciliation===true){
+          const next:Payment={...existing,...terminalProjection,accessToken:existing.accessToken,createdAt:existing.createdAt,redisProjectionVersion:existing.redisProjectionVersion,settledAt:existing.settledAt??new Date().toISOString()}
+          const cas=await compareAndSwapPaymentProjection(paymentId,existing,next)
+          if(cas.outcome!=='UPDATED'&&!(cas.outcome==='CONFLICT'&&cas.current?.status==='settled_to_merchant'&&cas.current.dbRecorded===true)){conflicts++;continue}
+        }
+      }else{
+        const created=await redis.set(`payment:${paymentId}`,JSON.stringify({...terminalProjection,settledAt:new Date().toISOString()}),{nx:true})
+        if(created==='OK')repopulated++
+        const readback=parsePayment(await redis.get(`payment:${paymentId}`))
+        if(!readback||readback.status!=='settled_to_merchant'||readback.dbRecorded!==true||readback.a2uTxid!==d.a2uTxid){conflicts++;continue}
+      }
+      await redis.eval<[string],number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1",['flashpay:recovery:active-payments:v1','flashpay:settlement:ready:v1'],[paymentId])
+      continue
+    }
+    if(existing){await redis.sadd('flashpay:recovery:active-payments:v1',paymentId);continue}
+    const created=await redis.set(`payment:${paymentId}`,JSON.stringify(terminalProjection),{nx:true})
     if(created==='OK')repopulated++
-    await redis.sadd("flashpay:recovery:active-payments:v1",paymentId)
-    const current=await redis.get(`payment:${paymentId}`)
-    const parsed=parsePayment(current)
+    await redis.sadd('flashpay:recovery:active-payments:v1',paymentId)
+    const parsed=parsePayment(await redis.get(`payment:${paymentId}`))
     if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==d.a2uPaymentId)throw new Error('Durable Settlement repopulation readback failed')
-    // Ready ordering is restored only for Stage1+ work; Redis assigns the next monotonic sequence.
     const seq=await redis.incr(READY_SEQUENCE_KEY)
     if(!Number.isSafeInteger(seq)||seq<1)throw new Error('Settlement ready sequence unavailable')
-    await redis.zadd("flashpay:settlement:ready:v1",{score:seq,member:paymentId})
+    await redis.zadd('flashpay:settlement:ready:v1',{score:seq,member:paymentId})
   }
   return{repopulated,conflicts}
 }
@@ -803,91 +839,6 @@ export async function POST(request: NextRequest) {
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
-
-  // F2-6 one-shot runtime certification: synthetic Redis-only stale-writer race.
-  // No payment is indexed, no Pi/Horizon/PostgreSQL call is made, and the
-  // synthetic payment key is always deleted before the certification completes.
-  try {
-    after(async () => {
-      let claimed = false
-      const syntheticPaymentId = randomUUID()
-      const syntheticKey = `payment:${syntheticPaymentId}`
-      try {
-        const claim = await redis.set(F2_6_CAS_RUNTIME_CERT_ONCE_KEY, "running", { nx: true, ex: 10 * 60 })
-        claimed = claim === "OK"
-        if (!claimed) return
-
-        const createdAt = new Date().toISOString()
-        const base: Payment = {
-          id: syntheticPaymentId,
-          merchantId: "f2-6-runtime-cert",
-          merchantUid: "f2-6-runtime-cert",
-          accessToken: "",
-          redisProjectionVersion: 1,
-          amount: 0.0000001,
-          note: "base",
-          status: "pending",
-          createdAt,
-        }
-        const created = await redis.set(syntheticKey, JSON.stringify(base), { nx: true, ex: 5 * 60 })
-        if (created !== "OK") throw new Error("synthetic projection create failed")
-
-        const writerA: Payment = { ...base, note: "writer-a" }
-        const writerB: Payment = { ...base, note: "writer-b" }
-        const [a, b] = await Promise.all([
-          compareAndSwapPaymentProjection(syntheticPaymentId, base, writerA),
-          compareAndSwapPaymentProjection(syntheticPaymentId, base, writerB),
-        ])
-        const outcomes = [a.outcome, b.outcome]
-        const updatedCount = outcomes.filter((value) => value === "UPDATED").length
-        const conflictCount = outcomes.filter((value) => value === "CONFLICT").length
-        if (updatedCount !== 1 || conflictCount !== 1) throw new Error(`unexpected concurrent CAS outcomes: ${outcomes.join(",")}`)
-
-        const winnerRaw = await redis.get(syntheticKey)
-        const winner = parsePayment(winnerRaw)
-        if (!winner || winner.id !== syntheticPaymentId || winner.redisProjectionVersion !== 2 || (winner.note !== "writer-a" && winner.note !== "writer-b")) {
-          throw new Error("concurrent CAS winner readback invalid")
-        }
-        const winnerNote = winner.note
-
-        // The stale version-1 writer must still lose after the winner committed.
-        const staleAttempt = await compareAndSwapPaymentProjection(syntheticPaymentId, base, { ...base, note: "stale-writer" })
-        if (staleAttempt.outcome !== "CONFLICT") throw new Error(`stale writer was not fenced: ${staleAttempt.outcome}`)
-        const afterStale = parsePayment(await redis.get(syntheticKey))
-        if (!afterStale || afterStale.redisProjectionVersion !== 2 || afterStale.note !== winnerNote) throw new Error("stale writer changed projection")
-
-        // A writer holding the current version may advance exactly once.
-        const currentAdvance = await compareAndSwapPaymentProjection(syntheticPaymentId, afterStale, { ...afterStale, note: "current-writer" })
-        if (currentAdvance.outcome !== "UPDATED" || currentAdvance.payment.redisProjectionVersion !== 3 || currentAdvance.payment.note !== "current-writer") {
-          throw new Error("current writer did not advance fence")
-        }
-        const final = parsePayment(await redis.get(syntheticKey))
-        if (!final || final.redisProjectionVersion !== 3 || final.note !== "current-writer") throw new Error("final CAS readback invalid")
-
-        const deleted = await redis.del(syntheticKey)
-        if (deleted !== 1) throw new Error("synthetic projection cleanup failed")
-        console.log("[F2-6 CAS RUNTIME CERT]", {
-          verdict: "FULL_PASS",
-          synthetic: true,
-          financialMutation: false,
-          piCall: false,
-          horizonCall: false,
-          postgresCall: false,
-          concurrentUpdated: updatedCount,
-          concurrentConflicts: conflictCount,
-          staleWriterOutcome: staleAttempt.outcome,
-          winnerVersion: 2,
-          finalVersion: final.redisProjectionVersion,
-          syntheticKeyDeleted: true,
-        })
-        await redis.set(F2_6_CAS_RUNTIME_CERT_ONCE_KEY, "done", { ex: 7 * 24 * 60 * 60 })
-      } catch (error) {
-        try { await redis.del(syntheticKey) } catch {}
-        if (claimed) { try { await redis.del(F2_6_CAS_RUNTIME_CERT_ONCE_KEY) } catch {} }
-        console.error("[F2-6 CAS RUNTIME CERT] failed", error instanceof Error ? error.message : String(error))
-      }
-    })
-  } catch {}
 
   // F1D2 temporary certification hook: after this already-secret-authenticated wake,
   // run the SELECT-only balance-integrity proof once and emit aggregate evidence to Vercel logs.

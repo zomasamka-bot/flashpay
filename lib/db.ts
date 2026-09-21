@@ -964,17 +964,17 @@ export async function listOutstandingSettlementCheckpointIds(limit:number):Promi
       const has=c.last_updated_at!=null&&typeof c.last_payment_id==='string'&&c.last_payment_id.length>0
       let rows=has
         ? await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
-            WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
+            WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')
               AND (updated_at,payment_id)>(${c.last_updated_at},${c.last_payment_id})
             ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
         : await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
-            WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
+            WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')
             ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
       let wrapped=false
       if(rows.length===0&&has){
         wrapped=true
         rows=await tx`SELECT payment_id,updated_at FROM settlement_checkpoints
-          WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')
+          WHERE stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')
           ORDER BY updated_at ASC,payment_id ASC LIMIT ${limit}`
       }
       if(rows.length===0){
@@ -1014,7 +1014,7 @@ export async function readSettlementRefundAuthority(paymentId:string):Promise<Se
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
       SELECT
-        EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed')) AS settlement_active,
+        EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')) AS settlement_active,
         EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${paymentId} AND status<>'manual_review_required') AS refund_active
     `
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Cross-authority durable read invalid'}

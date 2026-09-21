@@ -32,7 +32,8 @@
     "certify:nfinx1-prod-schema-repair": "node scripts/verify-nfinx1-production-schema-repair.mjs",
     "certify:financial-lock-renewal": "node scripts/verify-nfin-lock-lease-renewal.mjs",
     "certify:refund-exact-stroops": "node --experimental-strip-types scripts/verify-refund-exact-stroop-authority.mjs",
-    "certify:lease-loss-adversarial": "node scripts/verify-financial-lease-loss-adversarial-safety.mjs"
+    "certify:lease-loss-adversarial": "node scripts/verify-financial-lease-loss-adversarial-safety.mjs",
+    "certify:f2-7": "node scripts/verify-f2-7-live-fault-harness.mjs"
   },
   "overrides": {
     "react": "^19",

@@ -29,6 +29,9 @@ function requireSecret(name: string, value: string | undefined): string {
 }
 
 export const serverConfig = {
+  // Vercel environment; used only by tightly gated server-side certification hooks.
+  vercelEnv: process.env.VERCEL_ENV || "",
+
   // Pi Network API key — used by approve and complete webhook endpoints
   piApiKey: requireSecret("PI_API_KEY", process.env.PI_API_KEY),
 
