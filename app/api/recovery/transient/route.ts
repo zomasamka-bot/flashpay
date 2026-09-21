@@ -5,6 +5,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass, runAutomaticRefundPreparationStep, runAutomaticRefundFinalizationStep } from "@/lib/refund-auto-orchestrator"
+import { logF27RefundCheckpointDiagnostic } from "@/lib/refund-checkpoint-store"
 import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, listRecoverableU2AIngressCheckpointIds, getDurableU2AIngressAuthoritative, recordSettlementU2ACompletedCheckpoint, verifySettlementRefundAuthorityExclusion, repairF1LegacyCompletedCanonicalReceipts } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
@@ -2454,6 +2455,8 @@ export async function POST(request: NextRequest) {
 
   if (!await drainLease.renew()) return NextResponse.json({ error: "Transient drain lease ownership lost" }, { status: 503 })
   console.log("[P7J5 LEASE] renewed before refund drain")
+
+  await logF27RefundCheckpointDiagnostic("db04df04-0297-4242-9bbd-cd25cd7c40c6", "5cbfd33b-3eb7-474d-afaa-7f4711919bdd")
 
   let refundPass: Awaited<ReturnType<typeof runAutomaticRefundPass>>
   if (refundAccountingReady === null) refundAccountingReady = (await query("SELECT 1 FROM refund_accounting_records LIMIT 0")) !== null

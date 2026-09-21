@@ -3,6 +3,7 @@ import fs from 'node:fs'
 
 const read=(p)=>fs.readFileSync(p,'utf8')
 const helper=read('lib/f2-7-fault-injection.ts')
+const transient=read('app/api/recovery/transient/route.ts')
 const complete=read('app/api/pi/complete/route.ts')
 const recovery=read('app/api/recovery/transient/route.ts')
 const a2u=read('lib/a2u-executor.ts')
@@ -70,6 +71,11 @@ assert.equal(refundAuto.includes('\"f2_7_interruption\"'),true,'F2-7 interruptio
 assert.equal(refundCheckpoint.includes("last_error_code='automatic_refund_blocked'"),true,'legacy F2-7 deferral error-code fence')
 assert.equal(refundCheckpoint.includes("last_error_message='f2_7_interruption'"),true,'legacy F2-7 deferral marker fence')
 assert.equal(refundCheckpoint.includes("updated_at<=NOW()-INTERVAL '60 seconds'"),true,'legacy F2-7 deferral minimum age')
+
+assert.equal(refundCheckpoint.includes("export async function logF27RefundCheckpointDiagnostic"),true,'F2-7 refund diagnostic is explicit read-only helper')
+assert.equal(refundCheckpoint.includes("WHERE refund_id=$1 OR payment_id=$2"),true,'F2-7 refund diagnostic targets exact existing identities')
+assert.equal(refundCheckpoint.includes("[F2-7 REFUND CHECKPOINT DIAGNOSTIC]"),true,'F2-7 refund diagnostic marker')
+assert.equal(transient.includes('logF27RefundCheckpointDiagnostic("db04df04-0297-4242-9bbd-cd25cd7c40c6", "5cbfd33b-3eb7-474d-afaa-7f4711919bdd")'),true,'F2-7 refund diagnostic targets certification refund only')
 console.log(JSON.stringify({
   certification:'PASS',
   gate:'F2-7-LIVE-FAULT-HARNESS-CODE-READINESS',
