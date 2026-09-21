@@ -158,7 +158,9 @@ local latest=redis.call('GET',KEYS[1]); if not latest then return 0 end
 local ok,current=pcall(cjson.decode,latest); if not ok or type(current)~='table' then return 0 end
 if current.id~=ARGV[1] or current.payerUidSource~='verified_u2a' or current.payerUid~=ARGV[2] then return 0 end
 if current.payerUsername~=nil and current.payerUsername~=ARGV[3] then return -1 end
-current.payerUsername=ARGV[3]
+local projectionVersion=current.redisProjectionVersion; if projectionVersion==nil then projectionVersion=0 end
+if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return 0 end
+current.payerUsername=ARGV[3]; current.redisProjectionVersion=projectionVersion+1
 redis.call('SET',KEYS[1],cjson.encode(current)); return 1
 `, [`payment:${id}`], [id, verifiedPayer.uid, username])
 

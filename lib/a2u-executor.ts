@@ -33,6 +33,7 @@ import type { Payment } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment as isReconciledPiA2UPayment } from "@/lib/pi-reconciliation"
 import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
+import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 
 /**
  * Pi A2U Payment API Response - Strict type definition
@@ -1302,7 +1303,8 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
  */
 export async function persistCheckpointMerged(
   paymentId: string,
-  updates: Partial<Payment>
+  updates: Partial<Payment>,
+  casAttempt = 0,
 ): Promise<Payment> {
   if (!isRedisConfigured) {
     const msg = "[A2U Checkpoint] Redis not configured - cannot persist checkpoint"
@@ -1454,20 +1456,30 @@ export async function persistCheckpointMerged(
     if (updates.refundFailureCode !== undefined) merged.refundFailureCode = updates.refundFailureCode
     if (updates.refundProof !== undefined) merged.refundProof = updates.refundProof
 
-    // Persist merged record - if this fails, throw immediately to stop workflow
-    console.log("[A2U Checkpoint] Persisting strictly monotonic checkpoint to Redis")
-    await redis.set(`payment:${paymentId}`, JSON.stringify(merged))
-    console.log("[A2U Checkpoint] ✓ Strictly monotonic checkpoint persisted successfully")
+    // F2-6: fence the projection. A stale GET->merge writer may never overwrite
+    // a newer Payment projection. On a benign race, re-read and re-merge a
+    // bounded number of times; any uncertainty remains fail-closed.
+    console.log("[A2U Checkpoint] Persisting fenced monotonic checkpoint to Redis")
+    const cas = await compareAndSwapPaymentProjection(paymentId, latest, merged)
+    if (cas.outcome === "CONFLICT" && casAttempt < 4) {
+      console.warn("[F2-6 REDIS CAS] projection advanced concurrently; retrying merge", { paymentId, casAttempt: casAttempt + 1 })
+      return persistCheckpointMerged(paymentId, updates, casAttempt + 1)
+    }
+    if (cas.outcome !== "UPDATED") {
+      throw new Error(`[F2-6 REDIS CAS] Payment projection write blocked: ${cas.outcome}`)
+    }
+    const persisted = cas.payment
+    console.log("[A2U Checkpoint] ✓ Fenced monotonic checkpoint persisted", { paymentId, redisProjectionVersion: persisted.redisProjectionVersion })
 
     try {
-      if (isPaymentFinal(merged) || (merged.status === "paid_to_app" && merged.settlementFailureState === "held" && merged.refundStatus === "manual_review_required")) {
+      if (isPaymentFinal(persisted) || (persisted.status === "paid_to_app" && persisted.settlementFailureState === "held" && persisted.refundStatus === "manual_review_required")) {
         await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [paymentId])
       }
     } catch (error) {
       console.warn("[A2U Checkpoint] Active recovery index cleanup failed", error)
     }
 
-    return merged
+    return persisted
   } catch (error) {
     const msg = `[A2U Checkpoint] CRITICAL FAILURE: Checkpoint persistence failed - workflow stopped immediately: ${error instanceof Error ? error.message : String(error)}`
     console.error(msg)

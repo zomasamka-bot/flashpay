@@ -26,6 +26,7 @@ import { serverConfig } from './server-config'
 import { getDurableU2AIngressAuthoritative, query, readSettlementRefundAuthority } from './db'
 import { recordRefundAccounting } from './refund-accounting'
 import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, acquirePiWalletExistingIntentSubmitLock, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
+import { compareAndSwapPaymentProjection } from './payment-projection-cas'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission' | 'found'; refundId: string; paymentId: string; amount: number; refundPaymentId?: string }
@@ -121,6 +122,7 @@ async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promis
     merchantId: durable.merchantId,
     merchantUid: durable.merchantUid,
     accessToken: '',
+    redisProjectionVersion: 1,
     amount: durable.customerAmount,
     customerAmount: durable.customerAmount,
     note: '',
@@ -397,30 +399,6 @@ export async function executeRefundAccounting(refundId: string): Promise<RefundE
   const refundPaymentId = checkpoint.refundPaymentId
   const refundTxid = checkpoint.refundTxid
 
-  // F2-5 certification hook: one-shot Redis projection loss after the Refund
-  // blockchain identity is already durable. This never mutates PostgreSQL, Pi,
-  // Horizon, or refund identifiers; it only forces the normal durable rebuild
-  // gate below to prove that Redis is a reconstructable projection.
-  if (process.env.VERCEL_ENV === 'production' && checkpoint.amount === 0.1) {
-    const durableIngress = await getDurableU2AIngressAuthoritative(checkpoint.paymentId)
-    if (durableIngress.outcome === 'FOUND' && durableIngress.checkpoint.merchantId === 'hazemaboria') {
-      const hookKey = 'flashpay:f2-5:refund-redis-loss-proof:v1'
-      const armed = await redis.set(hookKey, `${checkpoint.paymentId}:${refundId}`, { nx: true, ex: 60 * 60 * 24 })
-      if (armed === 'OK') {
-        await redis.del(`payment:${checkpoint.paymentId}`)
-        console.warn('[F2-5 FAULT INJECTION] REDIS_PAYMENT_PROJECTION_DELETED', {
-          paymentId: checkpoint.paymentId,
-          refundId,
-          refundPaymentId,
-          refundTxid,
-          durableRefundStage: checkpoint.stage,
-          financialMutation: false,
-          blockchainMovement: false,
-        })
-      }
-    }
-  }
-
   const loadedPayment = await loadRefundPaymentProjection(checkpoint)
   if (loadedPayment.outcome !== 'FOUND') return { outcome: 'blocked', reason: loadedPayment.reason }
   const payment = loadedPayment.payment
@@ -511,13 +489,10 @@ export async function executeRefundFinalProjection(refundId: string): Promise<Re
     return finalized ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId } : { outcome: 'blocked', reason: 'projection_finality_uncertain' }
   }
   if (payment.status !== 'refund_pending' || payment.refundStatus !== 'submitted' || payment.settlementFailureState !== 'refund_pending' || payment.refundPaymentId !== checkpoint.refundPaymentId || payment.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'projection_conflict' }
-  const projected = { ...payment, status: 'refunded', refundStatus: 'completed', settlementFailureState: 'refunded' }
-  try { await redis.set(`payment:${checkpoint.paymentId}`, projected) } catch {
-    const readBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
-    if (!readBack || readBack.status !== 'refunded' || readBack.refundStatus !== 'completed' || readBack.settlementFailureState !== 'refunded' || readBack.refundPaymentId !== checkpoint.refundPaymentId || readBack.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'projection_uncertain' }
-  }
-  const readBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
-  if (!readBack || readBack.status !== 'refunded' || readBack.refundStatus !== 'completed' || readBack.settlementFailureState !== 'refunded' || readBack.refundPaymentId !== checkpoint.refundPaymentId || readBack.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: 'projection_uncertain' }
+  const projected: Payment = { ...payment, status: 'refunded', refundStatus: 'completed', settlementFailureState: 'refunded' }
+  const projectionCas = await compareAndSwapPaymentProjection(checkpoint.paymentId, payment, projected)
+  const readBack = projectionCas.outcome === 'UPDATED' ? projectionCas.payment : projectionCas.outcome === 'CONFLICT' ? projectionCas.current : null
+  if (!readBack || readBack.status !== 'refunded' || readBack.refundStatus !== 'completed' || readBack.settlementFailureState !== 'refunded' || readBack.refundPaymentId !== checkpoint.refundPaymentId || readBack.refundTxid !== checkpoint.refundTxid) return { outcome: 'blocked', reason: projectionCas.outcome === 'CONFLICT' ? 'projection_conflict' : 'projection_uncertain' }
   const finalized = await finalizeRefundProjectionWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount)
   if (finalized) {
     try {
@@ -575,8 +550,10 @@ export async function executeRefundCompletion(refundId: string): Promise<RefundE
   }
   const confirmed = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId })
   if (confirmed.outcome !== 'FOUND' || !confirmed.payment || confirmed.payment.identifier !== refundPaymentId || confirmed.payment.status.cancelled || confirmed.payment.status.user_cancelled || confirmed.payment.transaction === null || confirmed.payment.transaction.txid !== refundTxid || !confirmed.payment.transaction.verified || !confirmed.payment.status.transaction_verified || confirmed.payment.status.developer_completed !== true) return { outcome: 'blocked', reason: 'completion_unverified' }
-  const updatedPayment = { ...payment, status: 'refund_pending', refundStatus: 'submitted', refundPaymentId, refundTxid, settlementFailureState: 'refund_pending' }
-  await redis.set(`payment:${payment.id}`, updatedPayment)
+  const updatedPayment: Payment = { ...payment, status: 'refund_pending', refundStatus: 'submitted', refundPaymentId, refundTxid, settlementFailureState: 'refund_pending' }
+  const projectionCas = await compareAndSwapPaymentProjection(payment.id, payment, updatedPayment)
+  const persistedPayment = projectionCas.outcome === 'UPDATED' ? projectionCas.payment : projectionCas.outcome === 'CONFLICT' ? projectionCas.current : null
+  if (!persistedPayment || persistedPayment.id !== payment.id || persistedPayment.status !== 'refund_pending' || persistedPayment.refundStatus !== 'submitted' || persistedPayment.settlementFailureState !== 'refund_pending' || persistedPayment.refundPaymentId !== refundPaymentId || persistedPayment.refundTxid !== refundTxid) return { outcome: 'blocked', reason: projectionCas.outcome === 'CONFLICT' ? 'projection_conflict' : 'projection_uncertain' }
   const advanced = await advanceRefundPaymentCheckpointWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, refundTxid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_checkpoint_updated', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid } })
   return advanced ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId } : { outcome: 'blocked', reason: 'checkpoint_conflict' }
 }

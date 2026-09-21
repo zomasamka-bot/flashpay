@@ -400,6 +400,9 @@ export async function POST(request: NextRequest) {
       if not latest then return 0 end
       local ok, current = pcall(cjson.decode, latest)
       if not ok or type(current) ~= 'table' then return 0 end
+      local projectionVersion=current.redisProjectionVersion
+      if projectionVersion==nil then projectionVersion=0 end
+      if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return 0 end
       local incoming = cjson.decode(ARGV[1])
       if current.id ~= incoming.id or current.amount ~= incoming.amount or current.customerAmount ~= nil and current.customerAmount ~= incoming.customerAmount or current.merchantId ~= incoming.merchantId or current.merchantUid ~= incoming.merchantUid or current.accessToken ~= incoming.accessToken or current.piPaymentId ~= nil and current.piPaymentId ~= incoming.piPaymentId or current.u2aTxid ~= nil and current.u2aTxid ~= incoming.u2aTxid or current.payerUid ~= nil and incoming.payerUid ~= nil and current.payerUid ~= incoming.payerUid then return 0 end
       local transitioningToPaidToApp = current.status == nil or current.status == 'pending'
@@ -413,6 +416,7 @@ export async function POST(request: NextRequest) {
       if incoming.payerUid ~= nil then current.payerUid = incoming.payerUid; current.payerUidSource = incoming.payerUidSource; if current.payerUidCapturedAt == nil then current.payerUidCapturedAt = incoming.payerUidCapturedAt end end
       local immediateDrainKickOwned = 0
       if transitioningToPaidToApp then local seq=redis.call('GET',KEYS[4]); if not seq then local top=redis.call('ZRANGE',KEYS[3],-1,-1,'WITHSCORES'); if #top ~= 0 and #top ~= 2 then return 0 end; local base=0; if #top == 2 then base=tonumber(top[2]); if not base or base < 0 or base ~= math.floor(base) then return 0 end end; redis.call('SET',KEYS[4],base) end; local readySequence=redis.call('INCR',KEYS[4]); redis.call('SADD', KEYS[2], ARGV[2]); redis.call('ZADD', KEYS[3], 'NX', readySequence, ARGV[2]); local kick=redis.call('SET',KEYS[5],ARGV[3],'NX','EX',ARGV[4]); if kick then immediateDrainKickOwned=1 end end
+      current.redisProjectionVersion=projectionVersion+1
       redis.call('SET', KEYS[1], cjson.encode(current))
       if immediateDrainKickOwned == 1 then return 2 end
       return 1

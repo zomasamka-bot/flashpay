@@ -7,6 +7,7 @@ export interface Payment {
   merchantAddress?: string // Optional: Pi wallet address where payment is sent
   merchantUid?: string // CRITICAL: Pi user UID for A2U transfers (replaces wallet address)
   accessToken: string // CRITICAL: Needed to verify uid at time of A2U settlement
+  redisProjectionVersion?: number // F2-6 monotonic Redis projection fence; legacy missing value is version 0
   
   // Amount tracking - CRITICAL for fee accounting
   amount: number // Customer amount paid (U2A)

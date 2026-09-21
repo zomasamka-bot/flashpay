@@ -176,7 +176,7 @@ async function rebuildSettlementProjectionFromDurable(paymentId:string):Promise<
   const dbDone=d.stage==='db_finalized'
   const prepared=d.stage!=='a2u_created'
   const projected:Payment={
-    id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',
+    id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,
     amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,
     note:'',status:dbDone?'settled_to_merchant':moved||prepared?'settlement_pending':'paid_to_app',
     createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,
@@ -188,7 +188,7 @@ async function rebuildSettlementProjectionFromDurable(paymentId:string):Promise<
       requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{}),
     ...(dbDone?{settledAt:new Date().toISOString()}:{}),
   }
-  await redis.set(`payment:${paymentId}`,JSON.stringify(projected))
+  await redis.set(`payment:${paymentId}`,JSON.stringify(projected),{nx:true})
   const readback=await redis.get(`payment:${paymentId}`)
   const parsed=readback?(typeof readback==='string'?JSON.parse(readback):readback):null
   if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==d.a2uPaymentId||parsed.piPaymentId!==d.u2aIdentifier||parsed.u2aTxid!==d.u2aTxid)return null

@@ -130,6 +130,7 @@ export async function POST(request: NextRequest) {
       merchantId: trustedMerchantId, // Use verified username as source of truth
       merchantUid: verifiedMerchantUid, // Use the verified UID from Pi /v2/me
       accessToken: accessToken, // Store accessToken to verify uid again at A2U time
+      redisProjectionVersion: 1, // F2-6 initial projection fence
       amount: amount,
       note: note || "",
       status: "pending",

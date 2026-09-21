@@ -137,16 +137,19 @@ if current.status~='pending' and current.status~='paid_to_app' then return -1 en
 if current.a2uPaymentId~=nil or current.a2uTxid~=nil or current.a2uPreparedEnvelopeXdr~=nil or current.a2uPreparedTxHash~=nil or current.a2uPreparedSequence~=nil then return -1 end
 if current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return -1 end
 if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundProof~=nil or current.refundStatus~=nil then return -1 end
+local projectionVersion=current.redisProjectionVersion; if projectionVersion==nil then projectionVersion=0 end
+if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return -1 end
 current.customerAmount=amount; current.piPaymentId=ARGV[5]; current.u2aTxid=ARGV[6]; current.payerUid=ARGV[7]; current.payerUidSource='verified_u2a'
 if current.payerUidCapturedAt==nil then current.payerUidCapturedAt=ARGV[8] end
 if ARGV[9]~='' then current.status='paid_to_app'; if current.paidAt==nil then current.paidAt=ARGV[9] end; if current.settlementDispatchRequestedAt==nil then current.settlementDispatchRequestedAt=current.paidAt end end
+current.redisProjectionVersion=projectionVersion+1
 redis.call('SET',KEYS[1],cjson.encode(current)); return 1
 `,[`payment:${paymentId}`],[paymentId,d.merchantId,d.merchantUid,String(d.customerAmount),d.u2aIdentifier,d.u2aTxid,d.payerUid,d.verifiedAt,d.completedAt??''])
       if(healed!==1){result.conflicts++;continue}
       result.healed++
     }else{
       const projection:Payment={
-        id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',amount:d.customerAmount,customerAmount:d.customerAmount,
+        id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,amount:d.customerAmount,customerAmount:d.customerAmount,
         note:'',status:d.completedAt?'paid_to_app':'pending',createdAt:d.createdAt,piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,
         payerUid:d.payerUid,payerUidSource:'verified_u2a',payerUidCapturedAt:d.verifiedAt,
         ...(d.completedAt?{paidAt:d.completedAt,settlementDispatchRequestedAt:d.completedAt}:{}),
@@ -204,7 +207,7 @@ async function repopulateDurableSettlementWork():Promise<{repopulated:number;con
     const durable=await getSettlementCheckpointAuthoritative(paymentId)
     if(durable.outcome!=='FOUND')throw new Error('Durable Settlement projection unavailable')
     const d=durable.checkpoint,moved=d.stage==='horizon_confirmed'||d.stage==='pi_completed',piDone=d.stage==='pi_completed',prepared=d.stage!=='a2u_created'
-    const projection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:'',status:moved||prepared?'settlement_pending':'paid_to_app',createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:'none',appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone,dbRecorded:false}:{})}
+    const projection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:'',status:moved||prepared?'settlement_pending':'paid_to_app',createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:'none',appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone,dbRecorded:false}:{})}
     const encoded=JSON.stringify(projection)
     const created=await redis.set(`payment:${paymentId}`,encoded,{nx:true})
     if(created==='OK')repopulated++
@@ -570,7 +573,9 @@ if current.payerUidSource~='verified_u2a' or current.payerUid==nil or current.pa
 if current.a2uPaymentId~=nil or current.a2uTxid~=nil or current.a2uPreparedEnvelopeXdr~=nil or current.a2uPreparedTxHash~=nil or current.a2uPreparedSequence~=nil then return 0 end
 if current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return 0 end
 if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundProof~=nil then return 0 end
-current.settlementDispatchRequestedAt=nil; current.settlementFailureState='held'; current.refundStatus='manual_review_required'; current.a2uErrorCode='legacy_merchant_authority_reverification_required'; current.a2uErrorMessage='Legacy merchant authorization must be reverified before settlement'
+local projectionVersion=current.redisProjectionVersion; if projectionVersion==nil then projectionVersion=0 end
+if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return 0 end
+current.settlementDispatchRequestedAt=nil; current.settlementFailureState='held'; current.refundStatus='manual_review_required'; current.a2uErrorCode='legacy_merchant_authority_reverification_required'; current.a2uErrorMessage='Legacy merchant authorization must be reverified before settlement'; current.redisProjectionVersion=projectionVersion+1
 redis.call('SET',KEYS[1],cjson.encode(current)); redis.call('SREM',KEYS[2],ARGV[1]); redis.call('ZREM',KEYS[3],ARGV[1]); return 1
 `, [`payment:${paymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [paymentId])
   return result === 1
@@ -623,7 +628,9 @@ if current.settlementFailureState~=nil or current.refundStatus~=nil then return 
 if current.a2uPaymentId~=nil or current.a2uTxid~=nil or current.a2uPreparedEnvelopeXdr~=nil or current.a2uPreparedTxHash~=nil or current.a2uPreparedSequence~=nil then return 0 end
 if current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return 0 end
 if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundProof~=nil then return 0 end
-current.payerUid=ARGV[5]; current.payerUidSource='verified_u2a'; current.payerUidCapturedAt=ARGV[6]; current.settlementFailureState='held'; current.refundStatus='manual_review_required'; current.a2uErrorCode='legacy_merchant_authority_reverification_required'; current.a2uErrorMessage='Legacy merchant authorization must be reverified before settlement'
+local projectionVersion=current.redisProjectionVersion; if projectionVersion==nil then projectionVersion=0 end
+if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return 0 end
+current.payerUid=ARGV[5]; current.payerUidSource='verified_u2a'; current.payerUidCapturedAt=ARGV[6]; current.settlementFailureState='held'; current.refundStatus='manual_review_required'; current.a2uErrorCode='legacy_merchant_authority_reverification_required'; current.a2uErrorMessage='Legacy merchant authorization must be reverified before settlement'; current.redisProjectionVersion=projectionVersion+1
 redis.call('SET',KEYS[1],cjson.encode(current)); redis.call('SREM',KEYS[2],ARGV[1]); redis.call('ZREM',KEYS[3],ARGV[1]); return 1
 `, [`payment:${paymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [paymentId, piPaymentId, u2aTxid, paidAt, payerUid, capturedAt])
   return result === 1
