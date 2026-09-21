@@ -26,6 +26,7 @@ const SHORT_RETRY_REASONS = new Set([
   "completion_unverified",
   "intent_409",
   "intent_503",
+  "f2_7_interruption",
 ])
 
 function isIntentSuccess(result: unknown): boolean {

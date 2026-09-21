@@ -10,6 +10,8 @@ const refund=read('lib/refund-executor.ts')
 const refundSubmit=read('lib/refund-blockchain-submit.ts')
 const db=read('lib/db.ts')
 const locked=read('lib/a2u-locked-executor.ts')
+const refundAuto=read('lib/refund-auto-orchestrator.ts')
+const refundCheckpoint=read('lib/refund-checkpoint-store.ts')
 
 const settlementPoints=[
 'u2a_verified_before_pi_complete','pi_complete_before_u2a_completed','u2a_completed_before_redis_projection',
@@ -64,6 +66,10 @@ assert.equal(a2u.includes('[F2-7 DURABLE HORIZON RESUME]'),true,'durable Horizon
 assert.equal(a2u.includes('recordSettlementHorizonCheckpoint({'),true,'durable Horizon replay/record')
 assert.equal(a2u.includes('.transactions().transaction(a2uTxid).call()'),true,'Horizon GET proof for prepared-stage recovery')
 assert.equal(a2u.includes('record.successful !== true'),true,'Horizon success proof')
+assert.equal(refundAuto.includes('\"f2_7_interruption\"'),true,'F2-7 interruption uses short retry')
+assert.equal(refundCheckpoint.includes("last_error_code='automatic_refund_blocked'"),true,'legacy F2-7 deferral error-code fence')
+assert.equal(refundCheckpoint.includes("last_error_message='f2_7_interruption'"),true,'legacy F2-7 deferral marker fence')
+assert.equal(refundCheckpoint.includes("updated_at<=NOW()-INTERVAL '60 seconds'"),true,'legacy F2-7 deferral minimum age')
 console.log(JSON.stringify({
   certification:'PASS',
   gate:'F2-7-LIVE-FAULT-HARNESS-CODE-READINESS',
@@ -78,5 +84,7 @@ console.log(JSON.stringify({
   terminalDbFinalizedRediscovery:true,
   u2aServerCompletionRecovery:true,
   stage1OnlyDurableResume:true,
-  durableHorizonResume:true
+  durableHorizonResume:true,
+  refundFaultShortRetry:true,
+  refundFaultLegacyDeferralCompatibility:true
 },null,2))
