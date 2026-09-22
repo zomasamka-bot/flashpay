@@ -54,6 +54,41 @@ export type AutomaticRefundCheckpointResult =
   | { state: 'ok'; checkpoints: RefundCheckpoint[] }
   | { state: 'uncertain' }
 
+export async function cleanupTerminalRefundRetryMetadata(limit: number): Promise<number | null> {
+  if (!Number.isInteger(limit) || limit <= 0) return null
+  try {
+    const rows = await query(`
+      WITH eligible AS (
+        SELECT c.refund_id
+        FROM refund_checkpoints c
+        JOIN refund_accounting_records r ON r.refund_id=c.refund_id
+        WHERE c.stage='audit_recorded' AND c.status='completed'
+          AND (c.last_error_code IS NOT NULL OR c.last_error_message IS NOT NULL OR c.next_retry_at IS NOT NULL)
+          AND c.refund_payment_id IS NOT NULL AND c.refund_txid IS NOT NULL
+          AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id
+          AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid
+          AND r.amount=c.amount AND r.currency='π' AND r.horizon_fee_stroops>=0
+          AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed')=1
+          AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_projection_finalized')=1
+          AND (SELECT count(*) FROM refund_audit_events a
+               WHERE a.refund_id=c.refund_id
+                 AND a.event_id='refund:'||c.refund_id||':projection_finalized'
+                 AND a.event_type='refund_projection_finalized'
+                 AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key
+                 AND a.actor_type='system'
+                 AND a.details=jsonb_build_object('refundPaymentId',c.refund_payment_id,'refundTxid',c.refund_txid))=1
+        ORDER BY c.updated_at ASC, c.refund_id ASC
+        LIMIT $1
+      )
+      UPDATE refund_checkpoints c
+      SET last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, updated_at=NOW()
+      FROM eligible e
+      WHERE c.refund_id=e.refund_id
+      RETURNING c.refund_id`, [Math.min(limit, 20)])
+    return Array.isArray(rows) ? rows.length : null
+  } catch { return null }
+}
+
 export async function listAutomaticRefundCheckpoints(limit: number): Promise<AutomaticRefundCheckpointResult> {
   if (!Number.isInteger(limit) || limit <= 0) return { state: 'uncertain' }
   try {

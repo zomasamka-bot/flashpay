@@ -80,6 +80,14 @@ assert.ok(refundFinalizer.includes('SET last_error_code=NULL, last_error_message
 assert.ok(refundFinalizer.includes("c.stage='audit_recorded' AND c.status='completed'"),'terminal metadata cleanup is fenced to completed audit-recorded refund')
 assert.ok(refundFinalizer.includes('FROM eligible e'),'terminal metadata cleanup reuses exact financially-proven eligible identity')
 assert.ok(refundFinalizer.includes('cleaned_count'),'terminal metadata cleanup must affect exactly one checkpoint')
+assert.ok(refundCheckpoint.includes('export async function cleanupTerminalRefundRetryMetadata'),'terminal retry metadata cleanup has a bounded recovery entry point')
+const terminalCleanup=refundCheckpoint.slice(refundCheckpoint.indexOf('export async function cleanupTerminalRefundRetryMetadata'),refundCheckpoint.indexOf('export async function listAutomaticRefundCheckpoints'))
+assert.ok(terminalCleanup.includes("c.stage='audit_recorded' AND c.status='completed'"),'terminal cleanup only considers completed audit-recorded refunds')
+assert.ok(terminalCleanup.includes("a.event_type='refund_completed'"),'terminal cleanup requires exactly one completed audit event')
+assert.ok(terminalCleanup.includes("a.event_type='refund_projection_finalized'"),'terminal cleanup requires exactly one projection-finalized audit event')
+assert.ok(terminalCleanup.includes("a.event_id='refund:'||c.refund_id||':projection_finalized'"),'terminal cleanup requires canonical projection-finalized identity')
+assert.ok(terminalCleanup.includes("SET last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL"),'terminal cleanup mutates retry metadata only')
+assert.ok(refundAuto.includes('cleanupTerminalRefundRetryMetadata(Math.min(limit, 20))'),'automatic refund pass runs bounded terminal metadata cleanup')
 console.log(JSON.stringify({
   certification:'PASS',
   gate:'F2-7-LIVE-FAULT-HARNESS-CODE-READINESS',
