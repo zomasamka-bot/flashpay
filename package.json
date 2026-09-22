@@ -34,7 +34,8 @@
     "certify:refund-exact-stroops": "node --experimental-strip-types scripts/verify-refund-exact-stroop-authority.mjs",
     "certify:lease-loss-adversarial": "node scripts/verify-financial-lease-loss-adversarial-safety.mjs",
     "certify:f3-1": "node scripts/verify-f3-1-public-status-reader-authority-map.mjs",
-    "certify:f3-2": "node scripts/verify-f3-2-stale-state-matrix.mjs"
+    "certify:f3-2": "node scripts/verify-f3-2-stale-state-matrix.mjs",
+    "certify:f3-3": "node scripts/verify-f3-3-durable-public-status-authority.mjs"
   },
   "overrides": {
     "react": "^19",

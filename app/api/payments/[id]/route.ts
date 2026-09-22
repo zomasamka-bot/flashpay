@@ -7,6 +7,8 @@ export const runtime = 'nodejs'
 import { redis, isRedisConfigured as isKvConfigured } from "@/lib/redis"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { getSettlementCheckpointAuthoritative, readSettlementRefundAuthority } from "@/lib/db"
+import { getRefundCheckpointsByPaymentIds } from "@/lib/refund-checkpoint-store"
 
 // Helper: Check if origin is allowed for CORS
 function isOriginAllowed(origin: string | null): boolean {
@@ -114,9 +116,32 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return conflictResponse
     }
 
+    // F3-3: read-only durable public-status authority. No repair or financial execution.
+    const authority = await readSettlementRefundAuthority(id)
+    if (authority.outcome !== "CLEAR") {
+      const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 409 })
+      return allowCors && origin ? addCorsHeaders(response, origin) : response
+    }
+    let publicPayment = getPublicPayment(payment)
+    if (authority.settlementActive) {
+      const durable = await getSettlementCheckpointAuthoritative(id)
+      if (durable.outcome !== "FOUND") {
+        const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
+        return allowCors && origin ? addCorsHeaders(response, origin) : response
+      }
+      publicPayment = {...publicPayment,status:durable.checkpoint.stage === "db_finalized" ? "settled_to_merchant" : "settlement_pending",txid:durable.checkpoint.a2uTxid || publicPayment.txid}
+    } else if (authority.refundActive) {
+      const durable = await getRefundCheckpointsByPaymentIds([id])
+      const checkpoint = durable.state === "ok" ? durable.checkpoints.get(id) : undefined
+      if (durable.state !== "ok" || !checkpoint) {
+        const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
+        return allowCors && origin ? addCorsHeaders(response, origin) : response
+      }
+      publicPayment = {...publicPayment,status:checkpoint.status === "completed" && checkpoint.stage === "audit_recorded" ? "refunded" : "refund_pending",txid:checkpoint.refundTxid || publicPayment.txid}
+    }
     const successResponse = NextResponse.json({
       success: true,
-      payment: getPublicPayment(payment),
+      payment: publicPayment,
     })
     if (allowCors && origin) {
       return addCorsHeaders(successResponse, origin)
