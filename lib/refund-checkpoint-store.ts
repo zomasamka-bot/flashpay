@@ -108,32 +108,6 @@ export async function getRefundCheckpointsByPaymentIds(paymentIds: string[]): Pr
   } catch { return { state: 'uncertain' } }
 }
 
-export async function logF27RefundCheckpointDiagnostic(refundId: string, paymentId: string): Promise<void> {
-  if (typeof refundId !== 'string' || refundId.length === 0 || typeof paymentId !== 'string' || paymentId.length === 0) return
-  try {
-    const rows = await query(`
-      SELECT
-        refund_id, payment_id, idempotency_key, status, stage, payer_uid, amount,
-        refund_payment_id, refund_txid, attempt_count, last_error_code, last_error_message,
-        next_retry_at, updated_at,
-        (status='pending') AS pending_status,
-        (stage='audit_recorded' AND status='completed') AS terminal_projection_candidate,
-        (next_retry_at IS NULL OR next_retry_at<=NOW()) AS retry_due,
-        (last_error_code='automatic_refund_blocked'
-          AND last_error_message='f2_7_interruption'
-          AND updated_at<=NOW()-INTERVAL '60 seconds') AS f2_7_legacy_retry_eligible,
-        (SELECT count(*)::int FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id) AS audit_event_count,
-        (SELECT count(*)::int FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized') AS projection_finalized_count
-      FROM refund_checkpoints
-      WHERE refund_id=$1 OR payment_id=$2
-      ORDER BY (refund_id=$1) DESC, updated_at DESC
-      LIMIT 3`, [refundId, paymentId])
-    console.warn('[F2-7 REFUND CHECKPOINT DIAGNOSTIC]', { refundId, paymentId, rowCount: Array.isArray(rows) ? rows.length : null, rows: Array.isArray(rows) ? rows : null })
-  } catch (error) {
-    console.warn('[F2-7 REFUND CHECKPOINT DIAGNOSTIC] unavailable', { refundId, paymentId, error: error instanceof Error ? error.message : 'unknown' })
-  }
-}
-
 export async function getRefundCheckpointReadOnly(refundId: string): Promise<RefundCheckpointReadOnly> {
   if (typeof refundId !== 'string' || refundId.trim().length === 0) return { state: 'uncertain' }
   try {
@@ -1144,10 +1118,21 @@ export async function completeRefundCheckpointWithAudit(
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $8, refund_id, payment_id, 'refund_projection_finalized', 'system', idempotency_key, NOW(), $9::jsonb FROM eligible
       ON CONFLICT (event_id) DO NOTHING RETURNING event_id
-    ) SELECT (SELECT count(*) FROM eligible) AS eligible_count, (SELECT count(*) FROM inserted) AS inserted_count`,
+    ), cleaned AS (
+      UPDATE refund_checkpoints c
+      SET last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, updated_at=NOW()
+      FROM eligible e
+      WHERE c.refund_id=e.refund_id
+        AND c.payment_id=e.payment_id
+        AND c.idempotency_key=e.idempotency_key
+        AND c.stage='audit_recorded' AND c.status='completed'
+      RETURNING c.refund_id
+    ) SELECT (SELECT count(*) FROM eligible) AS eligible_count,
+             (SELECT count(*) FROM inserted) AS inserted_count,
+             (SELECT count(*) FROM cleaned) AS cleaned_count`,
     [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, eventId, details],
   )
-  if (!Array.isArray(result) || result.length !== 1 || Number((result[0] as Record<string, unknown>).eligible_count) !== 1) return null
+  if (!Array.isArray(result) || result.length !== 1 || Number((result[0] as Record<string, unknown>).eligible_count) !== 1 || Number((result[0] as Record<string, unknown>).cleaned_count) !== 1) return null
   const insertedNow = Number((result[0] as Record<string, unknown>).inserted_count) === 1
   if (insertedNow) console.log('REFUND_COMPLETED', refundId)
   if (insertedNow) return { insertedNow }

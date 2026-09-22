@@ -72,10 +72,14 @@ assert.equal(refundCheckpoint.includes("last_error_code='automatic_refund_blocke
 assert.equal(refundCheckpoint.includes("last_error_message='f2_7_interruption'"),true,'legacy F2-7 deferral marker fence')
 assert.equal(refundCheckpoint.includes("updated_at<=NOW()-INTERVAL '60 seconds'"),true,'legacy F2-7 deferral minimum age')
 
-assert.equal(refundCheckpoint.includes("export async function logF27RefundCheckpointDiagnostic"),true,'F2-7 refund diagnostic is explicit read-only helper')
-assert.equal(refundCheckpoint.includes("WHERE refund_id=$1 OR payment_id=$2"),true,'F2-7 refund diagnostic targets exact existing identities')
-assert.equal(refundCheckpoint.includes("[F2-7 REFUND CHECKPOINT DIAGNOSTIC]"),true,'F2-7 refund diagnostic marker')
-assert.equal(transient.includes('logF27RefundCheckpointDiagnostic("db04df04-0297-4242-9bbd-cd25cd7c40c6", "5cbfd33b-3eb7-474d-afaa-7f4711919bdd")'),true,'F2-7 refund diagnostic targets certification refund only')
+assert.equal(refundCheckpoint.includes("export async function logF27RefundCheckpointDiagnostic"),false,'temporary F2-7 refund diagnostic helper removed')
+assert.equal(refundCheckpoint.includes("[F2-7 REFUND CHECKPOINT DIAGNOSTIC]"),false,'temporary F2-7 refund diagnostic marker removed')
+assert.equal(transient.includes('logF27RefundCheckpointDiagnostic'),false,'temporary F2-7 refund diagnostic call removed')
+const refundFinalizer=refundCheckpoint.slice(refundCheckpoint.indexOf('export async function finalizeRefundProjectionWithAudit'),refundCheckpoint.indexOf('export async function transitionRefundCheckpointWithAudit'))
+assert.ok(refundFinalizer.includes('SET last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, updated_at=NOW()'),'terminal refund finality clears stale retry metadata')
+assert.ok(refundFinalizer.includes("c.stage='audit_recorded' AND c.status='completed'"),'terminal metadata cleanup is fenced to completed audit-recorded refund')
+assert.ok(refundFinalizer.includes('FROM eligible e'),'terminal metadata cleanup reuses exact financially-proven eligible identity')
+assert.ok(refundFinalizer.includes('cleaned_count'),'terminal metadata cleanup must affect exactly one checkpoint')
 console.log(JSON.stringify({
   certification:'PASS',
   gate:'F2-7-LIVE-FAULT-HARNESS-CODE-READINESS',
