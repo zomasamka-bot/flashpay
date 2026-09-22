@@ -11,7 +11,6 @@ import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 import { serverConfig } from "@/lib/server-config"
-import { maybeInjectF27Fault } from "@/lib/f2-7-fault-injection"
 import type { Payment } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
@@ -108,9 +107,6 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
       let pi=await readExactPiU2A()
       if(!pi){result.piReadUncertain++;continue}
       if(pi.status.developer_completed!==true){
-        if(await maybeInjectF27Fault({lane:'settlement',point:'u2a_verified_before_pi_complete',paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,amount:ingress.customerAmount,details:{recovery:true}})){
-          result.verifiedOnly++;continue
-        }
         try{
           await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(ingress.u2aIdentifier)}/complete`,{
             method:'POST',headers:{Authorization:`Key ${serverConfig.piApiKey}`,'Content-Type':'application/json'},body:JSON.stringify({txid:ingress.u2aTxid}),cache:'no-store',redirect:'error',
@@ -120,13 +116,11 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
         pi=await readExactPiU2A()
         if(!pi||pi.status.developer_completed!==true){result.piReadUncertain++;continue}
       }
-      if(await maybeInjectF27Fault({lane:'settlement',point:'pi_complete_before_u2a_completed',paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,amount:ingress.customerAmount,details:{recovery:true,developerCompleted:true}}))continue
       const completion=await recordSettlementU2ACompletedCheckpoint({
         paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,customerAmount:ingress.customerAmount,
         u2aIdentifier:ingress.u2aIdentifier,u2aTxid:ingress.u2aTxid,payerUid:ingress.payerUid,
       })
       if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){result.conflicts++;continue}
-      if(await maybeInjectF27Fault({lane:'settlement',point:'u2a_completed_before_redis_projection',paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,amount:ingress.customerAmount,details:{recovery:true,durableVersion:completion.version}}))continue
       result.piCompletionReconciled++
       durable=await getDurableU2AIngressAuthoritative(paymentId)
       if(durable.outcome!=='FOUND'||durable.checkpoint.completedAt===null){result.conflicts++;continue}
