@@ -67,7 +67,8 @@ function exactTarget(input: Input): boolean {
  */
 export async function maybeInjectF27Fault(input: Input): Promise<boolean> {
   if (!exactTarget(input)) return false
-  const runKey = `flashpay:diagnostic:f2-7:${input.lane}:run:v1`
+  const runVersion = input.lane === "refund" ? "v2" : "v1"
+  const runKey = `flashpay:diagnostic:f2-7:${input.lane}:run:${runVersion}`
   let owner = await redis.get<string>(runKey).catch(() => null)
   if (owner === null) {
     const created = await redis.set(runKey, input.paymentId, { nx: true, ex: 7 * 24 * 60 * 60 }).catch(() => null)
@@ -76,7 +77,7 @@ export async function maybeInjectF27Fault(input: Input): Promise<boolean> {
   }
   if (owner !== input.paymentId) return false
 
-  const pointKey = `flashpay:diagnostic:f2-7:${input.lane}:point:v1:${input.paymentId}:${input.point}`
+  const pointKey = `flashpay:diagnostic:f2-7:${input.lane}:point:${runVersion}:${input.paymentId}:${input.point}`
   const claimed = await redis.set(pointKey, "1", { nx: true, ex: 7 * 24 * 60 * 60 }).catch(() => null)
   if (claimed !== "OK") return false
   console.log("[F2-7 FAULT INJECTION]", {

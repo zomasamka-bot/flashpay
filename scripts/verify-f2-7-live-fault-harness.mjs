@@ -30,6 +30,9 @@ assert.ok(helper.includes('F27_CERT_MERCHANT_ID = "hazemaboria"'))
 assert.ok(helper.includes('F27_CERT_MERCHANT_UID = "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"'))
 assert.ok(helper.includes('F27_SETTLEMENT_AMOUNT = 0.16'))
 assert.ok(helper.includes('F27_REFUND_AMOUNT = 0.1'))
+assert.ok(helper.includes('const runVersion = input.lane === "refund" ? "v2" : "v1"'),'refund certification is re-armed in a new namespace without re-arming settlement')
+assert.ok(helper.includes('run:${runVersion}'),'run ownership key is version-scoped')
+assert.ok(helper.includes('point:${runVersion}:${input.paymentId}:${input.point}'),'point claims are version-scoped to the same run generation')
 for(const forbidden of ['fetch(', 'submitTransaction(', 'recordA2UTransactionAtomic(', 'recordRefundAccounting(', 'query(']) assert.equal(helper.includes(forbidden),false,`injector side effect ${forbidden}`)
 
 for(const p of settlementPoints.slice(0,3)){assert.ok(complete.includes(p),`complete hook ${p}`);assert.ok(recovery.includes(p),`recovery hook ${p}`)}
