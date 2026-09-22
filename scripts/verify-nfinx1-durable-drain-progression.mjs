@@ -6,4 +6,4 @@ let cursor=null,redis=new Set(),seen=new Set(),wakes=0,peak=0;
 function next(){let start=0;if(cursor){start=rows.findIndex(r=>r.t>cursor.t||(r.t===cursor.t&&r.id>cursor.id));if(start<0)start=0}const p=rows.slice(start,start+200);peak=Math.max(peak,p.length);cursor=p.length?p[p.length-1]:null;return p}
 while(seen.size<10000&&wakes<60){for(const r of next()){seen.add(r.id);redis.add(r.id)}wakes++;if(wakes===17)redis=new Set()}
 assert.equal(seen.size,10000);assert.equal(wakes,50);assert.equal(peak,200);
-console.log(JSON.stringify({certification:"PASS",gate:"N-FIN-X1",durableRows:10000,covered:seen.size,wakes,pageLimit:200,redisLossInjectedAtWake:17,starved:10000-seen.size,financialMovementExecuted:false},null,2));
+console.log(JSON.stringify({certification:"PASS",gate:"N-FIN-X1-SYNTHETIC-DURABLE-DRAIN-READINESS",mode:"SYNTHETIC_MODEL_ONLY",syntheticDurableRows:10000,syntheticCovered:seen.size,wakes,pageLimit:200,syntheticRedisLossInjectedAtWake:17,syntheticStarved:10000-seen.size,financialMovementExecuted:false,live10kFinancialTransactionsExecuted:false,requiresIndependentLiveRuntimeEvidence:true},null,2));

@@ -20,4 +20,4 @@ const invariants=[
 ["fail-closed-recovery",recovery.includes("durable_projection_unavailable")&&recovery.includes("durable_authority_conflict")],
 ];
 for(const [name,ok]of invariants)assert.equal(ok,true,name);
-console.log(JSON.stringify({certification:"PASS",mode:"N10_FINAL_CERTIFICATION_ONLY",invariantsChecked:invariants.length,invariantsPassed:invariants.length,financialSourceChanged:false,blindRetryAdded:false,n10ClosureCandidate:true},null,2));
+console.log(JSON.stringify({certification:"PASS",gate:"N-FIN-10H-CODE-READINESS",mode:"CODE_READINESS_ONLY",invariantsChecked:invariants.length,invariantsPassed:invariants.length,liveFinancialTransactionsExecuted:false,live10kFinancialTransactionsExecuted:false,requiresIndependentProductionRuntimeEvidence:true,financialSourceChanged:false,blindRetryAdded:false,n10CodeReadinessCandidate:true},null,2));

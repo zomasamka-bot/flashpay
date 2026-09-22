@@ -102,11 +102,16 @@ assert.equal(crash.certified, true)
 console.table(rows)
 console.log(JSON.stringify({
   certification: 'PASS',
+  gate: 'N-FIN-6-10K-SYNTHETIC-CAPACITY-READINESS',
+  mode: 'SYNTHETIC_MODEL_ONLY',
   scale10k: rows.at(-1),
   adversarialMembershipMutation: swap.coverageByCycle,
   crashRestartDurableAccumulator: crash.certified,
-  duplicateFinancialMovement: 0,
-  sequenceCollision: 0,
-  walletPeakInFlight: 1,
-  nonWalletPeakInFlight: 2,
+  duplicateFinancialMovementObservedInModel: 0,
+  sequenceCollisionObservedInModel: 0,
+  walletPeakInFlightObservedInModel: 1,
+  nonWalletPeakInFlightObservedInModel: 2,
+  liveFinancialTransactionsExecuted: false,
+  live10kFinancialTransactionsExecuted: false,
+  requiresIndependentLiveRuntimeEvidence: true,
 }, null, 2))
