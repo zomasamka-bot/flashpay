@@ -1,14 +1,16 @@
 /**
  * Payment Status Utilities — Consistent status model across the app
  * 
- * EXACT 7 STATUS VALUES (never deviate):
+ * EXACT 9 STATUS VALUES (never deviate):
  * 1. pending: Initial state, awaiting Pi Wallet confirmation
  * 2. failed: Pre-settlement failure (retryable, no blockchain involvement)
  * 3. cancelled: Customer cancelled payment
  * 4. paid_to_app: U2A complete (processing state, NOT error)
  * 5. settlement_pending: A2U in progress (processing state, NOT error)
- * 6. settled_to_merchant: A2U complete - ONLY FINAL SUCCESS (never downgrades)
+ * 6. settled_to_merchant: Final successful merchant-settlement state (never downgrades)
  * 7. settlement_failed: A2U failure before Horizon success (terminal with flags)
+ * 8. refund_pending: Refund workflow is in progress
+ * 9. refunded: Final successful refund state
  * 
  * Terminal State Rule: settlement_failed with a2uTxid or horizonSuccessFlag
  * must NEVER be retried by client - requires server recovery or manual review.

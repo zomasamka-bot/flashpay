@@ -7,7 +7,7 @@ export const runtime = 'nodejs'
 import { redis, isRedisConfigured as isKvConfigured } from "@/lib/redis"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
-import { getSettlementCheckpointAuthoritative, readSettlementRefundAuthority } from "@/lib/db"
+import { getDurableU2AIngressAuthoritative, getSettlementCheckpointAuthoritative, readSettlementPaymentIdentityPresence, readSettlementRefundAuthority } from "@/lib/db"
 import { getRefundCheckpointsByPaymentIds } from "@/lib/refund-checkpoint-store"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 
@@ -39,7 +39,7 @@ interface Payment {
   accessToken: string
   amount: number
   note: string
-  status: "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "cancelled"
+  status: "pending" | "failed" | "cancelled" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "refund_pending" | "refunded"
   createdAt: string
   paidAt?: string
   settledAt?: string
@@ -95,21 +95,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     console.log("[API][ID] Redis result:", payment ? "FOUND ✅" : "NOT FOUND ❌")
     console.log("[API][ID] ========================================")
 
-    if (!payment) {
-      console.log("[API][ID] ❌ Payment not found:", id)
-      const notFoundResponse = NextResponse.json({ 
-        error: "Payment not found",
-        paymentId: id,
-      }, { status: 404 })
-      if (allowCors && origin) {
-        return addCorsHeaders(notFoundResponse, origin)
-      }
-      return notFoundResponse
-    }
-
-    console.log("[API] Payment retrieved:", id, "status:", payment.status)
-
-    if (typeof payment.id !== "string" || payment.id !== id) {
+    if (payment && (typeof payment.id !== "string" || payment.id !== id)) {
       const conflictResponse = NextResponse.json({ error: "Payment identity conflict", paymentId: id }, { status: 409 })
       if (allowCors && origin) {
         return addCorsHeaders(conflictResponse, origin)
@@ -117,12 +103,95 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return conflictResponse
     }
 
-    // F3-3: read-only durable public-status authority. No repair or financial execution.
+    // F3 durable public-status authority. This route is read-only with respect
+    // to financial movement; PostgreSQL decides branch ownership when Redis is
+    // stale or missing. Unknown/conflicting authority always fails closed.
     const authority = await readSettlementRefundAuthority(id)
     if (authority.outcome !== "CLEAR") {
       const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 409 })
       return allowCors && origin ? addCorsHeaders(response, origin) : response
     }
+
+    // Pre-review hardening: a missing Redis projection is not proof that the
+    // payment does not exist. Serve only statuses proven by durable branch
+    // authority. A bare durable payment identity is existence evidence only and
+    // therefore returns 503 rather than inventing pending/failed/refund state.
+    if (!payment) {
+      if (authority.settlementActive) {
+        const durable = await getSettlementCheckpointAuthoritative(id)
+        if (durable.outcome !== "FOUND") {
+          const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
+          return allowCors && origin ? addCorsHeaders(response, origin) : response
+        }
+        const durableStatus = durable.checkpoint.stage === "db_finalized" ? "settled_to_merchant" : "settlement_pending"
+        const confirmation = await readSettlementRefundAuthority(id)
+        if (confirmation.outcome !== "CLEAR" || !confirmation.settlementActive || confirmation.refundActive) {
+          const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 409 })
+          return allowCors && origin ? addCorsHeaders(response, origin) : response
+        }
+        const publicPayment = {
+          id: durable.checkpoint.paymentId,
+          merchantId: durable.checkpoint.merchantId,
+          amount: durable.checkpoint.customerAmount,
+          note: "",
+          status: durableStatus,
+          createdAt: durable.checkpoint.createdAt,
+          paidAt: durable.checkpoint.paidAt ?? undefined,
+          txid: durable.checkpoint.a2uTxid || durable.checkpoint.u2aTxid,
+        }
+        const successResponse = NextResponse.json({ success: true, payment: publicPayment })
+        return allowCors && origin ? addCorsHeaders(successResponse, origin) : successResponse
+      }
+
+      if (authority.refundActive) {
+        const ingress = await getDurableU2AIngressAuthoritative(id)
+        const durable = await getRefundCheckpointsByPaymentIds([id])
+        const checkpoint = durable.state === "ok" ? durable.checkpoints.get(id) : undefined
+        if (ingress.outcome !== "FOUND" || ingress.checkpoint.completedAt === null || durable.state !== "ok" || !checkpoint || checkpoint.status === "manual_review_required") {
+          const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
+          return allowCors && origin ? addCorsHeaders(response, origin) : response
+        }
+        const durableStatus = checkpoint.status === "completed" && checkpoint.stage === "audit_recorded" ? "refunded" : "refund_pending"
+        const confirmation = await readSettlementRefundAuthority(id)
+        if (confirmation.outcome !== "CLEAR" || confirmation.settlementActive || !confirmation.refundActive) {
+          const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 409 })
+          return allowCors && origin ? addCorsHeaders(response, origin) : response
+        }
+        const publicPayment = {
+          id: ingress.checkpoint.paymentId,
+          merchantId: ingress.checkpoint.merchantId,
+          amount: ingress.checkpoint.customerAmount,
+          note: "",
+          status: durableStatus,
+          createdAt: ingress.checkpoint.createdAt,
+          paidAt: ingress.checkpoint.completedAt,
+          txid: checkpoint.refundTxid || ingress.checkpoint.u2aTxid,
+        }
+        const successResponse = NextResponse.json({ success: true, payment: publicPayment })
+        return allowCors && origin ? addCorsHeaders(successResponse, origin) : successResponse
+      }
+
+      const identity = await readSettlementPaymentIdentityPresence(id)
+      const refundEvidence = await getRefundCheckpointsByPaymentIds([id])
+      if (identity.outcome === "INDETERMINATE" || refundEvidence.state !== "ok") {
+        const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
+        return allowCors && origin ? addCorsHeaders(response, origin) : response
+      }
+      if (identity.outcome === "PRESENT" || refundEvidence.checkpoints.has(id)) {
+        const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
+        return allowCors && origin ? addCorsHeaders(response, origin) : response
+      }
+
+      console.log("[API][ID] ❌ Payment absent from Redis and durable authorities:", id)
+      const notFoundResponse = NextResponse.json({ 
+        error: "Payment not found",
+        paymentId: id,
+      }, { status: 404 })
+      return allowCors && origin ? addCorsHeaders(notFoundResponse, origin) : notFoundResponse
+    }
+
+    console.log("[API] Payment retrieved:", id, "status:", payment.status)
+
     let publicPayment = getPublicPayment(payment)
     if (authority.settlementActive) {
       const durable = await getSettlementCheckpointAuthoritative(id)

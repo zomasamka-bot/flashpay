@@ -879,6 +879,7 @@ export type SettlementDurableCheckpointRead =
   | { outcome: 'FOUND'; checkpoint: {
       paymentId:string; version:number; stage:'a2u_created'|'prepared'|'horizon_confirmed'|'pi_completed'|'db_finalized';
       merchantId:string; merchantUid:string; customerAmount:number; merchantAmount:number;
+      createdAt:string; paidAt:string|null;
       u2aIdentifier:string; u2aTxid:string; a2uPaymentId:string; a2uFromAddress:string; a2uToAddress:string;
       preparedEnvelopeXdr?:string; preparedTxHash?:string; preparedSequence?:string;
       a2uTxid?:string; horizonFeeStroops?:number
@@ -894,7 +895,7 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
       SELECT payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
-        u2a_identifier,u2a_txid,a2u_payment_id,a2u_from_address,a2u_to_address,
+        created_at,u2a_completed_at,u2a_identifier,u2a_txid,a2u_payment_id,a2u_from_address,a2u_to_address,
         prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid,horizon_fee_stroops,
         horizon_confirmed_at,pi_completed_at,db_finalized_at
       FROM settlement_checkpoints WHERE payment_id=${paymentId}
@@ -903,12 +904,19 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Settlement durable identity is ambiguous'}
     const r=rows[0] as Record<string,unknown>
     const text=(v:unknown)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+    const iso=(v:unknown):string|null=>{
+      if(v instanceof Date&&!Number.isNaN(v.getTime()))return v.toISOString()
+      if(typeof v==='string'&&v.trim()!==''&&Number.isFinite(Date.parse(v)))return new Date(v).toISOString()
+      return null
+    }
+    const createdAt=iso(r.created_at),paidAt=r.u2a_completed_at==null?null:iso(r.u2a_completed_at)
     const version=Number(r.version),stage=r.stage
     let ca,ma,ac
     try{ca=normalizePostgresNumeric(r.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'settlement.app_commission')}
     catch{return{outcome:'INDETERMINATE',error:'Settlement durable accounting invalid'}}
     if(!Number.isSafeInteger(version)||version<1||!['a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized'].includes(String(stage))||
       !text(r.payment_id)||r.payment_id!==paymentId||!text(r.merchant_id)||!text(r.merchant_uid)||ca<=0||ma!==ca||ac!==0||
+      createdAt===null||(r.u2a_completed_at!=null&&paidAt===null)||
       !text(r.u2a_identifier)||typeof r.u2a_txid!=='string'||!/^[0-9a-f]{64}$/.test(r.u2a_txid)||
       !text(r.a2u_payment_id)||!text(r.a2u_from_address)||!text(r.a2u_to_address))
       return{outcome:'INDETERMINATE',error:'Settlement durable base identity invalid'}
@@ -928,7 +936,7 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
     if(stage==='db_finalized'&&r.db_finalized_at==null)return{outcome:'INDETERMINATE',error:'Settlement durable DB finality invalid'}
     return{outcome:'FOUND',checkpoint:{
       paymentId,version,stage:stage as any,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,
-      customerAmount:ca,merchantAmount:ma,u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,
+      customerAmount:ca,merchantAmount:ma,createdAt,paidAt,u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,
       a2uPaymentId:r.a2u_payment_id as string,a2uFromAddress:r.a2u_from_address as string,a2uToAddress:r.a2u_to_address as string,
       ...(advanced?{preparedEnvelopeXdr:r.prepared_envelope_xdr as string,preparedTxHash:r.prepared_tx_hash as string,preparedSequence:String(r.prepared_sequence)}:{}),
       ...(moved?{a2uTxid:r.a2u_txid as string,horizonFeeStroops:fee}:{}),
@@ -995,6 +1003,35 @@ export async function listOutstandingSettlementCheckpointIds(limit:number):Promi
     }
     return{outcome:'FOUND',paymentIds:ids,nextCursor:result.nextCursor,wrapped:result.wrapped===true}
   }catch(e){console.error('[DB] Settlement outstanding durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement outstanding durable read uncertain'}}
+}
+
+export type SettlementPaymentIdentityPresence =
+  | { outcome:'PRESENT' }
+  | { outcome:'ABSENT' }
+  | { outcome:'INDETERMINATE'; error:string }
+
+/**
+ * Pre-review public-read hardening: existence proof only.
+ *
+ * This read never authorizes Settlement/Refund movement and deliberately does
+ * not derive a public payment status. It exists only so a missing Redis
+ * projection cannot be mistaken for a globally absent payment. Callers must
+ * use the dedicated Settlement/Refund durable authorities for status/finality.
+ */
+export async function readSettlementPaymentIdentityPresence(paymentId:string):Promise<SettlementPaymentIdentityPresence>{
+  if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
+    return{outcome:'INDETERMINATE',error:'Invalid durable payment identity'}
+  try{
+    const client=await getPostgresClient()
+    if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client`SELECT payment_id,stage FROM settlement_checkpoints WHERE payment_id=${paymentId}`
+    if(rows.length===0)return{outcome:'ABSENT'}
+    if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Durable payment identity is ambiguous'}
+    const row=rows[0] as Record<string,unknown>
+    if(row.payment_id!==paymentId||typeof row.stage!=='string'||!['payment_identity','a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized'].includes(row.stage))
+      return{outcome:'INDETERMINATE',error:'Durable payment identity is invalid'}
+    return{outcome:'PRESENT'}
+  }catch(e){console.error('[DB] Durable payment identity presence read uncertain:',e);return{outcome:'INDETERMINATE',error:'Durable payment identity presence read uncertain'}}
 }
 
 export type SettlementRefundAuthorityCheck =

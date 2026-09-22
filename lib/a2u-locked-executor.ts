@@ -24,11 +24,14 @@ import { serverConfig } from "@/lib/server-config"
  * 
  * NO caller may invoke executeA2U directly.
  * 
- * Lock Strategy:
- * - Key: a2u:lock:${paymentId}
- * - NX + EX (expiry) + unique token
- * - Token-checked atomic release via Lua
- * - If lock fails: reread and return current state (no execution)
+ * Shared Payment-Operation Lock Strategy:
+ * - Key: flashpay:payment:operation:${paymentId}
+ * - Shared with Refund so Settlement and Refund cannot overlap for one paymentId
+ * - NX + EX 600s + unique token; token-checked renewal every 180s and atomic release
+ * - Lease expiry/loss is never financial authorization: PostgreSQL durable branch authority,
+ *   persistent source-wallet intent, and exact Horizon reconciliation remain fail-closed guards
+ * - Source-wallet submission is separately serialized by flashpay:wallet:submit:${sourceAddress}
+ * - If the payment-operation lock cannot be acquired: reread only; never execute a competing move
  */
 
 interface LockedExecutorParams {
