@@ -9,6 +9,7 @@ import { isPaymentFinal } from "@/lib/payment-status"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { getSettlementCheckpointAuthoritative, readSettlementRefundAuthority } from "@/lib/db"
 import { getRefundCheckpointsByPaymentIds } from "@/lib/refund-checkpoint-store"
+import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 
 // Helper: Check if origin is allowed for CORS
 function isOriginAllowed(origin: string | null): boolean {
@@ -129,7 +130,16 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
         return allowCors && origin ? addCorsHeaders(response, origin) : response
       }
-      publicPayment = {...publicPayment,status:durable.checkpoint.stage === "db_finalized" ? "settled_to_merchant" : "settlement_pending",txid:durable.checkpoint.a2uTxid || publicPayment.txid}
+      const durableStatus = durable.checkpoint.stage === "db_finalized" ? "settled_to_merchant" : "settlement_pending"
+      publicPayment = {...publicPayment,status:durableStatus,txid:durable.checkpoint.a2uTxid || publicPayment.txid}
+      if (payment.status !== durableStatus || (durable.checkpoint.a2uTxid && payment.a2uTxid !== durable.checkpoint.a2uTxid)) {
+        await compareAndSwapPaymentProjection(id, payment, {
+          ...payment,
+          status: durableStatus,
+          ...(durable.checkpoint.a2uTxid ? { a2uTxid: durable.checkpoint.a2uTxid } : {}),
+          ...(durable.checkpoint.stage === "db_finalized" ? { dbRecorded: true, requiresDbReconciliation: false } : {}),
+        })
+      }
     } else if (authority.refundActive) {
       const durable = await getRefundCheckpointsByPaymentIds([id])
       const checkpoint = durable.state === "ok" ? durable.checkpoints.get(id) : undefined
@@ -137,7 +147,18 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
         return allowCors && origin ? addCorsHeaders(response, origin) : response
       }
-      publicPayment = {...publicPayment,status:checkpoint.status === "completed" && checkpoint.stage === "audit_recorded" ? "refunded" : "refund_pending",txid:checkpoint.refundTxid || publicPayment.txid}
+      const durableStatus = checkpoint.status === "completed" && checkpoint.stage === "audit_recorded" ? "refunded" : "refund_pending"
+      publicPayment = {...publicPayment,status:durableStatus,txid:checkpoint.refundTxid || publicPayment.txid}
+      if (payment.status !== durableStatus || (checkpoint.refundPaymentId && payment.refundPaymentId !== checkpoint.refundPaymentId) || (checkpoint.refundTxid && payment.refundTxid !== checkpoint.refundTxid)) {
+        await compareAndSwapPaymentProjection(id, payment, {
+          ...payment,
+          status: durableStatus,
+          settlementFailureState: durableStatus === "refunded" ? "refunded" : "refund_pending",
+          ...(checkpoint.refundPaymentId ? { refundPaymentId: checkpoint.refundPaymentId } : {}),
+          ...(checkpoint.refundTxid ? { refundTxid: checkpoint.refundTxid } : {}),
+          ...(durableStatus === "refunded" ? { refundStatus: "completed" } : {}),
+        })
+      }
     }
     const successResponse = NextResponse.json({
       success: true,

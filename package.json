@@ -35,7 +35,8 @@
     "certify:lease-loss-adversarial": "node scripts/verify-financial-lease-loss-adversarial-safety.mjs",
     "certify:f3-1": "node scripts/verify-f3-1-public-status-reader-authority-map.mjs",
     "certify:f3-2": "node scripts/verify-f3-2-stale-state-matrix.mjs",
-    "certify:f3-3": "node scripts/verify-f3-3-durable-public-status-authority.mjs"
+    "certify:f3-3": "node scripts/verify-f3-3-durable-public-status-authority.mjs",
+    "certify:f3-4": "node scripts/verify-f3-4-projection-self-healing.mjs"
   },
   "overrides": {
     "react": "^19",
