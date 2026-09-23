@@ -6,6 +6,7 @@ import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 import { numberToExactPositiveStroops } from "@/lib/financial-amount-stroops"
+import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
 
 /**
  * UNIFIED A2U EXECUTOR - Single source of truth for ALL A2U execution paths
@@ -1087,7 +1088,51 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     }
 
     console.log("[A2U Stage2] Submitting to Horizon")
-    const moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)
+    let moved: Stage2MoveResult
+    let reconciledSubmitFeeStroops: number | null = null
+    try {
+      moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)
+    } catch (submitError) {
+      // R100-7: a transport exception after submit is ambiguous. Reconcile the exact
+      // prepared hash immediately via the existing GET-only Horizon proof path; never
+      // submit again from this branch. Anything short of exact movement proof stays pending.
+      console.warn("[R100-7 SETTLEMENT HORIZON IMMEDIATE RECONCILIATION] submit exception", {
+        paymentId: ctx.paymentId,
+        preparedHash,
+        preparedSequence: transaction.sequence,
+        error: submitError instanceof Error ? submitError.message : "unknown",
+      })
+      const reconciled = await executeFinancialRecoverySettlementSubmitReplay({ payment: ctx.payment, paymentId: ctx.paymentId })
+      const feeStroops = reconciled.outcome === "MOVEMENT_VERIFIED"
+        ? Math.round(reconciled.horizonFeeCharged * 10_000_000)
+        : Number.NaN
+      if (
+        reconciled.outcome !== "MOVEMENT_VERIFIED" ||
+        reconciled.moneyMovementProven !== true ||
+        reconciled.authorizesFinancialAction !== false ||
+        reconciled.paymentId !== ctx.paymentId ||
+        reconciled.merchantUid !== ctx.merchantUid ||
+        reconciled.reference.preparedHash !== preparedHash ||
+        reconciled.reference.preparedSequence !== transaction.sequence ||
+        reconciled.reference.a2uPaymentId !== a2uPaymentId ||
+        reconciled.reference.fromAddress !== appPublicKey ||
+        reconciled.reference.toAddress !== toAddress ||
+        reconciled.reference.amount !== amount ||
+        reconciled.reference.envelopeXdr !== transaction.toXDR() ||
+        !Number.isFinite(reconciled.horizonFeeCharged) ||
+        reconciled.horizonFeeCharged < 0 ||
+        !Number.isSafeInteger(feeStroops) ||
+        feeStroops < 0 ||
+        feeStroops / 10_000_000 !== reconciled.horizonFeeCharged
+      ) {
+        return { ok: false, error: "Horizon submit outcome remains unverified", userFacingStatus: "settlement_pending" }
+      }
+      reconciledSubmitFeeStroops = feeStroops
+      moved = { ok: true, txidFromHorizon: preparedHash }
+      console.log("[R100-7 SETTLEMENT HORIZON IMMEDIATE RECONCILIATION] exact movement verified", {
+        paymentId: ctx.paymentId, preparedHash, preparedSequence: transaction.sequence, feeStroops,
+      })
+    }
     if (!moved.ok) return moved
     const txidFromHorizon = moved.txidFromHorizon
     if (process.env.VERCEL_ENV !== "production" && ctx.isRecovery === false && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
@@ -1098,10 +1143,13 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     
     // Fetch the typed transaction record from Horizon to read actual fee_charged
     console.log("[A2U Stage2] Fetching transaction record for fee verification")
-    const transactionRecord = await horizonServer.transactions().transaction(txidFromHorizon).call()
+    const transactionRecord = reconciledSubmitFeeStroops === null
+      ? await horizonServer.transactions().transaction(txidFromHorizon).call()
+      : null
     
-    // Validate fee_charged is number or string (stroops)
-    const feeChargedStroops = transactionRecord.fee_charged
+    // Validate fee_charged is number or string (stroops). On the R100-7 ambiguity
+    // branch this fee already came from the exact GET-only Horizon proof above.
+    const feeChargedStroops = reconciledSubmitFeeStroops ?? transactionRecord?.fee_charged
     if (typeof feeChargedStroops !== 'number' && typeof feeChargedStroops !== 'string') {
       return { ok: false, error: "Horizon transaction has invalid fee_charged type", userFacingStatus: "error" }
     }
