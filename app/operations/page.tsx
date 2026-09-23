@@ -132,6 +132,20 @@ export default function OperationsPage() {
 
   useEffect(() => { if (uidData.status === "success" && uidData.uid === config.ownerUid && uidData.accessToken) void loadIncidentHealth() }, [uidData.status, uidData.uid, uidData.accessToken])
 
+  // R100-15: authenticated, SELECT-only final production financial snapshot.
+  // This only triggers the owner-protected diagnostic after owner verification.
+  // The server route itself remains SELECT-only and emits evidence to Runtime Logs.
+  useEffect(() => {
+    if (uidData.status !== "success" || uidData.uid !== config.ownerUid || !uidData.accessToken) return
+    void fetch("/api/operations/r10015-financial-snapshot", {
+      headers: { Authorization: `Bearer ${uidData.accessToken}` },
+      cache: "no-store",
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`R100-15 diagnostic failed: ${response.status}`)
+      await response.json()
+    }).catch((error) => console.error("[operations] R100-15 financial snapshot unavailable", error))
+  }, [uidData.status, uidData.uid, uidData.accessToken])
+
   // R100-1: authenticated, SELECT-only production accounting evidence.
   // The server emits the evidence to Vercel Runtime Logs; no financial state is changed.
   useEffect(() => {
