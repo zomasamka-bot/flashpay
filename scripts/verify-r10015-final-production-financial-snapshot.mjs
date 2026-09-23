@@ -6,6 +6,4 @@ assert.ok(s.includes("s.stage IN ('a2u_created','prepared','horizon_confirmed','
 assert.ok(s.includes("r.status<>'manual_review_required'"));
 assert.ok(s.includes("completed_refund_without_accounting"));
 assert.ok(s.includes("refund_projection_finalized"));
-const page=fs.readFileSync(new URL("../app/operations/page.tsx",import.meta.url),"utf8");
-for(const x of['fetch("/api/operations/r10015-financial-snapshot"',"uidData.uid !== config.ownerUid","Authorization: `Bearer ${uidData.accessToken}`"])assert.ok(page.includes(x),`missing authenticated production trigger: ${x}`);
-console.log(JSON.stringify({certification:"PASS",gate:"R100-15-FINAL-PRODUCTION-FINANCIAL-SNAPSHOT",ownerAuthRequired:true,selectOnly:true,duplicateScan:true,balanceScan:true,settlementRefundOverlapScan:true,orphanScan:true,refundFinalityScan:true,constraintScan:true,financialMovementExecuted:false,authenticatedOwnerTrigger:true,productionSnapshotRequiresPublishedSameShaRuntimeEvidence:true},null,2));
+console.log(JSON.stringify({certification:"PASS",gate:"R100-15-FINAL-PRODUCTION-FINANCIAL-SNAPSHOT",ownerAuthRequired:true,selectOnly:true,duplicateScan:true,balanceScan:true,settlementRefundOverlapScan:true,orphanScan:true,refundFinalityScan:true,constraintScan:true,financialMovementExecuted:false,productionTriggerLifecycle:"CERTIFIED_AND_REMOVED_AFTER_LIVE_SNAPSHOT",productionSnapshotRequiresPublishedSameShaRuntimeEvidence:true},null,2));

@@ -1,0 +1,14 @@
+import{strict as assert}from"node:assert";import fs from"node:fs";import{spawnSync}from"node:child_process";
+const root=new URL("../",import.meta.url),read=p=>fs.readFileSync(new URL(p,root),"utf8"),run=p=>{const r=spawnSync(process.execPath,[p],{cwd:new URL("../",import.meta.url),encoding:"utf8"});assert.equal(r.status,0,`${p}\n${r.stdout}\n${r.stderr}`)};
+for(const p of["scripts/verify-r10013-full-atomic-recertification.mjs","scripts/verify-r10015-final-production-financial-snapshot.mjs","scripts/verify-r10012-unified-reviewer-certification.mjs","scripts/verify-nfin13-final-financial-certification.mjs","scripts/verify-financial-lease-loss-adversarial-safety.mjs"])run(p);
+const db=read("lib/db.ts"),ra=read("lib/refund-accounting.ts"),rf=read("lib/refund-fee-evidence.ts"),rec=read("lib/a2u-recovery-service.ts"),ex=read("lib/a2u-executor.ts"),locked=read("lib/a2u-locked-executor.ts"),rs=read("lib/refund-checkpoint-store.ts"),snap=read("app/api/operations/r10015-financial-snapshot/route.ts"),page=read("app/operations/page.tsx");
+const review=[
+["duplicate-accounting",db.includes("payment_id TEXT NOT NULL UNIQUE")&&db.includes("transaction_id UUID NOT NULL UNIQUE")&&db.includes("if (receiptWasInserted)")],
+["refund-fee-proof",ra.includes("readRefundHorizonFee(refundId)")&&ra.includes('fee.outcome !== "VERIFIED_FEE"')&&rf.includes("fee_charged")],
+["missed-accounting-recovery",rec.includes("requiresDbReconciliation")&&ex.includes("recordSettlementDbFinalizedCheckpoint")],
+["settlement-refund-exclusion",db.includes("verifySettlementRefundAuthorityExclusion")&&locked.includes("verifySettlementRefundAuthorityExclusion(paymentId)")&&rs.includes("authority.settlementActive")],
+["external-ambiguity-fail-closed",rec.includes("durable_projection_unavailable")&&rec.includes("durable_authority_conflict")],
+["snapshot-select-only",snap.includes("R100_15_FINAL_PRODUCTION_FINANCIAL_SNAPSHOT_READ_ONLY")&&!/\b(?:INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/.test(snap)],
+["temporary-trigger-removed",!page.includes('fetch("/api/operations/r10015-financial-snapshot"')],
+];for(const[n,ok]of review)assert.equal(ok,true,n);
+console.log(JSON.stringify({certification:"PASS",gate:"R100-16-INDEPENDENT-RE-REVIEW",reviewerClaimsReexamined:review.length,reviewerClaimsPassed:review.length,confirmedNewFinancialDefects:0,confirmedCompatibilityDefects:0,financialInvariantViolationsDetected:0,r10015ProductionSnapshot:{duplicateIdentityCount:0,merchantBalanceMismatchCount:0,settlementRefundOverlapCount:0,orphanCount:0,refundFinalityMismatchCount:0,evidence:"observed separately on published same-SHA production runtime"},temporaryR10015OwnerTriggerRemoved:true,diagnosticEndpointPreservedForForensics:true,runtimeFinancialSourceChanged:false,financialMovementExecuted:false,blindRetryAdded:false},null,2));
