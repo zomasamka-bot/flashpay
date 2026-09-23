@@ -132,6 +132,19 @@ export default function OperationsPage() {
 
   useEffect(() => { if (uidData.status === "success" && uidData.uid === config.ownerUid && uidData.accessToken) void loadIncidentHealth() }, [uidData.status, uidData.uid, uidData.accessToken])
 
+  // R100-1: authenticated, SELECT-only production accounting evidence.
+  // The server emits the evidence to Vercel Runtime Logs; no financial state is changed.
+  useEffect(() => {
+    if (uidData.status !== "success" || uidData.uid !== config.ownerUid || !uidData.accessToken) return
+    void fetch("/api/operations/r1001-accounting-truth", {
+      headers: { Authorization: `Bearer ${uidData.accessToken}` },
+      cache: "no-store",
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`R100-1 diagnostic failed: ${response.status}`)
+      await response.json()
+    }).catch((error) => console.error("[operations] R100-1 accounting truth unavailable", error))
+  }, [uidData.status, uidData.uid, uidData.accessToken])
+
 
 
   if (!mounted) {
