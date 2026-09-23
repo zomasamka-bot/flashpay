@@ -26,4 +26,4 @@ assert.ok(refund.includes("getRefundCheckpointReadOnly"));
 assert.ok(status.includes('payment.status === "settled_to_merchant"'));
 assert.ok(route.includes('redis.get(`payment:${id}`)'));
 assert.ok(route.includes("getPublicPayment(payment)"));
-console.log(JSON.stringify({certification:"PASS",gate:"F3-2-STALE-STATE-MATRIX",mode:"STATIC_AND_MODEL_EVIDENCE_ONLY",cases:matrix.length,casesPassed:matrix.length,matrix,confirmedGap:"PUBLIC_READER_DOES_NOT_YET_APPLY_DURABLE_STALE_STATE_MATRIX",financialRuntimeSourceChanged:false,publicRuntimeReaderChanged:false,financialMovementExecuted:false,nextGate:"F3-3-DURABLE-PUBLIC-STATUS-AUTHORITY"},null,2));
+console.log(JSON.stringify({certification:"PASS",gate:"F3-2-STALE-STATE-MATRIX",mode:"STATIC_AND_MODEL_EVIDENCE_ONLY",cases:matrix.length,casesPassed:matrix.length,matrix,historicalGapClosed:"PUBLIC_READER_DOES_NOT_YET_APPLY_DURABLE_STALE_STATE_MATRIX",currentGapOpen:false,financialRuntimeSourceChanged:false,publicRuntimeReaderChanged:false,financialMovementExecuted:false,nextGate:"F3-3-DURABLE-PUBLIC-STATUS-AUTHORITY"},null,2));
