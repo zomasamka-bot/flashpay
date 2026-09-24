@@ -145,21 +145,6 @@ export default function OperationsPage() {
     }).catch((error) => console.error("[operations] R100-1 accounting truth unavailable", error))
   }, [uidData.status, uidData.uid, uidData.accessToken])
 
-  // DR-2: authenticated, SELECT-only final financial snapshot. This complements
-  // R100-1 with Settlement/Refund overlap, orphan and refund-finality evidence.
-  // It cannot repair, retry, queue, call Pi/Horizon, or mutate financial state.
-  useEffect(() => {
-    if (uidData.status !== "success" || uidData.uid !== config.ownerUid || !uidData.accessToken) return
-    void fetch("/api/operations/r10015-financial-snapshot", {
-      headers: { Authorization: `Bearer ${uidData.accessToken}` },
-      cache: "no-store",
-    }).then(async (response) => {
-      if (!response.ok) throw new Error(`DR-2/R100-15 diagnostic failed: ${response.status}`)
-      await response.json()
-    }).catch((error) => console.error("[operations] DR-2/R100-15 financial snapshot unavailable", error))
-  }, [uidData.status, uidData.uid, uidData.accessToken])
-
-
 
   if (!mounted) {
     return null
