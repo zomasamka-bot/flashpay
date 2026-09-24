@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 358,
-  "totalBytes": 2514636,
+  "fileCount": 359,
+  "totalBytes": 2517216,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 61933,
-      "sha256": "47bb21c6d94d56330c9a15a14bbfb5b7a75714be86db1bb23ce3eea1274a8712"
+      "bytes": 62116,
+      "sha256": "9e1e28f9631ec82c4b0e5e254cece59ad42198ac283837e5d22b39113f8b101b"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -1385,6 +1385,11 @@
       "path": "scripts/verify-dr31-final-matrix-closure-gate.mjs",
       "bytes": 3556,
       "sha256": "d0578faea0caf5a07afd6924b9c561ae4847a415b8f2ca0df8b493f17d2e4579"
+    },
+    {
+      "path": "scripts/verify-dr32-live-hook-test-readiness.mjs",
+      "bytes": 2397,
+      "sha256": "bec4bc083cb614b363041c5a63f0a0594babbf6909f8eb0d83ac5f9628b460aa"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",
