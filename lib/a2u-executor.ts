@@ -1562,7 +1562,9 @@ export async function persistCheckpointMerged(
     if (updates.merchantId !== undefined) merged.merchantId = updates.merchantId
     if (updates.merchantAddress !== undefined) merged.merchantAddress = updates.merchantAddress
     if (updates.merchantUid !== undefined) merged.merchantUid = updates.merchantUid
-    if (updates.accessToken !== undefined) merged.accessToken = updates.accessToken
+    // DR-5: bearer material is legacy projection compatibility only, never durable or recovery authority.
+    // Every server checkpoint write scrubs any historical bearer instead of propagating or accepting one.
+    merged.accessToken = ""
     if (updates.amount !== undefined) merged.amount = updates.amount
     if (updates.customerAmount !== undefined) merged.customerAmount = updates.customerAmount
     if (updates.merchantAmount !== undefined) merged.merchantAmount = updates.merchantAmount

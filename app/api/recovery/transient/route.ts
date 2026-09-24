@@ -229,7 +229,7 @@ async function repopulateDurableSettlementWork():Promise<{repopulated:number;con
       if(existing){
         if(existing.id!==d.paymentId||existing.merchantId!==d.merchantId||existing.merchantUid!==d.merchantUid||existing.piPaymentId!==d.u2aIdentifier||existing.u2aTxid!==d.u2aTxid||existing.a2uPaymentId!==d.a2uPaymentId||existing.a2uTxid!==d.a2uTxid||existing.refundPaymentId!==undefined||existing.refundTxid!==undefined){conflicts++;continue}
         if(existing.status!=='settled_to_merchant'||existing.dbRecorded!==true||existing.requiresDbReconciliation===true){
-          const next:Payment={...existing,...terminalProjection,accessToken:existing.accessToken,createdAt:existing.createdAt,redisProjectionVersion:existing.redisProjectionVersion,settledAt:existing.settledAt??new Date().toISOString()}
+          const next:Payment={...existing,...terminalProjection,accessToken:"",createdAt:existing.createdAt,redisProjectionVersion:existing.redisProjectionVersion,settledAt:existing.settledAt??new Date().toISOString()}
           const cas=await compareAndSwapPaymentProjection(paymentId,existing,next)
           if(cas.outcome!=='UPDATED'&&!(cas.outcome==='CONFLICT'&&cas.current?.status==='settled_to_merchant'&&cas.current.dbRecorded===true)){conflicts++;continue}
         }

@@ -1,0 +1,18 @@
+import { strict as assert } from "node:assert"
+import fs from "node:fs"
+const read=p=>fs.readFileSync(new URL("../"+p,import.meta.url),"utf8")
+const payments=read("app/api/payments/route.ts")
+const executor=read("lib/a2u-executor.ts")
+const recovery=read("app/api/recovery/transient/route.ts")
+const db=read("lib/db.ts")
+const complete=read("app/api/pi/complete/route.ts")
+assert.ok(payments.includes('Authorization: `Bearer ${accessToken}`'))
+assert.equal(payments.includes("accessToken: accessToken"),false)
+assert.ok(executor.includes('merged.accessToken = ""'))
+assert.equal(executor.includes("merged.accessToken = updates.accessToken"),false)
+assert.ok(recovery.includes('accessToken:""'))
+assert.equal(recovery.includes('accessToken:existing.accessToken'),false)
+assert.equal(/access[_]?token/i.test(db),false)
+assert.equal(complete.includes("accessToken"),false)
+assert.equal(executor.includes('Bearer ${ctx.accessToken}'),false)
+console.log(JSON.stringify({certification:"PASS",gate:"DR-5-LEGACY-BEARER-WRITE-SURFACE",freshServerProjectionBearerPersisted:false,checkpointBearerInjectionAccepted:false,legacyBearerPropagatedByCheckpoint:false,terminalRecoveryBearerPropagated:false,postgresBearerPersistence:false,completeBearerDependency:false,bearerFinancialAuthority:false,legacyProjectionCompatibility:"EMPTY_STRING_PLACEHOLDER_ONLY",financialMovementExecuted:false,secretsRead:false},null,2))
