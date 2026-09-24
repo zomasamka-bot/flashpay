@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/recovery/transient",
-      "schedule": "10 20 * * *"
+      "schedule": "0 21 * * *"
     }
   ]
 }
