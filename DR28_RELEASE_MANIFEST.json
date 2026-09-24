@@ -13,13 +13,18 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 354,
-  "totalBytes": 2444179,
+  "fileCount": 356,
+  "totalBytes": 2507257,
   "files": [
     {
       "path": ".gitignore",
       "bytes": 23,
       "sha256": "6f5ef2e3a6bd899a7f379e73d7adf79b37c152577a85c21a52a6543c7993b1f0"
+    },
+    {
+      "path": "DR28_RELEASE_MANIFEST.json",
+      "bytes": 61373,
+      "sha256": "4792a3bc08bf24da2d5a5f26fc273a00ab0b69090a6e5bbdf17dbd9071190cd8"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -1365,6 +1370,11 @@
       "path": "scripts/verify-dr28-clean-release-artifact.mjs",
       "bytes": 2241,
       "sha256": "e5fa30b1b4207a3af5e124f1de0be28ca24310bc809586efcbf3e2951aab2a4d"
+    },
+    {
+      "path": "scripts/verify-dr29-same-sha-production-certification.mjs",
+      "bytes": 1705,
+      "sha256": "a0d53769e9742ee1a951c5bcb59bd08b7a87eb8720d0f201efcfb8b3dad485e7"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",
