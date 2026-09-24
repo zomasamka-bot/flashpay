@@ -1,5 +1,5 @@
 import { redis, isRedisConfigured } from './redis'
-import { query, readSettlementRefundAuthority } from './db'
+import { query, readSettlementRefundAuthority, withPaymentAuthorityTransaction } from './db'
 import type { Payment, RefundAuditEvent, RefundCheckpoint } from './types'
 
 const redisKey = (refundId: string) => `flashpay:refund:checkpoint:${refundId}`
@@ -355,26 +355,25 @@ export async function verifyRefundTables(): Promise<boolean> {
  */
 export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoint, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
   if (!process.env.DATABASE_URL) return null
-  const result = await query(`
-    WITH inserted AS (
-      INSERT INTO refund_checkpoints
-        (refund_id, payment_id, idempotency_key, status, stage, payer_uid,
-         payer_uid_verified_at, amount, currency, source_payment_status,
-         source_settlement_state, created_at, updated_at, attempt_count)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-      ON CONFLICT (payment_id) DO NOTHING
-      RETURNING *
-    ), audited AS (
-      INSERT INTO refund_audit_events
-        (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
-      SELECT $15, refund_id, payment_id, $16, $17, idempotency_key, $18, $19::jsonb FROM inserted
-      RETURNING refund_id
-    ) SELECT inserted.* FROM inserted JOIN audited USING (refund_id)`, [
-      checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.status, checkpoint.stage,
-      checkpoint.payerUid, checkpoint.payerUidVerifiedAt, checkpoint.amount, checkpoint.currency,
-      checkpoint.sourcePaymentStatus, checkpoint.sourceSettlementState, checkpoint.createdAt, checkpoint.updatedAt,
-      checkpoint.attemptCount, event.eventId, event.eventType, event.actorType, event.createdAt, event.details,
-    ])
+  const result = await withPaymentAuthorityTransaction(checkpoint.paymentId, async (tx) => {
+    const opposite = await tx`SELECT EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${checkpoint.paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')) AS active`
+    if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean' || opposite[0].active === true) return []
+    return await tx`
+      WITH inserted AS (
+        INSERT INTO refund_checkpoints
+          (refund_id, payment_id, idempotency_key, status, stage, payer_uid,
+           payer_uid_verified_at, amount, currency, source_payment_status,
+           source_settlement_state, created_at, updated_at, attempt_count)
+        VALUES (${checkpoint.refundId},${checkpoint.paymentId},${checkpoint.idempotencyKey},${checkpoint.status},${checkpoint.stage},${checkpoint.payerUid},${checkpoint.payerUidVerifiedAt},${checkpoint.amount},${checkpoint.currency},${checkpoint.sourcePaymentStatus},${checkpoint.sourceSettlementState},${checkpoint.createdAt},${checkpoint.updatedAt},${checkpoint.attemptCount})
+        ON CONFLICT (payment_id) DO NOTHING
+        RETURNING *
+      ), audited AS (
+        INSERT INTO refund_audit_events
+          (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
+        SELECT ${event.eventId}, refund_id, payment_id, ${event.eventType}, ${event.actorType}, idempotency_key, ${event.createdAt}, ${JSON.stringify(event.details)}::jsonb FROM inserted
+        RETURNING refund_id
+      ) SELECT inserted.* FROM inserted JOIN audited USING (refund_id)`
+  })
   if (!Array.isArray(result) || result.length === 0) return null
   const persisted = normalizeCheckpoint(result[0])
   if (persisted && isRedisConfigured) await redis.set(redisKey(persisted.refundId), persisted)

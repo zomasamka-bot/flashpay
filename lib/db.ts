@@ -88,6 +88,25 @@ async function getPostgresClient() {
   }
 }
 
+export async function withPaymentAuthorityTransaction<T>(paymentId: string, work: (tx: any) => Promise<T>): Promise<T | null> {
+  if (typeof paymentId !== 'string' || paymentId.trim() === '' || paymentId !== paymentId.trim()) return null
+  const client = await getPostgresClient()
+  if (!client) return null
+  try {
+    return await client.begin(async (tx: any) => {
+      // DR-6/DR-7: PostgreSQL is the durable Settlement/Refund XOR serialization
+      // authority. Redis remains a fast coordination lock only. Both durable
+      // claim paths take this transaction-scoped lock before inspecting or
+      // creating the opposite authority.
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${paymentId}, 0))`
+      return await work(tx)
+    })
+  } catch (error) {
+    console.error('[DB] Payment authority transaction uncertain:', error)
+    return null
+  }
+}
+
 export async function query(text: string, values?: unknown[]) {
   // Check if PostgreSQL is configured
   if (!process.env.DATABASE_URL) {
@@ -872,6 +891,13 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
 
     const rows = await client.begin(async (tx: any) => {
+      // DR-6/DR-7: serialize the durable XOR claim in PostgreSQL itself. This
+      // remains correct if the shared Redis operation lock expires or is lost.
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
+      const opposite = await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active`
+      if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean') return [{ authorityIndeterminate: true }]
+      if (opposite[0].active === true) return [{ authorityConflict: true }]
+
       // F2-2: new flows may enter the movement-capable Settlement stage only after
       // the exact U2A blockchain identity AND Pi developer completion are durable.
       // Legacy pre-F2 rows are still handled by the fallback insert below.
@@ -952,6 +978,8 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable identity is ambiguous or conflicting' }
     }
     const row = rows[0] as Record<string, unknown>
+    if (row.authorityIndeterminate === true) return { outcome: 'INDETERMINATE', error: 'Settlement/Refund durable authority could not be proven' }
+    if (row.authorityConflict === true) return { outcome: 'CONFLICT', error: 'Refund durable authority already owns this payment' }
     const version = Number(row.version)
     if (!Number.isSafeInteger(version) || version < 1) {
       return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable version is invalid' }
