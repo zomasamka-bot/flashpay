@@ -61,6 +61,7 @@ type DurableU2AIngressRepopulation = {
   piCompletionReconciled:number
   piReadUncertain:number
   conflicts:number
+  conflictDiagnostics:Array<{paymentId:string;reason:string}>
 }
 
 /**
@@ -75,10 +76,10 @@ type DurableU2AIngressRepopulation = {
 async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopulation>{
   const page=await listRecoverableU2AIngressCheckpointIds(200)
   if(page.outcome!=='FOUND')throw new Error(page.error)
-  const result:DurableU2AIngressRepopulation={scanned:page.paymentIds.length,repopulated:0,healed:0,indexed:0,deferredNoAccessToken:0,verifiedOnly:0,piCompletionReconciled:0,piReadUncertain:0,conflicts:0}
+  const result:DurableU2AIngressRepopulation={scanned:page.paymentIds.length,repopulated:0,healed:0,indexed:0,deferredNoAccessToken:0,verifiedOnly:0,piCompletionReconciled:0,piReadUncertain:0,conflicts:0,conflictDiagnostics:[]}
   for(const paymentId of page.paymentIds){
     const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
-    if(authority.outcome!=='CLEAR'||authority.refundActive){result.conflicts++;continue}
+    if(authority.outcome!=='CLEAR'||authority.refundActive){result.conflicts++;result.conflictDiagnostics.push({paymentId,reason:authority.outcome!=='CLEAR'?`authority_${authority.outcome.toLowerCase()}`:'refund_active'});continue}
     let durable=await getDurableU2AIngressAuthoritative(paymentId)
     if(durable.outcome==='ABSENT')continue // It may have advanced to the existing Stage1+ recovery lane concurrently.
     if(durable.outcome!=='FOUND')throw new Error(durable.error)
@@ -120,10 +121,10 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
         paymentId,merchantId:ingress.merchantId,merchantUid:ingress.merchantUid,customerAmount:ingress.customerAmount,
         u2aIdentifier:ingress.u2aIdentifier,u2aTxid:ingress.u2aTxid,payerUid:ingress.payerUid,
       })
-      if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){result.conflicts++;continue}
+      if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){result.conflicts++;result.conflictDiagnostics.push({paymentId,reason:`completion_${completion.outcome.toLowerCase()}`});continue}
       result.piCompletionReconciled++
       durable=await getDurableU2AIngressAuthoritative(paymentId)
-      if(durable.outcome!=='FOUND'||durable.checkpoint.completedAt===null){result.conflicts++;continue}
+      if(durable.outcome!=='FOUND'||durable.checkpoint.completedAt===null){result.conflicts++;result.conflictDiagnostics.push({paymentId,reason:durable.outcome!=='FOUND'?`durable_refetch_${durable.outcome.toLowerCase()}`:'durable_refetch_missing_completed_at'});continue}
     }
 
     const d=durable.checkpoint
@@ -133,6 +134,7 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
       const advanced=await getSettlementCheckpointAuthoritative(paymentId)
       if(advanced.outcome==='FOUND')continue
       result.conflicts++
+      result.conflictDiagnostics.push({paymentId,reason:'redis_advanced_without_durable_stage1'})
       continue
     }
 
@@ -158,7 +160,7 @@ if ARGV[9]~='' then current.status='paid_to_app'; if current.paidAt==nil then cu
 current.redisProjectionVersion=projectionVersion+1
 redis.call('SET',KEYS[1],cjson.encode(current)); return 1
 `,[`payment:${paymentId}`],[paymentId,d.merchantId,d.merchantUid,String(d.customerAmount),d.u2aIdentifier,d.u2aTxid,d.payerUid,d.verifiedAt,d.completedAt??''])
-      if(healed!==1){result.conflicts++;continue}
+      if(healed!==1){result.conflicts++;result.conflictDiagnostics.push({paymentId,reason:`redis_heal_${healed}`});continue}
       result.healed++
     }else{
       const projection:Payment={
@@ -174,7 +176,7 @@ redis.call('SET',KEYS[1],cjson.encode(current)); return 1
     const readback=parsePayment(await redis.get(`payment:${paymentId}`))
     if(!readback||readback.id!==paymentId||readback.merchantId!==d.merchantId||readback.merchantUid!==d.merchantUid||readback.amount!==d.customerAmount||
       readback.customerAmount!==d.customerAmount||readback.piPaymentId!==d.u2aIdentifier||readback.u2aTxid!==d.u2aTxid||readback.payerUid!==d.payerUid||readback.payerUidSource!=='verified_u2a'){
-      result.conflicts++;continue
+      result.conflicts++;result.conflictDiagnostics.push({paymentId,reason:'redis_readback_identity_mismatch'});continue
     }
     if(!d.completedAt){result.verifiedOnly++;continue}
 
