@@ -355,7 +355,7 @@ return candidate
 }
 
 function isPiCreateBackpressureSignal(payment: Payment): boolean {
-  return payment.a2uErrorCode === "too_many_payments" || payment.a2uErrorCode === "uid_verification_429"
+  return payment.a2uErrorCode === "too_many_payments" || payment.a2uErrorCode === "uid_verification_429" || payment.a2uErrorCode === "a2u_rate_limited_post_ambiguous"
 }
 
 async function acquireTransientDrainLease(): Promise<DrainLease> {

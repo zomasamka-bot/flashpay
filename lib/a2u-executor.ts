@@ -221,7 +221,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[P7B TIMING] executeA2U Stage1", { paymentId: ctx.paymentId, durationMs: Date.now() - stage1TimingStartedAt })
     if (!stageResult.ok) {
       const retryable = stageResult.retryable === true
-      const failClosedStage1=["a2u_precreate_found_requires_reconciliation","a2u_precreate_reconciliation_indeterminate","a2u_ambiguous_reconciliation_indeterminate","a2u_network_reconciliation_indeterminate"].includes(stageResult.errorCode??"")||stageResult.errorCode?.startsWith("unparseable_")===true||stageResult.errorCode?.startsWith("invalid_dto_")===true
+      const failClosedStage1=["a2u_precreate_found_requires_reconciliation","a2u_precreate_reconciliation_indeterminate","a2u_ambiguous_reconciliation_indeterminate","a2u_network_reconciliation_indeterminate","a2u_rate_limited_post_ambiguous","a2u_failed_post_reconciliation_confirmed_none","a2u_network_reconciliation_confirmed_none"].includes(stageResult.errorCode??"")||stageResult.errorCode?.startsWith("unparseable_")===true||stageResult.errorCode?.startsWith("invalid_dto_")===true
       let failedPayment = ctx.payment
       let refundPendingFromConfirmedNone = false
       if (!failClosedStage1 && !retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
@@ -793,6 +793,20 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
         if (reconciled.outcome === "INDETERMINATE") {
           return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_ambiguous_reconciliation_indeterminate" }
         }
+        // DR-20: Pi documents what incomplete_server_payments contains, but does not
+        // document an immediate strong-consistency guarantee after an ambiguous failed
+        // POST. Therefore CONFIRMED_NONE is not authority to create a second A2U.
+        // Hold this payment fail-closed; a 429 still raises global fresh-create
+        // backpressure so other payments do not form a retry storm.
+        const rateLimitedAmbiguous = createResponse.status === 429 || codeIsTooManyPayments(errorData, errorText)
+        return {
+          ok: false,
+          error: rateLimitedAmbiguous ? "Pi rate-limited an ambiguous A2U create; exact identity is not proven" : "Pi failed an ambiguous A2U create; exact identity is not proven",
+          userFacingStatus: "manual_review_required",
+          retryable: false,
+          errorCode: rateLimitedAmbiguous ? "a2u_rate_limited_post_ambiguous" : "a2u_failed_post_reconciliation_confirmed_none",
+          errorBody: errorText.slice(0, 2000),
+        }
       }
 
       console.error("[A2U Stage1] A2U creation failed:", errorData)
@@ -880,7 +894,11 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     if (reconciled.outcome === "INDETERMINATE") {
       return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_network_reconciliation_indeterminate", errorBody: String(error).slice(0, 2000) }
     }
-    return { ok: false, error: "A2U creation network failure", userFacingStatus: "error", retryable: true, errorCode: "network_error", errorBody: String(error).slice(0, 2000) }
+    // DR-20: transport failure means the POST outcome is ambiguous. Pi's public
+    // incomplete-server-payments contract does not establish that an immediate
+    // absence is a strongly consistent proof that creation did not happen. Never
+    // authorize a fresh create from that absence alone.
+    return { ok: false, error: "A2U creation network outcome is ambiguous", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_network_reconciliation_confirmed_none", errorBody: String(error).slice(0, 2000) }
   }
 }
 
