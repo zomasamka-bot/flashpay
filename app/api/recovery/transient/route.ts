@@ -153,6 +153,7 @@ if current.horizonSuccessFlag==true or current.piCompletionPending==true or curr
 if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundProof~=nil or current.refundStatus~=nil then return -1 end
 local projectionVersion=current.redisProjectionVersion; if projectionVersion==nil then projectionVersion=0 end
 if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return -1 end
+if current.accessToken==nil then current.accessToken='' elseif type(current.accessToken)~='string' then return -1 elseif current.accessToken~='' and current.accessToken~=string.match(current.accessToken,'^%s*(.-)%s*$') then return -1 end
 current.customerAmount=amount; current.piPaymentId=ARGV[5]; current.u2aTxid=ARGV[6]; current.payerUid=ARGV[7]; current.payerUidSource='verified_u2a'
 if current.payerUidCapturedAt==nil then current.payerUidCapturedAt=ARGV[8] end
 if ARGV[9]~='' then current.status='paid_to_app'; if current.paidAt==nil then current.paidAt=ARGV[9] end; if current.settlementDispatchRequestedAt==nil then current.settlementDispatchRequestedAt=current.paidAt end end
@@ -174,7 +175,7 @@ redis.call('SET',KEYS[1],cjson.encode(current)); return 1
 
     const readback=parsePayment(await redis.get(`payment:${paymentId}`))
     if(!readback||readback.id!==paymentId||readback.merchantId!==d.merchantId||readback.merchantUid!==d.merchantUid||readback.amount!==d.customerAmount||
-      readback.customerAmount!==d.customerAmount||readback.piPaymentId!==d.u2aIdentifier||readback.u2aTxid!==d.u2aTxid||readback.payerUid!==d.payerUid||readback.payerUidSource!=='verified_u2a'){
+      readback.customerAmount!==d.customerAmount||readback.piPaymentId!==d.u2aIdentifier||readback.u2aTxid!==d.u2aTxid||readback.payerUid!==d.payerUid||readback.payerUidSource!=='verified_u2a'||!hasSettlementMerchantProjectionAuthority(readback)){
       result.conflicts++;continue
     }
     if(!d.completedAt){result.verifiedOnly++;continue}
