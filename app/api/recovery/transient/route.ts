@@ -39,7 +39,7 @@ const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d
 const F1_FINAL_LEGACY_CLOSURE_ONCE_KEY = "flashpay:repair:f1-final-legacy-closure:v1:0594908"
 const F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY = "flashpay:diagnostic:f1-orphan-forensic-proof:v1:d1a0ae"
 const F1_FINAL_ACCOUNTING_CERT_ONCE_KEY = "flashpay:diagnostic:f1-final-accounting-cert:v1:d2823a"
-const DR26_FINAL_ACCOUNTING_RECONCILIATION_ONCE_KEY = "flashpay:diagnostic:dr26-final-accounting-reconciliation:v1:20260925"
+const DR26_FINAL_ACCOUNTING_RECONCILIATION_ONCE_KEY = "flashpay:diagnostic:dr26-final-accounting-reconciliation:v2:20260925"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -872,9 +872,15 @@ export async function POST(request: NextRequest) {
                OR (ra.refund_id IS NOT NULL AND (rc.refund_payment_id IS DISTINCT FROM ra.refund_payment_id OR rc.refund_txid IS DISTINCT FROM ra.refund_txid OR rc.payment_id IS DISTINCT FROM ra.payment_id OR rc.amount IS DISTINCT FROM ra.amount))
           ), settlement_finality_mismatch AS (
             SELECT sc.payment_id FROM settlement_checkpoints sc
-            LEFT JOIN transactions t ON t.payment_id=sc.payment_id
+            LEFT JOIN transactions t ON t.payment_id=sc.u2a_identifier
             LEFT JOIN receipts r ON r.transaction_id=t.id
-            WHERE sc.stage='db_finalized' AND (t.id IS NULL OR r.id IS NULL OR r.settlement_status IS DISTINCT FROM 'settled_to_merchant' OR r.a2u_txid IS DISTINCT FROM sc.a2u_txid OR r.merchant_amount IS DISTINCT FROM sc.merchant_amount)
+            WHERE sc.stage='db_finalized' AND (
+              t.id IS NULL OR r.id IS NULL OR
+              t.payment_id IS DISTINCT FROM sc.u2a_identifier OR t.merchant_id IS DISTINCT FROM sc.merchant_id OR t.merchant_uid IS DISTINCT FROM sc.merchant_uid OR t.amount IS DISTINCT FROM sc.merchant_amount OR
+              r.settlement_status IS DISTINCT FROM 'settled_to_merchant' OR r.merchant_id IS DISTINCT FROM sc.merchant_id OR r.merchant_uid IS DISTINCT FROM sc.merchant_uid OR
+              r.u2a_identifier IS DISTINCT FROM sc.u2a_identifier OR r.u2a_txid IS DISTINCT FROM sc.u2a_txid OR r.a2u_identifier IS DISTINCT FROM sc.a2u_payment_id OR r.a2u_txid IS DISTINCT FROM sc.a2u_txid OR
+              r.customer_amount IS DISTINCT FROM sc.customer_amount OR r.merchant_amount IS DISTINCT FROM sc.merchant_amount OR r.app_commission IS DISTINCT FROM sc.app_commission
+            )
           )
           SELECT
             (SELECT COUNT(*)::int FROM transactions) transaction_count,
