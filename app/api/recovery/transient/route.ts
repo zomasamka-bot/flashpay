@@ -2561,7 +2561,19 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   let walletDrainKickGateReleased = false
   let walletDrainKickGateReleaseDeferred = false
   const periodicFreshCreateDetected = !immediateDrainMode && useReadyExecution && !piCreateBackpressureActive() && ((readyShadowFreshCreateIds?.length ?? 0) > 0 || (readyShadowRetryableIds?.length ?? 0) > 0)
-  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (readyLegacyQuarantineSucceeded > 0 || periodicFreshCreateDetected || walletDrainDeferredDbCount > 0 || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
+  // DR-21: Pi-create backpressure suppresses only work that could create a new Pi
+  // payment identity. It must never suppress continuation for already-authorized
+  // non-create work (prepared/stage1-only/reconciling/refund). Otherwise a long
+  // rate-limit window plus an exhausted burst could strand durable financial work
+  // until an unrelated external wake. Determine remaining non-create work from the
+  // exact post-burst attempted sets and the canonical refund head.
+  const backpressureNonCreateContinuationDetected = piCreateBackpressureActive() && (
+    (readyShadowPreparedIds?.some((id) => !walletDrainAttemptedSettlementIds.has(id)) ?? false) ||
+    (readyShadowStage1OnlyIds?.some((id) => !walletDrainAttemptedSettlementIds.has(id)) ?? false) ||
+    settlementReconcilingExecutionIds.some((id) => !walletDrainAttemptedSettlementIds.has(id)) ||
+    (currentRefundDrain.state === "ok" && currentRefundDrain.refundDrainHeadRefundId !== null && !walletDrainAttemptedRefundIds.has(currentRefundDrain.refundDrainHeadRefundId))
+  )
+  const continuationNeeded = useReadyExecution && walletDrainBurstStopReason === null && (readyLegacyQuarantineSucceeded > 0 || periodicFreshCreateDetected || walletDrainDeferredDbCount > 0 || backpressureNonCreateContinuationDetected || (!piCreateBackpressureActive() && (walletDrainBudgetExhausted || (readyRotationNext !== null && readyRotationNext !== "r:0"))))
   if (continuationNeeded) {
     walletDrainContinuationScheduled = scheduleTrustedTransientRequest("continuation-kick")
   } else if (useReadyExecution && walletDrainBurstStopReason === null && !piCreateBackpressureActive()) {
