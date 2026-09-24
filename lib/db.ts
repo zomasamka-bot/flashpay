@@ -502,16 +502,25 @@ export async function recordSettlementU2AApprovalClaim(params: {
       ac=normalizePostgresNumeric(row.app_commission,'settlement.app_commission')
     } catch { return { outcome:'CONFLICT', error:'Settlement U2A approval durable accounting invalid' } }
 
+    const replayStage = typeof row.stage === 'string' && [
+      'payment_identity', 'a2u_created', 'prepared', 'horizon_confirmed', 'pi_completed', 'db_finalized'
+    ].includes(row.stage)
+    const laterStage = row.stage !== 'payment_identity'
     if (
-      row.stage !== 'payment_identity' ||
+      !replayStage ||
       row.merchant_id !== params.merchantId ||
       row.merchant_uid !== params.merchantUid ||
       ca !== params.customerAmount || ma !== params.customerAmount || ac !== 0 ||
       row.u2a_approval_identifier !== params.u2aIdentifier ||
       row.u2a_approval_claimed_at == null ||
-      (row.u2a_identifier != null && row.u2a_identifier !== params.u2aIdentifier)
+      (row.u2a_identifier != null && row.u2a_identifier !== params.u2aIdentifier) ||
+      (laterStage && row.u2a_identifier !== params.u2aIdentifier)
     ) return { outcome:'CONFLICT', error:'Settlement U2A approval durable ownership conflict' }
 
+    // DR-12: the immutable approval owner remains replay-safe after the payment
+    // advances. Stage progression must not turn the same canonical Pi approval
+    // identifier into a false conflict; a different/missing later U2A identity
+    // remains fail-closed. This path is read-only and performs no Pi mutation.
     return { outcome:'REPLAYED', version }
   } catch (error) {
     console.error('[DB] Settlement U2A approval claim uncertain:', error)
