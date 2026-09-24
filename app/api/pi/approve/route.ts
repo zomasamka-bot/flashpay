@@ -161,8 +161,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Validate canonical payment against Redis record - continue requiring pending for all other records
-    if (true) {
+    // Validate canonical payment against Redis record - continue requiring pending for all other records.
+    // DR-23: the payment-existence gate above already returned on absence; keep the
+    // live validation path explicit and remove the unreachable permissive legacy branch.
       if (canonicalPayment.identifier !== identifier) {
         console.error("[Pi Webhook] SECURITY: Canonical identifier mismatch")
         return new Response(JSON.stringify({ error: "Payment validation failed" }), {
@@ -195,15 +196,12 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      if (redisPayment.status?.toLowerCase() !== "pending") {
-        console.error("[Pi Webhook] SECURITY: Redis payment is not pending:", redisPayment.status)
-        return new Response(JSON.stringify({ error: "Invalid payment status" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        })
-      }
-    } else {
-      console.warn("[Pi Webhook] No Redis payment record found - proceeding with canonical validation")
+    if (redisPayment.status?.toLowerCase() !== "pending") {
+      console.error("[Pi Webhook] SECURITY: Redis payment is not pending:", redisPayment.status)
+      return new Response(JSON.stringify({ error: "Invalid payment status" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })
     }
 
     // R101-2: after every canonical/Redis gate but BEFORE Pi /approve, atomically
