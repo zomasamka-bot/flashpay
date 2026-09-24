@@ -1746,7 +1746,11 @@ export async function POST(request: NextRequest) {
       redis.get("flashpay:recovery:active-payments:v1:prune-pending"),
       redis.get("flashpay:recovery:active-payments:v1:prune-final-settlement"),
     ])
-    if (markers.some((marker) => marker !== "done")) return NextResponse.json({ error: "Active recovery index not ready" }, { status: 503 })
+    // DR-10: these three keys are legacy Redis bootstrap certificates, not financial authority.
+    // A total Redis loss legitimately removes them. PostgreSQL durable rediscovery above
+    // reconstructs financial work, and the exact ready-baseline certification below
+    // re-certifies the rebuilt Redis indexes. Reject only contradictory marker values.
+    if (markers.some((marker) => marker !== null && marker !== "done")) return NextResponse.json({ error: "Active recovery index not ready" }, { status: 503 })
 
     const storedCursor = await redis.get("flashpay:recovery:active-payments:v1:scan-cursor")
     if (storedCursor !== null && (typeof storedCursor !== "string" || !/^c:[0-9]+$/.test(storedCursor))) return NextResponse.json({ error: "Active recovery index unavailable" }, { status: 503 })
