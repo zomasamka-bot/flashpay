@@ -29,6 +29,9 @@ function isPaymentDto(value: unknown): value is Record<string, unknown> {
   if (typeof dto.from_address !== "string" || dto.from_address.length === 0) return false
   if (typeof dto.to_address !== "string" || dto.to_address.length === 0) return false
   if (typeof dto.amount !== "number" || !Number.isFinite(dto.amount) || dto.amount <= 0) return false
+  // DR-24: all settlement/refund reconciliation in this release is bound to
+  // Pi Testnet + the Testnet Horizon/passphrase used by the financial kernel.
+  if (dto.network !== "Pi Testnet") return false
   for (const key of ["completed", "cancelled", "approved", "rejected"] as const) {
     if (key in dto && typeof dto[key] !== "boolean") return false
   }

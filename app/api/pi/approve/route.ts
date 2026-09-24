@@ -89,6 +89,14 @@ export async function POST(request: NextRequest) {
       return new Response(JSON.stringify({ error: "Payment validation failed" }), { status: 400, headers: { "Content-Type": "application/json" } })
     }
 
+    // DR-24: FlashPay is deliberately Testnet-only at this release boundary.
+    // A Pi Developer Portal/app-key mismatch must fail before Pi /approve or any
+    // durable financial ownership transition can authorize Testnet settlement.
+    if (canonicalPayment.network !== "Pi Testnet") {
+      console.error("[DR-24 NETWORK BOUNDARY] canonical Pi network mismatch", { observedNetwork: typeof canonicalPayment.network === "string" ? canonicalPayment.network : "invalid" })
+      return new Response(JSON.stringify({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }), { status: 409, headers: { "Content-Type": "application/json" } })
+    }
+
     // Derive paymentId ONLY from canonical metadata
     const rawPaymentId = canonicalPayment.metadata?.paymentId
     if (typeof rawPaymentId !== "string" || rawPaymentId.length === 0 || rawPaymentId !== rawPaymentId.trim()) {
@@ -288,6 +296,11 @@ export async function POST(request: NextRequest) {
     const refetchedPayment = await piRefetchResponse.json()
 
     // Revalidate paymentId, amount, direction, non-cancelled state, and developer_approved
+    if (refetchedPayment.network !== "Pi Testnet") {
+      console.error("[DR-24 NETWORK BOUNDARY] refetched Pi network mismatch", { paymentId, observedNetwork: typeof refetchedPayment.network === "string" ? refetchedPayment.network : "invalid" })
+      return new Response(JSON.stringify({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }), { status: 409, headers: { "Content-Type": "application/json" } })
+    }
+
     if (refetchedPayment.metadata?.paymentId !== paymentId) {
       console.error("[Pi Webhook] SECURITY: Refetched paymentId mismatch")
       return new Response(JSON.stringify({ error: "Payment validation failed" }), {

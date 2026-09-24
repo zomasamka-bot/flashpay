@@ -86,6 +86,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment identifier mismatch" }, { status: 400 })
     }
 
+    // DR-24: never let a Mainnet/unknown Pi payment enter the Testnet-only
+    // durable ingress + settlement kernel. Network mismatch is a hard boundary.
+    if (piPayment.network !== "Pi Testnet") {
+      console.error("[DR-24 NETWORK BOUNDARY] completion Pi network mismatch", { observedNetwork: typeof piPayment.network === "string" ? piPayment.network : "invalid" })
+      return NextResponse.json({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }, { status: 409 })
+    }
+
     if (piPayment.direction !== "user_to_app") {
       console.error("[Pi Complete] Invalid payment direction:", piPayment.direction)
       return NextResponse.json({ error: "Invalid payment direction" }, { status: 400 })
@@ -197,7 +204,11 @@ export async function POST(request: NextRequest) {
       const refetchedFlashPaymentId = finalPiPayment.metadata?.paymentId
       if (typeof refetchedFlashPaymentId !== "string" || refetchedFlashPaymentId.length === 0 || refetchedFlashPaymentId !== refetchedFlashPaymentId.trim() || refetchedFlashPaymentId !== preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
 
-      // Validate identifier, direction, amount, txid, non-cancelled, developer_completed after refetch
+      // Validate identifier, network, direction, amount, txid, non-cancelled, developer_completed after refetch
+      if (finalPiPayment.network !== "Pi Testnet") {
+        console.error("[DR-24 NETWORK BOUNDARY] refetched completion network mismatch", { paymentId: preFlashPaymentId, observedNetwork: typeof finalPiPayment.network === "string" ? finalPiPayment.network : "invalid" })
+        return NextResponse.json({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }, { status: 409 })
+      }
       if (!finalPiPayment.identifier || finalPiPayment.identifier !== piPaymentId) {
         console.error("[Pi Complete] Refetched payment identifier mismatch")
         return NextResponse.json({ error: "Payment identifier mismatch" }, { status: 400 })
@@ -234,6 +245,7 @@ export async function POST(request: NextRequest) {
     const finalPayerUid = typeof finalPiPayment.user_uid === "string" && finalPiPayment.user_uid.length > 0 && finalPiPayment.user_uid === finalPiPayment.user_uid.trim() ? finalPiPayment.user_uid : ""
     if (
       finalPiPayment.identifier !== piPaymentId ||
+      finalPiPayment.network !== "Pi Testnet" ||
       finalPiPayment.direction !== "user_to_app" ||
       finalPiPayment.metadata?.paymentId !== preFlashPaymentId ||
       finalPiPayment.status?.developer_approved !== true ||
