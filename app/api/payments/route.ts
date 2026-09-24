@@ -8,7 +8,7 @@ import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/re
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
-import { recordSettlementPaymentIdentityCheckpoint } from "@/lib/db"
+import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 const corsHeaders = {
@@ -162,6 +162,16 @@ export async function POST(request: NextRequest) {
     if (!isKvConfigured) {
       return NextResponse.json(
         { error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
+
+    // DR-13: a clean-install first payment request must establish the durable
+    // Settlement authority schema before attempting the F2-1 identity write.
+    // Idempotent PostgreSQL DDL is safe under concurrent cold-start requests.
+    if (!(await ensureSettlementCheckpointTable())) {
+      return NextResponse.json(
+        { error: "Payment durability unavailable", code: "PAYMENT_SCHEMA_UNAVAILABLE" },
         { status: 503, headers: corsHeaders },
       )
     }

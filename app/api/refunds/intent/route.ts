@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'crypto'
 import { type NextRequest, NextResponse } from 'next/server'
 import { isRedisConfigured } from '@/lib/redis'
 import { verifyRefundTables } from '@/lib/refund-checkpoint-store'
+import { ensureRefundCheckpointTables } from '@/lib/db'
 import { serverConfig } from '@/lib/server-config'
 import { createRefundIntentInternal } from '@/lib/refund-intent-service'
 
@@ -33,7 +34,10 @@ export async function POST(request: NextRequest) {
     if (!isRedisConfigured) {
       return NextResponse.json({ error: 'Refund store unavailable' }, { status: 503, headers: corsHeaders })
     }
-    const tablesReady = await verifyRefundTables()
+    // DR-13: clean-install first request establishes only the durable Refund schema.
+    // The subsequent verifier is independent and keeps schema uncertainty fail-closed.
+    const schemaInitialized = await ensureRefundCheckpointTables()
+    const tablesReady = schemaInitialized && await verifyRefundTables()
     if (!tablesReady) {
       return NextResponse.json({ error: 'Refund tables unavailable' }, { status: 503, headers: corsHeaders })
     }

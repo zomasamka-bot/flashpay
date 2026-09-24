@@ -1353,6 +1353,62 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
   }catch(e){console.error('[DB] Settlement DB-finality checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement DB-finality checkpoint uncertain'}}
 }
 
+export async function ensureRefundCheckpointTables(): Promise<boolean> {
+  if (!process.env.DATABASE_URL) return false
+  // DR-13: first Refund request must be able to establish its durable schema on
+  // a clean database. DDL is idempotent/concurrency-safe; every step is checked
+  // and no financial movement is possible until the complete schema exists.
+  const checkpoints = await query(`
+    CREATE TABLE IF NOT EXISTS refund_checkpoints (
+      refund_id TEXT PRIMARY KEY,
+      payment_id TEXT NOT NULL UNIQUE,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      payer_uid TEXT NOT NULL,
+      payer_uid_verified_at TIMESTAMP NOT NULL,
+      amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
+      currency TEXT NOT NULL DEFAULT 'π',
+      source_payment_status TEXT NOT NULL,
+      source_settlement_state TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      refund_payment_id TEXT,
+      refund_txid TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+      last_error_code TEXT,
+      last_error_message TEXT,
+      next_retry_at TIMESTAMP
+    )
+  `)
+  if (checkpoints === null) return false
+
+  if (!(await ensureRefundAccountingTable())) return false
+
+  const audits = await query(`
+    CREATE TABLE IF NOT EXISTS refund_audit_events (
+      event_id TEXT PRIMARY KEY,
+      refund_id TEXT NOT NULL REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
+      payment_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_type TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      details JSONB NOT NULL DEFAULT '{}'::jsonb
+    )
+  `)
+  if (audits === null) return false
+
+  for (const ddl of [
+    `CREATE INDEX IF NOT EXISTS idx_refund_checkpoints_status_retry ON refund_checkpoints(status, next_retry_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_refund_checkpoints_payment ON refund_checkpoints(payment_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_refund_audit_payment_created ON refund_audit_events(payment_id, created_at ASC)`,
+    `CREATE INDEX IF NOT EXISTS idx_refund_audit_refund_created ON refund_audit_events(refund_id, created_at ASC)`,
+  ]) if ((await query(ddl)) === null) return false
+
+  return true
+}
+
 export async function ensureRefundAccountingTable(): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
   const result = await query(`
@@ -1594,66 +1650,11 @@ export async function initializeSchema() {
       throw new Error('Settlement checkpoint schema initialization failed')
     }
 
-    // Create durable refund intent/checkpoint records.
-    // The unique payment and idempotency constraints prevent duplicate refunds.
-    await query(`
-      CREATE TABLE IF NOT EXISTS refund_checkpoints (
-        refund_id TEXT PRIMARY KEY,
-        payment_id TEXT NOT NULL UNIQUE,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        status TEXT NOT NULL,
-        stage TEXT NOT NULL,
-        payer_uid TEXT NOT NULL,
-        payer_uid_verified_at TIMESTAMP NOT NULL,
-        amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
-        currency TEXT NOT NULL DEFAULT 'π',
-        source_payment_status TEXT NOT NULL,
-        source_settlement_state TEXT NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        refund_payment_id TEXT,
-        refund_txid TEXT,
-        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-        last_error_code TEXT,
-        last_error_message TEXT,
-        next_retry_at TIMESTAMP
-      )
-    `)
-
-    await ensureRefundAccountingTable()
-
-    await query(`
-      CREATE TABLE IF NOT EXISTS refund_audit_events (
-        event_id TEXT PRIMARY KEY,
-        refund_id TEXT NOT NULL REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
-        payment_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        actor_type TEXT NOT NULL,
-        idempotency_key TEXT NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        details JSONB NOT NULL DEFAULT '{}'::jsonb
-      )
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_refund_checkpoints_status_retry
-      ON refund_checkpoints(status, next_retry_at)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_refund_checkpoints_payment
-      ON refund_checkpoints(payment_id)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_refund_audit_payment_created
-      ON refund_audit_events(payment_id, created_at ASC)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_refund_audit_refund_created
-      ON refund_audit_events(refund_id, created_at ASC)
-    `)
+    // DR-13: use the same idempotent first-request-safe Refund schema initializer
+    // as the live Refund entry point so bootstrap and runtime cannot drift.
+    if (!(await ensureRefundCheckpointTables())) {
+      throw new Error('Refund checkpoint schema initialization failed')
+    }
 
     // Create indexes for settlement requests
     await query(`
