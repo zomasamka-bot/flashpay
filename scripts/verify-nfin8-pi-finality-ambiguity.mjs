@@ -28,7 +28,7 @@ for (const predicate of sourcePredicates) assert.ok(settlement.includes(predicat
 assert.ok(!settlement.includes('catch (error) {\n    console.error("[A2U Stage3] Exception:", error)\n    return { ok: false, error: String(error), userFacingStatus: "error" }'), "Old transport ambiguity path still present")
 for (const predicate of [
   'reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)',
-  'existing.outcome === "INDETERMINATE"',
+  'reconciled.outcome === "INDETERMINATE"',
   'responseStatusRetryable(createResponse.status)',
   'A failed POST is ambiguous',
 ]) assert.ok(settlement.includes(predicate), `Create ambiguity predicate missing: ${predicate}`)

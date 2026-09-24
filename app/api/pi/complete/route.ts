@@ -293,12 +293,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment - missing merchantUid" }, { status: 400 })
     }
     
-    const accessToken = payment.accessToken
-    if (!accessToken || typeof accessToken !== "string") {
-      console.error("[Pi Complete] Payment missing accessToken")
-      return NextResponse.json({ error: "Invalid payment - missing accessToken" }, { status: 400 })
-    }
-    
     // Validate finalPiPayment.amount is finite positive and matches Redis payment.amount
     const finalPiAmount = finalPiPayment.amount
     if (typeof finalPiAmount !== "number" || !Number.isFinite(finalPiAmount) || finalPiAmount <= 0) {
@@ -338,7 +332,7 @@ export async function POST(request: NextRequest) {
       console.log("[Pi Complete] No existing customerAmount - will persist authoritative finalPiAmount:", finalPiAmount)
     }
 
-    console.log("[Pi Complete] ✓ All required fields validated - merchantUid, accessToken, amount, piPaymentId, customerAmount")
+    console.log("[Pi Complete] ✓ All required fields validated - merchantUid, amount, piPaymentId, customerAmount")
     
     // === STAGE 3: Persist verified U2A fields with strict status validation ===
     console.log("[Pi Complete] === STAGE 3: Persist verified U2A fields ===")
@@ -404,7 +398,7 @@ export async function POST(request: NextRequest) {
       if projectionVersion==nil then projectionVersion=0 end
       if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return 0 end
       local incoming = cjson.decode(ARGV[1])
-      if current.id ~= incoming.id or current.amount ~= incoming.amount or current.customerAmount ~= nil and current.customerAmount ~= incoming.customerAmount or current.merchantId ~= incoming.merchantId or current.merchantUid ~= incoming.merchantUid or current.accessToken ~= incoming.accessToken or current.piPaymentId ~= nil and current.piPaymentId ~= incoming.piPaymentId or current.u2aTxid ~= nil and current.u2aTxid ~= incoming.u2aTxid or current.payerUid ~= nil and incoming.payerUid ~= nil and current.payerUid ~= incoming.payerUid then return 0 end
+      if current.id ~= incoming.id or current.amount ~= incoming.amount or current.customerAmount ~= nil and current.customerAmount ~= incoming.customerAmount or current.merchantId ~= incoming.merchantId or current.merchantUid ~= incoming.merchantUid or current.piPaymentId ~= nil and current.piPaymentId ~= incoming.piPaymentId or current.u2aTxid ~= nil and current.u2aTxid ~= incoming.u2aTxid or current.payerUid ~= nil and incoming.payerUid ~= nil and current.payerUid ~= incoming.payerUid then return 0 end
       local transitioningToPaidToApp = current.status == nil or current.status == 'pending'
       if current.status ~= nil and current.status ~= 'pending' and current.status ~= 'paid_to_app' and current.status ~= 'settlement_pending' and current.status ~= 'settled_to_merchant' then return 0 end
       if transitioningToPaidToApp then current.status = 'paid_to_app' end
@@ -426,7 +420,6 @@ export async function POST(request: NextRequest) {
       customerAmount: payment.customerAmount,
       merchantId: payment.merchantId,
       merchantUid: payment.merchantUid,
-      accessToken: payment.accessToken,
       piPaymentId: payment.piPaymentId,
       u2aTxid: payment.u2aTxid,
       payerUid: payment.payerUid,

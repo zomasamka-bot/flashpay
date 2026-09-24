@@ -133,8 +133,7 @@ export interface ExecutorContext {
   paymentId: string
   payment: Payment // Use canonical Payment type - REQUIRED
   merchantUid: string
-  accessToken: string
-  merchantAuthority: "access_token" | "durable_u2a"
+  merchantAuthority: "durable_u2a"
   customerAmount: number // REQUIRED - validated amount
   piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
   isRecovery: boolean
@@ -169,14 +168,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     return { ok: false, status: "invalid_context", error: "merchantUid required and must be string" }
   }
   const durableMerchantAuthority = ctx.merchantAuthority === "durable_u2a"
-  if (!ctx.payment.a2uPaymentId) {
-    if (ctx.merchantAuthority === "access_token") {
-      if (!ctx.accessToken || typeof ctx.accessToken !== 'string' || ctx.accessToken !== ctx.accessToken.trim()) {
-        return { ok: false, status: "invalid_context", error: "accessToken required before A2U creation" }
-      }
-    } else if (!(durableMerchantAuthority && ctx.isRecovery === true && ctx.accessToken === "")) {
-      return { ok: false, status: "invalid_context", error: "durable merchant authority required before A2U creation" }
-    }
+  if (!ctx.payment.a2uPaymentId && !durableMerchantAuthority) {
+    return { ok: false, status: "invalid_context", error: "durable merchant authority required before A2U creation" }
   }
   if (typeof ctx.customerAmount !== 'number' || !Number.isFinite(ctx.customerAmount)) {
     return { ok: false, status: "invalid_context", error: "customerAmount required and must be finite number" }
@@ -716,63 +709,13 @@ function parseRetryAfterMs(value: string | null, now: number): number | undefine
 
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
   try {
-    if (ctx.merchantAuthority === "access_token") {
-      // Normal live path: verify the current user access token via /v2/me.
-      const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${ctx.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      })
-
-      if (!verifyResponse.ok) {
-        const error = await verifyResponse.text()
-        const retryable = responseStatusRetryable(verifyResponse.status)
-        const retryAfterMs = retryable ? parseRetryAfterMs(verifyResponse.headers.get("retry-after"), Date.now()) : undefined
-        console.error("[A2U Stage1] UID verification failed:", error)
-        return { ok: false, error: "UID verification failed", userFacingStatus: "error", retryable, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}), errorCode: `uid_verification_${verifyResponse.status}`, errorBody: error.slice(0, 2000) }
-      }
-
-      const verifiedUser = await verifyResponse.json()
-      if (verifiedUser.uid !== ctx.merchantUid) {
-        console.error("[A2U Stage1] UID mismatch")
-        return { ok: false, error: "UID mismatch", userFacingStatus: "error" }
-      }
-
-      console.log("[A2U Stage1] ✓ UID verified")
-    } else {
-      // F2-4: the shared locked executor has already re-proved the immutable
-      // merchant/U2A binding from PostgreSQL plus Pi server GET. Do not require
-      // or recreate an expired/lost user bearer token. A2U POST itself is a
-      // server-only Platform API operation authorized by the app Server API Key.
-      if (!(ctx.isRecovery === true && ctx.accessToken === "")) {
-        return { ok: false, error: "Durable merchant authority invalid", userFacingStatus: "manual_review_required", retryable: false, errorCode: "durable_merchant_authority_invalid" }
-      }
-      console.log("[F2-4 DURABLE MERCHANT AUTHORITY] Stage1 bearer re-verification skipped after locked durable+Pi proof", { paymentId: ctx.paymentId, merchantUid: ctx.merchantUid })
+    // R101-6: the shared locked executor has already re-proved the immutable
+    // merchant/U2A binding from PostgreSQL plus canonical Pi server evidence.
+    // No merchant bearer is needed or consulted after U2A completion.
+    if (ctx.merchantAuthority !== "durable_u2a") {
+      return { ok: false, error: "Durable merchant authority required", userFacingStatus: "error" }
     }
-
-    // Reconcile before creation. Only CONFIRMED_NONE permits POST /v2/payments.
-    const existing = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
-    if (existing.outcome === "FOUND") {
-      const dto = existing.dto
-      if (dto === undefined || !isReconciledPiA2UPayment(dto) || !isPiA2UPayment(dto)) {
-        return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
-      }
-      const transaction = isRecord(dto.transaction) ? dto.transaction : null
-      const status = isRecord(dto.status) ? dto.status : null
-      if (dto.identifier.trim() === "" || dto.identifier !== dto.identifier.trim() || dto.amount !== ctx.customerAmount || typeof dto.txid === "string" || typeof dto.transaction_id === "string" || typeof transaction?.txid === "string" || dto.completed === true || dto.cancelled === true || dto.rejected === true || transaction?.verified === true || status?.transaction_verified === true || status?.developer_completed === true || status?.cancelled === true || status?.user_cancelled === true) {
-        return { ok: false, error: "Pi found an existing A2U transfer requiring reconciliation", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_found_requires_reconciliation" }
-      }
-      return { ok: true, data: { a2uPaymentId: dto.identifier, a2uPayment: dto } }
-    }
-    if (existing.outcome === "INDETERMINATE") {
-      return { ok: false, error: existing.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_precreate_reconciliation_indeterminate" }
-    }
-
-    if (ctx.payment.status === "paid_to_app" && ctx.payment.merchantId === "hazemaboria" && ctx.payment.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.1) {
-      return { ok:false, error:"Intentional Testnet A2U failure for repeated refund validation", userFacingStatus:"error", retryable:false, errorCode:"refund_test_forced_hazem_01_a2u_failure" }
-    }
+    console.log("[R101-6 A2U Stage1] ✓ Durable merchant/U2A authority verified upstream")
 
     // Create A2U payment
     const requestBody = {

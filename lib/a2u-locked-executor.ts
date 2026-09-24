@@ -41,12 +41,9 @@ interface LockedExecutorParams {
   schedulerWalletPaymentId?: string | null
 }
 
-function hasUsableAccessToken(payment: Payment): boolean {
-  return typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim()
-}
-
 function hasRecoverableMerchantProjectionAuthority(payment: Payment): boolean {
-  return hasUsableAccessToken(payment) || payment.accessToken === ""
+  return payment.accessToken === undefined || payment.accessToken === "" ||
+    (typeof payment.accessToken === "string" && payment.accessToken.trim() !== "" && payment.accessToken === payment.accessToken.trim())
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -54,7 +51,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Payment): Promise<boolean> {
-  if (!serverConfig.isPiApiKeyConfigured || payment.accessToken !== "") return false
+  if (!serverConfig.isPiApiKeyConfigured) return false
   const durable = await getDurableU2AIngressAuthoritative(paymentId)
   if (durable.outcome !== "FOUND" || durable.checkpoint.completedAt === null) return false
   const d = durable.checkpoint
@@ -279,15 +276,15 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 409, error: refundLookup.state === 'present' ? "Refund operation owns this payment" : "Refund state could not be verified" }
     }
 
-    let merchantAuthority: "access_token" | "durable_u2a" = "access_token"
-    if (!latestPayment.a2uPaymentId && !hasUsableAccessToken(latestPayment)) {
-      const recoveryMayCreate = params.isRecovery === true &&
-        (params.recoveryOperation === "SETTLEMENT_DISPATCH" || params.recoveryOperation === "SETTLEMENT_RECONCILE" || params.recoveryOperation === "SETTLEMENT_CREATE")
-      if (!recoveryMayCreate || latestPayment.accessToken !== "" || !(await verifyF24DurableMerchantAuthority(paymentId, latestPayment))) {
-        return { ok: false, status: 409, error: "Durable merchant authority could not be verified" }
-      }
-      merchantAuthority = "durable_u2a"
-      console.log("[F2-4 DURABLE MERCHANT AUTHORITY] verified", { paymentId, merchantId: latestPayment.merchantId, merchantUid: latestPayment.merchantUid, recoveryOperation: params.recoveryOperation })
+    // R101-6: after completed U2A, the durable PostgreSQL + canonical Pi
+    // binding is the authority for fresh A2U creation in both normal drain and
+    // recovery. Legacy Redis bearer values are tolerated but never consulted.
+    let merchantAuthority: "durable_u2a" = "durable_u2a"
+    if (!latestPayment.a2uPaymentId && !(await verifyF24DurableMerchantAuthority(paymentId, latestPayment))) {
+      return { ok: false, status: 409, error: "Durable merchant authority could not be verified" }
+    }
+    if (!latestPayment.a2uPaymentId) {
+      console.log("[R101-6 DURABLE MERCHANT AUTHORITY] verified", { paymentId, merchantId: latestPayment.merchantId, merchantUid: latestPayment.merchantUid, recoveryOperation: params.recoveryOperation ?? "normal" })
     }
 
     if (params.recoveryOperation === "SETTLEMENT_DISPATCH") {
@@ -562,11 +559,6 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       return { ok: false, status: 400, error: "Invalid payment record" }
     }
 
-    if (!latestPayment.a2uPaymentId && merchantAuthority === "access_token" && !hasUsableAccessToken(latestPayment)) {
-      console.error("[A2U Locked Executor] accessToken required before non-recovery A2U creation")
-      return { ok: false, status: 400, error: "Invalid payment record" }
-    }
-
     if (typeof latestPayment.amount !== "number" || latestPayment.amount <= 0) {
       console.error("[A2U Locked Executor] Invalid amount in latest checkpoint:", latestPayment.amount)
       return { ok: false, status: 400, error: "Invalid payment amount" }
@@ -610,7 +602,6 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         paymentId,
         payment: latestPayment,
         merchantUid: latestPayment.merchantUid,
-        accessToken: latestPayment.accessToken,
         merchantAuthority,
         customerAmount: typeof latestPayment.customerAmount === "number" && Number.isFinite(latestPayment.customerAmount)
           ? latestPayment.customerAmount
