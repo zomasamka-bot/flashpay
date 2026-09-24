@@ -809,7 +809,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
         }
       }
 
-      console.error("[A2U Stage1] A2U creation failed:", errorData)
+      console.error("[DR-22 FINANCIAL EVENT]", { event: "a2u_create_failed", paymentId: ctx.paymentId, stage: "pi_create", httpStatus: createResponse.status, errorCode, rateLimited: createResponse.status === 429 || codeIsTooManyPayments(errorData, errorText), failClosed: true })
       const rateLimited = createResponse.status === 429 || codeIsTooManyPayments(errorData, errorText)
       const retryable = responseStatusRetryable(createResponse.status) || rateLimited
       const retryAfterMs = retryable ? parseRetryAfterMs(createResponse.headers.get("retry-after"), Date.now()) : undefined
@@ -842,7 +842,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     
     // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
-      console.error("[A2U Stage1] A2U response validation failed:", responseData)
+      console.error("[DR-22 FINANCIAL EVENT]", { event: "a2u_create_invalid_dto", paymentId: ctx.paymentId, stage: "pi_create_response", responseType: responseData === null ? "null" : Array.isArray(responseData) ? "array" : typeof responseData, failClosed: true })
       const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
       if (reconciliation.outcome === "FOUND") {
         const dto = reconciliation.dto
@@ -1670,7 +1670,7 @@ async function fetchA2UPayment(a2uPaymentId: string): Promise<PiA2UPayment | nul
     
     // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
-      console.error("[A2U Fetch] A2U response validation failed:", responseData)
+      console.error("[DR-22 FINANCIAL EVENT]", { event: "a2u_fetch_invalid_dto", stage: "pi_fetch", a2uPaymentId, responseType: responseData === null ? "null" : Array.isArray(responseData) ? "array" : typeof responseData, failClosed: true })
       return null
     }
     
