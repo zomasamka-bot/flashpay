@@ -9,6 +9,7 @@ import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
 import { recordSettlementPaymentIdentityCheckpoint } from "@/lib/db"
+import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -119,6 +120,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Verified merchant identity invalid" }, { status: 502, headers: corsHeaders })
     }
     
+    // R101-8: creation abuse control is keyed to the Pi-verified merchant UID,
+    // never IP-only. No payment identity exists yet, so limiter uncertainty can
+    // safely fail closed without stranding an existing financial lifecycle.
+    const creationLimit = await consumeFinancialRateLimit({
+      namespace: "payments-create", subject: verifiedMerchantUid, limit: 30, windowSeconds: 60,
+    })
+    if (creationLimit.outcome === "LIMITED") {
+      return NextResponse.json({ error: "Too many payment creation requests", code: "RATE_LIMITED" }, { status: 429, headers: { ...corsHeaders, "Retry-After": String(creationLimit.retryAfterSeconds) } })
+    }
+    if (creationLimit.outcome === "UNAVAILABLE") {
+      return NextResponse.json({ error: "Payment creation temporarily unavailable", code: "RATE_LIMIT_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+
     console.log("[API] ✅ UID VERIFIED")
 
     // Generate unique payment ID (Edge Runtime compatible)

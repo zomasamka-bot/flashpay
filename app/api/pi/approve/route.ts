@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { recordSettlementU2AApprovalClaim } from "@/lib/db"
+import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -100,6 +101,20 @@ export async function POST(request: NextRequest) {
     const paymentId = rawPaymentId
 
     console.log("[Pi Webhook] Our Payment ID:", paymentId)
+
+    // R101-8: payment/identifier-scoped abuse control after canonical Pi identity
+    // is known and before any Pi mutation. SDK retries retain a generous burst.
+    const approvalLimit = await consumeFinancialRateLimit({
+      namespace: "pi-approve", subject: `${paymentId}:${identifier}`, limit: 20, windowSeconds: 60,
+    })
+    if (approvalLimit.outcome === "LIMITED") {
+      return new Response(JSON.stringify({ error: "Too many approval requests", code: "RATE_LIMITED" }), { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(approvalLimit.retryAfterSeconds) } })
+    }
+    if (approvalLimit.outcome === "UNAVAILABLE") {
+      return new Response(JSON.stringify({ error: "Approval temporarily unavailable", code: "RATE_LIMIT_UNAVAILABLE" }), { status: 503, headers: { "Content-Type": "application/json" } })
+    }
+
+
 
     // FAIL CLOSED: Require Redis to be configured and payment record to exist
     if (!isRedisConfigured) {

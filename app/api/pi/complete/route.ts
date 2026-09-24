@@ -4,6 +4,7 @@ import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint } from "@/lib/db"
 import type { Payment } from "@/lib/types"
+import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -118,6 +119,19 @@ export async function POST(request: NextRequest) {
     if (!preStoredPayment) return NextResponse.json({ error: "Payment not found" }, { status: 404 })
     const prePayment: Payment = typeof preStoredPayment === "string" ? JSON.parse(preStoredPayment) : preStoredPayment
     if (prePayment.id !== preFlashPaymentId || typeof piPayment.amount !== "number" || !Number.isFinite(piPayment.amount) || piPayment.amount <= 0 || typeof prePayment.amount !== "number" || !Number.isFinite(prePayment.amount) || prePayment.amount <= 0 || piPayment.amount !== prePayment.amount || (prePayment.piPaymentId && prePayment.piPaymentId !== piPayment.identifier)) return NextResponse.json({ error: "Payment validation failed" }, { status: 400 })
+
+    // R101-8: completion is existing-money recovery. A definite excess is a
+    // retry-safe 429, but limiter infrastructure uncertainty cannot strand a
+    // canonically verified U2A lifecycle and therefore does not become money truth.
+    const completionLimit = await consumeFinancialRateLimit({
+      namespace: "pi-complete", subject: `${preFlashPaymentId}:${piPaymentId}`, limit: 30, windowSeconds: 60,
+    })
+    if (completionLimit.outcome === "LIMITED") {
+      return NextResponse.json({ error: "Too many completion requests", code: "RATE_LIMITED" }, { status: 429, headers: { "Retry-After": String(completionLimit.retryAfterSeconds) } })
+    }
+    if (completionLimit.outcome === "UNAVAILABLE") {
+      console.warn("[R101-8 RATE LIMIT] completion limiter unavailable; canonical existing-money recovery continues", { paymentId: preFlashPaymentId })
+    }
 
     const preMerchantId = typeof prePayment.merchantId === "string" && prePayment.merchantId.length > 0 && prePayment.merchantId === prePayment.merchantId.trim() ? prePayment.merchantId : ""
     const preMerchantUid = typeof prePayment.merchantUid === "string" && prePayment.merchantUid.length > 0 && prePayment.merchantUid === prePayment.merchantUid.trim() ? prePayment.merchantUid : ""
