@@ -39,6 +39,7 @@ const F1_GUARDED_REPAIR_ONCE_KEY = "flashpay:repair:f1-legacy-completed:v1:d6d1d
 const F1_FINAL_LEGACY_CLOSURE_ONCE_KEY = "flashpay:repair:f1-final-legacy-closure:v1:0594908"
 const F1_ORPHAN_FORENSIC_PROOF_ONCE_KEY = "flashpay:diagnostic:f1-orphan-forensic-proof:v1:d1a0ae"
 const F1_FINAL_ACCOUNTING_CERT_ONCE_KEY = "flashpay:diagnostic:f1-final-accounting-cert:v1:d2823a"
+const DR26_FINAL_ACCOUNTING_RECONCILIATION_ONCE_KEY = "flashpay:diagnostic:dr26-final-accounting-reconciliation:v1:20260925"
 const PI_CREATE_BACKPRESSURE_FALLBACK_MS = 15 * 60_000
 const DRAIN_LEASE_RELEASE_SCRIPT = `
 local current = redis.call("GET", KEYS[1])
@@ -841,6 +842,76 @@ export async function POST(request: NextRequest) {
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
+
+  // DR-26: one-shot, authenticated, SELECT-only production accounting reconciliation.
+  // It never writes PostgreSQL financial state and never authorizes Pi/Horizon movement.
+  try {
+    after(async () => {
+      let claimed = false
+      try {
+        const claim = await redis.set(DR26_FINAL_ACCOUNTING_RECONCILIATION_ONCE_KEY, "running", { nx: true, ex: 15 * 60 })
+        claimed = claim === "OK"
+        if (!claimed) return
+        const rows = await query(`
+          WITH canonical AS (
+            SELECT merchant_id, COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status='settled_to_merchant'),0) canonical_settled
+            FROM receipts GROUP BY merchant_id
+          ), all_merchants AS (
+            SELECT merchant_id FROM merchant_balances UNION SELECT merchant_id FROM canonical
+          ), settled_refund_overlap AS (
+            SELECT ra.payment_id FROM refund_accounting_records ra
+            JOIN transactions t ON t.payment_id=ra.payment_id
+            JOIN receipts r ON r.transaction_id=t.id
+            WHERE r.settlement_status='settled_to_merchant'
+          ), orphans AS (
+            SELECT t.id,t.payment_id FROM transactions t LEFT JOIN receipts r ON r.transaction_id=t.id WHERE r.id IS NULL
+          ), refund_finality_mismatch AS (
+            SELECT rc.refund_id FROM refund_checkpoints rc
+            LEFT JOIN refund_accounting_records ra ON ra.refund_id=rc.refund_id
+            WHERE (rc.status='completed' AND (rc.refund_payment_id IS NULL OR rc.refund_txid IS NULL OR ra.refund_id IS NULL))
+               OR (ra.refund_id IS NOT NULL AND (rc.refund_payment_id IS DISTINCT FROM ra.refund_payment_id OR rc.refund_txid IS DISTINCT FROM ra.refund_txid OR rc.payment_id IS DISTINCT FROM ra.payment_id OR rc.amount IS DISTINCT FROM ra.amount))
+          ), settlement_finality_mismatch AS (
+            SELECT sc.payment_id FROM settlement_checkpoints sc
+            LEFT JOIN transactions t ON t.payment_id=sc.payment_id
+            LEFT JOIN receipts r ON r.transaction_id=t.id
+            WHERE sc.stage='db_finalized' AND (t.id IS NULL OR r.id IS NULL OR r.settlement_status IS DISTINCT FROM 'settled_to_merchant' OR r.a2u_txid IS DISTINCT FROM sc.a2u_txid OR r.merchant_amount IS DISTINCT FROM sc.merchant_amount)
+          )
+          SELECT
+            (SELECT COUNT(*)::int FROM transactions) transaction_count,
+            (SELECT COUNT(*)::int FROM receipts) receipt_count,
+            (SELECT COUNT(*)::int FROM merchant_balances) merchant_balance_count,
+            (SELECT COUNT(*)::int FROM settlement_checkpoints) settlement_checkpoint_count,
+            (SELECT COUNT(*)::int FROM refund_checkpoints) refund_checkpoint_count,
+            (SELECT COUNT(*)::int FROM refund_accounting_records) refund_accounting_count,
+            (SELECT COUNT(*)::int FROM refund_audit_events) refund_audit_count,
+            (SELECT COUNT(*)::int FROM (SELECT payment_id FROM transactions GROUP BY payment_id HAVING COUNT(*)>1)d) duplicate_payment_id_count,
+            (SELECT COUNT(*)::int FROM (SELECT transaction_id FROM receipts GROUP BY transaction_id HAVING COUNT(*)>1)d) duplicate_receipt_transaction_id_count,
+            (SELECT COUNT(*)::int FROM (SELECT a2u_identifier FROM receipts WHERE a2u_identifier IS NOT NULL GROUP BY a2u_identifier HAVING COUNT(*)>1)d) duplicate_a2u_identifier_count,
+            (SELECT COUNT(*)::int FROM (SELECT a2u_txid FROM receipts WHERE a2u_txid IS NOT NULL GROUP BY a2u_txid HAVING COUNT(*)>1)d) duplicate_a2u_txid_count,
+            (SELECT COUNT(*)::int FROM (SELECT refund_payment_id FROM refund_accounting_records GROUP BY refund_payment_id HAVING COUNT(*)>1)d) duplicate_refund_payment_id_count,
+            (SELECT COUNT(*)::int FROM (SELECT refund_txid FROM refund_accounting_records GROUP BY refund_txid HAVING COUNT(*)>1)d) duplicate_refund_txid_count,
+            (SELECT COUNT(*)::int FROM all_merchants m LEFT JOIN merchant_balances b ON b.merchant_id=m.merchant_id LEFT JOIN canonical c ON c.merchant_id=m.merchant_id WHERE COALESCE(b.settled,0)<>COALESCE(c.canonical_settled,0) OR COALESCE(b.unsettled,0)<>0) merchant_balance_mismatch_count,
+            (SELECT COUNT(*)::int FROM receipts WHERE settlement_status='settled_to_merchant' AND (merchant_amount IS NULL OR customer_amount IS NULL OR merchant_amount<>customer_amount OR app_commission<>0)) settlement_invariant_violation_count,
+            (SELECT COUNT(*)::int FROM settled_refund_overlap) settlement_refund_overlap_count,
+            (SELECT COUNT(*)::int FROM refund_finality_mismatch) refund_finality_mismatch_count,
+            (SELECT COUNT(*)::int FROM settlement_finality_mismatch) settlement_finality_mismatch_count,
+            (SELECT COUNT(*)::int FROM orphans) raw_orphan_count,
+            (SELECT COUNT(*)::int FROM orphans WHERE id='8669e2bc-effc-4e76-8d24-d809025f2a92'::uuid AND payment_id='eQU604TLlEn2O86i00o5jUhM1HAD') classified_legacy_orphan_count,
+            (SELECT COUNT(*)::int FROM orphans WHERE NOT (id='8669e2bc-effc-4e76-8d24-d809025f2a92'::uuid AND payment_id='eQU604TLlEn2O86i00o5jUhM1HAD')) unclassified_orphan_count
+        `)
+        if (!Array.isArray(rows) || rows.length !== 1 || !rows[0] || typeof rows[0] !== "object") throw new Error("DR-26 accounting reconciliation unavailable")
+        const r = rows[0] as Record<string, unknown>
+        const zeroFields = ["duplicate_payment_id_count","duplicate_receipt_transaction_id_count","duplicate_a2u_identifier_count","duplicate_a2u_txid_count","duplicate_refund_payment_id_count","duplicate_refund_txid_count","merchant_balance_mismatch_count","settlement_invariant_violation_count","settlement_refund_overlap_count","refund_finality_mismatch_count","settlement_finality_mismatch_count","unclassified_orphan_count"]
+        const pass = zeroFields.every((field) => Number(r[field]) === 0) && Number(r.raw_orphan_count) === 1 && Number(r.classified_legacy_orphan_count) === 1
+        console.log("[DR-26 FINAL ACCOUNTING RECONCILIATION]", { ...r, readOnly: true, financialMutation: false, blockchainMovement: false, verdict: pass ? "PASS" : "FAIL" })
+        if (!pass) throw new Error("DR-26 final accounting invariant rejected")
+        await redis.set(DR26_FINAL_ACCOUNTING_RECONCILIATION_ONCE_KEY, "done", { ex: 30 * 24 * 60 * 60 })
+      } catch (error) {
+        if (claimed) { try { await redis.del(DR26_FINAL_ACCOUNTING_RECONCILIATION_ONCE_KEY) } catch {} }
+        console.error("[DR-26 FINAL ACCOUNTING RECONCILIATION] failed", error instanceof Error ? error.message : String(error))
+      }
+    })
+  } catch {}
 
   // F1D2 temporary certification hook: after this already-secret-authenticated wake,
   // run the SELECT-only balance-integrity proof once and emit aggregate evidence to Vercel logs.
