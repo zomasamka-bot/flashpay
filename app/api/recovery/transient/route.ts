@@ -392,17 +392,25 @@ async function acquireTransientDrainLease(): Promise<DrainLease> {
   }
 }
 
-function hasValidSecret(request: NextRequest): boolean {
-  const expected = runtimeEnv[RECOVERY_SECRET_ENV]
-  const provided = request.headers.get("x-flashpay-transient-recovery-secret")
-
+function constantTimeSecretEqual(expected: string | undefined, provided: string | null): boolean {
   if (!expected || !provided) return false
-
   const expectedBuffer = Buffer.from(expected)
   const providedBuffer = Buffer.from(provided)
   if (expectedBuffer.length !== providedBuffer.length) return false
-
   return timingSafeEqual(expectedBuffer, providedBuffer)
+}
+
+function hasValidSecret(request: NextRequest): boolean {
+  // Existing trusted internal/external scheduler authority.
+  if (constantTimeSecretEqual(runtimeEnv[RECOVERY_SECRET_ENV], request.headers.get("x-flashpay-transient-recovery-secret"))) return true
+
+  // DR-8: independent Vercel Cron authority. Vercel sends CRON_SECRET as
+  // `Authorization: Bearer <CRON_SECRET>`. Keep this fail-closed when the
+  // environment variable is absent; never trust a user-agent or source IP.
+  const authorization = request.headers.get("authorization")
+  const cronSecret = runtimeEnv.CRON_SECRET
+  const cronBearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : null
+  return constantTimeSecretEqual(cronSecret, cronBearer)
 }
 
 function scheduleTrustedTransientRequest(target: "drain" | "continuation-kick"): boolean {
@@ -2613,3 +2621,7 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
     else console.warn("[P7J5 LEASE] release skipped or ownership changed")
   }
 }
+
+// DR-8: Vercel Cron invokes configured paths with GET. The same handler and
+// lease/durable-recovery barriers are used; only authentication provenance differs.
+export { POST as GET }
