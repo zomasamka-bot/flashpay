@@ -13,7 +13,7 @@ for(const x of [
  "readyWindowObserved: readyOrderedCount,",
  "settlementAttempts: walletDrainBurstSettlementAttempts,",
  "refundAttempts: walletDrainBurstRefundAttempts,",
- "completedResults: results.filter((item) => item.ok).length + refundResults.filter((item) => item.ok).length,",
+ 'completedResults: results.filter((item) => item.ok).length + (refundPass.state === "ok" ? refundPass.results.filter((item) => item.outcome === "success").length : 0),',
  "deferredDbCount: walletDrainDeferredDbCount,",
  "budgetExhausted: walletDrainBudgetExhausted,",
  "continuationScheduled: walletDrainContinuationScheduled,",
