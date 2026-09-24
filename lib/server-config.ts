@@ -32,10 +32,10 @@ export const serverConfig = {
   // Vercel environment; used only by tightly gated server-side certification hooks.
   vercelEnv: process.env.VERCEL_ENV || "",
 
-  // Pi Network API key — used by approve and complete webhook endpoints
+  // Pi Network API key — used by server-side Pi Platform API verification/mutation
   piApiKey: requireSecret("PI_API_KEY", process.env.PI_API_KEY),
 
-  // A2U Internal Secret — server-only, used to secure internal A2U calls
+  // A2U Internal Secret — server-only, used only to secure internal A2U routes; never required by browser callbacks
   // Must be set in environment; no fallback - fail closed if missing
   a2uInternalSecret: requireSecret("A2U_INTERNAL_SECRET", process.env.A2U_INTERNAL_SECRET),
 

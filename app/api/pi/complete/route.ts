@@ -36,12 +36,9 @@ export async function POST(request: NextRequest) {
   console.log("[Pi Complete] Request received at", new Date().toISOString())
 
   try {
-    // Fail closed: require A2U_INTERNAL_SECRET from environment
-    if (!serverConfig.a2uInternalSecret || typeof serverConfig.a2uInternalSecret !== "string") {
-      console.error("[Pi Complete] SECURITY: A2U_INTERNAL_SECRET not configured - REJECTING")
-      return NextResponse.json({ error: "Server not configured" }, { status: 500 })
-    }
-
+    // R101-7: /complete is a Pi SDK browser callback, not an internal A2U route.
+    // Do not require or expose A2U_INTERNAL_SECRET here. Financial authorization
+    // is established below from canonical Pi server evidence plus durable identity.
     if (!serverConfig.isPiApiKeyConfigured) {
       console.error("[Pi Complete] PI_API_KEY not configured")
       return NextResponse.json({ error: "Server not configured" }, { status: 500 })
