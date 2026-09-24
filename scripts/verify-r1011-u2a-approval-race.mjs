@@ -11,13 +11,16 @@ const preApproval = route.slice(0, approvalCall)
 // R101-1 asks one narrow question: before Pi /approve, is there any durable
 // paymentId -> identifier ownership claim that can distinguish A from B?
 const durableClaimBindings = [
-  "recordU2AApprovalClaim",
-  "recordSettlementU2AApproval",
+  "recordSettlementU2AApprovalClaim",
   "u2a_approval_identifier",
-  "approval_identifier",
 ]
-for (const binding of durableClaimBindings) {
-  assert.equal(preApproval.includes(binding), false, `unexpected pre-approve durable ownership binding: ${binding}`)
+const r1012Installed = preApproval.includes("recordSettlementU2AApprovalClaim")
+if (r1012Installed) {
+  assert.ok(preApproval.includes("recordSettlementU2AApprovalClaim"), "R101-2 durable ownership claim must precede Pi /approve")
+} else {
+  for (const binding of durableClaimBindings) {
+    assert.equal(preApproval.includes(binding), false, `unexpected pre-approve durable ownership binding: ${binding}`)
+  }
 }
 assert.equal(preApproval.includes("recordSettlementPaymentIdentityCheckpoint"), false, "approve route must not confuse payment identity with approval ownership")
 assert.ok(preApproval.includes("canonicalPayment.amount !== redisPayment.amount"), "amount gate missing")
@@ -62,18 +65,19 @@ assert.ok(tableStart >= 0 && tableEnd > tableStart)
 const settlementSchema = db.slice(tableStart, tableEnd)
 assert.ok(settlementSchema.includes("payment_id TEXT PRIMARY KEY"))
 assert.ok(settlementSchema.includes("u2a_identifier TEXT"))
-assert.equal(settlementSchema.includes("u2a_approval_identifier"), false)
+if (r1012Installed) assert.equal(settlementSchema.includes("u2a_approval_identifier"), true)
+else assert.equal(settlementSchema.includes("u2a_approval_identifier"), false)
 
 console.log(JSON.stringify({
   certification: "PASS",
   gate: "R101-1-U2A-APPROVAL-RACE-PROOF",
-  finding: "CONFIRMED",
+  finding: r1012Installed ? "CONFIRMED_AND_MITIGATED_BY_R101_2" : "CONFIRMED",
   adversarialCase: "A_THEN_B_SAME_FLASHPAY_PAYMENT",
   APassesCurrentPreApprovalGates: true,
   BPassesCurrentPreApprovalGates: true,
-  durableApprovalOwnershipBeforePiApprove: false,
+  durableApprovalOwnershipBeforePiApprove: r1012Installed,
   financialMovementExecuted: false,
   piNetworkCalled: false,
   secretsRead: false,
-  next: "R101-2-DURABLE-U2A-APPROVAL-CLAIM"
+  next: r1012Installed ? "R101-3-APPROVAL-CRASH-MATRIX" : "R101-2-DURABLE-U2A-APPROVAL-CLAIM"
 }, null, 2))

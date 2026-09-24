@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
+import { recordSettlementU2AApprovalClaim } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -188,6 +189,36 @@ export async function POST(request: NextRequest) {
       }
     } else {
       console.warn("[Pi Webhook] No Redis payment record found - proceeding with canonical validation")
+    }
+
+    // R101-2: after every canonical/Redis gate but BEFORE Pi /approve, atomically
+    // bind this FlashPay payment to exactly one Pi U2A identifier in PostgreSQL.
+    // No secret is stored. DB uncertainty/conflict fails closed before Pi mutation.
+    const merchantId = typeof redisPayment.merchantId === "string" && redisPayment.merchantId.length > 0 && redisPayment.merchantId === redisPayment.merchantId.trim() ? redisPayment.merchantId : ""
+    const merchantUid = typeof redisPayment.merchantUid === "string" && redisPayment.merchantUid.length > 0 && redisPayment.merchantUid === redisPayment.merchantUid.trim() ? redisPayment.merchantUid : ""
+    if (!merchantId || !merchantUid) {
+      console.error("[R101-2 U2A APPROVAL CLAIM] durable identity input invalid", { paymentId })
+      return new Response(JSON.stringify({ error: "Payment identity verification failed" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+    const approvalClaim = await recordSettlementU2AApprovalClaim({
+      paymentId,
+      merchantId,
+      merchantUid,
+      customerAmount: redisPayment.amount,
+      u2aIdentifier: identifier,
+    })
+    if (approvalClaim.outcome !== "RECORDED" && approvalClaim.outcome !== "REPLAYED") {
+      console.error("[R101-2 U2A APPROVAL CLAIM] approval ownership unavailable", { paymentId, outcome: approvalClaim.outcome })
+      return new Response(JSON.stringify({
+        error: approvalClaim.outcome === "CONFLICT" ? "Payment validation failed" : "Payment durability unavailable",
+        code: approvalClaim.outcome === "CONFLICT" ? "U2A_APPROVAL_OWNERSHIP_CONFLICT" : "U2A_APPROVAL_DURABILITY_UNAVAILABLE",
+      }), {
+        status: approvalClaim.outcome === "CONFLICT" ? 409 : 503,
+        headers: { "Content-Type": "application/json" },
+      })
     }
 
     // Call Pi /approve endpoint

@@ -152,6 +152,8 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
       customer_amount NUMERIC(18, 8) NOT NULL CHECK (customer_amount > 0),
       merchant_amount NUMERIC(18, 8) CHECK (merchant_amount > 0),
       app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0),
+      u2a_approval_identifier TEXT,
+      u2a_approval_claimed_at TIMESTAMP,
       u2a_identifier TEXT,
       u2a_txid TEXT,
       payer_uid TEXT,
@@ -210,6 +212,8 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   // identity/finality evidence needed across Redis/Pi crash boundaries. No token/secret is stored.
   const u2aIdentityColumns = await query(`
     ALTER TABLE settlement_checkpoints
+      ADD COLUMN IF NOT EXISTS u2a_approval_identifier TEXT,
+      ADD COLUMN IF NOT EXISTS u2a_approval_claimed_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS u2a_identifier TEXT,
       ADD COLUMN IF NOT EXISTS u2a_txid TEXT,
       ADD COLUMN IF NOT EXISTS payer_uid TEXT,
@@ -383,6 +387,119 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
   }
 }
 
+export type SettlementU2AApprovalClaimResult =
+  | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/**
+ * R101-2: durable one-payment -> one-Pi-U2A approval ownership.
+ *
+ * The claim is established only after canonical Pi validation and before Pi
+ * /approve. It performs no Pi/Horizon/Redis mutation and stores no secret.
+ * NULL -> A records atomically; A -> A is replay-safe; A -> B conflicts.
+ * PostgreSQL uncertainty is INDETERMINATE so callers fail closed before Pi.
+ */
+export async function recordSettlementU2AApprovalClaim(params: {
+  paymentId: string
+  merchantId: string
+  merchantUid: string
+  customerAmount: number
+  u2aIdentifier: string
+}): Promise<SettlementU2AApprovalClaimResult> {
+  const canonicalText = (value: string) => typeof value === 'string' && value.length > 0 && value === value.trim()
+  if (
+    !canonicalText(params.paymentId) ||
+    !canonicalText(params.merchantId) ||
+    !canonicalText(params.merchantUid) ||
+    !canonicalText(params.u2aIdentifier) ||
+    typeof params.customerAmount !== 'number' ||
+    !Number.isFinite(params.customerAmount) ||
+    params.customerAmount <= 0
+  ) return { outcome: 'CONFLICT', error: 'Settlement U2A approval claim input is invalid' }
+
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+
+    const rows = await client.begin(async (tx: any) => {
+      // The F2-1 row must already exist. Never create payment identity here.
+      const recorded = await tx`
+        UPDATE settlement_checkpoints
+        SET version=version+1,
+            u2a_approval_identifier=${params.u2aIdentifier},
+            u2a_approval_claimed_at=NOW(),
+            updated_at=NOW()
+        WHERE payment_id=${params.paymentId}
+          AND stage='payment_identity'
+          AND merchant_id=${params.merchantId}
+          AND merchant_uid=${params.merchantUid}
+          AND customer_amount=${params.customerAmount}
+          AND merchant_amount=${params.customerAmount}
+          AND app_commission=0
+          AND u2a_approval_identifier IS NULL
+          AND u2a_approval_claimed_at IS NULL
+          AND u2a_identifier IS NULL
+          AND u2a_txid IS NULL
+          AND payer_uid IS NULL
+          AND u2a_verified_at IS NULL
+          AND u2a_completed_at IS NULL
+          AND a2u_payment_id IS NULL
+          AND a2u_from_address IS NULL
+          AND a2u_to_address IS NULL
+          AND prepared_envelope_xdr IS NULL
+          AND prepared_tx_hash IS NULL
+          AND prepared_sequence IS NULL
+          AND a2u_txid IS NULL
+          AND horizon_fee_stroops IS NULL
+          AND horizon_confirmed_at IS NULL
+          AND pi_completed_at IS NULL
+          AND db_finalized_at IS NULL
+        RETURNING version
+      `
+      if (recorded.length === 1) return [{ ...recorded[0], recorded: true }]
+
+      return await tx`
+        SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+               u2a_approval_identifier,u2a_approval_claimed_at,u2a_identifier
+        FROM settlement_checkpoints
+        WHERE payment_id=${params.paymentId}
+        FOR UPDATE
+      `
+    })
+
+    if (!Array.isArray(rows) || rows.length !== 1 || typeof rows[0] !== 'object' || rows[0] === null)
+      return { outcome: 'CONFLICT', error: 'Settlement U2A approval ownership is absent or ambiguous' }
+
+    const row = rows[0] as Record<string, unknown>
+    const version = Number(row.version)
+    if (!Number.isSafeInteger(version) || version < 1)
+      return { outcome: 'CONFLICT', error: 'Settlement U2A approval durable version is invalid' }
+    if (row.recorded === true) return { outcome: 'RECORDED', version }
+
+    let ca:number, ma:number, ac:number
+    try {
+      ca=normalizePostgresNumeric(row.customer_amount,'settlement.customer_amount')
+      ma=normalizePostgresNumeric(row.merchant_amount,'settlement.merchant_amount')
+      ac=normalizePostgresNumeric(row.app_commission,'settlement.app_commission')
+    } catch { return { outcome:'CONFLICT', error:'Settlement U2A approval durable accounting invalid' } }
+
+    if (
+      row.stage !== 'payment_identity' ||
+      row.merchant_id !== params.merchantId ||
+      row.merchant_uid !== params.merchantUid ||
+      ca !== params.customerAmount || ma !== params.customerAmount || ac !== 0 ||
+      row.u2a_approval_identifier !== params.u2aIdentifier ||
+      row.u2a_approval_claimed_at == null ||
+      (row.u2a_identifier != null && row.u2a_identifier !== params.u2aIdentifier)
+    ) return { outcome:'CONFLICT', error:'Settlement U2A approval durable ownership conflict' }
+
+    return { outcome:'REPLAYED', version }
+  } catch (error) {
+    console.error('[DB] Settlement U2A approval claim uncertain:', error)
+    return { outcome:'INDETERMINATE', error:'Settlement U2A approval claim uncertain' }
+  }
+}
+
 export type SettlementU2AIngressCheckpointResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
@@ -438,6 +555,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
           AND customer_amount=${params.customerAmount}
           AND merchant_amount=${params.customerAmount}
           AND app_commission=0
+          AND (u2a_approval_identifier IS NULL OR u2a_approval_identifier=${params.u2aIdentifier})
           AND u2a_identifier IS NULL
           AND u2a_txid IS NULL
           AND payer_uid IS NULL
@@ -499,7 +617,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
 
       return await tx`
         SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
-               u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at
+               u2a_approval_identifier,u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at
         FROM settlement_checkpoints
         WHERE payment_id=${params.paymentId}
         FOR UPDATE
@@ -523,6 +641,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
     if (
       !['payment_identity','a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized'].includes(String(row.stage)) ||
       row.merchant_id!==params.merchantId || row.merchant_uid!==params.merchantUid || ca!==params.customerAmount || ma!==params.customerAmount || ac!==0 ||
+      (row.u2a_approval_identifier!=null && row.u2a_approval_identifier!==params.u2aIdentifier) ||
       row.u2a_identifier!==params.u2aIdentifier || row.u2a_txid!==params.u2aTxid || row.payer_uid!==params.payerUid || row.u2a_verified_at==null
     ) return { outcome: 'CONFLICT', error: 'Settlement U2A verified durable identity mismatch' }
     return { outcome: 'REPLAYED', version }
