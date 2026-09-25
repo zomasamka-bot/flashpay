@@ -881,6 +881,11 @@ export async function POST(request: NextRequest) {
     let unknownForeignKeyCount=0
     const unknownNamespaceCounts:Record<string,number>={}
     const unknownSuffixShapeCounts:Record<string,number>={}
+    const dr50OwnershipPatternCounts:Record<string,number>={}
+    const dr50PatternTypeCounts:Record<string,Record<string,number>>={}
+    const dr50PatternTtlCounts:Record<string,Record<string,number>>={}
+    const dr50UuidIds:{a2u:string[];transaction:string[];receipt:string[]}={a2u:[],transaction:[],receipt:[]}
+    let dr50StructurallyUnknownCount=0
     // Upstash TS SCAN cursors are opaque strings; preserve them verbatim.
     // Converting through Number can lose/alter cursor identity and is not the SDK contract.
     let cursor="0"
@@ -911,31 +916,38 @@ export async function POST(request: NextRequest) {
         }
         if(!DR10_ALLOWED_REDIS_PREFIXES.some(prefix=>key.startsWith(prefix))) {
           foreignKeyCount+=1
+          const separator=key.indexOf(":")
+          const namespace=separator>0?key.slice(0,separator):""
+          const suffix=separator>0?key.slice(separator+1):""
+          const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          const safeNamespace=/^[a-z][a-z0-9_-]{0,31}$/.test(namespace)?namespace:"<noncanonical>"
+          const suffixShape=uuid.test(suffix)?"uuid":/^[0-9a-f]{64}$/i.test(suffix)?"hex64":/^[A-Za-z0-9_-]{16,128}$/.test(suffix)?`opaque_${suffix.length}`:"other"
+          let ownershipPattern="unknown"
+          if(key.startsWith("pi:approval:") && key.length>12) ownershipPattern="pi_approval_cache"
+          else if(namespace==="a2u" && uuid.test(suffix)){ownershipPattern="legacy_a2u_uuid";dr50UuidIds.a2u.push(suffix)}
+          else if(namespace==="transaction" && uuid.test(suffix)){ownershipPattern="legacy_transaction_uuid";dr50UuidIds.transaction.push(suffix)}
+          else if(namespace==="receipt" && uuid.test(suffix)){ownershipPattern="legacy_receipt_transaction_uuid";dr50UuidIds.receipt.push(suffix)}
+          else if(/^merchant:verified-uid:[^:]+$/.test(key)) ownershipPattern="merchant_verified_uid_cache"
+          else if(/^merchant:[^:]+:transactions$/.test(key)) ownershipPattern="legacy_merchant_transactions_index"
+          else if(/^merchant:[^:]+:balance$/.test(key)) ownershipPattern="legacy_merchant_balance_cache"
+          else if(/^merchant:[^:]+:txn-counter:[0-9]{4}$/.test(key)) ownershipPattern="legacy_merchant_txn_counter"
+          else dr50StructurallyUnknownCount+=1
+          dr50OwnershipPatternCounts[ownershipPattern]=(dr50OwnershipPatternCounts[ownershipPattern]??0)+1
           if(DR10_KNOWN_FLASH_PAY_FOREIGN_PREFIXES.some(prefix=>key.startsWith(prefix))) knownPiApprovalKeyCount+=1
           else {
             unknownForeignKeyCount+=1
-            const separator=key.indexOf(":")
-            const namespace=separator>0?key.slice(0,separator):""
-            const suffix=separator>0?key.slice(separator+1):""
-            const safeNamespace=/^[a-z][a-z0-9_-]{0,31}$/.test(namespace)?namespace:"<noncanonical>"
-            const suffixShape=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suffix)?"uuid":
-              /^[0-9a-f]{64}$/i.test(suffix)?"hex64":/^[A-Za-z0-9_-]{16,128}$/.test(suffix)?`opaque_${suffix.length}`:"other"
             unknownNamespaceCounts[safeNamespace]=(unknownNamespaceCounts[safeNamespace]??0)+1
             unknownSuffixShapeCounts[suffixShape]=(unknownSuffixShapeCounts[suffixShape]??0)+1
           }
-          if(foreignKeyDiagnostics.length<32) {
-            let redisType="unavailable"
-            let ttlClass="unavailable"
-            try {
-              const observedType=await redis.type(key)
-              redisType=typeof observedType==="string"&&/^[a-z]+$/.test(observedType)?observedType:"indeterminate"
-            } catch {}
-            try {
-              const observedTtl=Number(await redis.ttl(key))
-              ttlClass=observedTtl===-1?"persistent":observedTtl===-2?"missing":Number.isSafeInteger(observedTtl)&&observedTtl>=0?"expiring":"indeterminate"
-            } catch {}
-            foreignKeyDiagnostics.push({fingerprint:createHash("sha256").update(key).digest("hex").slice(0,16),keyLength:key.length,colonCount:(key.match(/:/g)??[]).length,type:redisType,ttlClass})
-          }
+          let redisType="unavailable"
+          let ttlClass="unavailable"
+          try { const observedType=await redis.type(key); redisType=typeof observedType==="string"&&/^[a-z]+$/.test(observedType)?observedType:"indeterminate" } catch {}
+          try { const observedTtl=Number(await redis.ttl(key)); ttlClass=observedTtl===-1?"persistent":observedTtl===-2?"missing":Number.isSafeInteger(observedTtl)&&observedTtl>=0?"expiring":"indeterminate" } catch {}
+          dr50PatternTypeCounts[ownershipPattern]??={}
+          dr50PatternTypeCounts[ownershipPattern][redisType]=(dr50PatternTypeCounts[ownershipPattern][redisType]??0)+1
+          dr50PatternTtlCounts[ownershipPattern]??={}
+          dr50PatternTtlCounts[ownershipPattern][ttlClass]=(dr50PatternTtlCounts[ownershipPattern][ttlClass]??0)+1
+          if(foreignKeyDiagnostics.length<32) foreignKeyDiagnostics.push({fingerprint:createHash("sha256").update(key).digest("hex").slice(0,16),keyLength:key.length,colonCount:(key.match(/:/g)??[]).length,type:redisType,ttlClass})
           continue
         }
         keys.push(key)
@@ -944,9 +956,21 @@ export async function POST(request: NextRequest) {
       if(keys.length+foreignKeyCount>100000) return NextResponse.json({ error: "DR10 Redis keyspace exceeds certification bound" }, { status: 409 })
     } while(cursor!=="0")
 
-    const safeCensus={flashPayOwnedKeys:keys.length,foreignKeyCount,knownPiApprovalKeyCount,unknownForeignKeyCount,unknownNamespaceCounts,unknownSuffixShapeCounts,sampledForeignKeys:foreignKeyDiagnostics.length,foreignKeyDiagnostics,rawKeysLogged:false,valuesRead:false,deletionAttempted:false}
+    let dr50DurableCoverage={transactionIds:dr50UuidIds.transaction.length,transactionRows:0,receiptIds:dr50UuidIds.receipt.length,receiptRowsByTransactionId:0,a2uPaymentIds:dr50UuidIds.a2u.length,a2uSettlementCheckpointRows:0,queryOutcome:"not_run"}
     if(censusOnly) {
-      console.warn("[DR49 DR10 NONDESTRUCTIVE KEYSPACE CENSUS]",safeCensus)
+      try {
+        const txRows=dr50UuidIds.transaction.length?await query(`SELECT COUNT(*)::int AS count FROM transactions WHERE id = ANY($1::uuid[])`,[dr50UuidIds.transaction]):[{count:0}]
+        const receiptRows=dr50UuidIds.receipt.length?await query(`SELECT COUNT(*)::int AS count FROM receipts WHERE transaction_id = ANY($1::uuid[])`,[dr50UuidIds.receipt]):[{count:0}]
+        const a2uRows=dr50UuidIds.a2u.length?await query(`SELECT COUNT(*)::int AS count FROM settlement_checkpoints WHERE payment_id = ANY($1::text[])`,[dr50UuidIds.a2u]):[{count:0}]
+        const count=(rows:unknown)=>Array.isArray(rows)&&rows.length&&typeof rows[0]==="object"&&rows[0]!==null?Number((rows[0] as Record<string,unknown>).count):NaN
+        const txCount=count(txRows),receiptCount=count(receiptRows),a2uCount=count(a2uRows)
+        if(!Number.isSafeInteger(txCount)||!Number.isSafeInteger(receiptCount)||!Number.isSafeInteger(a2uCount)) throw new Error("invalid durable coverage count")
+        dr50DurableCoverage={...dr50DurableCoverage,transactionRows:txCount,receiptRowsByTransactionId:receiptCount,a2uSettlementCheckpointRows:a2uCount,queryOutcome:"ok"}
+      } catch { dr50DurableCoverage={...dr50DurableCoverage,queryOutcome:"failed_closed"} }
+    }
+    const safeCensus={flashPayOwnedKeys:keys.length,foreignKeyCount,knownPiApprovalKeyCount,unknownForeignKeyCount,unknownNamespaceCounts,unknownSuffixShapeCounts,dr50OwnershipPatternCounts,dr50PatternTypeCounts,dr50PatternTtlCounts,dr50StructurallyUnknownCount,dr50DurableCoverage,sampledForeignKeys:foreignKeyDiagnostics.length,foreignKeyDiagnostics,rawKeysLogged:false,valuesRead:false,deletionAttempted:false}
+    if(censusOnly) {
+      console.warn("[DR50 DR10 NONDESTRUCTIVE PROVENANCE CENSUS]",safeCensus)
       return NextResponse.json({state:"dr10_keyspace_census_complete",...safeCensus},{status:200})
     }
     if(foreignKeyCount>0) {
