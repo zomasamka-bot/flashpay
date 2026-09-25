@@ -25,7 +25,7 @@ import { verifyRefundBlockchainEvidence } from './refund-blockchain-evidence'
 import { serverConfig } from './server-config'
 import { getDurableU2AIngressAuthoritative, query, readSettlementRefundAuthority } from './db'
 import { recordRefundAccounting } from './refund-accounting'
-import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, acquirePiWalletExistingIntentSubmitLock, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
+import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, claimPiWalletIntent, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
 import { compareAndSwapPaymentProjection } from './payment-projection-cas'
 
 export type RefundExecutionResult =
@@ -257,7 +257,7 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
     if (initial.state !== 'present' || initial.checkpoint.stage !== 'wallet_submission_started' || initial.checkpoint.status !== 'pending' || typeof initial.checkpoint.refundPaymentId !== 'string' || !initial.checkpoint.refundPaymentId) return blocked
     const refund = await reconcileRefundWithPi({ paymentId: initial.checkpoint.paymentId, refundId, idempotencyKey: initial.checkpoint.idempotencyKey, payerUid: initial.checkpoint.payerUid, amount: initial.checkpoint.amount, refundPaymentId: initial.checkpoint.refundPaymentId })
     if (refund.outcome !== 'FOUND' || !refund.payment || refund.payment.identifier !== initial.checkpoint.refundPaymentId || refund.payment.status.cancelled || refund.payment.status.user_cancelled) return blocked
-    const walletLock = await acquirePiWalletExistingIntentSubmitLock(refund.payment.from_address, { kind: 'refund_claim', paymentId: initial.checkpoint.paymentId, refundId })
+    const walletLock = await acquirePiWalletSubmitLock(refund.payment.from_address)
     if (!walletLock) return blocked
     try {
       const lockedCheckpoint = await getRefundCheckpointReadOnly(refundId)
@@ -280,6 +280,17 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
       const gate = submit.evaluateRefundPreparedReplayPreGate({ sourcePayment: lockedSourcePayment, payment: lockedRefund.payment, prepared, evidence })
       if (gate.outcome !== 'ELIGIBLE_EXACT_REPLAY') return gate
       if (refundAuthority !== undefined && (refundAuthority === null || refundAuthority.paymentId !== initial.checkpoint.paymentId || refundAuthority.refundId !== refundId)) return blocked
+      // DR54: total Redis loss may erase the refund wallet-owner projection while the
+      // PostgreSQL claim/prepared evidence survives. Reconstruct only under the source-wallet
+      // submit lock and only after the exact durable/Pi/Horizon/A2U-absence gate above passes.
+      const currentWalletIntent = await readPiWalletIntent(lockedRefund.payment.from_address)
+      if (currentWalletIntent.state === 'unavailable') return blocked
+      if (currentWalletIntent.state === 'absent') {
+        const reconstructed = await claimPiWalletIntent(lockedRefund.payment.from_address, { kind: 'refund_claim', paymentId: initial.checkpoint.paymentId, refundId })
+        if (!reconstructed) return blocked
+      } else if (currentWalletIntent.owner.kind !== 'refund_claim' || currentWalletIntent.owner.paymentId !== initial.checkpoint.paymentId || currentWalletIntent.owner.refundId !== refundId) return blocked
+      const reconstructedWalletIntent = await readPiWalletIntent(lockedRefund.payment.from_address)
+      if (reconstructedWalletIntent.state !== 'present' || reconstructedWalletIntent.owner.kind !== 'refund_claim' || reconstructedWalletIntent.owner.paymentId !== initial.checkpoint.paymentId || reconstructedWalletIntent.owner.refundId !== refundId) return blocked
       const authorization = await readRefundBlockchainSubmitAuthorizationState(refundId, initial.checkpoint.paymentId, initial.checkpoint.idempotencyKey, lockedRefund.payment.identifier, gate.prepared.envelopeXdr, gate.prepared.preparedHash, gate.prepared.preparedSequence)
       if (authorization.state === 'uncertain') return blocked
       if (authorization.state === 'absent') {

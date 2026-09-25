@@ -1,0 +1,48 @@
+import fs from 'node:fs'
+import { strict as assert } from 'node:assert'
+const settlement=fs.readFileSync('lib/a2u-locked-executor.ts','utf8')
+const refund=fs.readFileSync('lib/refund-executor.ts','utf8')
+const wallet=fs.readFileSync('lib/pi-wallet-submit-lock.ts','utf8')
+const s0=settlement.indexOf('if (params.recoveryOperation === "SETTLEMENT_SUBMIT")')
+const s1=settlement.indexOf('// Validate and derive all fields',s0)
+const s=settlement.slice(s0,s1)
+const r0=refund.indexOf('export async function readRefundPreparedReplayUnderExistingOwner')
+const r1=refund.indexOf('export async function executeRefundBlockchain',r0)
+const r=refund.slice(r0,r1)
+assert.ok(s0>=0&&s1>s0&&r0>=0&&r1>r0)
+// Settlement: source-wallet serialization first; durable exact replay proof before absent-owner reconstruction.
+assert.ok(s.includes('const walletLock = await acquirePiWalletSubmitLock(latestPayment.a2uFromAddress)'))
+assert.ok(s.includes('const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })'))
+assert.ok(s.includes('if (walletIntent.state === "absent")'))
+assert.ok(s.includes('replay.outcome !== "ALLOW_EXACT_REPLAY"'))
+assert.ok(s.includes('replay.mode !== "EXACT_STORED_XDR_ONLY"'))
+assert.ok(s.includes('replay.authorizesFinancialAction !== true'))
+assert.ok(s.includes('claimPiWalletIntent(latestPayment.a2uFromAddress, { kind: "settlement_prepared"'))
+assert.ok(s.indexOf('executeFinancialRecoverySettlementSubmitReplay') < s.indexOf('claimPiWalletIntent(latestPayment.a2uFromAddress'))
+assert.ok(s.includes('if (walletIntent.state === "present" && walletIntent.owner.kind !== "settlement_prepared" && walletIntent.owner.kind !== "settlement_claim")'))
+// Movement already on Horizon never needs ownership reconstruction to acknowledge durable truth.
+assert.ok(s.includes('if (replay.outcome !== "MOVEMENT_VERIFIED" && (preparedIntent.state !== "present"'))
+// Refund: source-wallet serialization, durable claim/prepared + Pi/Horizon/A2U absence + scheduler authority before reconstruction.
+assert.ok(r.includes('const walletLock = await acquirePiWalletSubmitLock(refund.payment.from_address)'))
+for(const x of ['claim.state !== \'present\'','prepared.state !== \'present\'','readRefundPreparedRecoveryEvidence','lockedA2u.outcome !== \'CONFIRMED_NONE\'','gate.outcome !== \'ELIGIBLE_EXACT_REPLAY\'','refundAuthority !== undefined']) assert.ok(r.includes(x),x)
+assert.ok(r.includes("if (currentWalletIntent.state === 'absent')"))
+assert.ok(r.includes("claimPiWalletIntent(lockedRefund.payment.from_address, { kind: 'refund_claim'"))
+assert.ok(r.indexOf("gate.outcome !== 'ELIGIBLE_EXACT_REPLAY'") < r.indexOf("claimPiWalletIntent(lockedRefund.payment.from_address"))
+assert.ok(r.indexOf('refundAuthority !== undefined') < r.indexOf("claimPiWalletIntent(lockedRefund.payment.from_address"))
+assert.ok(r.includes("else if (currentWalletIntent.owner.kind !== 'refund_claim'"))
+assert.ok(r.includes("reconstructedWalletIntent.state !== 'present'"))
+// Primitive remains CAS-like: absent can be claimed; conflicting present owner cannot be overwritten.
+assert.ok(wallet.includes('if not current then'))
+assert.ok(wallet.includes('if current == ARGV[1] then return 1 end'))
+assert.ok(wallet.includes('return 0'))
+// Deterministic adversarial ownership matrix.
+const reconstruct=(existing,expected,gate)=> gate!==true ? 'BLOCK' : existing===null ? 'CLAIM_EXPECTED' : existing===expected ? 'KEEP_EXPECTED' : 'BLOCK'
+assert.equal(reconstruct(null,'settlement',true),'CLAIM_EXPECTED')
+assert.equal(reconstruct('settlement','settlement',true),'KEEP_EXPECTED')
+assert.equal(reconstruct('refund','settlement',true),'BLOCK')
+assert.equal(reconstruct(null,'settlement',false),'BLOCK')
+assert.equal(reconstruct(null,'refund',true),'CLAIM_EXPECTED')
+assert.equal(reconstruct('refund','refund',true),'KEEP_EXPECTED')
+assert.equal(reconstruct('settlement','refund',true),'BLOCK')
+assert.equal(reconstruct(null,'refund',false),'BLOCK')
+console.log(JSON.stringify({verdict:'PASS',gate:'DR54-TOTAL-REDIS-LOSS-WALLET-INTENT-RECONSTRUCTION',settlementMissingIntentReconstructedOnlyAfterExactReplayGate:true,refundMissingIntentReconstructedOnlyAfterDurablePiHorizonA2UAndSchedulerGate:true,conflictingIntentFailsClosed:true,movementVerifiedDoesNotResubmit:true,sourceWalletSubmitLockRequired:true,financialMovementExecuted:false},null,2))

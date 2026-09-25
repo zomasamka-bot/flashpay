@@ -8,7 +8,7 @@ import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlem
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
 import { logSettlementSubmitRuntimeDiagnostic } from "@/lib/settlement-submit-runtime-diagnostic"
-import { acquirePiWalletSubmitLock, readPiWalletIntent, replacePiWalletIntent, releasePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
+import { acquirePiWalletSubmitLock, claimPiWalletIntent, readPiWalletIntent, replacePiWalletIntent, releasePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
 import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
 import { serverConfig } from "@/lib/server-config"
@@ -427,18 +427,32 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
       }
       try {
-        const walletIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+        let walletIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
         if (walletIntent.state === "unavailable") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         if (walletIntent.state === "present" && walletIntent.owner.kind === "settlement_prepared" && (walletIntent.owner.paymentId !== paymentId || walletIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || walletIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         if (walletIntent.state === "present" && walletIntent.owner.kind === "settlement_claim") {
           if (walletIntent.owner.paymentId !== paymentId || typeof latestPayment.a2uPreparedEnvelopeXdr !== "string" || !latestPayment.a2uPreparedEnvelopeXdr.trim() || latestPayment.a2uPreparedEnvelopeXdr !== latestPayment.a2uPreparedEnvelopeXdr.trim() || typeof latestPayment.a2uPreparedTxHash !== "string" || !/^[0-9a-f]{64}$/.test(latestPayment.a2uPreparedTxHash) || typeof latestPayment.a2uPreparedSequence !== "string" || !/^[1-9][0-9]*$/.test(latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           const promoted = await replacePiWalletIntent(latestPayment.a2uFromAddress, walletIntent.owner, { kind: "settlement_prepared", paymentId, preparedHash: latestPayment.a2uPreparedTxHash, preparedSequence: latestPayment.a2uPreparedSequence })
           if (!promoted) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          walletIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
         }
         if (walletIntent.state === "present" && walletIntent.owner.kind !== "settlement_prepared" && walletIntent.owner.kind !== "settlement_claim") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
-        const preparedIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
-        if (preparedIntent.state !== "present" || preparedIntent.owner.kind !== "settlement_prepared" || preparedIntent.owner.paymentId !== paymentId || preparedIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || preparedIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         const replay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
+        if (walletIntent.state === "absent") {
+          // DR54: a total Redis loss may erase only the source-wallet ownership projection.
+          // Reconstruct it under the source-wallet submit lock only after the durable exact-XDR
+          // replay gate has independently proved Settlement authority, Refund absence, Horizon
+          // sequence safety and exact prepared identity. Never reconstruct from Redis projection alone.
+          if (replay.outcome !== "ALLOW_EXACT_REPLAY" || replay.mode !== "EXACT_STORED_XDR_ONLY" || replay.authorizesFinancialAction !== true) {
+            if (replay.outcome !== "MOVEMENT_VERIFIED") return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          } else {
+            const reconstructed = await claimPiWalletIntent(latestPayment.a2uFromAddress, { kind: "settlement_prepared", paymentId, preparedHash: latestPayment.a2uPreparedTxHash, preparedSequence: latestPayment.a2uPreparedSequence })
+            if (!reconstructed) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+            walletIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+          }
+        }
+        const preparedIntent = await readPiWalletIntent(latestPayment.a2uFromAddress)
+        if (replay.outcome !== "MOVEMENT_VERIFIED" && (preparedIntent.state !== "present" || preparedIntent.owner.kind !== "settlement_prepared" || preparedIntent.owner.paymentId !== paymentId || preparedIntent.owner.preparedHash !== latestPayment.a2uPreparedTxHash || preparedIntent.owner.preparedSequence !== latestPayment.a2uPreparedSequence)) return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         if (replay.outcome === "MOVEMENT_VERIFIED") {
           if (
             replay.moneyMovementProven !== true ||
