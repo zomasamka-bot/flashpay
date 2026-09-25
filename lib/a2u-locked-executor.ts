@@ -112,7 +112,7 @@ export function isStage1OnlySettlementDispatchCandidate(payment: Payment, now: n
   const paidAt = typeof payment.paidAt === "string" && payment.paidAt.trim() !== "" && payment.paidAt === payment.paidAt.trim() ? Date.parse(payment.paidAt) : NaN
   const lastAttemptAt = typeof payment.lastAttemptAt === "string" && payment.lastAttemptAt.trim() !== "" && payment.lastAttemptAt === payment.lastAttemptAt.trim() ? Date.parse(payment.lastAttemptAt) : NaN
   const u2aTxid = payment.u2aTxid
-  return payment.status === "paid_to_app" && payment.settlementFailureState === "none" &&
+  return (payment.status === "paid_to_app" || payment.status === "settlement_pending") && payment.settlementFailureState === "none" &&
     Number.isFinite(dispatchAt) && Number.isFinite(paidAt) && dispatchAt === paidAt && payment.settlementDispatchRequestedAt === payment.paidAt && dispatchAt <= now &&
     Number.isFinite(lastAttemptAt) && lastAttemptAt >= paidAt && lastAttemptAt <= now &&
     typeof payment.amount === "number" && Number.isFinite(payment.amount) && payment.amount > 0 &&

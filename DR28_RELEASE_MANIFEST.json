@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 364,
-  "totalBytes": 2533169,
+  "fileCount": 365,
+  "totalBytes": 2536651,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 63062,
-      "sha256": "ee7ff39adb07f82c70a7a52802d32b383ea082a16ea6059191badc00e7e4b091"
+      "bytes": 63256,
+      "sha256": "e08c914b5579ed70f2a771b34e9ef739ae7b7aa98d29b4818c9238c632f040ec"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -310,11 +310,6 @@
       "path": "app/transactions/page.tsx",
       "bytes": 15147,
       "sha256": "da94ab50e3675a1e47754a9738f9e929c18dbb9f7233f2bbd8522b329140be3a"
-    },
-    {
-      "path": "components.json",
-      "bytes": 427,
-      "sha256": "060762649713523e82b4a1cf131fba79ab250407a109d7ae7dc045ff482ae36d"
     },
     {
       "path": "components/back-button.tsx",
@@ -647,6 +642,11 @@
       "sha256": "0a97d84a8079b32ebee161f61bb436bd36cad333897a94a95b91b5e2835400b7"
     },
     {
+      "path": "components.json",
+      "bytes": 427,
+      "sha256": "060762649713523e82b4a1cf131fba79ab250407a109d7ae7dc045ff482ae36d"
+    },
+    {
       "path": "hooks/use-mobile.ts",
       "bytes": 565,
       "sha256": "1b43441b273aa21c1e74fefa774d5a7cb50068e5d4c192a8f63b9c95c5580431"
@@ -663,8 +663,8 @@
     },
     {
       "path": "lib/a2u-locked-executor.ts",
-      "bytes": 53018,
-      "sha256": "2df70105aa74c152265c75e2a3edc86e6fb2879bfce57202acc3defff427ffec"
+      "bytes": 53063,
+      "sha256": "d093a9da8d77132fa034f3ff1d4478d0aa231c526f17ae203732fea15be7c50a"
     },
     {
       "path": "lib/a2u-recovery-service.ts",
@@ -1415,6 +1415,11 @@
       "path": "scripts/verify-dr37-stage1-hook-one-shot.mjs",
       "bytes": 1984,
       "sha256": "7466f41bb786b85d3678e7a66e4e727314f4180f1359bdd6193b15abf6127a65"
+    },
+    {
+      "path": "scripts/verify-dr38-stage1-only-recovery-classification.mjs",
+      "bytes": 3243,
+      "sha256": "039068ed1b0579f7393d4178334280c749f1b9f9b75e46ffb36fdb2213922253"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",
