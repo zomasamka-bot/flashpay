@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 365,
-  "totalBytes": 2536100,
+  "fileCount": 367,
+  "totalBytes": 2545056,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 63257,
-      "sha256": "3986667325f19ff84b081b5db56d049a98685a7b12202620d54ae18b49efc260"
+      "bytes": 63626,
+      "sha256": "ac059ecb648bbbdc8c0be2a218c7695f2511f19843bebe03950d3d0ade24ba15"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -658,18 +658,18 @@
     },
     {
       "path": "lib/a2u-executor.ts",
-      "bytes": 95200,
-      "sha256": "86d76728d2e79c26323f0dc21f4e526db391f0a40f04e514a1b3fd9cc9df90ea"
+      "bytes": 99450,
+      "sha256": "a3363703c5b87d7b05b6d6e844a974574bfbd558051fd51c47ef2fb0879db9fc"
     },
     {
       "path": "lib/a2u-locked-executor.ts",
-      "bytes": 53018,
-      "sha256": "2df70105aa74c152265c75e2a3edc86e6fb2879bfce57202acc3defff427ffec"
+      "bytes": 53063,
+      "sha256": "d093a9da8d77132fa034f3ff1d4478d0aa231c526f17ae203732fea15be7c50a"
     },
     {
       "path": "lib/a2u-recovery-service.ts",
-      "bytes": 38834,
-      "sha256": "0837e8ef2e49927e7fe1398f1589b10cf8079bbd879eb244b51454d87f3421fd"
+      "bytes": 38848,
+      "sha256": "00a1046eb224fada5b8d027b9a8c8c7d96888e8a9e63b8d87fb3cdb1e9e62ecc"
     },
     {
       "path": "lib/a2u-response.ts",
@@ -713,8 +713,8 @@
     },
     {
       "path": "lib/financial-amount-stroops.ts",
-      "bytes": 1711,
-      "sha256": "684ca57018a7f1b86a0b895a334d8d185ab9d6908a793e33b13f1061c91df497"
+      "bytes": 1325,
+      "sha256": "3ec5580eca2f28e0e05fcf0947ba111c9fac755559153cb93f790268137f0e64"
     },
     {
       "path": "lib/financial-recovery-a2u-proof.ts",
@@ -1417,9 +1417,19 @@
       "sha256": "7466f41bb786b85d3678e7a66e4e727314f4180f1359bdd6193b15abf6127a65"
     },
     {
-      "path": "scripts/verify-dr40-exact-stroop-number-canonicalization.mjs",
-      "bytes": 2304,
-      "sha256": "71705bc965efa73bc15ad6089d578e5e9c7c811cb2fd40b759c33bf54ada43fd"
+      "path": "scripts/verify-dr38-stage1-only-recovery-classification.mjs",
+      "bytes": 3243,
+      "sha256": "039068ed1b0579f7393d4178334280c749f1b9f9b75e46ffb36fdb2213922253"
+    },
+    {
+      "path": "scripts/verify-dr39-stage1-only-orchestrator-routing.mjs",
+      "bytes": 1781,
+      "sha256": "809a8882fac03c284232f5697685005db9b79467f9d218e2b0fd3e3fab8ed9b8"
+    },
+    {
+      "path": "scripts/verify-dr41-stage2-observability.mjs",
+      "bytes": 1944,
+      "sha256": "f576b888d21e2fe17f8f603a9d0ef4dacdfc59f08dc1c28b57bd0e7eba1f1595"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",

@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+const ex=fs.readFileSync(new URL('../lib/a2u-executor.ts', import.meta.url),'utf8');
+const amt=fs.readFileSync(new URL('../lib/financial-amount-stroops.ts', import.meta.url),'utf8');
+const markers=['prepare_enter','source_account_loaded','base_fee_loaded','amount_canonicalized','transaction_built','transaction_signed','prepared_identity','redis_prepared_persisted','durable_prepared_outcome','wallet_intent_replace','wallet_intent_read','wallet_lock_request','wallet_lock_result','prepare_failed','prepare_succeeded','horizon_submit_about_to_start','horizon_move_failed','exception','stage2_result_failed'];
+for(const m of markers) if(!ex.includes(`[DR41 STAGE2 DIAGNOSTIC] ${m}`)) throw new Error('missing marker '+m);
+const diagnosticLines=ex.split('\n').filter(l=>l.includes('[DR41 STAGE2 DIAGNOSTIC]')).join('\n');
+for(const forbidden of ['PI_PRIVATE_SEED', 'piPrivateSeed,', 'preparedEnvelopeXdr:']) if(diagnosticLines.includes(forbidden)) throw new Error('diagnostic may expose secret/xdr: '+forbidden);
+if(!amt.includes('const canonical = value.toFixed(7)') || !amt.includes('return stellarAmountToExactPositiveStroops(canonical)')) throw new Error('DR40 exact-stroop canonicalization missing');
+const canonical=(v)=>{ if(!Number.isFinite(v)||v<=0)return null; const c=v.toFixed(7); if(Number(c)!==v)return null; const [w,f='']=c.split('.'); const n=Number(`${w}${f.padEnd(7,'0')}`); return Number.isSafeInteger(n)&&n>0?n:null };
+const cases=[[0.14,1400000],[0.11,1100000],[0.12,1200000],[0.13,1300000],[0.30000000000000004,null],[1e-8,null]];
+for(const [v,e] of cases) if(canonical(v)!==e) throw new Error(`canonical mismatch ${v}`);
+console.log(JSON.stringify({gate:'DR41-STAGE2-OBSERVABILITY',markers:markers.length,secretOrXdrLogging:false,exact014Stroops:canonical(0.14),unsafePrecisionRejected:canonical(0.30000000000000004)===null,financialMovementExecuted:false,productionDataMutated:false},null,2));

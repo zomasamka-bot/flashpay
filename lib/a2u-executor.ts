@@ -414,6 +414,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     const signResult = await stage2SignAndSubmit(ctx)
     console.log("[P7B TIMING] executeA2U Stage2/Horizon", { paymentId: ctx.paymentId, durationMs: Date.now() - stage2TimingStartedAt })
     if (!signResult.ok) {
+      console.error("[DR41 STAGE2 DIAGNOSTIC] stage2_result_failed", { paymentId: ctx.paymentId, userFacingStatus: signResult.userFacingStatus, error: signResult.error })
       return {
         ok: false,
         status: signResult.userFacingStatus,
@@ -907,13 +908,16 @@ type Stage2PreparedResult =
   | { ok: false; error: string; userFacingStatus: string }
 
 async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair: StellarSDK.Keypair, appPublicKey: string, horizonServer: StellarSDK.Horizon.Server, toAddress: string, amount: number, a2uPaymentId: string): Promise<Stage2PreparedResult> {
+  console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_enter", { paymentId: ctx.paymentId, amount, exactStroops: numberToExactPositiveStroops(amount), hasToAddress: typeof toAddress === "string" && toAddress.length > 0, hasA2UPaymentId: typeof a2uPaymentId === "string" && a2uPaymentId.length > 0 })
   const sourceAccount = await horizonServer.loadAccount(appPublicKey)
+  console.log("[DR41 STAGE2 DIAGNOSTIC] source_account_loaded", { paymentId: ctx.paymentId, sourceSequence: sourceAccount.sequence })
   let feeCharged: number
   try {
     const baseFeeFromHorizon = await horizonServer.fetchBaseFee()
     const baseFeeNumber = Number(baseFeeFromHorizon)
     if (!Number.isFinite(baseFeeNumber) || baseFeeNumber <= 0) return { ok: false, error: "Horizon baseFee is not a valid positive number", userFacingStatus: "error" }
     feeCharged = baseFeeNumber * 2
+    console.log("[DR41 STAGE2 DIAGNOSTIC] base_fee_loaded", { paymentId: ctx.paymentId, baseFeeStroops: baseFeeNumber, transactionFeeStroops: feeCharged })
   } catch (feeError) {
     console.error("[A2U Stage2] Failed to fetch Horizon baseFee:", feeError)
     return { ok: false, error: "Failed to fetch Horizon baseFee", userFacingStatus: "error" }
@@ -921,28 +925,40 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   const feeAsString = String(Math.floor(feeCharged))
   console.log("[A2U Stage2] Building transaction")
   const builder = new StellarSDK.TransactionBuilder(sourceAccount, { fee: feeAsString, networkPassphrase: "Pi Testnet" })
-  if (numberToExactPositiveStroops(amount) === null) return { ok: false, error: "Settlement amount is not an exact positive stroop value", userFacingStatus: "error" }
+  const exactAmountStroops = numberToExactPositiveStroops(amount)
+  console.log("[DR41 STAGE2 DIAGNOSTIC] amount_canonicalized", { paymentId: ctx.paymentId, amount, stellarAmount: amount.toFixed(7), exactAmountStroops })
+  if (exactAmountStroops === null) {
+    console.error("[DR41 STAGE2 DIAGNOSTIC] amount_rejected", { paymentId: ctx.paymentId, amount, stellarAmount: amount.toFixed(7) })
+    return { ok: false, error: "Settlement amount is not an exact positive stroop value", userFacingStatus: "error" }
+  }
   builder.addOperation(StellarSDK.Operation.payment({ destination: toAddress, asset: StellarSDK.Asset.native(), amount: amount.toFixed(7) }))
   builder.addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0, 28)))
   builder.setTimeout(StellarSDK.TimeoutInfinite)
   const transaction = builder.build()
+  console.log("[DR41 STAGE2 DIAGNOSTIC] transaction_built", { paymentId: ctx.paymentId, sequence: transaction.sequence, operationCount: transaction.operations.length })
   transaction.sign(appKeypair)
+  console.log("[DR41 STAGE2 DIAGNOSTIC] transaction_signed", { paymentId: ctx.paymentId, sequence: transaction.sequence })
   const preparedEnvelopeXdr = transaction.toXDR()
   if (typeof preparedEnvelopeXdr !== "string" || !preparedEnvelopeXdr.trim() || preparedEnvelopeXdr !== preparedEnvelopeXdr.trim()) return { ok: false, error: "Prepared A2U envelope is invalid", userFacingStatus: "error" }
   const preparedHash = Buffer.from(transaction.hash()).toString("hex")
   const preparedSequence = transaction.sequence
+  console.log("[DR41 STAGE2 DIAGNOSTIC] prepared_identity", { paymentId: ctx.paymentId, preparedHash, preparedSequence, envelopePresent: preparedEnvelopeXdr.length > 0 })
   if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
   ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr, a2uPreparedTxHash: preparedHash, a2uPreparedSequence: preparedSequence, status: "settlement_pending" as const })
+  console.log("[DR41 STAGE2 DIAGNOSTIC] redis_prepared_persisted", { paymentId: ctx.paymentId, preparedHash, preparedSequence })
   const durablePrepared = await recordSettlementPreparedCheckpoint({
     paymentId:ctx.paymentId,merchantId:ctx.payment.merchantId,merchantUid:ctx.merchantUid,
     customerAmount:ctx.customerAmount,merchantAmount:amount,a2uPaymentId,a2uFromAddress:appPublicKey,a2uToAddress:toAddress,
     preparedEnvelopeXdr,preparedTxHash:preparedHash,preparedSequence
   })
+  console.log("[DR41 STAGE2 DIAGNOSTIC] durable_prepared_outcome", { paymentId: ctx.paymentId, outcome: durablePrepared.outcome, preparedHash, preparedSequence })
   if(durablePrepared.outcome!=="RECORDED"&&durablePrepared.outcome!=="REPLAYED")
     return {ok:false,error:"Prepared A2U durable checkpoint not proven",userFacingStatus:"settlement_pending"}
   const preparedOwnerReplaced = await replacePiWalletIntent(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId }, { kind: "settlement_prepared", paymentId: ctx.paymentId, preparedHash, preparedSequence })
+  console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_intent_replace", { paymentId: ctx.paymentId, preparedOwnerReplaced })
   if (!preparedOwnerReplaced) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
   const preparedOwner = await readPiWalletIntent(appPublicKey)
+  console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_intent_read", { paymentId: ctx.paymentId, state: preparedOwner.state, kind: preparedOwner.state === "present" ? preparedOwner.owner.kind : null, ownerMatchesPayment: preparedOwner.state === "present" ? preparedOwner.owner.paymentId === ctx.paymentId : false })
   if (preparedOwner.state !== "present" || preparedOwner.owner.kind !== "settlement_prepared" || preparedOwner.owner.paymentId !== ctx.paymentId || preparedOwner.owner.preparedHash !== preparedHash || preparedOwner.owner.preparedSequence !== preparedSequence) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
   return { ok: true, transaction, preparedHash, preparedSequence }
 }
@@ -1034,13 +1050,19 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Private seed does not match app wallet address", userFacingStatus: "error" }
     }
 
+    console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_lock_request", { paymentId: ctx.paymentId, status: ctx.payment.status, isRecovery: ctx.isRecovery, recoveryOperation: ctx.recoveryOperation ?? null, hasPreparedEvidence: ctx.payment.a2uPreparedTxHash !== undefined || ctx.payment.a2uPreparedSequence !== undefined || ctx.payment.a2uPreparedEnvelopeXdr !== undefined })
     walletLock = await acquirePiWalletIntentSubmitLock(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId })
+    console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_lock_result", { paymentId: ctx.paymentId, acquired: walletLock !== null })
     if (!walletLock) return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
 
     console.log("[A2U Stage2] Connecting to Horizon")
     const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
     const prepared = await prepareStage2UnderHeldWalletLock(ctx, appKeypair, appPublicKey, horizonServer, toAddress, amount, a2uPaymentId)
-    if (!prepared.ok) return prepared
+    if (!prepared.ok) {
+      console.error("[DR41 STAGE2 DIAGNOSTIC] prepare_failed", { paymentId: ctx.paymentId, error: prepared.error, userFacingStatus: prepared.userFacingStatus })
+      return prepared
+    }
+    console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_succeeded", { paymentId: ctx.paymentId, preparedHash: prepared.preparedHash, preparedSequence: prepared.preparedSequence })
     const { transaction, preparedHash } = prepared
 
     if (ctx.isRecovery === false && ctx.merchantAuthority === "durable_u2a" && typeof ctx.payment.piPaymentId === "string" && ctx.payment.piPaymentId.length > 0 && typeof ctx.payment.u2aTxid === "string" && ctx.payment.u2aTxid.length > 0 && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
@@ -1048,6 +1070,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Temporary Stage2 prepared checkpoint fault", userFacingStatus: "settlement_pending" }
     }
 
+    console.log("[DR41 STAGE2 DIAGNOSTIC] horizon_submit_about_to_start", { paymentId: ctx.paymentId, preparedHash, preparedSequence: transaction.sequence })
     console.log("[A2U Stage2] Submitting to Horizon")
     let moved: Stage2MoveResult
     let reconciledSubmitFeeStroops: number | null = null
@@ -1094,7 +1117,10 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
         paymentId: ctx.paymentId, preparedHash, preparedSequence: transaction.sequence, feeStroops,
       })
     }
-    if (!moved.ok) return moved
+    if (!moved.ok) {
+      console.error("[DR41 STAGE2 DIAGNOSTIC] horizon_move_failed", { paymentId: ctx.paymentId, error: moved.error, userFacingStatus: moved.userFacingStatus, preparedHash, preparedSequence: transaction.sequence })
+      return moved
+    }
     const txidFromHorizon = moved.txidFromHorizon
     if (ctx.isRecovery === false && ctx.merchantAuthority === "durable_u2a" && typeof ctx.payment.piPaymentId === "string" && ctx.payment.piPaymentId.length > 0 && typeof ctx.payment.u2aTxid === "string" && ctx.payment.u2aTxid.length > 0 && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
       console.log("[A2U TEST] Stage2 post-submit fault point 0.12")
@@ -1142,6 +1168,16 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       },
     }
   } catch (error) {
+    const e = error as { name?: unknown; message?: unknown; code?: unknown; response?: { status?: unknown; data?: { extras?: { result_codes?: unknown } } } }
+    console.error("[DR41 STAGE2 DIAGNOSTIC] exception", {
+      paymentId: ctx.paymentId,
+      name: typeof e?.name === "string" ? e.name : null,
+      message: typeof e?.message === "string" ? e.message.slice(0, 500) : String(error).slice(0, 500),
+      code: typeof e?.code === "string" || typeof e?.code === "number" ? e.code : null,
+      httpStatus: typeof e?.response?.status === "number" ? e.response.status : null,
+      horizonResultCodes: e?.response?.data?.extras?.result_codes ?? null,
+      stage: ctx.payment.a2uPreparedTxHash ? "post_prepared" : "pre_prepared",
+    })
     console.error("[A2U Stage2] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }
   } finally {
