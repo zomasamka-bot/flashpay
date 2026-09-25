@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 360,
-  "totalBytes": 2520253,
+  "fileCount": 361,
+  "totalBytes": 2523491,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 62306,
-      "sha256": "f9552f29069335a100caac8a8c72553f1b2a93082881666f20922d14f12a214a"
+      "bytes": 62503,
+      "sha256": "bd14e106749b733cb8f9c2ab28caba6d27778d1476354e0010828be3421eb445"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -163,8 +163,8 @@
     },
     {
       "path": "app/api/recovery/transient/route.ts",
-      "bytes": 197384,
-      "sha256": "bd442f2b82036844891f9220b2c3af166f4fb5f1741a1d9b795ad0e25a6193d6"
+      "bytes": 197406,
+      "sha256": "18581e71723b5c7759679c7d920721bebd8fbaba60371f764171f9afa9e38a5f"
     },
     {
       "path": "app/api/refunds/customer-status/route.ts",
@@ -1395,6 +1395,11 @@
       "path": "scripts/verify-dr33-durable-merchant-authority-heal.mjs",
       "bytes": 2556,
       "sha256": "56c00f41d798c648a8eac68487dbfac44d1db35a9ac668e9fa09aac66897c419"
+    },
+    {
+      "path": "scripts/verify-dr34-durable-u2a-timestamp-canonicalization.mjs",
+      "bytes": 3019,
+      "sha256": "30de5173ab61af2b74de6bd07e00f90db5dfd93002d9f790eb4486ad47f3da22"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",
