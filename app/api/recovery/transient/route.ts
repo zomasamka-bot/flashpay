@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "crypto"
+import { createHash, randomUUID, timingSafeEqual } from "crypto"
 import { after, type NextRequest, NextResponse } from "next/server"
 
 import { redis, isRedisConfigured } from "@/lib/redis"
