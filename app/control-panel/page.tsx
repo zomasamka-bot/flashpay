@@ -26,6 +26,8 @@ function ControlPanelContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [isToggling, setIsToggling] = useState(false)
   const [isDr10Running, setIsDr10Running] = useState(false)
+  const [isDr11Running, setIsDr11Running] = useState(false)
+  const [dr11RefundId, setDr11RefundId] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [reason, setReason] = useState("")
@@ -144,6 +146,25 @@ function ControlPanelContent() {
     } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR10 injection failed") } finally { setIsDr10Running(false) }
   }, [isDr10Running, uidData.accessToken])
 
+  const executeDr11 = useCallback(async (live: boolean) => {
+    if (isDr11Running || !uidData.accessToken) return
+    const refundId = dr11RefundId.trim()
+    if (!/^[A-Za-z0-9-]{8,128}$/.test(refundId)) { setError("Enter the exact DR11 refund ID first."); return }
+    let confirmation = "READINESS_ONLY"
+    if (live) {
+      const typed = window.prompt(document.documentElement.lang === "ar" ? "اختبار مالي حي متزامن. اكتب DR11_CONCURRENT_REFUND للمتابعة." : "Live concurrent financial certification. Type DR11_CONCURRENT_REFUND to continue.")
+      confirmation = typed?.trim() ?? ""
+      if (confirmation !== "DR11_CONCURRENT_REFUND") { setError(typed === null ? "DR11 cancelled before request." : "DR11 confirmation did not match exactly. No request was sent."); return }
+    }
+    setIsDr11Running(true); setError(null); setSuccess(live ? "DR11 live request accepted locally · sending two bounded contenders…" : "DR11 readiness check running…")
+    try {
+      const response = await fetch("/api/control/dr11", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ refundId, confirmation }) })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.error || `DR11 request failed (${response.status})`)
+      setSuccess(live ? `DR11 ${data?.certification ?? "result"} · refund ${data?.final?.refundId ?? refundId} · tx ${data?.final?.refundTxid ?? "?"}` : `DR11 ready · stage ${data?.checkpoint?.stage ?? "?"} · status ${data?.checkpoint?.status ?? "?"} · financial execution 0`)
+    } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR11 request failed") } finally { setIsDr11Running(false) }
+  }, [isDr11Running, dr11RefundId, uidData.accessToken])
+
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
   if (isLoading) {
@@ -199,6 +220,12 @@ function ControlPanelContent() {
         <Card className="border-amber-500/50">
           <CardHeader><CardTitle>DR10 Live Total Redis Loss Certification</CardTitle><CardDescription>Owner-only, production-only certification trigger. It deletes Redis projections only after the server-side FlashPay-exclusive keyspace preflight. It does not mutate PostgreSQL or call Pi/Horizon.</CardDescription></CardHeader>
           <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Run the non-destructive census first. It reads only Redis key metadata, never values, and never deletes. The destructive loss trigger remains separately confirmation-gated.</AlertDescription></Alert><Button onClick={() => void executeDr10Census()} disabled={isDr10Running} variant="outline" size="lg" className="w-full">{isDr10Running ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <ShieldAlert className="h-4 w-4 mr-2" />}Run DR10 Safe Census</Button><Button onClick={() => void executeDr10()} disabled={isDr10Running} variant="destructive" size="lg" className="w-full">{isDr10Running ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <ShieldAlert className="h-4 w-4 mr-2" />}Run DR10 Total Redis Loss</Button></CardContent>
+        </Card>
+
+
+        <Card className="border-orange-500/50">
+          <CardHeader><CardTitle>DR11 Live Concurrent Refund Certification</CardTitle><CardDescription>Owner-only, production-only, two-contender certification over one exact refund. Readiness is read-only; live execution requires an exact pristine intent_created refund and explicit confirmation.</CardDescription></CardHeader>
+          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Use only the exact DR11 test refund ID. The live action drives that single refund through bounded concurrent rounds using the normal production executor; it does not create a customer payment or bypass financial gates.</AlertDescription></Alert><input value={dr11RefundId} onChange={(e) => setDr11RefundId(e.target.value.slice(0,128))} disabled={isDr11Running} placeholder="Exact DR11 refund ID" className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono" /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><Button onClick={() => void executeDr11(false)} disabled={isDr11Running || !dr11RefundId.trim()} variant="outline">Check DR11 Readiness</Button><Button onClick={() => void executeDr11(true)} disabled={isDr11Running || !dr11RefundId.trim()} variant="destructive">Run DR11 Concurrent Refund</Button></div></CardContent>
         </Card>
 
         <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>
