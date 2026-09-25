@@ -5,6 +5,7 @@ const NO_STORE = { "Cache-Control": "no-cache, no-store, must-revalidate" }
 const DR10_ENV = "FLASHPAY_DR10_TOTAL_REDIS_LOSS_TEST"
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
 const CONFIRM = "TOTAL_REDIS_LOSS"
+const CENSUS_CONFIRM = "CENSUS_ONLY"
 
 function authError(status: 401 | 403 | 500 | 503) {
   return status === 500 ? "Owner verification not configured" :
@@ -25,18 +26,19 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
-  if (body?.confirmation !== CONFIRM) {
-    return NextResponse.json({ error: "Exact destructive confirmation required" }, { status: 400, headers: NO_STORE })
+  const censusOnly=body?.confirmation===CENSUS_CONFIRM
+  if (!censusOnly && body?.confirmation !== CONFIRM) {
+    return NextResponse.json({ error: "Exact DR10 confirmation required" }, { status: 400, headers: NO_STORE })
   }
 
   const target = new URL("/api/recovery/transient", `https://${productionHost}`)
-  target.searchParams.set("mode", "dr10-total-redis-loss")
+  target.searchParams.set("mode", censusOnly ? "dr10-keyspace-census" : "dr10-total-redis-loss")
   try {
     const response = await fetch(target, {
       method: "POST",
       headers: {
         "x-flashpay-transient-recovery-secret": recoverySecret,
-        "x-flashpay-dr10-confirm": CONFIRM,
+        ...(censusOnly ? {} : { "x-flashpay-dr10-confirm": CONFIRM }),
       },
       cache: "no-store",
       redirect: "error",
@@ -50,7 +52,7 @@ export async function POST(request: NextRequest) {
       console.error("[DR45 DR10 OWNER TRIGGER] internal injection rejected", { status: response.status, internalError: safeInternalError })
       return NextResponse.json({ error: "DR10 internal injection rejected", status: response.status, internalError: safeInternalError }, { status: 502, headers: NO_STORE })
     }
-    console.warn("[DR45 DR10 OWNER TRIGGER] injection accepted", {
+    console.warn(censusOnly ? "[DR49 DR10 OWNER CENSUS] census accepted" : "[DR45 DR10 OWNER TRIGGER] injection accepted", {
       ownerUid: auth.uid,
       state: payload && typeof payload === "object" ? (payload as Record<string, unknown>).state : undefined,
     })

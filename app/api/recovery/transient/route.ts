@@ -33,6 +33,7 @@ const DRAIN_LEASE_TTL_SECONDS = 900
 const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
 const RECOVERY_WAKE_HEALTH_KEY = "flashpay:operations:recovery-last-wake:v1"
 const DR10_TOTAL_REDIS_LOSS_MODE = "dr10-total-redis-loss"
+const DR10_KEYSPACE_CENSUS_MODE = "dr10-keyspace-census"
 const DR10_TOTAL_REDIS_LOSS_ENV = "FLASHPAY_DR10_TOTAL_REDIS_LOSS_TEST"
 const DR10_TOTAL_REDIS_LOSS_CONFIRM = "TOTAL_REDIS_LOSS"
 const DR10_ALLOWED_REDIS_PREFIXES = ["flashpay:", "payment:", "receipt-file:"] as const
@@ -863,11 +864,13 @@ export async function POST(request: NextRequest) {
   // environment opt-in + exact destructive confirmation header. It deletes only
   // after a complete keyspace preflight proves every key belongs to FlashPay's
   // known Redis namespaces. PostgreSQL/Pi/Horizon are never mutated by this hook.
-  if (request.nextUrl.searchParams.get("mode") === DR10_TOTAL_REDIS_LOSS_MODE) {
+  const dr10Mode=request.nextUrl.searchParams.get("mode")
+  if (dr10Mode === DR10_TOTAL_REDIS_LOSS_MODE || dr10Mode === DR10_KEYSPACE_CENSUS_MODE) {
+    const censusOnly=dr10Mode===DR10_KEYSPACE_CENSUS_MODE
     if (runtimeEnv.VERCEL_ENV !== "production" || runtimeEnv[DR10_TOTAL_REDIS_LOSS_ENV] !== "1") {
       return NextResponse.json({ error: "DR10 live fault injection disabled" }, { status: 403 })
     }
-    if (!constantTimeSecretEqual(DR10_TOTAL_REDIS_LOSS_CONFIRM, request.headers.get("x-flashpay-dr10-confirm"))) {
+    if (!censusOnly && !constantTimeSecretEqual(DR10_TOTAL_REDIS_LOSS_CONFIRM, request.headers.get("x-flashpay-dr10-confirm"))) {
       return NextResponse.json({ error: "DR10 destructive confirmation required" }, { status: 403 })
     }
 
@@ -876,6 +879,8 @@ export async function POST(request: NextRequest) {
     let foreignKeyCount=0
     let knownPiApprovalKeyCount=0
     let unknownForeignKeyCount=0
+    const unknownNamespaceCounts:Record<string,number>={}
+    const unknownSuffixShapeCounts:Record<string,number>={}
     // Upstash TS SCAN cursors are opaque strings; preserve them verbatim.
     // Converting through Number can lose/alter cursor identity and is not the SDK contract.
     let cursor="0"
@@ -907,7 +912,17 @@ export async function POST(request: NextRequest) {
         if(!DR10_ALLOWED_REDIS_PREFIXES.some(prefix=>key.startsWith(prefix))) {
           foreignKeyCount+=1
           if(DR10_KNOWN_FLASH_PAY_FOREIGN_PREFIXES.some(prefix=>key.startsWith(prefix))) knownPiApprovalKeyCount+=1
-          else unknownForeignKeyCount+=1
+          else {
+            unknownForeignKeyCount+=1
+            const separator=key.indexOf(":")
+            const namespace=separator>0?key.slice(0,separator):""
+            const suffix=separator>0?key.slice(separator+1):""
+            const safeNamespace=/^[a-z][a-z0-9_-]{0,31}$/.test(namespace)?namespace:"<noncanonical>"
+            const suffixShape=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suffix)?"uuid":
+              /^[0-9a-f]{64}$/i.test(suffix)?"hex64":/^[A-Za-z0-9_-]{16,128}$/.test(suffix)?`opaque_${suffix.length}`:"other"
+            unknownNamespaceCounts[safeNamespace]=(unknownNamespaceCounts[safeNamespace]??0)+1
+            unknownSuffixShapeCounts[suffixShape]=(unknownSuffixShapeCounts[suffixShape]??0)+1
+          }
           if(foreignKeyDiagnostics.length<32) {
             let redisType="unavailable"
             let ttlClass="unavailable"
@@ -929,9 +944,14 @@ export async function POST(request: NextRequest) {
       if(keys.length+foreignKeyCount>100000) return NextResponse.json({ error: "DR10 Redis keyspace exceeds certification bound" }, { status: 409 })
     } while(cursor!=="0")
 
+    const safeCensus={flashPayOwnedKeys:keys.length,foreignKeyCount,knownPiApprovalKeyCount,unknownForeignKeyCount,unknownNamespaceCounts,unknownSuffixShapeCounts,sampledForeignKeys:foreignKeyDiagnostics.length,foreignKeyDiagnostics,rawKeysLogged:false,valuesRead:false,deletionAttempted:false}
+    if(censusOnly) {
+      console.warn("[DR49 DR10 NONDESTRUCTIVE KEYSPACE CENSUS]",safeCensus)
+      return NextResponse.json({state:"dr10_keyspace_census_complete",...safeCensus},{status:200})
+    }
     if(foreignKeyCount>0) {
-      console.error("[DR48 DR10 OWNERSHIP CLASSIFIER] foreign namespaces block destructive injection",{flashPayOwnedKeys:keys.length,foreignKeyCount,knownPiApprovalKeyCount,unknownForeignKeyCount,sampledForeignKeys:foreignKeyDiagnostics.length,foreignKeyDiagnostics,rawKeysLogged:false,valuesRead:false,deletionAttempted:false})
-      return NextResponse.json({error:"DR10 Redis keyspace is not FlashPay-exclusive",flashPayOwnedKeys:keys.length,foreignKeyCount,knownPiApprovalKeyCount,unknownForeignKeyCount,sampledForeignKeys:foreignKeyDiagnostics.length,deletionAttempted:false},{status:409})
+      console.error("[DR49 DR10 OWNERSHIP CLASSIFIER] foreign namespaces block destructive injection",safeCensus)
+      return NextResponse.json({error:"DR10 Redis keyspace is not FlashPay-exclusive",...safeCensus},{status:409})
     }
 
     // Delete in bounded batches. If a batch fails, stop immediately; the normal

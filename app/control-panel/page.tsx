@@ -114,6 +114,17 @@ function ControlPanelContent() {
     }
   }, [reason, systemState, uidData.accessToken, fetchSystemState])
 
+  const executeDr10Census = useCallback(async () => {
+    if (isDr10Running || !uidData.accessToken) return
+    setIsDr10Running(true); setError(null); setSuccess(null)
+    try {
+      const response = await fetch(`${config.appUrl}/api/control/dr10`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ confirmation: "CENSUS_ONLY" }) })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data?.error || "DR10 census failed")
+      setSuccess(`DR10 census complete · foreign ${data?.result?.foreignKeyCount ?? "?"} · unknown ${data?.result?.unknownForeignKeyCount ?? "?"} · deletion 0`)
+    } catch (err) { setError((err as Error)?.message || "DR10 census failed") } finally { setIsDr10Running(false) }
+  }, [isDr10Running, uidData.accessToken])
+
   const executeDr10 = useCallback(async () => {
     if (isDr10Running || !uidData.accessToken) return
     const typed = window.prompt(document.documentElement.lang === "ar" ? "اختبار مدمر لـ Redis فقط. اكتب TOTAL_REDIS_LOSS للمتابعة." : "Destructive Redis-only certification. Type TOTAL_REDIS_LOSS to continue.")
@@ -181,7 +192,7 @@ function ControlPanelContent() {
 
         <Card className="border-amber-500/50">
           <CardHeader><CardTitle>DR10 Live Total Redis Loss Certification</CardTitle><CardDescription>Owner-only, production-only certification trigger. It deletes Redis projections only after the server-side FlashPay-exclusive keyspace preflight. It does not mutate PostgreSQL or call Pi/Horizon.</CardDescription></CardHeader>
-          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Use only for the current DR10 certification. You must type TOTAL_REDIS_LOSS exactly. Recovery is intentionally not run by this destructive request so a later wake can prove durable rediscovery.</AlertDescription></Alert><Button onClick={() => void executeDr10()} disabled={isDr10Running} variant="destructive" size="lg" className="w-full">{isDr10Running ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <ShieldAlert className="h-4 w-4 mr-2" />}Run DR10 Total Redis Loss</Button></CardContent>
+          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Run the non-destructive census first. It reads only Redis key metadata, never values, and never deletes. The destructive loss trigger remains separately confirmation-gated.</AlertDescription></Alert><Button onClick={() => void executeDr10Census()} disabled={isDr10Running} variant="outline" size="lg" className="w-full">{isDr10Running ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <ShieldAlert className="h-4 w-4 mr-2" />}Run DR10 Safe Census</Button><Button onClick={() => void executeDr10()} disabled={isDr10Running} variant="destructive" size="lg" className="w-full">{isDr10Running ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <ShieldAlert className="h-4 w-4 mr-2" />}Run DR10 Total Redis Loss</Button></CardContent>
         </Card>
 
         <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>
