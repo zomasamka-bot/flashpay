@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 367,
-  "totalBytes": 2545056,
+  "fileCount": 368,
+  "totalBytes": 2550493,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 63626,
-      "sha256": "ac059ecb648bbbdc8c0be2a218c7695f2511f19843bebe03950d3d0ade24ba15"
+      "bytes": 63814,
+      "sha256": "f7c2bea951f031a01a2905c03c4b0331c4c00464c95255b635d555fc8c2c12c3"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -163,8 +163,8 @@
     },
     {
       "path": "app/api/recovery/transient/route.ts",
-      "bytes": 198318,
-      "sha256": "9700b482ec271fc31ef8d86f5087af783cde12771edf61d8f14349c3c1b79b2e"
+      "bytes": 201868,
+      "sha256": "2e02c0729a9f3089d4c1d3dcd907a6f84e32fecdba11c735576086598e6273ec"
     },
     {
       "path": "app/api/refunds/customer-status/route.ts",
@@ -1430,6 +1430,11 @@
       "path": "scripts/verify-dr41-stage2-observability.mjs",
       "bytes": 1944,
       "sha256": "f576b888d21e2fe17f8f603a9d0ef4dacdfc59f08dc1c28b57bd0e7eba1f1595"
+    },
+    {
+      "path": "scripts/verify-dr42-live-total-redis-loss-harness.mjs",
+      "bytes": 1699,
+      "sha256": "35d68933b7db2bffe1c05cba65234ee4b57cdcff29bf2ab46a48d8309c98d3c8"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",

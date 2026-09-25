@@ -32,6 +32,10 @@ const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
 const DRAIN_LEASE_TTL_SECONDS = 900
 const PI_CREATE_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
 const RECOVERY_WAKE_HEALTH_KEY = "flashpay:operations:recovery-last-wake:v1"
+const DR10_TOTAL_REDIS_LOSS_MODE = "dr10-total-redis-loss"
+const DR10_TOTAL_REDIS_LOSS_ENV = "FLASHPAY_DR10_TOTAL_REDIS_LOSS_TEST"
+const DR10_TOTAL_REDIS_LOSS_CONFIRM = "TOTAL_REDIS_LOSS"
+const DR10_ALLOWED_REDIS_PREFIXES = ["flashpay:", "payment:", "receipt-file:"] as const
 const F1_BALANCE_DIAGNOSTIC_ONCE_KEY = "flashpay:diagnostic:f1-balance-integrity:v1:ec3295"
 const F1_FORENSIC_ATTRIBUTION_ONCE_KEY = "flashpay:diagnostic:f1-forensic-attribution:v1:fa1f5"
 const F1_ROOT_CAUSE_CERT_ONCE_KEY = "flashpay:diagnostic:f1-root-cause-cert:v1:8f4a22"
@@ -851,6 +855,59 @@ export async function POST(request: NextRequest) {
 
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
+  }
+
+  // DR-10 LIVE certification harness. This is deliberately impossible to trigger
+  // accidentally: production only + existing recovery authentication + explicit
+  // environment opt-in + exact destructive confirmation header. It deletes only
+  // after a complete keyspace preflight proves every key belongs to FlashPay's
+  // known Redis namespaces. PostgreSQL/Pi/Horizon are never mutated by this hook.
+  if (request.nextUrl.searchParams.get("mode") === DR10_TOTAL_REDIS_LOSS_MODE) {
+    if (runtimeEnv.VERCEL_ENV !== "production" || runtimeEnv[DR10_TOTAL_REDIS_LOSS_ENV] !== "1") {
+      return NextResponse.json({ error: "DR10 live fault injection disabled" }, { status: 403 })
+    }
+    if (!constantTimeSecretEqual(DR10_TOTAL_REDIS_LOSS_CONFIRM, request.headers.get("x-flashpay-dr10-confirm"))) {
+      return NextResponse.json({ error: "DR10 destructive confirmation required" }, { status: 403 })
+    }
+
+    const keys:string[]=[]
+    let cursor=0
+    do {
+      const scanned=await redis.scan(cursor,{count:200})
+      if(!Array.isArray(scanned)||scanned.length!==2||!Array.isArray(scanned[1])) {
+        return NextResponse.json({ error: "DR10 Redis preflight indeterminate" }, { status: 503 })
+      }
+      const next=Number(scanned[0])
+      if(!Number.isSafeInteger(next)||next<0) return NextResponse.json({ error: "DR10 Redis cursor indeterminate" }, { status: 503 })
+      for(const key of scanned[1]) {
+        if(typeof key!=="string"||!DR10_ALLOWED_REDIS_PREFIXES.some(prefix=>key.startsWith(prefix))) {
+          console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight rejected unexpected key",{key:typeof key==="string"?key.slice(0,120):"non-string"})
+          return NextResponse.json({ error: "DR10 Redis keyspace is not FlashPay-exclusive" }, { status: 409 })
+        }
+        keys.push(key)
+      }
+      cursor=next
+      if(keys.length>100000) return NextResponse.json({ error: "DR10 Redis keyspace exceeds certification bound" }, { status: 409 })
+    } while(cursor!==0)
+
+    // Delete in bounded batches. If a batch fails, stop immediately; the normal
+    // durable recovery path remains authoritative and can reconstruct lost state.
+    let deleted=0
+    for(let offset=0;offset<keys.length;offset+=100) {
+      const batch=keys.slice(offset,offset+100)
+      if(batch.length===0) continue
+      const count=await redis.del(...batch)
+      if(typeof count!=="number"||count<0) return NextResponse.json({ error: "DR10 Redis deletion indeterminate" }, { status: 503 })
+      deleted+=count
+    }
+    const residual=await redis.scan(0,{count:1})
+    const residualKeys=Array.isArray(residual)&&Array.isArray(residual[1])?residual[1].length:-1
+    console.warn("[DR10 LIVE TOTAL REDIS LOSS] injected",{preflightKeys:keys.length,deleted,residualKeys,postgresMutated:false,piCalled:false,horizonCalled:false})
+    if(residualKeys!==0) return NextResponse.json({ error:"DR10 Redis loss incomplete",preflightKeys:keys.length,deleted },{status:503})
+
+    // Do not recover in the destructive request. This proves that a later,
+    // independent authenticated wake can bootstrap solely from durable authority.
+    return NextResponse.json({ state:"dr10_total_redis_loss_injected",preflightKeys:keys.length,deleted,independentWakeRequired:true })
   }
 
   // DR-26: one-shot, authenticated, SELECT-only production accounting reconciliation.
