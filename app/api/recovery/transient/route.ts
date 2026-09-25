@@ -873,8 +873,15 @@ export async function POST(request: NextRequest) {
     const keys:string[]=[]
     let cursor=0
     do {
-      const scanned=await redis.scan(cursor,{count:200})
+      let scanned: unknown
+      try {
+        scanned=await redis.scan(cursor,{count:200})
+      } catch (error) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight scan failed",{error:error instanceof Error?error.message:String(error)})
+        return NextResponse.json({ error: "DR10 Redis preflight scan failed" }, { status: 503 })
+      }
       if(!Array.isArray(scanned)||scanned.length!==2||!Array.isArray(scanned[1])) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight scan shape indeterminate",{array:Array.isArray(scanned),length:Array.isArray(scanned)?scanned.length:null,keysArray:Array.isArray(scanned)&&scanned.length>1?Array.isArray(scanned[1]):false})
         return NextResponse.json({ error: "DR10 Redis preflight indeterminate" }, { status: 503 })
       }
       const next=Number(scanned[0])
@@ -900,10 +907,35 @@ export async function POST(request: NextRequest) {
       if(typeof count!=="number"||count<0) return NextResponse.json({ error: "DR10 Redis deletion indeterminate" }, { status: 503 })
       deleted+=count
     }
-    const residual=await redis.scan(0,{count:1})
-    const residualKeys=Array.isArray(residual)&&Array.isArray(residual[1])?residual[1].length:-1
-    console.warn("[DR10 LIVE TOTAL REDIS LOSS] injected",{preflightKeys:keys.length,deleted,residualKeys,postgresMutated:false,piCalled:false,horizonCalled:false})
-    if(residualKeys!==0) return NextResponse.json({ error:"DR10 Redis loss incomplete",preflightKeys:keys.length,deleted },{status:503})
+    // Prove the post-delete keyspace is empty by exhausting SCAN to cursor 0.
+    // A single SCAN page may legally return zero keys with a non-zero cursor.
+    let residualCursor=0
+    let residualKeys=0
+    let residualPasses=0
+    do {
+      let residual: unknown
+      try {
+        residual=await redis.scan(residualCursor,{count:200})
+      } catch (error) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual scan failed",{error:error instanceof Error?error.message:String(error),residualPasses})
+        return NextResponse.json({ error:"DR10 Redis residual scan failed",preflightKeys:keys.length,deleted },{status:503})
+      }
+      if(!Array.isArray(residual)||residual.length!==2||!Array.isArray(residual[1])) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual scan shape indeterminate",{array:Array.isArray(residual),length:Array.isArray(residual)?residual.length:null,keysArray:Array.isArray(residual)&&residual.length>1?Array.isArray(residual[1]):false,residualPasses})
+        return NextResponse.json({ error:"DR10 Redis residual scan indeterminate",preflightKeys:keys.length,deleted },{status:503})
+      }
+      const nextResidual=Number(residual[0])
+      if(!Number.isSafeInteger(nextResidual)||nextResidual<0) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual cursor indeterminate",{residualPasses})
+        return NextResponse.json({ error:"DR10 Redis residual cursor indeterminate",preflightKeys:keys.length,deleted },{status:503})
+      }
+      residualKeys+=residual[1].length
+      residualCursor=nextResidual
+      residualPasses+=1
+      if(residualKeys>0||residualPasses>100000) break
+    } while(residualCursor!==0)
+    console.warn("[DR10 LIVE TOTAL REDIS LOSS] injected",{preflightKeys:keys.length,deleted,residualKeys,residualPasses,postgresMutated:false,piCalled:false,horizonCalled:false})
+    if(residualKeys!==0||residualCursor!==0) return NextResponse.json({ error:"DR10 Redis loss incomplete",preflightKeys:keys.length,deleted,residualKeys },{status:503})
 
     // Do not recover in the destructive request. This proves that a later,
     // independent authenticated wake can bootstrap solely from durable authority.
