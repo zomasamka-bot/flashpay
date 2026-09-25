@@ -25,6 +25,7 @@ function ControlPanelContent() {
   const [systemState, setSystemState] = useState<SystemState | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isToggling, setIsToggling] = useState(false)
+  const [isDr10Running, setIsDr10Running] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [reason, setReason] = useState("")
@@ -113,6 +114,19 @@ function ControlPanelContent() {
     }
   }, [reason, systemState, uidData.accessToken, fetchSystemState])
 
+  const executeDr10 = useCallback(async () => {
+    if (isDr10Running || !uidData.accessToken) return
+    const typed = window.prompt(document.documentElement.lang === "ar" ? "اختبار مدمر لـ Redis فقط. اكتب TOTAL_REDIS_LOSS للمتابعة." : "Destructive Redis-only certification. Type TOTAL_REDIS_LOSS to continue.")
+    if (typed !== "TOTAL_REDIS_LOSS") return
+    setIsDr10Running(true); setError(null); setSuccess(null)
+    try {
+      const response = await fetch(`${config.appUrl}/api/control/dr10`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ confirmation: typed }) })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data?.error || "DR10 injection failed")
+      setSuccess(`DR10 total Redis loss injected · deleted ${data?.result?.deleted ?? "?"} keys · wait for independent recovery wake`)
+    } catch (err) { setError((err as Error)?.message || "DR10 injection failed") } finally { setIsDr10Running(false) }
+  }, [isDr10Running, uidData.accessToken])
+
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
   if (isLoading) {
@@ -162,6 +176,12 @@ function ControlPanelContent() {
         <Card>
           <CardHeader><CardTitle>Restore Control Defaults</CardTitle><CardDescription>Restores only the operational control-state record. It does not reset FlashPay, payments, financial records, recovery, or user data.</CardDescription></CardHeader>
           <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>This is deliberately not called “System Reset”: its authority is limited to the control-state record.</AlertDescription></Alert><p className="text-xs text-muted-foreground">This control remains available whenever the authoritative state is readable. A justification and RESTORE confirmation are still required before any write.</p><Button onClick={() => void executeControl("reset")} disabled={isToggling || !systemState} variant="outline" size="lg" className="w-full">{isToggling ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}Restore Control Defaults</Button></CardContent>
+        </Card>
+
+
+        <Card className="border-amber-500/50">
+          <CardHeader><CardTitle>DR10 Live Total Redis Loss Certification</CardTitle><CardDescription>Owner-only, production-only certification trigger. It deletes Redis projections only after the server-side FlashPay-exclusive keyspace preflight. It does not mutate PostgreSQL or call Pi/Horizon.</CardDescription></CardHeader>
+          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Use only for the current DR10 certification. You must type TOTAL_REDIS_LOSS exactly. Recovery is intentionally not run by this destructive request so a later wake can prove durable rediscovery.</AlertDescription></Alert><Button onClick={() => void executeDr10()} disabled={isDr10Running} variant="destructive" size="lg" className="w-full">{isDr10Running ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <ShieldAlert className="h-4 w-4 mr-2" />}Run DR10 Total Redis Loss</Button></CardContent>
         </Card>
 
         <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>

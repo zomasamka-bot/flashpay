@@ -1,0 +1,58 @@
+import { NextRequest, NextResponse } from "next/server"
+import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
+
+const NO_STORE = { "Cache-Control": "no-cache, no-store, must-revalidate" }
+const DR10_ENV = "FLASHPAY_DR10_TOTAL_REDIS_LOSS_TEST"
+const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
+const CONFIRM = "TOTAL_REDIS_LOSS"
+
+function authError(status: 401 | 403 | 500 | 503) {
+  return status === 500 ? "Owner verification not configured" :
+    status === 503 ? "Owner verification unavailable" : "Unauthorized"
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
+  if (!auth.ok) return NextResponse.json({ error: authError(auth.status) }, { status: auth.status, headers: NO_STORE })
+
+  if (process.env.VERCEL_ENV !== "production" || process.env[DR10_ENV] !== "1") {
+    return NextResponse.json({ error: "DR10 live fault injection disabled" }, { status: 403, headers: NO_STORE })
+  }
+  const recoverySecret = process.env[RECOVERY_SECRET_ENV]
+  const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  if (!recoverySecret || !productionHost || !/^[A-Za-z0-9.-]+$/.test(productionHost)) {
+    return NextResponse.json({ error: "DR10 internal authority unavailable" }, { status: 503, headers: NO_STORE })
+  }
+
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null
+  if (body?.confirmation !== CONFIRM) {
+    return NextResponse.json({ error: "Exact destructive confirmation required" }, { status: 400, headers: NO_STORE })
+  }
+
+  const target = new URL("/api/recovery/transient", `https://${productionHost}`)
+  target.searchParams.set("mode", "dr10-total-redis-loss")
+  try {
+    const response = await fetch(target, {
+      method: "POST",
+      headers: {
+        "x-flashpay-transient-recovery-secret": recoverySecret,
+        "x-flashpay-dr10-confirm": CONFIRM,
+      },
+      cache: "no-store",
+      redirect: "error",
+    })
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) {
+      console.error("[DR43 DR10 OWNER TRIGGER] internal injection rejected", { status: response.status })
+      return NextResponse.json({ error: "DR10 internal injection rejected", status: response.status }, { status: 502, headers: NO_STORE })
+    }
+    console.warn("[DR43 DR10 OWNER TRIGGER] injection accepted", {
+      ownerUid: auth.uid,
+      state: payload && typeof payload === "object" ? (payload as Record<string, unknown>).state : undefined,
+    })
+    return NextResponse.json({ success: true, result: payload }, { status: 200, headers: NO_STORE })
+  } catch (error) {
+    console.error("[DR43 DR10 OWNER TRIGGER] internal request failed", { error: error instanceof Error ? error.message : String(error) })
+    return NextResponse.json({ error: "DR10 internal request failed" }, { status: 503, headers: NO_STORE })
+  }
+}
