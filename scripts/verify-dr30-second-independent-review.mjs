@@ -5,7 +5,7 @@ const db=read('lib/db.ts'), a2u=read('lib/a2u-executor.ts'), refund=read('lib/re
 const bindings={
  durableXor:/pg_advisory_xact_lock\(hashtextextended/.test(db)&&/refund_checkpoints/.test(db)&&/settlement_checkpoints/.test(db),
  bearerScrub:a2u.includes('merged.accessToken = ""'),
- settlementFaultProdExcluded:(a2u.match(/process\.env\.VERCEL_ENV !== "production"/g)||[]).length>=3,
+ settlementFaultTestnetDurableGated:a2u.includes('ctx.merchantAuthority==="durable_u2a"')&&a2u.includes('ctx.payment.piPaymentId')&&a2u.includes('ctx.payment.u2aTxid')&&complete.includes('finalPiPayment.network==="Pi Testnet"'),
  refundFaultProdExcluded:refund.includes('process.env.VERCEL_ENV !== "production"')&&submit.includes('process.env.VERCEL_ENV !== "production"'),
  refundFaultExplicitFlag:refund.includes('FLASHPAY_REFUND_CRASH_TEST')&&submit.includes('FLASHPAY_REFUND_CRASH_TEST'),
  testnetIngressGate:approve.includes('PI_NETWORK_MISMATCH')&&complete.includes('PI_NETWORK_MISMATCH')&&recon.includes('Pi Testnet'),
