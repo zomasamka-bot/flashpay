@@ -128,14 +128,20 @@ function ControlPanelContent() {
   const executeDr10 = useCallback(async () => {
     if (isDr10Running || !uidData.accessToken) return
     const typed = window.prompt(document.documentElement.lang === "ar" ? "اختبار مدمر لـ Redis فقط. اكتب TOTAL_REDIS_LOSS للمتابعة." : "Destructive Redis-only certification. Type TOTAL_REDIS_LOSS to continue.")
-    if (typed !== "TOTAL_REDIS_LOSS") return
-    setIsDr10Running(true); setError(null); setSuccess(null)
+    const confirmation = typed?.trim() ?? ""
+    if (confirmation !== "TOTAL_REDIS_LOSS") {
+      setSuccess(null)
+      setError(typed === null ? "DR10 cancelled before request." : "DR10 confirmation did not match exactly. No request was sent.")
+      return
+    }
+    setIsDr10Running(true); setError(null); setSuccess("DR10 request accepted locally · sending to server…")
     try {
-      const response = await fetch(`${config.appUrl}/api/control/dr10`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ confirmation: typed }) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data?.error || "DR10 injection failed")
+      // DR52: same-origin routing removes appUrl/alias ambiguity from this destructive owner action.
+      const response = await fetch("/api/control/dr10", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ confirmation }) })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.internalError || data?.error || `DR10 injection failed (${response.status})`)
       setSuccess(`DR10 total Redis loss injected · deleted ${data?.result?.deleted ?? "?"} keys · wait for independent recovery wake`)
-    } catch (err) { setError((err as Error)?.message || "DR10 injection failed") } finally { setIsDr10Running(false) }
+    } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR10 injection failed") } finally { setIsDr10Running(false) }
   }, [isDr10Running, uidData.accessToken])
 
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null

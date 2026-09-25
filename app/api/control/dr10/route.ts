@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   const censusOnly=body?.confirmation===CENSUS_CONFIRM
+  console.warn("[DR52 DR10 OWNER REQUEST] received", { ownerUid: auth.uid, censusOnly })
   if (!censusOnly && body?.confirmation !== CONFIRM) {
     return NextResponse.json({ error: "Exact DR10 confirmation required" }, { status: 400, headers: NO_STORE })
   }

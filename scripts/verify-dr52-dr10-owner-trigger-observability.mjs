@@ -1,0 +1,13 @@
+import { strict as assert } from "node:assert"; import fs from "node:fs";
+const ui=fs.readFileSync("app/control-panel/page.tsx","utf8"), route=fs.readFileSync("app/api/control/dr10/route.ts","utf8");
+assert.ok(ui.includes('const confirmation = typed?.trim() ?? ""'),"confirmation must normalize surrounding whitespace");
+assert.ok(ui.includes('DR10 confirmation did not match exactly. No request was sent.'),"mismatch must be visible, never silent");
+assert.ok(ui.includes('fetch("/api/control/dr10"'),"destructive trigger must use same-origin route");
+assert.ok(ui.includes('DR10 request accepted locally · sending to server…'),"client must expose pre-network phase");
+assert.ok(ui.includes('data?.internalError || data?.error'),"safe server blocker must reach owner UI");
+assert.ok(route.includes('[DR52 DR10 OWNER REQUEST] received'),"server receipt must be observable");
+assert.ok(route.includes('verifyOwnerAuthorizationHeader'),"owner authorization preserved");
+assert.ok(route.includes('process.env.VERCEL_ENV !== "production" || process.env[DR10_ENV] !== "1"'),"production/env gate preserved");
+assert.ok(route.includes('body?.confirmation !== CONFIRM'),"exact server confirmation preserved");
+assert.ok(route.includes('"x-flashpay-dr10-confirm": CONFIRM'),"internal destructive confirmation preserved");
+console.log(JSON.stringify({dr52:"PASS",silentClientReturnRemoved:true,sameOriginTrigger:true,serverReceiptObservable:true,ownerGatePreserved:true,productionGatePreserved:true,serverExactConfirmationPreserved:true,financialAuthorityChanged:false},null,2));
