@@ -973,64 +973,65 @@ export async function POST(request: NextRequest) {
       console.warn("[DR50 DR10 NONDESTRUCTIVE PROVENANCE CENSUS]",safeCensus)
       return NextResponse.json({state:"dr10_keyspace_census_complete",...safeCensus},{status:200})
     }
-    if(foreignKeyCount>0) {
-      console.error("[DR49 DR10 OWNERSHIP CLASSIFIER] foreign namespaces block destructive injection",safeCensus)
-      return NextResponse.json({error:"DR10 Redis keyspace is not FlashPay-exclusive",...safeCensus},{status:409})
+    // DR51: the destructive proof is re-authorized atomically inside ONE Lua
+    // script. Upstash executes EVAL without allow-key-locking under the global
+    // database lock, so no Redis writer can interleave between ownership proof,
+    // active-financial-work proof, and FLUSHDB. The earlier SCAN is diagnostic
+    // only and is never used as deletion authority.
+    const DR51_ATOMIC_TOTAL_LOSS_SCRIPT = `
+local size = tonumber(redis.call('DBSIZE'))
+if not size or size > 100000 then return {-4, size or -1, 0, 0} end
+local all = redis.call('KEYS', '*')
+local unknown = 0
+local activeWalletSubmit = 0
+local activeDrain = 0
+local function starts(s,p) return string.sub(s,1,string.len(p)) == p end
+local function legacyOwned(k)
+  if string.match(k, '^a2u:[0-9a-fA-F%-]+$') then return true end
+  if string.match(k, '^transaction:[0-9a-fA-F%-]+$') then return true end
+  if string.match(k, '^receipt:[0-9a-fA-F%-]+$') then return true end
+  if string.match(k, '^merchant:[^:]+:transactions$') then return true end
+  if string.match(k, '^merchant:[^:]+:balance$') then return true end
+  if string.match(k, '^merchant:[^:]+:txn%-counter:[0-9][0-9][0-9][0-9]$') then return true end
+  if string.match(k, '^merchant:verified%-uid:[^:]+$') then return true end
+  if starts(k, 'pi:approval:') then return true end
+  return false
+end
+for _,k in ipairs(all) do
+  if starts(k, 'flashpay:wallet:submit:') then activeWalletSubmit = activeWalletSubmit + 1 end
+  if k == 'flashpay:recovery:transient:drain-lease:v1' then activeDrain = activeDrain + 1 end
+  if not (starts(k,'flashpay:') or starts(k,'payment:') or starts(k,'receipt-file:') or legacyOwned(k)) then
+    unknown = unknown + 1
+  end
+end
+if unknown > 0 then return {-1, #all, unknown, activeWalletSubmit + activeDrain} end
+if activeWalletSubmit > 0 then return {-2, #all, 0, activeWalletSubmit} end
+if activeDrain > 0 then return {-3, #all, 0, activeDrain} end
+redis.call('FLUSHDB')
+return {1, #all, 0, 0}
+`
+    let atomicLoss: unknown
+    try { atomicLoss = await redis.eval<[], unknown>(DR51_ATOMIC_TOTAL_LOSS_SCRIPT, [], []) }
+    catch(error) {
+      console.error("[DR51 DR10 ATOMIC TOTAL LOSS] script failed",{error:error instanceof Error?error.message:String(error)})
+      return NextResponse.json({error:"DR10 atomic loss script failed"},{status:503})
     }
+    if(!Array.isArray(atomicLoss)||atomicLoss.length!==4||atomicLoss.some(value=>typeof value!=="number"||!Number.isSafeInteger(value))) {
+      console.error("[DR51 DR10 ATOMIC TOTAL LOSS] result indeterminate",{shape:Array.isArray(atomicLoss)?atomicLoss.length:null})
+      return NextResponse.json({error:"DR10 atomic loss result indeterminate"},{status:503})
+    }
+    const [atomicCode,atomicPreflightKeys,atomicUnknownKeys,atomicActiveBlockers]=atomicLoss as number[]
+    if(atomicCode!==1) {
+      const reason=atomicCode===-1?"unknown_keyspace":atomicCode===-2?"wallet_submit_active":atomicCode===-3?"recovery_drain_active":atomicCode===-4?"keyspace_bound":"indeterminate"
+      console.warn("[DR51 DR10 ATOMIC TOTAL LOSS] blocked",{reason,atomicPreflightKeys,atomicUnknownKeys,atomicActiveBlockers,deletionAttempted:false})
+      return NextResponse.json({error:"DR10 atomic total loss blocked",reason,atomicPreflightKeys,atomicUnknownKeys,atomicActiveBlockers,deletionAttempted:false},{status:409})
+    }
+    console.warn("[DR51 DR10 ATOMIC TOTAL LOSS] injected",{preflightKeys:atomicPreflightKeys,deletedByFlushDb:true,atomicGlobalLock:true,postgresMutated:false,piCalled:false,horizonCalled:false})
 
-    // Delete in bounded batches. If a batch fails, stop immediately; the normal
-    // durable recovery path remains authoritative and can reconstruct lost state.
-    let deleted=0
-    for(let offset=0;offset<keys.length;offset+=100) {
-      const batch=keys.slice(offset,offset+100)
-      if(batch.length===0) continue
-      let count: unknown
-      try { count=await redis.del(...batch) }
-      catch(error){
-        console.error("[DR10 LIVE TOTAL REDIS LOSS] deletion failed",{error:error instanceof Error?error.message:String(error),batchSize:batch.length,offset})
-        return NextResponse.json({ error: "DR10 Redis deletion failed" }, { status: 503 })
-      }
-      if(typeof count!=="number"||!Number.isSafeInteger(count)||count<0||count>batch.length) {
-        console.error("[DR10 LIVE TOTAL REDIS LOSS] deletion result indeterminate",{countType:typeof count,batchSize:batch.length,offset})
-        return NextResponse.json({ error: "DR10 Redis deletion indeterminate" }, { status: 503 })
-      }
-      deleted+=count
-    }
-    // Prove the post-delete keyspace is empty by exhausting SCAN to cursor 0.
-    // A single SCAN page may legally return zero keys with a non-zero cursor.
-    let residualCursor="0"
-    let residualKeys=0
-    let residualPasses=0
-    do {
-      let residual: unknown
-      try {
-        residual=await redis.scan(residualCursor,{count:200})
-      } catch (error) {
-        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual scan failed",{error:error instanceof Error?error.message:String(error),residualPasses})
-        return NextResponse.json({ error:"DR10 Redis residual scan failed",preflightKeys:keys.length,deleted },{status:503})
-      }
-      if(!Array.isArray(residual)||residual.length!==2||!Array.isArray(residual[1])) {
-        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual scan shape indeterminate",{array:Array.isArray(residual),length:Array.isArray(residual)?residual.length:null,keysArray:Array.isArray(residual)&&residual.length>1?Array.isArray(residual[1]):false,residualPasses})
-        return NextResponse.json({ error:"DR10 Redis residual scan indeterminate",preflightKeys:keys.length,deleted },{status:503})
-      }
-      const nextResidualRaw=residual[0]
-      const nextResidual=typeof nextResidualRaw==="string"&&/^[0-9]+$/.test(nextResidualRaw)?nextResidualRaw:
-        typeof nextResidualRaw==="number"&&Number.isSafeInteger(nextResidualRaw)&&nextResidualRaw>=0?String(nextResidualRaw):null
-      if(nextResidual===null) {
-        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual cursor indeterminate",{residualPasses,cursorType:typeof nextResidualRaw})
-        return NextResponse.json({ error:"DR10 Redis residual cursor indeterminate",preflightKeys:keys.length,deleted },{status:503})
-      }
-      residualKeys+=residual[1].length
-      residualCursor=nextResidual
-      residualPasses+=1
-      if(residualKeys>0||residualPasses>100000) break
-    } while(residualCursor!=="0")
-    console.warn("[DR10 LIVE TOTAL REDIS LOSS] injected",{preflightKeys:keys.length,deleted,residualKeys,residualPasses,postgresMutated:false,piCalled:false,horizonCalled:false})
-    if(residualKeys!==0||residualCursor!=="0") return NextResponse.json({ error:"DR10 Redis loss incomplete",preflightKeys:keys.length,deleted,residualKeys },{status:503})
 
     // Do not recover in the destructive request. This proves that a later,
     // independent authenticated wake can bootstrap solely from durable authority.
-    return NextResponse.json({ state:"dr10_total_redis_loss_injected",preflightKeys:keys.length,deleted,independentWakeRequired:true })
+    return NextResponse.json({ state:"dr10_total_redis_loss_injected",preflightKeys:atomicPreflightKeys,deleted:atomicPreflightKeys,atomicGlobalLock:true,independentWakeRequired:true })
   }
 
   // DR-26: one-shot, authenticated, SELECT-only production accounting reconciliation.

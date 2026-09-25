@@ -41,6 +41,15 @@ export async function OPTIONS() {
 export async function POST(request: NextRequest) {
   const paymentTimingStartedAt = Date.now()
   try {
+    // DR51: while the explicitly enabled live total-Redis-loss certification is
+    // armed, no NEW customer payment may enter the system. Existing completion
+    // and durable recovery remain available so already-received funds are never stranded.
+    if (process.env.FLASHPAY_DR10_TOTAL_REDIS_LOSS_TEST === "1") {
+      return NextResponse.json(
+        { error: "Service temporarily unavailable", code: "DR10_CERTIFICATION_MAINTENANCE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
     // M9: kill switch blocks creation of NEW financial flows only.
     // Existing payment completion/recovery routes remain available so funds are never stranded.
     const control = await readSystemState()
