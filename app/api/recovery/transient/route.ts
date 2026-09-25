@@ -1400,6 +1400,42 @@ return {1, #all, 0, 0}
         const claim = await redis.set(F1_GUARDED_REPAIR_ONCE_KEY, "running", { nx: true, ex: 15 * 60 })
         claimed = claim === "OK"
         if (!claimed) return
+
+        // DR53: the Redis marker is only a scheduling optimization. After total
+        // Redis loss, prove from durable PostgreSQL state whether this historical
+        // repair is already closed before consulting Pi/Horizon or entering any
+        // mutation-capable path. Never weaken the original exact historical guard.
+        const durableClosure = await query(`
+          WITH canonical AS (
+            SELECT merchant_id,
+                   COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status='settled_to_merchant'),0) canonical_settled
+            FROM receipts GROUP BY merchant_id
+          )
+          SELECT
+            COUNT(DISTINCT b.merchant_id) FILTER (WHERE b.merchant_id='hazemaboria')::int merchant_balance_row_count,
+            COUNT(*) FILTER (
+              WHERE r.merchant_id='hazemaboria' AND r.settlement_status='completed'
+                AND r.customer_amount IS NOT NULL AND r.merchant_amount IS NOT NULL
+                AND r.u2a_identifier IS NOT NULL AND r.u2a_txid IS NOT NULL
+                AND r.a2u_identifier IS NOT NULL AND r.a2u_txid IS NOT NULL
+            )::int canonical_completed_remaining,
+            COUNT(*) FILTER (
+              WHERE b.merchant_id='hazemaboria'
+                AND b.settled <> COALESCE(c.canonical_settled,0)
+            )::int settled_mismatch_count
+          FROM merchant_balances b
+          LEFT JOIN canonical c ON c.merchant_id=b.merchant_id
+          LEFT JOIN receipts r ON r.merchant_id=b.merchant_id
+        `)
+        if (!Array.isArray(durableClosure) || durableClosure.length !== 1 || !durableClosure[0] || typeof durableClosure[0] !== "object")
+          throw new Error("F1G durable closure proof unavailable")
+        const durable = durableClosure[0] as Record<string, unknown>
+        if (Number(durable.merchant_balance_row_count) === 1 && Number(durable.canonical_completed_remaining) === 0 && Number(durable.settled_mismatch_count) === 0) {
+          console.log("[DR53 F1G DURABLE CLOSURE] already closed", { postgresAuthority: true, piCalled: false, horizonCalled: false, financialMutation: false })
+          await redis.set(F1_GUARDED_REPAIR_ONCE_KEY, "done", { ex: 30 * 24 * 60 * 60 })
+          return
+        }
+
         if (!serverConfig.piApiKey) throw new Error("F1G Pi API authority unavailable")
         const candidateRows = await query(`
           SELECT r.id receipt_id,t.payment_id,r.a2u_identifier,r.a2u_txid,r.merchant_amount
@@ -1506,6 +1542,35 @@ return {1, #all, 0, 0}
         const claim = await redis.set(F1_FINAL_LEGACY_CLOSURE_ONCE_KEY, "running", { nx: true, ex: 15 * 60 })
         claimed = claim === "OK"
         if (!claimed) return
+
+        // DR53: Redis loss must not resurrect this historical accounting repair.
+        // Prove durable closure first. The original 27-row / 139.6 Pi mutation
+        // guard below remains byte-for-byte authoritative if closure is not proven.
+        const durableClosure = await query(`
+          WITH canonical AS (
+            SELECT merchant_id,
+                   COALESCE(SUM(merchant_amount) FILTER (WHERE settlement_status='settled_to_merchant'),0) canonical_settled
+            FROM receipts GROUP BY merchant_id
+          ), all_merchants AS (
+            SELECT merchant_id FROM merchant_balances
+            UNION SELECT merchant_id FROM canonical
+          )
+          SELECT
+            COUNT(DISTINCT b.merchant_id)::int merchant_balance_row_count,
+            COUNT(*) FILTER (WHERE COALESCE(b.unsettled,0) <> 0)::int nonzero_unsettled_count,
+            COUNT(*) FILTER (WHERE COALESCE(b.settled,0) <> COALESCE(c.canonical_settled,0))::int settled_mismatch_count
+          FROM all_merchants m
+          LEFT JOIN merchant_balances b ON b.merchant_id=m.merchant_id
+          LEFT JOIN canonical c ON c.merchant_id=m.merchant_id
+        `)
+        if (!Array.isArray(durableClosure) || durableClosure.length !== 1 || !durableClosure[0] || typeof durableClosure[0] !== "object")
+          throw new Error("F1H durable closure proof unavailable")
+        const durable = durableClosure[0] as Record<string, unknown>
+        if (Number(durable.merchant_balance_row_count) > 0 && Number(durable.nonzero_unsettled_count) === 0 && Number(durable.settled_mismatch_count) === 0) {
+          console.log("[DR53 F1H DURABLE CLOSURE] already closed", { postgresAuthority: true, piCalled: false, financialMutation: false })
+          await redis.set(F1_FINAL_LEGACY_CLOSURE_ONCE_KEY, "done", { ex: 30 * 24 * 60 * 60 })
+          return
+        }
 
         const repaired = await query(`
           WITH locked AS (

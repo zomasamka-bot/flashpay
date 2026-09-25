@@ -1,0 +1,21 @@
+import fs from 'node:fs'
+const source = fs.readFileSync('app/api/recovery/transient/route.ts','utf8')
+const fail = (m) => { console.error('DR53 FAIL:', m); process.exit(1) }
+const must = (x,m) => { if(!x) fail(m) }
+const g0=source.indexOf('// F1G guarded historical repair:')
+const h0=source.indexOf('// F1H final legacy closure:')
+const orphan=source.indexOf('// F1 orphan forensic proof',h0)
+must(g0>=0&&h0>g0&&orphan>h0,'F1G/F1H boundaries unavailable')
+const g=source.slice(g0,h0), h=source.slice(h0,orphan)
+must(g.includes('[DR53 F1G DURABLE CLOSURE] already closed'),'F1G durable closure marker missing')
+must(g.includes('canonical_completed_remaining')&&g.includes('settled_mismatch_count'),'F1G durable closure predicates missing')
+must(g.indexOf('const durableClosure = await query') < g.indexOf('https://api.minepi.com/v2/payments/'),'F1G must prove durable closure before Pi')
+must(g.indexOf('[DR53 F1G DURABLE CLOSURE] already closed') < g.indexOf('repairF1LegacyCompletedCanonicalReceipts'),'F1G closure must precede mutation-capable repair')
+must(g.includes('candidateRows.length !== 3')&&g.includes('candidateAmount - 3.2'),'F1G historical exact guard weakened')
+must(h.includes('[DR53 F1H DURABLE CLOSURE] already closed'),'F1H durable closure marker missing')
+must(h.includes('nonzero_unsettled_count')&&h.includes('settled_mismatch_count'),'F1H durable closure predicates missing')
+must(h.indexOf('const durableClosure = await query') < h.indexOf('WITH locked AS'),'F1H durable closure must precede mutation-capable repair')
+must(h.includes('g.row_count=27')&&h.includes('g.total_unsettled=139.60000000')&&h.includes('g.settled_mismatch_count=0'),'F1H historical exact guard weakened')
+must(g.includes('piCalled: false')&&g.includes('horizonCalled: false')&&g.includes('financialMutation: false'),'F1G no-side-effect evidence missing')
+must(h.includes('piCalled: false')&&h.includes('financialMutation: false'),'F1H no-side-effect evidence missing')
+console.log(JSON.stringify({verdict:'PASS',f1gDurableClosureBeforeExternalAuthority:true,f1hDurableClosureBeforeMutation:true,historicalGuardsPreserved:true,redisMarkerIsOptimizationOnly:true},null,2))
