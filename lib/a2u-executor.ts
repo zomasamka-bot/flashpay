@@ -296,7 +296,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         console.error("[A2U Stage1] Durable checkpoint not proven:", durableStage1.outcome)
         return { ok: false, status: "settlement_pending", error: "A2U Stage1 durable checkpoint not proven" }
       }
-      if (ctx.isRecovery===false && ctx.merchantAuthority==="durable_u2a" && typeof ctx.payment.piPaymentId==="string" && ctx.payment.piPaymentId.length>0 && typeof ctx.payment.u2aTxid==="string" && ctx.payment.u2aTxid.length>0 && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
+      if (durableStage1.outcome==="RECORDED" && ctx.merchantAuthority==="durable_u2a" && typeof ctx.payment.piPaymentId==="string" && ctx.payment.piPaymentId.length>0 && typeof ctx.payment.u2aTxid==="string" && ctx.payment.u2aTxid.length>0 && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
         console.log("[P7 TEST] Stage1-only interruption 0.14")
         return { ok:false,status:"settlement_pending",error:"Temporary Stage1-only interruption test" }
       }

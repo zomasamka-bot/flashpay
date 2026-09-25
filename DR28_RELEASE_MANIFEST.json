@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 363,
-  "totalBytes": 2530539,
+  "fileCount": 364,
+  "totalBytes": 2533169,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 62883,
-      "sha256": "175469bd62c8737934e08926a72c4d7a99d14d06564c09da9bb2a1dfd87fc6c5"
+      "bytes": 63062,
+      "sha256": "ee7ff39adb07f82c70a7a52802d32b383ea082a16ea6059191badc00e7e4b091"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -658,8 +658,8 @@
     },
     {
       "path": "lib/a2u-executor.ts",
-      "bytes": 95188,
-      "sha256": "c156e95fb6135a4a15b555f48b32e10e0fb6e837264dac0aba944c52eb21a210"
+      "bytes": 95200,
+      "sha256": "86d76728d2e79c26323f0dc21f4e526db391f0a40f04e514a1b3fd9cc9df90ea"
     },
     {
       "path": "lib/a2u-locked-executor.ts",
@@ -1348,8 +1348,8 @@
     },
     {
       "path": "scripts/verify-dr25-test-fault-hook-exclusion-proof.mjs",
-      "bytes": 2338,
-      "sha256": "0ec38fef72fd5922b6069f03bc49420e336f22a398f26f8312ada2797b7c281a"
+      "bytes": 2480,
+      "sha256": "a675cc3963310b3d50d543d4919f425d010382cc82a1720a039cd6c3858e9a8a"
     },
     {
       "path": "scripts/verify-dr26-final-accounting-reconciliation.mjs",
@@ -1388,8 +1388,8 @@
     },
     {
       "path": "scripts/verify-dr32-live-hook-test-readiness.mjs",
-      "bytes": 2625,
-      "sha256": "044e44b1284d55527305acfea9f7a1c3f423ecead814005fd76ac806c31c82da"
+      "bytes": 2725,
+      "sha256": "4b3c2f84b1f289e48a49bc38e649c35ac451c68d7f9bea4aca68a61a230eb647"
     },
     {
       "path": "scripts/verify-dr33-durable-merchant-authority-heal.mjs",
@@ -1408,8 +1408,13 @@
     },
     {
       "path": "scripts/verify-dr36-testnet-settlement-fault-hook-gate.mjs",
-      "bytes": 3204,
-      "sha256": "d264b559eaec0b1045d8ec977e2fcaf0b3c6332f89ee31131733e3f0cbdc84a0"
+      "bytes": 3417,
+      "sha256": "4468e76dd7bc109c525dcfb3eceec1d172fd7075bd0740fe5bc911eed6be7b84"
+    },
+    {
+      "path": "scripts/verify-dr37-stage1-hook-one-shot.mjs",
+      "bytes": 1984,
+      "sha256": "7466f41bb786b85d3678e7a66e4e727314f4180f1359bdd6193b15abf6127a65"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",
