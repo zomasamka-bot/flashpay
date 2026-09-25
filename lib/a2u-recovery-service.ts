@@ -491,7 +491,7 @@ export async function executeA2URecovery(
     return { status: "manual_review_required", state: "settlement_submit_movement_checkpoint_invalid", paymentId, details: { error: "Settlement movement checkpoint could not be verified" } }
   }
 
-  if ((payment.status === "paid_to_app" && payment.settlementFailureState === undefined && typeof payment.settlementDispatchRequestedAt === "string") || isStage1OnlySettlementDispatchCandidate(payment, Date.now())) {
+  if(payment.status==="paid_to_app"&&(payment.settlementFailureState===undefined&&typeof payment.settlementDispatchRequestedAt==="string"||isStage1OnlySettlementDispatchCandidate(payment,Date.now()))) {
     const result = await executeA2ULocked({ paymentId, isRecovery: true, recoveryOperation: "SETTLEMENT_DISPATCH", ...(schedulerWalletPaymentId !== undefined ? { schedulerWalletPaymentId } : {}) })
     if (!result.ok) {
       if (result.error === "wallet_drain_not_selected") return { status: "pending_pi_complete", state: "wallet_drain_not_selected", paymentId, details: { error: result.error } }
