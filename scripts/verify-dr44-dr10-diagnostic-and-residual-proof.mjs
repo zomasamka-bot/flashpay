@@ -3,7 +3,7 @@ const s=fs.readFileSync('app/api/recovery/transient/route.ts','utf8')
 const checks={
  preflightScanCatch:s.includes('preflight scan failed'),
  preflightShapeDiagnostic:s.includes('preflight scan shape indeterminate'),
- residualExhaustive:s.includes('do {')&&s.includes('residualCursor!==0'),
+ residualExhaustive:s.includes('do {')&&(s.includes('residualCursor!==0')||s.includes('residualCursor!=="0"')),
  residualScanCatch:s.includes('residual scan failed'),
  residualShapeDiagnostic:s.includes('residual scan shape indeterminate'),
  residualCursorDiagnostic:s.includes('residual cursor indeterminate'),

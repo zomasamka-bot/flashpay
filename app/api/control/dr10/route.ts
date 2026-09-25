@@ -43,16 +43,20 @@ export async function POST(request: NextRequest) {
     })
     const payload = await response.json().catch(() => null)
     if (!response.ok) {
-      console.error("[DR43 DR10 OWNER TRIGGER] internal injection rejected", { status: response.status })
-      return NextResponse.json({ error: "DR10 internal injection rejected", status: response.status }, { status: 502, headers: NO_STORE })
+      const internalError = payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).error === "string"
+        ? (payload as Record<string, unknown>).error as string
+        : "DR10 internal error unavailable"
+      const safeInternalError = internalError.startsWith("DR10 ") ? internalError : "DR10 internal error unavailable"
+      console.error("[DR45 DR10 OWNER TRIGGER] internal injection rejected", { status: response.status, internalError: safeInternalError })
+      return NextResponse.json({ error: "DR10 internal injection rejected", status: response.status, internalError: safeInternalError }, { status: 502, headers: NO_STORE })
     }
-    console.warn("[DR43 DR10 OWNER TRIGGER] injection accepted", {
+    console.warn("[DR45 DR10 OWNER TRIGGER] injection accepted", {
       ownerUid: auth.uid,
       state: payload && typeof payload === "object" ? (payload as Record<string, unknown>).state : undefined,
     })
     return NextResponse.json({ success: true, result: payload }, { status: 200, headers: NO_STORE })
   } catch (error) {
-    console.error("[DR43 DR10 OWNER TRIGGER] internal request failed", { error: error instanceof Error ? error.message : String(error) })
+    console.error("[DR45 DR10 OWNER TRIGGER] internal request failed", { error: error instanceof Error ? error.message : String(error) })
     return NextResponse.json({ error: "DR10 internal request failed" }, { status: 503, headers: NO_STORE })
   }
 }

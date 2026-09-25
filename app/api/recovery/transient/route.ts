@@ -871,7 +871,9 @@ export async function POST(request: NextRequest) {
     }
 
     const keys:string[]=[]
-    let cursor=0
+    // Upstash TS SCAN cursors are opaque strings; preserve them verbatim.
+    // Converting through Number can lose/alter cursor identity and is not the SDK contract.
+    let cursor="0"
     do {
       let scanned: unknown
       try {
@@ -884,18 +886,23 @@ export async function POST(request: NextRequest) {
         console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight scan shape indeterminate",{array:Array.isArray(scanned),length:Array.isArray(scanned)?scanned.length:null,keysArray:Array.isArray(scanned)&&scanned.length>1?Array.isArray(scanned[1]):false})
         return NextResponse.json({ error: "DR10 Redis preflight indeterminate" }, { status: 503 })
       }
-      const next=Number(scanned[0])
-      if(!Number.isSafeInteger(next)||next<0) return NextResponse.json({ error: "DR10 Redis cursor indeterminate" }, { status: 503 })
+      const nextRaw=scanned[0]
+      const next=typeof nextRaw==="string"&&/^[0-9]+$/.test(nextRaw)?nextRaw:
+        typeof nextRaw==="number"&&Number.isSafeInteger(nextRaw)&&nextRaw>=0?String(nextRaw):null
+      if(next===null) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight cursor indeterminate",{cursorType:typeof nextRaw})
+        return NextResponse.json({ error: "DR10 Redis cursor indeterminate" }, { status: 503 })
+      }
       for(const key of scanned[1]) {
         if(typeof key!=="string"||!DR10_ALLOWED_REDIS_PREFIXES.some(prefix=>key.startsWith(prefix))) {
-          console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight rejected unexpected key",{key:typeof key==="string"?key.slice(0,120):"non-string"})
+          console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight rejected unexpected key",{keyType:typeof key})
           return NextResponse.json({ error: "DR10 Redis keyspace is not FlashPay-exclusive" }, { status: 409 })
         }
         keys.push(key)
       }
       cursor=next
       if(keys.length>100000) return NextResponse.json({ error: "DR10 Redis keyspace exceeds certification bound" }, { status: 409 })
-    } while(cursor!==0)
+    } while(cursor!=="0")
 
     // Delete in bounded batches. If a batch fails, stop immediately; the normal
     // durable recovery path remains authoritative and can reconstruct lost state.
@@ -903,13 +910,21 @@ export async function POST(request: NextRequest) {
     for(let offset=0;offset<keys.length;offset+=100) {
       const batch=keys.slice(offset,offset+100)
       if(batch.length===0) continue
-      const count=await redis.del(...batch)
-      if(typeof count!=="number"||count<0) return NextResponse.json({ error: "DR10 Redis deletion indeterminate" }, { status: 503 })
+      let count: unknown
+      try { count=await redis.del(...batch) }
+      catch(error){
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] deletion failed",{error:error instanceof Error?error.message:String(error),batchSize:batch.length,offset})
+        return NextResponse.json({ error: "DR10 Redis deletion failed" }, { status: 503 })
+      }
+      if(typeof count!=="number"||!Number.isSafeInteger(count)||count<0||count>batch.length) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] deletion result indeterminate",{countType:typeof count,batchSize:batch.length,offset})
+        return NextResponse.json({ error: "DR10 Redis deletion indeterminate" }, { status: 503 })
+      }
       deleted+=count
     }
     // Prove the post-delete keyspace is empty by exhausting SCAN to cursor 0.
     // A single SCAN page may legally return zero keys with a non-zero cursor.
-    let residualCursor=0
+    let residualCursor="0"
     let residualKeys=0
     let residualPasses=0
     do {
@@ -924,18 +939,20 @@ export async function POST(request: NextRequest) {
         console.error("[DR10 LIVE TOTAL REDIS LOSS] residual scan shape indeterminate",{array:Array.isArray(residual),length:Array.isArray(residual)?residual.length:null,keysArray:Array.isArray(residual)&&residual.length>1?Array.isArray(residual[1]):false,residualPasses})
         return NextResponse.json({ error:"DR10 Redis residual scan indeterminate",preflightKeys:keys.length,deleted },{status:503})
       }
-      const nextResidual=Number(residual[0])
-      if(!Number.isSafeInteger(nextResidual)||nextResidual<0) {
-        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual cursor indeterminate",{residualPasses})
+      const nextResidualRaw=residual[0]
+      const nextResidual=typeof nextResidualRaw==="string"&&/^[0-9]+$/.test(nextResidualRaw)?nextResidualRaw:
+        typeof nextResidualRaw==="number"&&Number.isSafeInteger(nextResidualRaw)&&nextResidualRaw>=0?String(nextResidualRaw):null
+      if(nextResidual===null) {
+        console.error("[DR10 LIVE TOTAL REDIS LOSS] residual cursor indeterminate",{residualPasses,cursorType:typeof nextResidualRaw})
         return NextResponse.json({ error:"DR10 Redis residual cursor indeterminate",preflightKeys:keys.length,deleted },{status:503})
       }
       residualKeys+=residual[1].length
       residualCursor=nextResidual
       residualPasses+=1
       if(residualKeys>0||residualPasses>100000) break
-    } while(residualCursor!==0)
+    } while(residualCursor!=="0")
     console.warn("[DR10 LIVE TOTAL REDIS LOSS] injected",{preflightKeys:keys.length,deleted,residualKeys,residualPasses,postgresMutated:false,piCalled:false,horizonCalled:false})
-    if(residualKeys!==0||residualCursor!==0) return NextResponse.json({ error:"DR10 Redis loss incomplete",preflightKeys:keys.length,deleted,residualKeys },{status:503})
+    if(residualKeys!==0||residualCursor!=="0") return NextResponse.json({ error:"DR10 Redis loss incomplete",preflightKeys:keys.length,deleted,residualKeys },{status:503})
 
     // Do not recover in the destructive request. This proves that a later,
     // independent authenticated wake can bootstrap solely from durable authority.
