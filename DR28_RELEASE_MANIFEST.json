@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 361,
-  "totalBytes": 2523491,
+  "fileCount": 362,
+  "totalBytes": 2527164,
   "files": [
     {
       "path": ".gitignore",
@@ -163,8 +163,8 @@
     },
     {
       "path": "app/api/recovery/transient/route.ts",
-      "bytes": 197406,
-      "sha256": "18581e71723b5c7759679c7d920721bebd8fbaba60371f764171f9afa9e38a5f"
+      "bytes": 198318,
+      "sha256": "9700b482ec271fc31ef8d86f5087af783cde12771edf61d8f14349c3c1b79b2e"
     },
     {
       "path": "app/api/refunds/customer-status/route.ts",
@@ -1393,13 +1393,18 @@
     },
     {
       "path": "scripts/verify-dr33-durable-merchant-authority-heal.mjs",
-      "bytes": 2556,
-      "sha256": "56c00f41d798c648a8eac68487dbfac44d1db35a9ac668e9fa09aac66897c419"
+      "bytes": 2668,
+      "sha256": "5035830f344bec1c69f917c7a7a0d9b9d20c83b6348f4333e05c7fc104555123"
     },
     {
       "path": "scripts/verify-dr34-durable-u2a-timestamp-canonicalization.mjs",
-      "bytes": 3019,
-      "sha256": "30de5173ab61af2b74de6bd07e00f90db5dfd93002d9f790eb4486ad47f3da22"
+      "bytes": 3131,
+      "sha256": "d5b57f31868ce4803e043cea95986362299efb45ac17271f3babe845702dd75a"
+    },
+    {
+      "path": "scripts/verify-dr35-f2-3-conflict-classification.mjs",
+      "bytes": 2483,
+      "sha256": "f70ea716dca2e04435b2b7eb92e042f3dbb881707466a4b19b610fb252af0845"
     },
     {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",
@@ -1773,8 +1778,8 @@
     },
     {
       "path": "scripts/verify-r1014-u2a-retry-incomplete-recovery.mjs",
-      "bytes": 5345,
-      "sha256": "60ccd19a7843e4fe26cdbb8e9df59cd8035c9bb9b1a2ba62c97b1b3f4124e97d"
+      "bytes": 5399,
+      "sha256": "cebbe75c46982c01e6cf7725c00e31c26ef12f57ec80d68727908b4502570e55"
     },
     {
       "path": "scripts/verify-r1015-bearer-authority-redesign-proof.mjs",

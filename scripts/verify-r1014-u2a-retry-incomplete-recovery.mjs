@@ -47,7 +47,7 @@ assert.ok(repop.includes("recordSettlementU2ACompletedCheckpoint({"))
 // PostgreSQL/Pi uncertainty cannot manufacture completion or ready membership.
 assert.ok(repop.includes("if(!pi){result.piReadUncertain++;continue}"))
 assert.ok(repop.includes("if(!pi||pi.status.developer_completed!==true){result.piReadUncertain++;continue}"))
-assert.ok(repop.includes("if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){result.conflicts++;continue}"))
+assert.ok(repop.includes("if(completion.outcome!=='RECORDED'&&completion.outcome!=='REPLAYED'){conflict(paymentId,`u2a_completion_${completion.outcome.toLowerCase()}`);continue}"))
 
 // Redis loss after durable completion is recoverable from exact durable evidence.
 assert.ok(repop.includes("redis.set(`payment:${paymentId}`,JSON.stringify(projection),{nx:true})"))

@@ -9,7 +9,7 @@ assert.ok(heal.includes("if current.accessToken==nil then current.accessToken=''
 assert.ok(heal.includes("elseif type(current.accessToken)~='string' then return -1"),'non-string authority must fail closed')
 assert.ok(heal.includes("current.accessToken~='' and current.accessToken~=string.match(current.accessToken,'^%s*(.-)%s*$') then return -1"),'malformed bearer must fail closed')
 assert.ok(heal.includes('!hasSettlementMerchantProjectionAuthority(readback)'),'readback authority proof missing')
-assert.ok(heal.includes("if(authority.outcome!=='CLEAR'||authority.refundActive){result.conflicts++;continue}"),'durable XOR proof missing')
+assert.ok(heal.includes("if(authority.outcome!=='CLEAR'){conflict(paymentId,`authority_${authority.outcome.toLowerCase()}`);continue}")&&heal.includes("if(authority.refundActive){result.excludedRefundAuthority++;continue}"),'durable XOR proof missing')
 assert.ok(heal.includes("dto.identifier!==ingress.u2aIdentifier")&&heal.includes("transaction.txid!==ingress.u2aTxid")&&heal.includes("payerUid!==ingress.payerUid"),'exact Pi U2A identity proof missing')
 assert.ok(heal.includes("current.refundPaymentId~=nil")&&heal.includes("current.refundTxid~=nil"),'refund evidence exclusion missing')
 // Deterministic 10K model: only absent authority becomes durable placeholder; valid bearer is preserved; malformed values block.

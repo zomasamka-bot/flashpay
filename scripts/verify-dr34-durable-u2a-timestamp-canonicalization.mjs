@@ -12,7 +12,7 @@ assert.ok(heal.includes("current.paidAt=ARGV[9]; current.settlementDispatchReque
 assert.ok(heal.includes('readback.payerUidCapturedAt!==d.verifiedAt'),'readback verifiedAt proof missing')
 assert.ok(heal.includes('readback.paidAt!==d.completedAt||readback.settlementDispatchRequestedAt!==d.completedAt'),'readback completedAt proof missing')
 assert.ok(heal.includes("if current.a2uPaymentId~=nil or current.a2uTxid~=nil") && heal.includes("if current.refundPaymentId~=nil or current.refundTxid~=nil"),'advanced financial/refund state must block canonicalization')
-assert.ok(heal.includes("if(authority.outcome!=='CLEAR'||authority.refundActive){result.conflicts++;continue}"),'durable XOR proof missing')
+assert.ok(heal.includes("if(authority.outcome!=='CLEAR'){conflict(paymentId,`authority_${authority.outcome.toLowerCase()}`);continue}")&&heal.includes("if(authority.refundActive){result.excludedRefundAuthority++;continue}"),'durable XOR proof missing')
 let canonicalized=0,unchanged=0,blocked=0
 const durableVerified='2026-09-24T23:40:00.000Z', durableCompleted='2026-09-24T23:40:01.000Z'
 for(let i=0;i<10000;i++){
