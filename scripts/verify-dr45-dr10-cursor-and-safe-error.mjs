@@ -7,7 +7,7 @@ const checks={
  acceptsDocumentedStringCursor:r.includes('typeof nextRaw==="string"')&&r.includes('typeof nextResidualRaw==="string"'),
  cursorFailureObservable:r.includes('preflight cursor indeterminate')&&r.includes('residual cursor indeterminate'),
  deletionFailureObservable:r.includes('deletion failed')&&r.includes('deletion result indeterminate'),
- noUnexpectedKeyValueLogging:r.includes('preflight rejected unexpected key",{keyType:typeof key}')&&!r.includes('key.slice(0,120)'),
+ noUnexpectedKeyValueLogging:!r.includes('key.slice(0,120)')&&!r.includes('console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight rejected unexpected key"')&&r.includes('createHash("sha256").update(key)'),
  ownerSafeErrorPropagation:c.includes('safeInternalError')&&c.includes('internalError: safeInternalError'),
  ownerGatePreserved:c.includes('verifyOwnerAuthorizationHeader'),
  exactConfirmationPreserved:r.includes('DR10_TOTAL_REDIS_LOSS_CONFIRM'),

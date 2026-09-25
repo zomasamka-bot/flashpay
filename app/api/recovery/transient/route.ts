@@ -871,6 +871,8 @@ export async function POST(request: NextRequest) {
     }
 
     const keys:string[]=[]
+    const foreignKeyDiagnostics:Array<{fingerprint:string;keyLength:number;colonCount:number;type:string;ttlClass:string}>=[]
+    let foreignKeyCount=0
     // Upstash TS SCAN cursors are opaque strings; preserve them verbatim.
     // Converting through Number can lose/alter cursor identity and is not the SDK contract.
     let cursor="0"
@@ -894,15 +896,38 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "DR10 Redis cursor indeterminate" }, { status: 503 })
       }
       for(const key of scanned[1]) {
-        if(typeof key!=="string"||!DR10_ALLOWED_REDIS_PREFIXES.some(prefix=>key.startsWith(prefix))) {
-          console.error("[DR10 LIVE TOTAL REDIS LOSS] preflight rejected unexpected key",{keyType:typeof key})
-          return NextResponse.json({ error: "DR10 Redis keyspace is not FlashPay-exclusive" }, { status: 409 })
+        if(typeof key!=="string") {
+          foreignKeyCount+=1
+          if(foreignKeyDiagnostics.length<32) foreignKeyDiagnostics.push({fingerprint:"non-string",keyLength:0,colonCount:0,type:"unknown",ttlClass:"unknown"})
+          continue
+        }
+        if(!DR10_ALLOWED_REDIS_PREFIXES.some(prefix=>key.startsWith(prefix))) {
+          foreignKeyCount+=1
+          if(foreignKeyDiagnostics.length<32) {
+            let redisType="unavailable"
+            let ttlClass="unavailable"
+            try {
+              const observedType=await redis.type(key)
+              redisType=typeof observedType==="string"&&/^[a-z]+$/.test(observedType)?observedType:"indeterminate"
+            } catch {}
+            try {
+              const observedTtl=Number(await redis.ttl(key))
+              ttlClass=observedTtl===-1?"persistent":observedTtl===-2?"missing":Number.isSafeInteger(observedTtl)&&observedTtl>=0?"expiring":"indeterminate"
+            } catch {}
+            foreignKeyDiagnostics.push({fingerprint:createHash("sha256").update(key).digest("hex").slice(0,16),keyLength:key.length,colonCount:(key.match(/:/g)??[]).length,type:redisType,ttlClass})
+          }
+          continue
         }
         keys.push(key)
       }
       cursor=next
-      if(keys.length>100000) return NextResponse.json({ error: "DR10 Redis keyspace exceeds certification bound" }, { status: 409 })
+      if(keys.length+foreignKeyCount>100000) return NextResponse.json({ error: "DR10 Redis keyspace exceeds certification bound" }, { status: 409 })
     } while(cursor!=="0")
+
+    if(foreignKeyCount>0) {
+      console.error("[DR46 DR10 KEYSPACE CENSUS] foreign namespaces block destructive injection",{flashPayOwnedKeys:keys.length,foreignKeyCount,sampledForeignKeys:foreignKeyDiagnostics.length,foreignKeyDiagnostics,rawKeysLogged:false,valuesRead:false,deletionAttempted:false})
+      return NextResponse.json({error:"DR10 Redis keyspace is not FlashPay-exclusive",flashPayOwnedKeys:keys.length,foreignKeyCount,sampledForeignKeys:foreignKeyDiagnostics.length,deletionAttempted:false},{status:409})
+    }
 
     // Delete in bounded batches. If a batch fails, stop immediately; the normal
     // durable recovery path remains authoritative and can reconstruct lost state.
