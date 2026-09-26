@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyOwnerAuthorizationHeader } from '@/lib/owner-server-auth'
-import { armDr14Crash, isDr14Boundary, readDr14Crash } from '@/lib/dr14-live-crash-certification'
+import { armDr14Crash, isDr14Boundary, readDr14Crash, readDr14Readiness } from '@/lib/dr14-live-crash-certification'
 const NO_STORE={ 'Cache-Control':'no-cache, no-store, must-revalidate' }
 export async function POST(request:NextRequest){
  const auth=await verifyOwnerAuthorizationHeader(request.headers.get('authorization'))
@@ -8,7 +8,10 @@ export async function POST(request:NextRequest){
  const body=await request.json().catch(()=>null) as Record<string,unknown>|null
  const paymentId=typeof body?.paymentId==='string'?body.paymentId:''
  const boundary=body?.boundary
- if(body?.confirmation!=='ARM_DR14_ONE_SHOT'||!paymentId||!isDr14Boundary(boundary))return NextResponse.json({error:'Exact DR14 paymentId, boundary and confirmation required'},{status:400,headers:NO_STORE})
+ if(!paymentId||!isDr14Boundary(boundary)||(body?.confirmation!=='READINESS_DR14_ONLY'&&body?.confirmation!=='ARM_DR14_ONE_SHOT'))return NextResponse.json({error:'Exact DR14 paymentId, boundary and confirmation required'},{status:400,headers:NO_STORE})
+ const readiness=await readDr14Readiness(paymentId,boundary)
+ if(body.confirmation==='READINESS_DR14_ONLY')return NextResponse.json({success:readiness.outcome==='READY',mode:'readiness',readiness,financialExecutionStarted:false},{status:readiness.outcome==='READY'?200:readiness.outcome==='INDETERMINATE'?503:409,headers:NO_STORE})
+ if(readiness.outcome!=='READY')return NextResponse.json({success:false,outcome:readiness.outcome,readiness,financialExecutionStarted:false},{status:readiness.outcome==='INDETERMINATE'?503:409,headers:NO_STORE})
  const outcome=await armDr14Crash(paymentId,boundary)
  console.warn('[DR14 OWNER ARM]',{ownerUid:auth.uid,paymentId,boundary,outcome})
  return NextResponse.json({success:outcome==='ARMED',outcome,paymentId,boundary,ttlSeconds:1800,financialExecutionStarted:false},{status:outcome==='ARMED'?200:outcome==='INDETERMINATE'?503:409,headers:NO_STORE})

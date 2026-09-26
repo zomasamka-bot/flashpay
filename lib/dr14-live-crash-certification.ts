@@ -36,15 +36,31 @@ async function ensureTable(): Promise<boolean> {
   return r !== null
 }
 
-export async function armDr14Crash(paymentId: string, boundary: Dr14Boundary): Promise<'ARMED'|'CONFLICT'|'INDETERMINATE'> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId) || !isDr14Boundary(boundary)) return 'CONFLICT'
-  if (!await ensureTable()) return 'INDETERMINATE'
+export type Dr14Readiness =
+  | { outcome: 'READY'; paymentId: string; lane: Dr14Lane; boundary: Dr14Boundary; identityStage: string; activeArm: null }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; reason: string }
+
+export async function readDr14Readiness(paymentId: string, boundary: Dr14Boundary): Promise<Dr14Readiness> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId) || !isDr14Boundary(boundary)) return { outcome: 'CONFLICT', reason: 'invalid_identity_or_boundary' }
+  if (!await ensureTable()) return { outcome: 'INDETERMINATE', reason: 'certification_table_unavailable' }
   const lane=dr14BoundaryLane(boundary)
   const identity=await query(`SELECT payment_id,stage FROM settlement_checkpoints WHERE payment_id=$1 LIMIT 2`,[paymentId])
-  if (!Array.isArray(identity) || identity.length !== 1 || !isRow(identity[0]) || identity[0].payment_id !== paymentId) return 'CONFLICT'
+  if (!Array.isArray(identity)) return { outcome: 'INDETERMINATE', reason: 'payment_identity_read_uncertain' }
+  if (identity.length !== 1 || !isRow(identity[0]) || identity[0].payment_id !== paymentId || typeof identity[0].stage !== 'string') return { outcome: 'CONFLICT', reason: 'payment_identity_not_unique' }
   const opposite=await query(`SELECT refund_id,status FROM refund_checkpoints WHERE payment_id=$1 AND status<>'manual_review_required' LIMIT 2`,[paymentId])
-  if (!Array.isArray(opposite)) return 'INDETERMINATE'
-  if (lane==='settlement' && opposite.length!==0) return 'CONFLICT'
+  if (!Array.isArray(opposite)) return { outcome: 'INDETERMINATE', reason: 'refund_authority_read_uncertain' }
+  if (lane==='settlement' && opposite.length!==0) return { outcome: 'CONFLICT', reason: 'refund_authority_exists' }
+  const active=await query(`SELECT lane,boundary,expires_at FROM certification_fault_arms WHERE payment_id=$1 AND consumed_at IS NULL AND expires_at>NOW() LIMIT 2`,[paymentId])
+  if (!Array.isArray(active)) return { outcome: 'INDETERMINATE', reason: 'active_arm_read_uncertain' }
+  if (active.length!==0) return { outcome: 'CONFLICT', reason: 'active_arm_exists' }
+  return { outcome: 'READY', paymentId, lane, boundary, identityStage: identity[0].stage, activeArm: null }
+}
+
+export async function armDr14Crash(paymentId: string, boundary: Dr14Boundary): Promise<'ARMED'|'CONFLICT'|'INDETERMINATE'> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId) || !isDr14Boundary(boundary)) return 'CONFLICT'
+  const readiness=await readDr14Readiness(paymentId,boundary)
+  if (readiness.outcome!=='READY') return readiness.outcome
+  const lane=readiness.lane
   const r=await query(`INSERT INTO certification_fault_arms(payment_id,lane,boundary,expires_at)
     VALUES($1,$2,$3,NOW()+INTERVAL '30 minutes')
     ON CONFLICT(payment_id) DO UPDATE SET lane=EXCLUDED.lane,boundary=EXCLUDED.boundary,armed_at=NOW(),expires_at=NOW()+INTERVAL '30 minutes',consumed_at=NULL

@@ -1,32 +1,30 @@
 {
-  "gate": "DR73-DR14-BUILD-TYPE-HARDENED-LIVE-CRASH-HARNESS",
+  "gate": "DR-28-CLEAN-RELEASE-ARTIFACT",
   "schemaVersion": 1,
-  "baselineGitSha": "cf8ab7467d3ea78bc3ebb8e2158fa10fbe51b98f",
-  "supersedesFailedGitSha": "fe6cef67925035a2f1dd09026e4ba2e2d65696cd",
   "artifactPolicy": {
     "forbidden": [
       ".env*",
-      ".git/",
-      ".next/",
-      "node_modules/",
+      "node_modules",
+      ".next",
+      ".git",
       "*.tsbuildinfo",
-      ".DS_Store"
+      ".DS_Store",
+      "private-key/signing-secret literals"
     ],
     "secretsEmbedded": false
   },
-  "buildFailureRepair": {
-    "confirmedCause": "DR72 accessed payment_id on query() row typed unknown",
-    "repair": "explicit Record<string, unknown> type guard before property access",
-    "uuidValidation": "RFC4122-shaped v1-v5 + variant enforced"
-  },
   "fileCount": 399,
-  "listedFilesExcludingManifest": 398,
-  "totalBytesExcludingManifest": 2627510,
+  "totalBytes": 2699690,
   "files": [
     {
       "path": ".gitignore",
       "bytes": 37,
       "sha256": "2dbc66bba289edaf9c63330e16f186f00b0ed400dbd9146ea5901c6d8ac2c042"
+    },
+    {
+      "path": "DR28_RELEASE_MANIFEST.json",
+      "bytes": 69836,
+      "sha256": "4fc3395e00d63b6ab96fe9b467a75273cbc08f97bbf49bb0e452439857766198"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -50,8 +48,8 @@
     },
     {
       "path": "app/api/control/dr14/route.ts",
-      "bytes": 1869,
-      "sha256": "86bea29d92e7732d9d36e0ab02ac0035b6b93eebd954fab9970bb463e442a91e"
+      "bytes": 2478,
+      "sha256": "afe1ceb9ec36bfdd8c7abd0d586b440bb3fa3caf170f655de3397e339694059a"
     },
     {
       "path": "app/api/control/system/route.ts",
@@ -327,6 +325,11 @@
       "path": "app/transactions/page.tsx",
       "bytes": 15147,
       "sha256": "da94ab50e3675a1e47754a9738f9e929c18dbb9f7233f2bbd8522b329140be3a"
+    },
+    {
+      "path": "components.json",
+      "bytes": 427,
+      "sha256": "060762649713523e82b4a1cf131fba79ab250407a109d7ae7dc045ff482ae36d"
     },
     {
       "path": "components/back-button.tsx",
@@ -659,11 +662,6 @@
       "sha256": "0a97d84a8079b32ebee161f61bb436bd36cad333897a94a95b91b5e2835400b7"
     },
     {
-      "path": "components.json",
-      "bytes": 427,
-      "sha256": "060762649713523e82b4a1cf131fba79ab250407a109d7ae7dc045ff482ae36d"
-    },
-    {
       "path": "hooks/use-mobile.ts",
       "bytes": 565,
       "sha256": "1b43441b273aa21c1e74fefa774d5a7cb50068e5d4c192a8f63b9c95c5580431"
@@ -730,8 +728,8 @@
     },
     {
       "path": "lib/dr14-live-crash-certification.ts",
-      "bytes": 4597,
-      "sha256": "0625d55d38a818dd3dc4d0e9114a433fa0f6d7e21e97bd0b784dc87bb964182d"
+      "bytes": 6084,
+      "sha256": "59f72e4070945ff6b2e83ab402e2aa5e48e143959b0c1988027e0bff781d0813"
     },
     {
       "path": "lib/financial-amount-stroops.ts",
@@ -1600,8 +1598,8 @@
     },
     {
       "path": "scripts/verify-dr72-dr14-live-crash-harness.mjs",
-      "bytes": 2993,
-      "sha256": "926990c0afc1095e39adf1b193d0ec6c89f0ffe66e7c160b3ee22bcfcf131399"
+      "bytes": 3241,
+      "sha256": "b626455c9732a786d427aabc1caa804853970d978c0ad8ccf5f14021ab498921"
     },
     {
       "path": "scripts/verify-dr8-independent-recovery-wake.mjs",
