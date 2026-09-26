@@ -2045,5 +2045,27 @@
     "missingBearerStatus": 401,
     "nonOwnerStatus": 403,
     "financialSourceChanged": false
+  },
+  "dr78": {
+    "gate": "DR78-DR14-CANONICAL-READBACK",
+    "baselineProductionSha": "5e2335a518971fc2aaf30fe4e6a036131a0f6498",
+    "baselineArtifactSha256": "309a9b24701993a65f9d6e68a70f2c24f915d23856c7d46016ab0acd13b4ef13",
+    "confirmedDefect": "readDr14Crash exposed PostgreSQL snake_case row while owner UI consumed camelCase readback contract",
+    "scope": [
+      "lib/dr14-live-crash-certification.ts",
+      "scripts/verify-dr78-dr14-canonical-readback.mjs",
+      "DR28_RELEASE_MANIFEST.json"
+    ],
+    "canonicalContract": [
+      "paymentId",
+      "lane",
+      "boundary",
+      "armedAt",
+      "expiresAt",
+      "consumedAt"
+    ],
+    "rawDbRowExposed": false,
+    "failClosedValidation": true,
+    "financialSourceChanged": false
   }
 }

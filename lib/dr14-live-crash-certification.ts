@@ -79,8 +79,32 @@ export async function consumeDr14Crash(paymentId: string, boundary: Dr14Boundary
   return true
 }
 
-export async function readDr14Crash(paymentId:string){
+export type Dr14CrashReadback = {
+  paymentId: string
+  lane: Dr14Lane
+  boundary: Dr14Boundary
+  armedAt: string
+  expiresAt: string
+  consumedAt: string | null
+}
+
+function canonicalTimestamp(value: unknown): string | null {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString()
+  if (typeof value !== 'string') return null
+  const parsed=Date.parse(value)
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null
+}
+
+export async function readDr14Crash(paymentId:string): Promise<Dr14CrashReadback | null> {
   if (!await ensureTable()) return null
   const r=await query(`SELECT payment_id,lane,boundary,armed_at,expires_at,consumed_at FROM certification_fault_arms WHERE payment_id=$1 LIMIT 2`,[paymentId])
-  return Array.isArray(r)&&r.length===1?r[0]:null
+  if (!Array.isArray(r) || r.length!==1 || !isRow(r[0])) return null
+  const row=r[0]
+  if (row.payment_id!==paymentId || (row.lane!=='settlement'&&row.lane!=='refund') || !isDr14Boundary(row.boundary)) return null
+  if (dr14BoundaryLane(row.boundary)!==row.lane) return null
+  const armedAt=canonicalTimestamp(row.armed_at)
+  const expiresAt=canonicalTimestamp(row.expires_at)
+  const consumedAt=row.consumed_at===null ? null : canonicalTimestamp(row.consumed_at)
+  if (!armedAt || !expiresAt || (row.consumed_at!==null && !consumedAt)) return null
+  return { paymentId, lane:row.lane, boundary:row.boundary, armedAt, expiresAt, consumedAt }
 }
