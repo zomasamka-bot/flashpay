@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 399,
-  "totalBytes": 2699690,
+  "fileCount": 405,
+  "totalBytes": 2714542,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 69836,
-      "sha256": "4fc3395e00d63b6ab96fe9b467a75273cbc08f97bbf49bb0e452439857766198"
+      "bytes": 71764,
+      "sha256": "d449b3075a19d4461c851ebf1fcab58b68aed12d9b8194ed0c4c00c78602e2ee"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -278,8 +278,8 @@
     },
     {
       "path": "app/page.tsx",
-      "bytes": 34990,
-      "sha256": "2509f0a7fbad46357eceb7747a8ab59b8f01f2780cd3071c73cc3e13acb123a5"
+      "bytes": 38501,
+      "sha256": "2ad7d8f5a9faf092285e19d916005e5eb2d4845681c4c4a3689ff0d556eb7c30"
     },
     {
       "path": "app/pay/[id]/page.tsx",
@@ -728,8 +728,8 @@
     },
     {
       "path": "lib/dr14-live-crash-certification.ts",
-      "bytes": 6084,
-      "sha256": "59f72e4070945ff6b2e83ab402e2aa5e48e143959b0c1988027e0bff781d0813"
+      "bytes": 7185,
+      "sha256": "f88490bacef8d177c41d30b1fe0aff4bbbe5577bf8c74196b1064a50c3353ff5"
     },
     {
       "path": "lib/financial-amount-stroops.ts",
@@ -1602,9 +1602,39 @@
       "sha256": "b626455c9732a786d427aabc1caa804853970d978c0ad8ccf5f14021ab498921"
     },
     {
+      "path": "scripts/verify-dr75-dr14-owner-session-arm-control.mjs",
+      "bytes": 1245,
+      "sha256": "479186e6cb44e1b8c6e8f596e226292b8c9f4d631168eb1e5eb9856a48368aac"
+    },
+    {
+      "path": "scripts/verify-dr76-dr14-visible-operational-control.mjs",
+      "bytes": 997,
+      "sha256": "fd8f1c1b9ed7b5529674103f00060386118b8e1da53b38c9113be485d9ab6520"
+    },
+    {
+      "path": "scripts/verify-dr77-dr14-server-owner-authority.mjs",
+      "bytes": 1424,
+      "sha256": "4400a5a545dc44268fd2847c6e5f376ed0696c573412075e7b7bbab4a943a08f"
+    },
+    {
+      "path": "scripts/verify-dr78-dr14-canonical-readback.mjs",
+      "bytes": 1376,
+      "sha256": "b1c56743eac1de346076c2f3886e5a21234d7db851d4176b78f1493296d05e67"
+    },
+    {
+      "path": "scripts/verify-dr79-dr14-prepared-boundary-control.mjs",
+      "bytes": 1475,
+      "sha256": "3a1930f2284da7fe6f90ec636fed5ca8bb5d5b30bec5f1b8d4e7be95c052a7be"
+    },
+    {
       "path": "scripts/verify-dr8-independent-recovery-wake.mjs",
       "bytes": 1147,
       "sha256": "7a895c1218d0cef71958345c6598ee5173d86317bfd3f5c454e3ca51e3ced967"
+    },
+    {
+      "path": "scripts/verify-dr80-dr14-horizon-submit-boundary-control.mjs",
+      "bytes": 1795,
+      "sha256": "3ebcda174473cdcdfd4c1671ae3b5370c4253f98d254f25590c791d52343e7cb"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
@@ -2011,74 +2041,5 @@
       "bytes": 105,
       "sha256": "c305dc3b539a260d0c44bad7eb3d6947535c9f232ffbea33d1193bb8b731f0ef"
     }
-  ],
-  "dr75": {
-    "gate": "DR75-DR14-OWNER-SESSION-ARM-CONTROL",
-    "baselineProductionSha": "c0caf00ca8d3dce35a586150cfd3104b15a6a9cf",
-    "baselineArtifactSha256": "25029a0a93b517ab0f56baf6a1a4d8d7f64721779845e07c0f08365afbbb1dfd",
-    "scope": [
-      "app/page.tsx",
-      "scripts/verify-dr75-dr14-owner-session-arm-control.mjs",
-      "DR28_RELEASE_MANIFEST.json"
-    ],
-    "verifiedOwnerUid": true,
-    "readinessBeforeArm": true,
-    "authenticatedReadback": true,
-    "tokenInUrl": false,
-    "tokenInBody": false,
-    "financialExecutionStarted": false
-  },
-  "dr76": {
-    "gate": "DR76-DR14-VISIBLE-OPERATIONAL-CONTROL",
-    "baselineProductionSha": "3db53924f9d5b1d6409ea7682c1495c705ac06cf",
-    "baselineArtifactSha256": "a7f5e571f27591451a8a1f327100b56fb5a8e6da73f29f069af488aaff9b5aae",
-    "pendingControlVisible": true,
-    "serverOwnerAuthorizationRetained": true,
-    "financialSourceChanged": false
-  },
-  "dr77": {
-    "gate": "DR77-DR14-SERVER-OWNER-AUTHORITY",
-    "baselineProductionSha": "1ae17e2b871b2a49361599c657a69b2d328c9e74",
-    "confirmedDefect": "DR76 required merchant.verifiedUid locally although createPayment server-verifies the Pi token without populating that local field",
-    "clientRequirement": "accessToken only",
-    "serverOwnerAuthority": "Pi /v2/me UID equals NEXT_PUBLIC_OWNER_UID",
-    "missingBearerStatus": 401,
-    "nonOwnerStatus": 403,
-    "financialSourceChanged": false
-  },
-  "dr78": {
-    "gate": "DR78-DR14-CANONICAL-READBACK",
-    "baselineProductionSha": "5e2335a518971fc2aaf30fe4e6a036131a0f6498",
-    "baselineArtifactSha256": "309a9b24701993a65f9d6e68a70f2c24f915d23856c7d46016ab0acd13b4ef13",
-    "confirmedDefect": "readDr14Crash exposed PostgreSQL snake_case row while owner UI consumed camelCase readback contract",
-    "scope": [
-      "lib/dr14-live-crash-certification.ts",
-      "scripts/verify-dr78-dr14-canonical-readback.mjs",
-      "DR28_RELEASE_MANIFEST.json"
-    ],
-    "canonicalContract": [
-      "paymentId",
-      "lane",
-      "boundary",
-      "armedAt",
-      "expiresAt",
-      "consumedAt"
-    ],
-    "rawDbRowExposed": false,
-    "failClosedValidation": true,
-    "financialSourceChanged": false
-  },
-  "dr79": {
-    "gate": "DR79-DR14-PREPARED-BOUNDARY-CONTROL",
-    "baselineProductionSha": "903f516bf9a118889fb593e7e837f333f3e45bd8",
-    "baselineArtifactSha256": "e2033bb995711d690db6925eb881efe5f2601a25e33de36e9254409a09a4f500",
-    "boundary": "settlement_after_prepared_durable",
-    "scope": [
-      "app/page.tsx",
-      "scripts/verify-dr79-dr14-prepared-boundary-control.mjs",
-      "DR28_RELEASE_MANIFEST.json"
-    ],
-    "financialExecutorChanged": false,
-    "canonicalReadbackRetained": true
-  }
+  ]
 }
