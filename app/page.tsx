@@ -56,7 +56,7 @@ export default function HomePage() {
   const [dr14Arming, setDr14Arming] = useState(false)
   const [dr14Armed, setDr14Armed] = useState(false)
   const [dr14Error, setDr14Error] = useState<string | null>(null)
-  const dr14Boundary = "settlement_after_horizon_durable" as const
+  const dr14Boundary = "settlement_after_pi_durable" as const
   
   useEffect(() => {
     // Check hash first (Pi Browser QR route: #/pay/{id})
@@ -608,7 +608,7 @@ export default function HomePage() {
           {payment?.status === "pending" && (
             <div className="mb-6 w-full max-w-sm rounded-xl border p-3">
               <Button type="button" variant="outline" className="w-full" onClick={handleArmDr14Stage1} disabled={dr14Arming || dr14Armed}>
-                {dr14Armed ? "DR14 armed · Horizon durable" : dr14Arming ? "Verifying & arming DR14…" : "Arm DR14 · Horizon durable"}
+                {dr14Armed ? "DR14 armed · Pi durable" : dr14Arming ? "Verifying & arming DR14…" : "Arm DR14 · Pi durable"}
               </Button>
               {dr14Error && <p className="mt-2 text-xs text-destructive">{dr14Error}</p>}
               {dr14Armed && <p className="mt-2 text-xs text-muted-foreground">One-shot arm verified. Do not re-arm this payment.</p>}
