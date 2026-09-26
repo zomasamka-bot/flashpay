@@ -106,14 +106,39 @@ async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promis
   // movement evidence, and the durable U2A + canonical Pi + PostgreSQL refund
   // authority are independently re-proven below. Identity/amount are rebuilt from
   // that durable authority; any financial evidence or terminal state fails closed.
+  // DR69: legacy Redis JSON may preserve absent optional pre-submit fields as
+  // explicit null. Null is absence, not prepared-A2U evidence. Non-null values
+  // remain fail-closed because a prepared hash/sequence/XDR can represent a
+  // merchant-settlement intent even before Horizon movement exists.
+  const noPreparedA2UEvidence = existing !== null &&
+    existing.a2uPreparedTxHash == null &&
+    existing.a2uPreparedSequence == null &&
+    existing.a2uPreparedEnvelopeXdr == null
   const stalePreRefundProjection = existing !== null &&
     existing.id === checkpoint.paymentId &&
     (existing.status === 'settlement_failed' || existing.status === 'refund_pending') &&
     existing.settlementFailureState === 'refund_pending' && existing.refundStatus === 'pending' &&
-    !existing.a2uPaymentId && !existing.a2uTxid && existing.a2uPreparedTxHash === undefined && existing.a2uPreparedSequence === undefined && existing.a2uPreparedEnvelopeXdr === undefined &&
+    !existing.a2uPaymentId && !existing.a2uTxid && noPreparedA2UEvidence &&
     existing.horizonSuccessFlag !== true && !existing.refundPaymentId && !existing.refundTxid &&
     checkpoint.status === 'pending' && checkpoint.stage === 'intent_created' && !checkpoint.refundPaymentId && !checkpoint.refundTxid
-  if (existing && !stalePreRefundProjection) return { outcome: 'BLOCKED', reason: 'projection_conflict' }
+  if (existing && !stalePreRefundProjection) {
+    console.warn('[DR69 REFUND SOURCE PROJECTION CONFLICT]', {
+      paymentId: checkpoint.paymentId,
+      refundId: checkpoint.refundId,
+      status: existing.status,
+      settlementFailureState: existing.settlementFailureState ?? null,
+      refundStatus: existing.refundStatus ?? null,
+      hasA2UPaymentId: !!existing.a2uPaymentId,
+      hasA2UTxid: !!existing.a2uTxid,
+      hasPreparedTxHash: existing.a2uPreparedTxHash != null,
+      hasPreparedSequence: existing.a2uPreparedSequence != null,
+      hasPreparedEnvelopeXdr: existing.a2uPreparedEnvelopeXdr != null,
+      horizonSuccess: existing.horizonSuccessFlag === true,
+      hasRefundPaymentId: !!existing.refundPaymentId,
+      hasRefundTxid: !!existing.refundTxid,
+    })
+    return { outcome: 'BLOCKED', reason: 'projection_conflict' }
+  }
 
   const durable = await verifyOriginalU2AForRefundRecovery(checkpoint)
   if (!durable) return { outcome: 'BLOCKED', reason: 'durable_projection_unproven' }

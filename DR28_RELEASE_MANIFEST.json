@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 393,
-  "totalBytes": 2674251,
+  "fileCount": 394,
+  "totalBytes": 2677339,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 68490,
-      "sha256": "270607cb1855d20d9ac5ef5de4ed37eb9410ae8bca99b2666b3747a2bb860711"
+      "bytes": 68671,
+      "sha256": "349a64b112bdcf820743b83069d125c4c990dedc5355664893c1d9deb41cc2f5"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -1058,8 +1058,8 @@
     },
     {
       "path": "lib/refund-executor.ts",
-      "bytes": 74325,
-      "sha256": "706724b864df920baa40b733e034d6e3bd8cb648e9881cc94193e073b23974ea"
+      "bytes": 75449,
+      "sha256": "5ad2bda50ac49e994c986698f95e0cf9b1a0496f6059a24ee2d9f5515d37ac03"
     },
     {
       "path": "lib/refund-fee-evidence.ts",
@@ -1570,6 +1570,11 @@
       "path": "scripts/verify-dr67-refund-projection-authority.mjs",
       "bytes": 2449,
       "sha256": "6ac7893efd04569aac9a77cf13c0b9439da73e971a8911be16c799fd4f96a275"
+    },
+    {
+      "path": "scripts/verify-dr69-null-legacy-projection.mjs",
+      "bytes": 1783,
+      "sha256": "23ec67bc0adb355c37d84bbc421c5b0ce8b6f5e1a7720ae216d85aed7b5db88e"
     },
     {
       "path": "scripts/verify-dr8-independent-recovery-wake.mjs",
