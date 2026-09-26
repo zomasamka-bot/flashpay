@@ -8,7 +8,7 @@ import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/re
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
-import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint } from "@/lib/db"
+import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint, recordDr11RefundCertificationHold } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 const DR10_MAINTENANCE_KEY = "flashpay:certification:dr10:maintenance:v1"
@@ -256,7 +256,14 @@ export async function POST(request: NextRequest) {
       if (redisPersistResult !== 1 && redisPersistResult !== 2) {
         throw new Error("Atomic payment persistence failed")
       }
-      if (redisPersistResult === 2) console.warn("[DR58 DR11 ARM] bound to exact payment", { paymentId: payment.id, amount: payment.amount })
+      if (redisPersistResult === 2) {
+        const durableHold = await recordDr11RefundCertificationHold({ paymentId: payment.id, merchantId: trustedMerchantId, merchantUid: verifiedMerchantUid, customerAmount: payment.amount })
+        if (durableHold.outcome !== "RECORDED" && durableHold.outcome !== "REPLAYED") {
+          console.error("[DR60 DR11 DURABLE HOLD] binding failed closed", { paymentId: payment.id, outcome: durableHold.outcome })
+          return NextResponse.json({ error: "DR11 durable certification hold unavailable", code: "DR11_DURABLE_HOLD_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+        }
+        console.warn("[DR60 DR11 DURABLE HOLD] exact payment bound", { paymentId: payment.id, amount: payment.amount, durable: true })
+      }
       const redisPersistDurationMs = Date.now() - redisPersistTimingStartedAt
       console.log("[API] ✅ Atomic payment and history index persistence completed successfully for key:", kvKey)
       

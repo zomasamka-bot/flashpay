@@ -5,7 +5,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass, runAutomaticRefundPreparationStep, runAutomaticRefundFinalizationStep } from "@/lib/refund-auto-orchestrator"
-import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, listRecoverableU2AIngressCheckpointIds, getDurableU2AIngressAuthoritative, recordSettlementU2ACompletedCheckpoint, verifySettlementRefundAuthorityExclusion, repairF1LegacyCompletedCanonicalReceipts } from "@/lib/db"
+import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, listRecoverableU2AIngressCheckpointIds, getDurableU2AIngressAuthoritative, recordSettlementU2ACompletedCheckpoint, verifySettlementRefundAuthorityExclusion, readDr11RefundCertificationHold, repairF1LegacyCompletedCanonicalReceipts } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
@@ -141,11 +141,9 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
     // durable Refund authority. A failed Lua EVAL rolls back marker deletion, so
     // this also closes the post-Pi-completion crash window without authorizing
     // any financial movement from Redis. Ordinary payments have no such marker.
-    const dr11ExactPaymentHold = await redis.get(`flashpay:certification:dr11:payment:${paymentId}`)
-    if(dr11ExactPaymentHold!==null){
-      if(dr11ExactPaymentHold!=="armed:v1"){conflict(paymentId,'dr11_exact_payment_hold_invalid');continue}
-      result.excludedRefundAuthority++;continue
-    }
+    const dr11DurableHold=await readDr11RefundCertificationHold(paymentId)
+    if(dr11DurableHold.outcome==='INDETERMINATE'){conflict(paymentId,'dr11_durable_hold_indeterminate');continue}
+    if(dr11DurableHold.outcome==='HELD'){result.excludedRefundAuthority++;continue}
     const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
     if(authority.outcome!=='CLEAR'){conflict(paymentId,`authority_${authority.outcome.toLowerCase()}`);continue}
     // A durable Refund authority is an expected XOR exclusion, not a Settlement

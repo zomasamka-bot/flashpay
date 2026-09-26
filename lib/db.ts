@@ -241,6 +241,16 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   `)
   if (u2aIdentityColumns === null) return false
 
+  // DR60: durable certification hold lives on the existing payment identity row.
+  // It is coordination metadata only: it never represents Settlement or Refund movement.
+  const certificationHoldColumns = await query(`
+    ALTER TABLE settlement_checkpoints
+      ADD COLUMN IF NOT EXISTS certification_hold TEXT,
+      ADD COLUMN IF NOT EXISTS certification_hold_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS certification_hold_expires_at TIMESTAMP
+  `)
+  if (certificationHoldColumns === null) return false
+
   const stageIndex = await query(`
     CREATE INDEX IF NOT EXISTS idx_settlement_checkpoints_stage_updated
     ON settlement_checkpoints(stage, updated_at ASC)
@@ -404,6 +414,50 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
     console.error('[DB] Settlement payment identity checkpoint outcome is uncertain:', error)
     return { outcome: 'INDETERMINATE', error: 'Settlement payment identity checkpoint outcome is uncertain' }
   }
+}
+
+export type Dr11CertificationHoldResult =
+  | { outcome: 'RECORDED' | 'REPLAYED' }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/** DR60: durable, non-financial hold for the exact owner-armed DR11 payment. */
+export async function recordDr11RefundCertificationHold(params:{paymentId:string;merchantId:string;merchantUid:string;customerAmount:number}):Promise<Dr11CertificationHoldResult>{
+  if(!params.paymentId||params.paymentId!==params.paymentId.trim()||!params.merchantId||!params.merchantUid||params.customerAmount!==0.1)
+    return{outcome:'CONFLICT',error:'DR11 certification hold input invalid'}
+  try{
+    const client=await getPostgresClient(); if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client.begin(async(tx:any)=>{
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))`
+      const updated=await tx`UPDATE settlement_checkpoints SET certification_hold='dr11_refund',certification_hold_at=NOW(),certification_hold_expires_at=NOW()+INTERVAL '15 minutes',updated_at=NOW()
+        WHERE payment_id=${params.paymentId} AND stage='payment_identity' AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
+          AND customer_amount=${params.customerAmount} AND merchant_amount=${params.customerAmount} AND app_commission=0
+          AND certification_hold IS NULL AND a2u_payment_id IS NULL AND prepared_tx_hash IS NULL AND a2u_txid IS NULL
+        RETURNING certification_hold,certification_hold_expires_at`
+      if(updated.length===1)return[{recorded:true,certification_hold:updated[0].certification_hold}]
+      return await tx`SELECT stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,certification_hold,certification_hold_at,certification_hold_expires_at,
+        a2u_payment_id,prepared_tx_hash,a2u_txid FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+    })
+    if(!Array.isArray(rows)||rows.length!==1||!rows[0])return{outcome:'CONFLICT',error:'DR11 certification identity absent or ambiguous'}
+    const r=rows[0] as Record<string,unknown>; if(r.recorded===true)return{outcome:'RECORDED'}
+    let ca,ma,ac; try{ca=normalizePostgresNumeric(r.customer_amount,'dr11.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'dr11.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'dr11.app_commission')}catch{return{outcome:'CONFLICT',error:'DR11 durable accounting invalid'}}
+    if(r.stage!=='payment_identity'||r.merchant_id!==params.merchantId||r.merchant_uid!==params.merchantUid||ca!==0.1||ma!==0.1||ac!==0||r.certification_hold!=='dr11_refund'||r.certification_hold_at==null||r.certification_hold_expires_at==null||new Date(r.certification_hold_expires_at as any).getTime()<=Date.now()||r.a2u_payment_id!=null||r.prepared_tx_hash!=null||r.a2u_txid!=null)
+      return{outcome:'CONFLICT',error:'DR11 certification hold conflicts with durable authority'}
+    return{outcome:'REPLAYED'}
+  }catch(e){console.error('[DR60] certification hold write uncertain',e);return{outcome:'INDETERMINATE',error:'DR11 certification hold write uncertain'}}
+}
+
+export type Dr11CertificationHoldRead = {outcome:'HELD'|'ABSENT'}|{outcome:'INDETERMINATE';error:string}
+export async function readDr11RefundCertificationHold(paymentId:string):Promise<Dr11CertificationHoldRead>{
+  if(!paymentId||paymentId!==paymentId.trim())return{outcome:'INDETERMINATE',error:'Invalid payment identity'}
+  try{
+    const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const rows=await client`SELECT certification_hold,certification_hold_at,certification_hold_expires_at FROM settlement_checkpoints WHERE payment_id=${paymentId}`
+    if(rows.length!==1)return rows.length===0?{outcome:'ABSENT'}:{outcome:'INDETERMINATE',error:'DR11 hold identity ambiguous'}
+    const r=rows[0] as Record<string,unknown>
+    if(r.certification_hold==null&&r.certification_hold_at==null&&r.certification_hold_expires_at==null)return{outcome:'ABSENT'}
+    if(r.certification_hold==='dr11_refund'&&r.certification_hold_at!=null&&r.certification_hold_expires_at!=null){const expires=new Date(r.certification_hold_expires_at as any).getTime();if(Number.isFinite(expires)&&expires>Date.now())return{outcome:'HELD'};if(Number.isFinite(expires)&&expires<=Date.now())return{outcome:'ABSENT'}}
+    return{outcome:'INDETERMINATE',error:'DR11 hold state contradictory'}
+  }catch(e){return{outcome:'INDETERMINATE',error:'DR11 hold read uncertain'}}
 }
 
 export type SettlementU2AApprovalClaimResult =
@@ -903,6 +957,13 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       // DR-6/DR-7: serialize the durable XOR claim in PostgreSQL itself. This
       // remains correct if the shared Redis operation lock expires or is lost.
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
+      const hold = await tx`SELECT certification_hold,certification_hold_at,certification_hold_expires_at FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+      if(hold.length===1 && (hold[0]?.certification_hold!==null || hold[0]?.certification_hold_at!==null || hold[0]?.certification_hold_expires_at!==null)){
+        const expires=hold[0]?.certification_hold_expires_at instanceof Date?hold[0].certification_hold_expires_at.getTime():Date.parse(String(hold[0]?.certification_hold_expires_at??''))
+        if(hold[0]?.certification_hold==='dr11_refund' && hold[0]?.certification_hold_at!=null && Number.isFinite(expires) && expires>Date.now()) return [{ authorityConflict: true, certificationHold: true }]
+        if(hold[0]?.certification_hold==='dr11_refund' && hold[0]?.certification_hold_at!=null && Number.isFinite(expires) && expires<=Date.now()) await tx`UPDATE settlement_checkpoints SET certification_hold=NULL,certification_hold_at=NULL,certification_hold_expires_at=NULL,updated_at=NOW() WHERE payment_id=${params.paymentId}`
+        else return [{ authorityIndeterminate: true }]
+      }
       const opposite = await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active`
       if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean') return [{ authorityIndeterminate: true }]
       if (opposite[0].active === true) return [{ authorityConflict: true }]
@@ -988,7 +1049,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     }
     const row = rows[0] as Record<string, unknown>
     if (row.authorityIndeterminate === true) return { outcome: 'INDETERMINATE', error: 'Settlement/Refund durable authority could not be proven' }
-    if (row.authorityConflict === true) return { outcome: 'CONFLICT', error: 'Refund durable authority already owns this payment' }
+    if (row.authorityConflict === true) return { outcome: 'CONFLICT', error: row.certificationHold===true ? 'DR11 durable certification hold blocks Settlement authority' : 'Refund durable authority already owns this payment' }
     const version = Number(row.version)
     if (!Number.isSafeInteger(version) || version < 1) {
       return { outcome: 'CONFLICT', error: 'Settlement Stage1 durable version is invalid' }

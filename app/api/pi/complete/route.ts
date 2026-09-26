@@ -2,11 +2,10 @@ import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint } from "@/lib/db"
+import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, readDr11RefundCertificationHold } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
-import { createRefundIntentInternal } from "@/lib/refund-intent-service"
-import { deferAutomaticRefund } from "@/lib/refund-checkpoint-store"
+import { createDr11RefundAuthorityFromDurableHold, deferAutomaticRefund, getRefundCheckpointByIdempotency, transitionRefundCheckpointWithAudit } from "@/lib/refund-checkpoint-store"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -280,6 +279,30 @@ export async function POST(request: NextRequest) {
     }
     console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
 
+    // DR60: PostgreSQL, not Redis, decides whether this exact payment is the
+    // owner-armed DR11 refund certification flow. Refund authority is persisted
+    // under the shared advisory lock before any Redis projection can enter Settlement.
+    const dr11ExactIdentity = process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1 && preMerchantId === "hazemaboria" && preMerchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"
+    const dr11Hold = await readDr11RefundCertificationHold(preFlashPaymentId)
+    if (dr11Hold.outcome === "INDETERMINATE") return NextResponse.json({ error: "DR11 durable hold authority unavailable" }, { status: 503 })
+    if (dr11Hold.outcome === "HELD" && !dr11ExactIdentity) return NextResponse.json({ error: "DR11 durable hold identity conflict" }, { status: 409 })
+    let dr11DurableRefund = dr11ExactIdentity ? await getRefundCheckpointByIdempotency(`dr11-live:${preFlashPaymentId}`) : null
+    if (dr11ExactIdentity && dr11Hold.outcome === "HELD" && !dr11DurableRefund) dr11DurableRefund = await createDr11RefundAuthorityFromDurableHold(preFlashPaymentId)
+    if (dr11Hold.outcome === "HELD" && !dr11DurableRefund) return NextResponse.json({ error: "DR11 durable refund authority unavailable" }, { status: 503 })
+    if (dr11DurableRefund) {
+      if (dr11DurableRefund.paymentId !== preFlashPaymentId || dr11DurableRefund.payerUid !== verifiedPayerUid || dr11DurableRefund.amount !== 0.1 || dr11DurableRefund.status !== "pending") return NextResponse.json({ error: "DR11 durable refund authority conflict" }, { status: 409 })
+      if (dr11DurableRefund.stage === "eligibility_verified") {
+        const transitioned = await transitionRefundCheckpointWithAudit(dr11DurableRefund.refundId, "eligibility_verified", "intent_created", "pending", { eventId: crypto.randomUUID(), refundId: dr11DurableRefund.refundId, paymentId: preFlashPaymentId, eventType: "refund_requested", actorType: "system", idempotencyKey: dr11DurableRefund.idempotencyKey, createdAt: new Date().toISOString(), details: { source: "dr60_durable_hold" } })
+        if (!transitioned) return NextResponse.json({ error: "DR11 durable refund intent transition unavailable" }, { status: 503 })
+        dr11DurableRefund = transitioned
+      }
+      if (dr11DurableRefund.stage !== "intent_created") return NextResponse.json({ error: "DR11 durable refund intent state conflict" }, { status: 409 })
+      const held = await deferAutomaticRefund(dr11DurableRefund.refundId, "intent_created", "pending", "dr11_live_hold", "awaiting_owner_concurrent_harness", new Date(Date.now() + 24 * 60 * 60_000).toISOString())
+      if (!held) return NextResponse.json({ error: "DR11 automatic refund hold unavailable" }, { status: 503 })
+      dr11DurableRefund = held
+      console.warn("[DR60 DR11 DURABLE REFUND AUTHORITY] established before Redis projection", { paymentId: preFlashPaymentId, refundId: held.refundId, settlementAuthorityCreated: false })
+    }
+
     console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
 
     // Derive flashPaymentId from metadata BEFORE loading Redis (internal app identifier)
@@ -372,12 +395,7 @@ export async function POST(request: NextRequest) {
     // DR57: an exact owner-controlled Testnet 0.10 certification payment is
     // diverted into refund authority only after canonical Pi completion is proven.
     // This is a test authority gate, never a shortcut around the Pi handshake.
-    const dr11RefundCertificationCandidate =
-      process.env.VERCEL_ENV === "production" &&
-      finalPiPayment.network === "Pi Testnet" &&
-      finalPiAmount === 0.1 &&
-      payment.merchantId === "hazemaboria" &&
-      payment.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"
+    const dr11RefundCertificationCandidate = dr11DurableRefund !== null
 
     // Fail closed on incompatible statuses. A replay of the exact DR11 certification
     // payment may already be in the refund-pending source state; no other failed
@@ -417,9 +435,14 @@ export async function POST(request: NextRequest) {
 
     // Change status only if currently pending; preserve paid_to_app, settlement_pending, settled_to_merchant.
     // DR11 replay preserves the already-authorized refund source state.
-    if (dr11RefundReplay) {
+    if (dr11RefundCertificationCandidate || dr11RefundReplay) {
       payment.status = "settlement_failed"
-      console.log("[DR57 DR11 REFUND AUTHORITY] preserving replayed refund source state")
+      payment.settlementFailureState = "refund_pending"
+      payment.payerRefundEligible = true
+      payment.refundStatus = "pending"
+      payment.a2uErrorCode = "dr11_live_concurrent_refund_certification"
+      payment.a2uErrorMessage = "DR11 owner-controlled Testnet refund certification"
+      console.log("[DR60 DR11 REFUND AUTHORITY] durable refund source state selected")
     } else if (currentStatus === "pending" || !currentStatus) {
       payment.status = "paid_to_app"
       console.log("[Pi Complete] Changed status from pending to paid_to_app")
@@ -442,8 +465,7 @@ export async function POST(request: NextRequest) {
       local incoming = cjson.decode(ARGV[1])
       if current.id ~= incoming.id or current.amount ~= incoming.amount or current.customerAmount ~= nil and current.customerAmount ~= incoming.customerAmount or current.merchantId ~= incoming.merchantId or current.merchantUid ~= incoming.merchantUid or current.piPaymentId ~= nil and current.piPaymentId ~= incoming.piPaymentId or current.u2aTxid ~= nil and current.u2aTxid ~= incoming.u2aTxid or current.payerUid ~= nil and incoming.payerUid ~= nil and current.payerUid ~= incoming.payerUid then return 0 end
       local dr11Candidate = ARGV[5] == '1'
-      local dr11Armed = dr11Candidate and redis.call('GET', KEYS[6]) == ARGV[6]
-      local dr11Refund = dr11Armed and (current.status == nil or current.status == 'pending')
+      local dr11Refund = dr11Candidate and (current.status == nil or current.status == 'pending')
       local transitioningToPaidToApp = (current.status == nil or current.status == 'pending') and not dr11Refund
       local dr11RefundReplay = dr11Candidate and current.status == 'settlement_failed' and current.settlementFailureState == 'refund_pending' and current.refundStatus == 'pending' and current.payerRefundEligible == true and current.a2uErrorCode == 'dr11_live_concurrent_refund_certification'
       if current.status ~= nil and current.status ~= 'pending' and current.status ~= 'paid_to_app' and current.status ~= 'settlement_pending' and current.status ~= 'settled_to_merchant' and not dr11RefundReplay then return 0 end
@@ -490,22 +512,11 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
 
     if (atomicU2AResultNumber === 3) {
-      const intent = await createRefundIntentInternal(flashPaymentId, `dr11-live:${flashPaymentId}`)
-      const body = intent.body as { refund?: { id?: string; stage?: string; status?: string } } | null
-      const refundId = body?.refund?.id
-      if ((intent.status !== 200 && intent.status !== 201) || typeof refundId !== "string" || refundId.length === 0 || body?.refund?.stage !== "intent_created" || body?.refund?.status !== "pending") {
-        console.error("[DR57 DR11 REFUND AUTHORITY] pristine intent unavailable", { paymentId: flashPaymentId, status: intent.status })
-        return NextResponse.json({ error: "DR11 refund intent unavailable" }, { status: 503 })
+      if (!dr11DurableRefund || dr11DurableRefund.stage !== "intent_created" || dr11DurableRefund.status !== "pending" || dr11DurableRefund.lastErrorCode !== "dr11_live_hold" || dr11DurableRefund.lastErrorMessage !== "awaiting_owner_concurrent_harness") {
+        console.error("[DR60 DR11 REFUND AUTHORITY] durable intent/hold unavailable after projection", { paymentId: flashPaymentId })
+        return NextResponse.json({ error: "DR11 durable refund authority unavailable after projection" }, { status: 503 })
       }
-      // Keep the automatic refund drain away from this checkpoint until the owner
-      // explicitly starts the two-contender DR11 harness. Direct executor calls do
-      // not depend on next_retry_at; the harness clears this hold before execution.
-      const held = await deferAutomaticRefund(refundId, "intent_created", "pending", "dr11_live_hold", "awaiting_owner_concurrent_harness", new Date(Date.now() + 24 * 60 * 60_000).toISOString())
-      if (!held || held.refundId !== refundId || held.paymentId !== flashPaymentId || held.stage !== "intent_created" || held.status !== "pending") {
-        console.error("[DR57 DR11 REFUND AUTHORITY] durable hold unavailable", { paymentId: flashPaymentId, refundId })
-        return NextResponse.json({ error: "DR11 refund hold unavailable" }, { status: 503 })
-      }
-      console.warn("[DR57 DR11 REFUND AUTHORITY] pristine intent held", { paymentId: flashPaymentId, refundId, amount: finalPiAmount, settlementQueued: false })
+      console.warn("[DR60 DR11 REFUND AUTHORITY] pristine intent held", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, amount: finalPiAmount, settlementQueued: false, authority: "postgres" })
     }
 
     if (atomicU2AResultNumber === 2) {
