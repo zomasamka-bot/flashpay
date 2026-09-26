@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 405,
-  "totalBytes": 2714542,
+  "fileCount": 406,
+  "totalBytes": 2714602,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 71764,
-      "sha256": "d449b3075a19d4461c851ebf1fcab58b68aed12d9b8194ed0c4c00c78602e2ee"
+      "bytes": 70701,
+      "sha256": "be70ef8319a1f4b6f70b88a80061eb589d97250772362603b71726920dcb36d4"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -278,8 +278,8 @@
     },
     {
       "path": "app/page.tsx",
-      "bytes": 38501,
-      "sha256": "2ad7d8f5a9faf092285e19d916005e5eb2d4845681c4c4a3689ff0d556eb7c30"
+      "bytes": 38483,
+      "sha256": "202b2146e7a7ae770fb7aab0e12faa5071e6ffeb1d89be138c9868b4141751ca"
     },
     {
       "path": "app/pay/[id]/page.tsx",
@@ -1623,8 +1623,8 @@
     },
     {
       "path": "scripts/verify-dr79-dr14-prepared-boundary-control.mjs",
-      "bytes": 1475,
-      "sha256": "3a1930f2284da7fe6f90ec636fed5ca8bb5d5b30bec5f1b8d4e7be95c052a7be"
+      "bytes": 922,
+      "sha256": "4b31f8b13f1512fa548134796fb699fcbf75ab46ad7b62a3d22d30619d18e5f0"
     },
     {
       "path": "scripts/verify-dr8-independent-recovery-wake.mjs",
@@ -1633,8 +1633,13 @@
     },
     {
       "path": "scripts/verify-dr80-dr14-horizon-submit-boundary-control.mjs",
-      "bytes": 1795,
-      "sha256": "3ebcda174473cdcdfd4c1671ae3b5370c4253f98d254f25590c791d52343e7cb"
+      "bytes": 1204,
+      "sha256": "862d0159fd5424e457610fae3fdbdff15fb6f5b85583ec42e1d168e3b680f10b"
+    },
+    {
+      "path": "scripts/verify-dr81-dr14-horizon-durable-boundary-control.mjs",
+      "bytes": 2285,
+      "sha256": "ba8b49895a6c926c63bebfc14a607b888f23a8bed3d845f25f244eea37a960b6"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
