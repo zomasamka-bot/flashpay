@@ -11,6 +11,7 @@ export const runtime = "nodejs"
 const NO_STORE = { "Cache-Control": "no-cache, no-store, must-revalidate" }
 const LIVE_CONFIRM = "DR11_CONCURRENT_REFUND"
 const READINESS_CONFIRM = "READINESS_ONLY"
+const RESOLVE_CONFIRM = "RESOLVE_CURRENT"
 const ARM_CONFIRM = "ARM_DR11_NEXT_010_PAYMENT"
 const ARM_KEY = "flashpay:certification:dr11:next-010:v1"
 const ARM_VALUE = "armed:v1"
@@ -40,6 +41,28 @@ export async function POST(request: NextRequest) {
     console.warn("[DR58 DR11 ARM] next exact 0.10 Testnet payment armed", { ownerUid: auth.uid, ttlSeconds: ARM_TTL_SECONDS })
     return NextResponse.json({ success: true, certification: "DR11_ARMED", ttlSeconds: ARM_TTL_SECONDS, financialExecutionStarted: false }, { status: 200, headers: NO_STORE })
   }
+  if (confirmation === RESOLVE_CONFIRM) {
+    const rows = await query(`
+      SELECT refund_id, payment_id, stage, status, amount, refund_payment_id, refund_txid
+      FROM refund_checkpoints
+      WHERE status='pending' AND stage='intent_created'
+        AND refund_payment_id IS NULL AND refund_txid IS NULL
+        AND last_error_code='dr11_live_hold'
+        AND last_error_message='awaiting_owner_concurrent_harness'
+        AND next_retry_at>NOW()
+      ORDER BY created_at DESC
+      LIMIT 2`)
+    if (!Array.isArray(rows) || rows.length !== 1) {
+      return NextResponse.json({ error: rows?.length === 0 ? "No pristine DR11 refund authority found" : "DR11 refund authority is ambiguous" }, { status: 409, headers: NO_STORE })
+    }
+    const row = rows[0] as Record<string, unknown>
+    const resolvedRefundId = canonicalRefundId(row.refund_id)
+    if (!resolvedRefundId || typeof row.payment_id !== "string") return NextResponse.json({ error: "DR11 refund authority identity invalid" }, { status: 409, headers: NO_STORE })
+    const checkpoint = { refundId: resolvedRefundId, paymentId: row.payment_id, stage: row.stage, status: row.status, amount: Number(row.amount), refundPaymentId: row.refund_payment_id ?? null, refundTxid: row.refund_txid ?? null }
+    console.warn("[DR11 LIVE CONCURRENT REFUND] owner resolve", { ownerUid: auth.uid, ...checkpoint })
+    return NextResponse.json({ success: true, mode: "resolve", checkpoint, financialExecutionStarted: false }, { status: 200, headers: NO_STORE })
+  }
+
   const refundId = canonicalRefundId(body?.refundId)
   if (!refundId || (confirmation !== LIVE_CONFIRM && confirmation !== READINESS_CONFIRM)) {
     return NextResponse.json({ error: "Exact DR11 refundId and confirmation required" }, { status: 400, headers: NO_STORE })

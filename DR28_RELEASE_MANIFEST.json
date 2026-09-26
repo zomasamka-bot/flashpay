@@ -13,18 +13,18 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 368,
-  "totalBytes": 2550493,
+  "fileCount": 391,
+  "totalBytes": 2662872,
   "files": [
     {
       "path": ".gitignore",
-      "bytes": 23,
-      "sha256": "6f5ef2e3a6bd899a7f379e73d7adf79b37c152577a85c21a52a6543c7993b1f0"
+      "bytes": 37,
+      "sha256": "2dbc66bba289edaf9c63330e16f186f00b0ed400dbd9146ea5901c6d8ac2c042"
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 63814,
-      "sha256": "f7c2bea951f031a01a2905c03c4b0331c4c00464c95255b635d555fc8c2c12c3"
+      "bytes": 68126,
+      "sha256": "ab445618fd9971e9e28ec7cc3e2978157b3308fbe723da9153e0845a06e20809"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -35,6 +35,16 @@
       "path": "app/api/control/domain/route.ts",
       "bytes": 3858,
       "sha256": "3ec0c6a1ccf8732e2274c443af71415a0f47b637152f20967c22bbadeae9bace"
+    },
+    {
+      "path": "app/api/control/dr10/route.ts",
+      "bytes": 4592,
+      "sha256": "cccf75b0389163207b0d06177fc587b83d815364c2885be709419e4f80541606"
+    },
+    {
+      "path": "app/api/control/dr11/route.ts",
+      "bytes": 10171,
+      "sha256": "d15f76ee4417ceefeca409fbb1d11c909c5486f6d76c8c6eae23e7044d559a39"
     },
     {
       "path": "app/api/control/system/route.ts",
@@ -113,8 +123,8 @@
     },
     {
       "path": "app/api/payments/route.ts",
-      "bytes": 16088,
-      "sha256": "4d680c67fb81a5b2b221b6dec257e185d3b2213310e126e5a50d8ebfb48415fe"
+      "bytes": 20940,
+      "sha256": "4deef7b587406089319d6eb06604849dd48f0f961a00cddc9270cd53aa1bc3f5"
     },
     {
       "path": "app/api/pi/a2u/route.ts",
@@ -123,13 +133,13 @@
     },
     {
       "path": "app/api/pi/approve/route.ts",
-      "bytes": 16203,
-      "sha256": "5c96de81e1dc6d7884739eb8fdc8bd5455bb9437fad96e231822857166a9d5c5"
+      "bytes": 17106,
+      "sha256": "7b85cc7a5f21f977379c7252fa5cac54703749198dbae4429155b81f49705771"
     },
     {
       "path": "app/api/pi/complete/route.ts",
-      "bytes": 30489,
-      "sha256": "3c7dacbde519c4fa868de6107b542471582b6eba314c28d5f6479527e5b9fabc"
+      "bytes": 38883,
+      "sha256": "9bf5fad74c388b30272e6079c897ad1924ca928e560bb9576b537d6ffecc0fb9"
     },
     {
       "path": "app/api/pi/verify-uid/route.ts",
@@ -163,8 +173,8 @@
     },
     {
       "path": "app/api/recovery/transient/route.ts",
-      "bytes": 201868,
-      "sha256": "2e02c0729a9f3089d4c1d3dcd907a6f84e32fecdba11c735576086598e6273ec"
+      "bytes": 220132,
+      "sha256": "9577ac7870a13f142c50125dfc8d26720b9694f5da5131ec482e7d948e4e7770"
     },
     {
       "path": "app/api/refunds/customer-status/route.ts",
@@ -208,8 +218,8 @@
     },
     {
       "path": "app/control-panel/page.tsx",
-      "bytes": 11238,
-      "sha256": "e7687062dd2545a37e92e65fb21128bc27a763e0391e15ba09da35224b9ab4f3"
+      "bytes": 19819,
+      "sha256": "24cf8871bb2c937623cc1a0e489f0d2e806c914fb3d2e95340fd06a8db8c7535"
     },
     {
       "path": "app/create/page.tsx",
@@ -663,8 +673,8 @@
     },
     {
       "path": "lib/a2u-locked-executor.ts",
-      "bytes": 53063,
-      "sha256": "d093a9da8d77132fa034f3ff1d4478d0aa231c526f17ae203732fea15be7c50a"
+      "bytes": 54414,
+      "sha256": "4ae08da012df58913f24df73c3d1461a5e6e203c6ee4c4f49f4f992390166dff"
     },
     {
       "path": "lib/a2u-recovery-service.ts",
@@ -673,8 +683,8 @@
     },
     {
       "path": "lib/a2u-response.ts",
-      "bytes": 6253,
-      "sha256": "008390171ca658577918fc3695ef26a9eb00e07e187065d4f646c1be274d5963"
+      "bytes": 7002,
+      "sha256": "6e4a8388e52fde56d41e8eb565b7aaec7436d02cfaa213ba44c78f6070040a3a"
     },
     {
       "path": "lib/config.ts",
@@ -698,8 +708,8 @@
     },
     {
       "path": "lib/db.ts",
-      "bytes": 136393,
-      "sha256": "83cbcafe587c4bbd969ec883e8ed1a873823d741da17a7004ebeb2c69ac9ee6c"
+      "bytes": 142694,
+      "sha256": "c78999cfb5efaf3b109e0bf2fa6a6b12e8dee42ea869dfd9cc3f584ab2b94622"
     },
     {
       "path": "lib/domain-control.ts",
@@ -993,8 +1003,8 @@
     },
     {
       "path": "lib/pi-sdk.ts",
-      "bytes": 21642,
-      "sha256": "142658c0f8dd061d9808c2cf3564708c29ec1237294fb400c6b91542a528acff"
+      "bytes": 21686,
+      "sha256": "610ea777138e3f1f1bd6d922a71ed9a3de3b55277abed1ca25c65d8442942105"
     },
     {
       "path": "lib/pi-wallet-submit-lock.ts",
@@ -1043,13 +1053,13 @@
     },
     {
       "path": "lib/refund-checkpoint-store.ts",
-      "bytes": 103872,
-      "sha256": "421262e98f8d1a29488180fc3b528dc04e16b0358d9f6f377e2fc5299c905aba"
+      "bytes": 107955,
+      "sha256": "294532d8675de11e7cd158e8c3805500aede2250c2286b93cef75cc7d189329a"
     },
     {
       "path": "lib/refund-executor.ts",
-      "bytes": 71017,
-      "sha256": "02cc76264325e18ff0ad30305f4822da42ef370e673d73e03e9b656b705087e5"
+      "bytes": 72183,
+      "sha256": "8da1d004025a5c38114a49db58950b308707fdfea4d160bc385c4438da18080b"
     },
     {
       "path": "lib/refund-fee-evidence.ts",
@@ -1437,14 +1447,119 @@
       "sha256": "35d68933b7db2bffe1c05cba65234ee4b57cdcff29bf2ab46a48d8309c98d3c8"
     },
     {
+      "path": "scripts/verify-dr43-owner-authenticated-dr10-trigger.mjs",
+      "bytes": 1249,
+      "sha256": "9be2dce96f628bbf08415ec6dedfbcada965eb48c02795ff414760ac512edba2"
+    },
+    {
+      "path": "scripts/verify-dr44-dr10-diagnostic-and-residual-proof.mjs",
+      "bytes": 1106,
+      "sha256": "4c4eabe46511f18512634f9f9f3db984c2c48eed20c170e7dee092e54f1934db"
+    },
+    {
+      "path": "scripts/verify-dr45-dr10-cursor-and-safe-error.mjs",
+      "bytes": 1431,
+      "sha256": "57cdf78059b99eb82f9e13f088f962631f1b02e0db89ba704532b013cfde08d1"
+    },
+    {
+      "path": "scripts/verify-dr46-dr10-safe-keyspace-census.mjs",
+      "bytes": 1495,
+      "sha256": "e04a74ec782bd8f312271b9a4d182d8cf2d8d416fe39ab5ab6ce6cd68ab63425"
+    },
+    {
+      "path": "scripts/verify-dr48-dr10-key-ownership-classifier.mjs",
+      "bytes": 941,
+      "sha256": "8aa4fd17c3fbe56be7caff2a3d803086f71148eabbda893d5f7331de1ef9abed"
+    },
+    {
+      "path": "scripts/verify-dr49-nondestructive-keyspace-census.mjs",
+      "bytes": 1424,
+      "sha256": "332f271225b21e377474d19a47bc6fd8af985c02f0d0c42fc12770d98cf7bfe0"
+    },
+    {
       "path": "scripts/verify-dr5-legacy-bearer-write-surface.mjs",
       "bytes": 1405,
       "sha256": "89a68b53a3c227c736e3f8bed9765997eb0efecdb7184e5c648af2381ba647ad"
     },
     {
+      "path": "scripts/verify-dr50-redis-provenance-census.mjs",
+      "bytes": 1179,
+      "sha256": "d18275bec25bb4e23bba05c72885956fdcb3defc625e920706cbff62257b3f4e"
+    },
+    {
+      "path": "scripts/verify-dr51-redis-authority-atomic-loss.mjs",
+      "bytes": 3303,
+      "sha256": "d972b4561a1961ce7f49d6d342564db0f9b219b470966935f8b397cf2b733d09"
+    },
+    {
+      "path": "scripts/verify-dr52-dr10-owner-trigger-observability.mjs",
+      "bytes": 1573,
+      "sha256": "adfb6741077fe7260c2b30845ac6de618453d929205e056ef08853c2c6007f77"
+    },
+    {
+      "path": "scripts/verify-dr53-post-redis-loss-historical-repair-finality.mjs",
+      "bytes": 2170,
+      "sha256": "8c5f25a6f4400a4aba69c6559f2a0b4672595088e0ad50631750d2adb2835e9f"
+    },
+    {
+      "path": "scripts/verify-dr54-total-redis-loss-wallet-intent-reconstruction.mjs",
+      "bytes": 4368,
+      "sha256": "8bd400520eda5daa6a5294d212dc9b9ce145eaa41b51ed55c5cd861048c89a6f"
+    },
+    {
+      "path": "scripts/verify-dr55-dr11-live-concurrent-refund-harness.mjs",
+      "bytes": 2066,
+      "sha256": "06b4248db0a76ca10cd84c9d17b222ef19765561fc338373d5afbc01d5c60c77"
+    },
+    {
+      "path": "scripts/verify-dr56-post-dr10-operational-restoration.mjs",
+      "bytes": 1986,
+      "sha256": "284ff579c171a1d84248599a99090b997b80e05b1d9f98971bc3bd5118106555"
+    },
+    {
+      "path": "scripts/verify-dr57-dr11-refund-test-authority-restoration.mjs",
+      "bytes": 2116,
+      "sha256": "da68c86df849801ce48f2bb67c20832cd302293ad75465d8913ca8e0a169e20d"
+    },
+    {
+      "path": "scripts/verify-dr58-dr11-one-shot-owner-arm.mjs",
+      "bytes": 1829,
+      "sha256": "dba507fe571b327fffc49995d407a98b8ade4517b8aad30021997bbc1c7ae3d6"
+    },
+    {
+      "path": "scripts/verify-dr59-dr11-lua-and-recovery-hold.mjs",
+      "bytes": 1565,
+      "sha256": "2ec40ba2ccbaa43ed29466dd000b87ba3cae2c8bd62482feabd9e7387eec4d2a"
+    },
+    {
       "path": "scripts/verify-dr6-durable-xor-interleaving.mjs",
       "bytes": 2246,
       "sha256": "766c22a199170c39b7bcf7436f4080a163141e24e0275927da717c114c97545f"
+    },
+    {
+      "path": "scripts/verify-dr60-dr11-durable-authority-handoff.mjs",
+      "bytes": 2892,
+      "sha256": "65c7c48a26b4dfd68a09844820a66cc2800ba6cdace2754c042c6531d2c6d17b"
+    },
+    {
+      "path": "scripts/verify-dr61-prepayment-atomic-authority.mjs",
+      "bytes": 1566,
+      "sha256": "f6680a382201db910a0317810441c53c5407c3dfa3e5f1055ee4f2d80eeee27c"
+    },
+    {
+      "path": "scripts/verify-dr62-prearm-creation-atomicity.mjs",
+      "bytes": 1351,
+      "sha256": "1d51958bc5ff0058275611a703266260f52c3783a924a2c434983f475b62e722"
+    },
+    {
+      "path": "scripts/verify-dr63-dr11-durable-processing-response.mjs",
+      "bytes": 1882,
+      "sha256": "0fb967cdb08f2273e8b39ca2331196bcc5543be2b63b6bb86d9668773ab83d94"
+    },
+    {
+      "path": "scripts/verify-dr64-refund-next-retry-normalization.mjs",
+      "bytes": 1110,
+      "sha256": "9694ec4ce06212f07fecdad093d3582c56116485f78bdb52337bcc365d1ddbff"
     },
     {
       "path": "scripts/verify-dr8-independent-recovery-wake.mjs",

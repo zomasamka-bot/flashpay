@@ -159,6 +159,20 @@ function ControlPanelContent() {
     } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR11 arm failed") } finally { setIsDr11Running(false) }
   }, [isDr11Running, uidData.accessToken])
 
+  const resolveDr11 = useCallback(async () => {
+    if (isDr11Running || !uidData.accessToken) return
+    setIsDr11Running(true); setError(null); setSuccess("Resolving the single pristine DR11 refund authority…")
+    try {
+      const response = await fetch("/api/control/dr11", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ confirmation: "RESOLVE_CURRENT" }) })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.error || `DR11 resolve failed (${response.status})`)
+      const refundId = typeof data?.checkpoint?.refundId === "string" ? data.checkpoint.refundId : ""
+      if (!/^[A-Za-z0-9-]{8,128}$/.test(refundId)) throw new Error("DR11 resolver returned an invalid refund ID")
+      setDr11RefundId(refundId)
+      setSuccess(`DR11 authority resolved · refund ${refundId} · payment ${data?.checkpoint?.paymentId ?? "?"} · financial execution 0`)
+    } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR11 resolve failed") } finally { setIsDr11Running(false) }
+  }, [isDr11Running, uidData.accessToken])
+
   const executeDr11 = useCallback(async (live: boolean) => {
     if (isDr11Running || !uidData.accessToken) return
     const refundId = dr11RefundId.trim()
@@ -238,7 +252,7 @@ function ControlPanelContent() {
 
         <Card className="border-orange-500/50">
           <CardHeader><CardTitle>DR11 Live Concurrent Refund Certification</CardTitle><CardDescription>Owner-only, production-only, two-contender certification over one exact refund. Readiness is read-only; live execution requires an exact pristine intent_created refund and explicit confirmation.</CardDescription></CardHeader>
-          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>First arm exactly one matching 0.10 Pi Testnet payment for 10 minutes. The arm is owner-authenticated, one-shot, and atomically consumed only by the exact DR11 payment gate. Then use the resulting exact refund ID below.</AlertDescription></Alert><Button onClick={() => void armDr11()} disabled={isDr11Running} variant="outline" className="w-full">Arm Next DR11 0.10 Payment</Button><input value={dr11RefundId} onChange={(e) => setDr11RefundId(e.target.value.slice(0,128))} disabled={isDr11Running} placeholder="Exact DR11 refund ID" className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono" /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><Button onClick={() => void executeDr11(false)} disabled={isDr11Running || !dr11RefundId.trim()} variant="outline">Check DR11 Readiness</Button><Button onClick={() => void executeDr11(true)} disabled={isDr11Running || !dr11RefundId.trim()} variant="destructive">Run DR11 Concurrent Refund</Button></div></CardContent>
+          <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>First arm exactly one matching 0.10 Pi Testnet payment for 10 minutes. The arm is owner-authenticated, one-shot, and atomically consumed only by the exact DR11 payment gate. Then use the resulting exact refund ID below.</AlertDescription></Alert><Button onClick={() => void armDr11()} disabled={isDr11Running} variant="outline" className="w-full">Arm Next DR11 0.10 Payment</Button><Button onClick={() => void resolveDr11()} disabled={isDr11Running} variant="outline" className="w-full">Load Current DR11 Refund</Button><input value={dr11RefundId} onChange={(e) => setDr11RefundId(e.target.value.slice(0,128))} disabled={isDr11Running} placeholder="Exact DR11 refund ID" className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono" /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><Button onClick={() => void executeDr11(false)} disabled={isDr11Running || !dr11RefundId.trim()} variant="outline">Check DR11 Readiness</Button><Button onClick={() => void executeDr11(true)} disabled={isDr11Running || !dr11RefundId.trim()} variant="destructive">Run DR11 Concurrent Refund</Button></div></CardContent>
         </Card>
 
         <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>

@@ -1,0 +1,16 @@
+import fs from "node:fs"
+const api=fs.readFileSync("app/api/control/dr11/route.ts","utf8")
+const ui=fs.readFileSync("app/control-panel/page.tsx","utf8")
+const must=(ok,msg)=>{if(!ok) throw new Error(msg)}
+must(api.includes('const RESOLVE_CONFIRM = "RESOLVE_CURRENT"'),"resolve confirmation missing")
+must(api.includes("last_error_code='dr11_live_hold'"),"durable DR11 hold filter missing")
+must(api.includes("last_error_message='awaiting_owner_concurrent_harness'"),"hold message filter missing")
+must(api.includes("refund_payment_id IS NULL AND refund_txid IS NULL"),"pristine movement filter missing")
+must(api.includes("next_retry_at>NOW()"),"live hold expiry guard missing")
+must(api.includes("LIMIT 2"),"ambiguity detection bound missing")
+must(api.includes('rows.length !== 1'),"fail-closed uniqueness missing")
+must(api.includes('financialExecutionStarted: false'),"nonfinancial response proof missing")
+must(ui.includes('confirmation: "RESOLVE_CURRENT"'),"UI resolver call missing")
+must(ui.includes("setDr11RefundId(refundId)"),"resolved ID is not bound to UI")
+must(ui.includes('disabled={isDr11Running || !dr11RefundId.trim()}'),"live/readiness ID gate was weakened")
+console.log("DR66 owner resolver certification: PASS")
