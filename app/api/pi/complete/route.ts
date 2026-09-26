@@ -372,9 +372,8 @@ export async function POST(request: NextRequest) {
     // DR57: an exact owner-controlled Testnet 0.10 certification payment is
     // diverted into refund authority only after canonical Pi completion is proven.
     // This is a test authority gate, never a shortcut around the Pi handshake.
-    const dr11RefundCertificationContext =
+    const dr11RefundCertificationCandidate =
       process.env.VERCEL_ENV === "production" &&
-      process.env.FLASHPAY_DR11_LIVE_CONCURRENT_REFUND_TEST === "1" &&
       finalPiPayment.network === "Pi Testnet" &&
       finalPiAmount === 0.1 &&
       payment.merchantId === "hazemaboria" &&
@@ -384,7 +383,7 @@ export async function POST(request: NextRequest) {
     // payment may already be in the refund-pending source state; no other failed
     // settlement is accepted by /complete.
     const currentStatus = payment.status
-    const dr11RefundReplay = dr11RefundCertificationContext && currentStatus === "settlement_failed" && payment.settlementFailureState === "refund_pending" && payment.refundStatus === "pending" && payment.payerRefundEligible === true
+    const dr11RefundReplay = dr11RefundCertificationCandidate && currentStatus === "settlement_failed" && payment.settlementFailureState === "refund_pending" && payment.refundStatus === "pending" && payment.payerRefundEligible === true && payment.a2uErrorCode === "dr11_live_concurrent_refund_certification"
     const incompatibleStatuses = ["cancelled", "failed", "settlement_failed"]
     if (incompatibleStatuses.includes(currentStatus) && !dr11RefundReplay) {
       console.error("[Pi Complete] Payment has incompatible status:", currentStatus)
@@ -442,14 +441,16 @@ export async function POST(request: NextRequest) {
       if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return 0 end
       local incoming = cjson.decode(ARGV[1])
       if current.id ~= incoming.id or current.amount ~= incoming.amount or current.customerAmount ~= nil and current.customerAmount ~= incoming.customerAmount or current.merchantId ~= incoming.merchantId or current.merchantUid ~= incoming.merchantUid or current.piPaymentId ~= nil and current.piPaymentId ~= incoming.piPaymentId or current.u2aTxid ~= nil and current.u2aTxid ~= incoming.u2aTxid or current.payerUid ~= nil and incoming.payerUid ~= nil and current.payerUid ~= incoming.payerUid then return 0 end
-      local dr11Refund = ARGV[5] == '1'
-      local transitioningToPaidToApp = (current.status == nil or current.status == 'pending') and not dr11Refund
-      local dr11RefundReplay = dr11Refund and current.status == 'settlement_failed' and current.settlementFailureState == 'refund_pending' and current.refundStatus == 'pending' and current.payerRefundEligible == true
+      local dr11Candidate = ARGV[5] == '1'
+      local dr11Armed = dr11Candidate and redis.call('GET', KEYS[6]) == ARGV[6]
+      local dr11Refund = dr11Armed and (current.status == nil or current.status == 'pending')
+      local dr11RefundReplay = dr11Candidate and current.status == 'settlement_failed' and current.settlementFailureState == 'refund_pending' and current.refundStatus == 'pending' and current.payerRefundEligible == true and current.a2uErrorCode == 'dr11_live_concurrent_refund_certification'
       if current.status ~= nil and current.status ~= 'pending' and current.status ~= 'paid_to_app' and current.status ~= 'settlement_pending' and current.status ~= 'settled_to_merchant' and not dr11RefundReplay then return 0 end
       if dr11Refund and (current.status == nil or current.status == 'pending') then
         if current.a2uPaymentId ~= nil or current.a2uTxid ~= nil or current.a2uPreparedTxHash ~= nil or current.a2uPreparedSequence ~= nil or current.a2uPreparedEnvelopeXdr ~= nil or current.horizonSuccessFlag == true or current.refundPaymentId ~= nil or current.refundTxid ~= nil then return 0 end
         current.status = 'settlement_failed'; current.settlementFailureState = 'refund_pending'; current.payerRefundEligible = true; current.refundStatus = 'pending'; current.a2uErrorCode = 'dr11_live_concurrent_refund_certification'; current.a2uErrorMessage = 'DR11 owner-controlled Testnet refund certification'
         current.settlementDispatchRequestedAt = nil
+        redis.call('DEL', KEYS[6])
         redis.call('SREM', KEYS[2], ARGV[2]); redis.call('ZREM', KEYS[3], ARGV[2])
       elseif transitioningToPaidToApp then current.status = 'paid_to_app' end
       current.customerAmount = incoming.customerAmount
@@ -462,9 +463,10 @@ export async function POST(request: NextRequest) {
       if transitioningToPaidToApp then local seq=redis.call('GET',KEYS[4]); if not seq then local top=redis.call('ZRANGE',KEYS[3],-1,-1,'WITHSCORES'); if #top ~= 0 and #top ~= 2 then return 0 end; local base=0; if #top == 2 then base=tonumber(top[2]); if not base or base < 0 or base ~= math.floor(base) then return 0 end end; redis.call('SET',KEYS[4],base) end; local readySequence=redis.call('INCR',KEYS[4]); redis.call('SADD', KEYS[2], ARGV[2]); redis.call('ZADD', KEYS[3], 'NX', readySequence, ARGV[2]); local kick=redis.call('SET',KEYS[5],ARGV[3],'NX','EX',ARGV[4]); if kick then immediateDrainKickOwned=1 end end
       current.redisProjectionVersion=projectionVersion+1
       redis.call('SET', KEYS[1], cjson.encode(current))
+      if dr11Refund then return 3 end
       if immediateDrainKickOwned == 1 then return 2 end
       return 1
-    `, [`payment:${flashPaymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1", "flashpay:settlement:ready:v1:sequence", IMMEDIATE_DRAIN_KICK_KEY], [JSON.stringify({
+    `, [`payment:${flashPaymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1", "flashpay:settlement:ready:v1:sequence", IMMEDIATE_DRAIN_KICK_KEY, `flashpay:certification:dr11:payment:${flashPaymentId}`], [JSON.stringify({
       id: flashPaymentId,
       amount: payment.amount,
       customerAmount: payment.customerAmount,
@@ -477,16 +479,16 @@ export async function POST(request: NextRequest) {
       payerUidCapturedAt: payment.payerUidCapturedAt,
       paidAt: payment.paidAt,
       settlementDispatchRequestedAt: payment.paidAt,
-    }), flashPaymentId, flashPaymentId, String(IMMEDIATE_DRAIN_KICK_TTL_SECONDS), dr11RefundCertificationContext ? "1" : "0"])
+    }), flashPaymentId, flashPaymentId, String(IMMEDIATE_DRAIN_KICK_TTL_SECONDS), dr11RefundCertificationCandidate ? "1" : "0", "armed:v1"])
     console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
     const atomicU2AResultNumber = Number(atomicU2AResult)
-    if (atomicU2AResultNumber !== 1 && atomicU2AResultNumber !== 2) {
+    if (atomicU2AResultNumber !== 1 && atomicU2AResultNumber !== 2 && atomicU2AResultNumber !== 3) {
       console.error("[Pi Complete] Atomic U2A persistence rejected")
       return NextResponse.json({ error: "Payment state conflict" }, { status: 409 })
     }
     console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
 
-    if (dr11RefundCertificationContext) {
+    if (atomicU2AResultNumber === 3) {
       const intent = await createRefundIntentInternal(flashPaymentId, `dr11-live:${flashPaymentId}`)
       const body = intent.body as { refund?: { id?: string; stage?: string; status?: string } } | null
       const refundId = body?.refund?.id

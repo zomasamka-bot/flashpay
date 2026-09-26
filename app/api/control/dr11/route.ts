@@ -3,6 +3,7 @@ import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
 import { executeRefundNextStep } from "@/lib/refund-executor"
 import { getRefundCheckpointReadOnly } from "@/lib/refund-checkpoint-store"
 import { query } from "@/lib/db"
+import { redis, isRedisConfigured } from "@/lib/redis"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -10,6 +11,10 @@ export const runtime = "nodejs"
 const NO_STORE = { "Cache-Control": "no-cache, no-store, must-revalidate" }
 const LIVE_CONFIRM = "DR11_CONCURRENT_REFUND"
 const READINESS_CONFIRM = "READINESS_ONLY"
+const ARM_CONFIRM = "ARM_DR11_NEXT_010_PAYMENT"
+const ARM_KEY = "flashpay:certification:dr11:next-010:v1"
+const ARM_VALUE = "armed:v1"
+const ARM_TTL_SECONDS = 600
 const MAX_ROUNDS = 8
 const CONTENDERS = 2
 
@@ -24,12 +29,18 @@ function canonicalRefundId(value: unknown): string | null {
 export async function POST(request: NextRequest) {
   const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
   if (!auth.ok) return NextResponse.json({ error: authError(auth.status) }, { status: auth.status, headers: NO_STORE })
-  if (process.env.VERCEL_ENV !== "production" || process.env.FLASHPAY_DR11_LIVE_CONCURRENT_REFUND_TEST !== "1") {
-    return NextResponse.json({ error: "DR11 live certification disabled" }, { status: 403, headers: NO_STORE })
+  if (process.env.VERCEL_ENV !== "production" || !isRedisConfigured) {
+    return NextResponse.json({ error: "DR11 live certification unavailable" }, { status: 503, headers: NO_STORE })
   }
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
-  const refundId = canonicalRefundId(body?.refundId)
   const confirmation = body?.confirmation
+  if (confirmation === ARM_CONFIRM) {
+    const armed = await redis.set(ARM_KEY, ARM_VALUE, { nx: true, ex: ARM_TTL_SECONDS })
+    if (armed !== "OK") return NextResponse.json({ error: "DR11 next-payment gate is already armed" }, { status: 409, headers: NO_STORE })
+    console.warn("[DR58 DR11 ARM] next exact 0.10 Testnet payment armed", { ownerUid: auth.uid, ttlSeconds: ARM_TTL_SECONDS })
+    return NextResponse.json({ success: true, certification: "DR11_ARMED", ttlSeconds: ARM_TTL_SECONDS, financialExecutionStarted: false }, { status: 200, headers: NO_STORE })
+  }
+  const refundId = canonicalRefundId(body?.refundId)
   if (!refundId || (confirmation !== LIVE_CONFIRM && confirmation !== READINESS_CONFIRM)) {
     return NextResponse.json({ error: "Exact DR11 refundId and confirmation required" }, { status: 400, headers: NO_STORE })
   }

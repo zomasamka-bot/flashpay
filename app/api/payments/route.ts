@@ -247,14 +247,16 @@ export async function POST(request: NextRequest) {
       console.log("[API]   - JSON includes 'createdAt':", paymentString.includes('"createdAt"'))
       
       const redisPersistTimingStartedAt = Date.now()
-      const redisPersistResult = await redis.eval<[string, string, string], number>(
-        "if redis.call('EXISTS',KEYS[1])~=0 then return 0 end local a=redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) if a~=1 then return -1 end redis.call('SET',KEYS[1],ARGV[1]) return 1",
-        [kvKey, historyKey],
-        [paymentString, String(historyScore), payment.id]
+      const dr11CreationCandidate = process.env.VERCEL_ENV === "production" && payment.amount === 0.1 && payment.merchantId === "hazemaboria" && payment.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"
+      const redisPersistResult = await redis.eval(
+        "if redis.call('EXISTS',KEYS[1])~=0 then return 0 end local a=redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) if a~=1 then return -1 end redis.call('SET',KEYS[1],ARGV[1]) if ARGV[4]=='1' and redis.call('GET',KEYS[3])==ARGV[5] then redis.call('SET',KEYS[4],ARGV[5],'EX',ARGV[6]); redis.call('DEL',KEYS[3]); return 2 end return 1",
+        [kvKey, historyKey, "flashpay:certification:dr11:next-010:v1", `flashpay:certification:dr11:payment:${payment.id}`],
+        [paymentString, String(historyScore), payment.id, dr11CreationCandidate ? "1" : "0", "armed:v1", "900"]
       )
-      if (redisPersistResult !== 1) {
+      if (redisPersistResult !== 1 && redisPersistResult !== 2) {
         throw new Error("Atomic payment persistence failed")
       }
+      if (redisPersistResult === 2) console.warn("[DR58 DR11 ARM] bound to exact payment", { paymentId: payment.id, amount: payment.amount })
       const redisPersistDurationMs = Date.now() - redisPersistTimingStartedAt
       console.log("[API] ✅ Atomic payment and history index persistence completed successfully for key:", kvKey)
       
