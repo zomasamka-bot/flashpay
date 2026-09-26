@@ -384,28 +384,32 @@ export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoi
 export async function createDr11RefundAuthorityFromDurableHold(paymentId:string):Promise<RefundCheckpoint|null>{
   if(!process.env.DATABASE_URL||!paymentId||paymentId!==paymentId.trim())return null
   const idempotencyKey=`dr11-live:${paymentId}`
-  const existing=await getRefundCheckpointByIdempotency(idempotencyKey)
-  if(existing)return existing.paymentId===paymentId?existing:null
-  const refundId=randomUUID(),now=new Date().toISOString(),eventId=randomUUID()
+  const refundId=randomUUID(),now=new Date().toISOString(),eventId=randomUUID(),retryAt=new Date(Date.now()+24*60*60_000).toISOString()
   const result=await withPaymentAuthorityTransaction(paymentId,async(tx)=>{
-    const row=await tx`SELECT stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at,
+    const row=await tx`SELECT stage,customer_amount,merchant_amount,app_commission,payer_uid,u2a_verified_at,u2a_completed_at,
       certification_hold,certification_hold_at,certification_hold_expires_at,a2u_payment_id,prepared_tx_hash,a2u_txid AS settlement_txid
       FROM settlement_checkpoints WHERE payment_id=${paymentId} FOR UPDATE`
     if(row.length!==1)return[]
     const r=row[0] as Record<string,unknown>
+    const existing=await tx`SELECT * FROM refund_checkpoints WHERE payment_id=${paymentId} FOR UPDATE`
+    if(existing.length===1){
+      const e=existing[0] as Record<string,unknown>
+      if(e.idempotency_key!==idempotencyKey||Number(e.amount)!==0.1||e.payer_uid!==r.payer_uid||e.source_payment_status!=='settlement_failed'||e.source_settlement_state!=='refund_pending'||
+        !['intent_created','wallet_submission_started','wallet_submission_confirmed','payment_checkpoint_updated','accounting_recorded','audit_recorded'].includes(String(e.stage)))return[]
+      return existing
+    }
+    if(existing.length!==0)return[]
     if(r.stage!=='payment_identity'||r.certification_hold!=='dr11_refund'||r.certification_hold_at==null||r.certification_hold_expires_at==null||new Date(r.certification_hold_expires_at as any).getTime()<=Date.now()||r.u2a_completed_at==null||
       r.a2u_payment_id!=null||r.prepared_tx_hash!=null||r.settlement_txid!=null||r.payer_uid==null||r.u2a_verified_at==null)return[]
     const amount=Number(r.customer_amount),merchantAmount=Number(r.merchant_amount),commission=Number(r.app_commission)
     if(amount!==0.1||merchantAmount!==amount||commission!==0)return[]
-    const opposite=await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${paymentId} AND status<>'manual_review_required') AS active`
-    if(opposite.length!==1||opposite[0]?.active!==false)return[]
     const inserted=await tx`INSERT INTO refund_checkpoints
-      (refund_id,payment_id,idempotency_key,status,stage,payer_uid,payer_uid_verified_at,amount,currency,source_payment_status,source_settlement_state,created_at,updated_at,attempt_count)
-      VALUES(${refundId},${paymentId},${idempotencyKey},'pending','eligibility_verified',${String(r.payer_uid)},${r.u2a_verified_at},${amount},'π','settlement_failed','refund_pending',${now},${now},0)
-      ON CONFLICT(payment_id) DO NOTHING RETURNING *`
+      (refund_id,payment_id,idempotency_key,status,stage,payer_uid,payer_uid_verified_at,amount,currency,source_payment_status,source_settlement_state,created_at,updated_at,attempt_count,last_error_code,last_error_message,next_retry_at)
+      VALUES(${refundId},${paymentId},${idempotencyKey},'pending','intent_created',${String(r.payer_uid)},${r.u2a_verified_at},${amount},'π','settlement_failed','refund_pending',${now},${now},0,'dr11_live_hold','awaiting_owner_concurrent_harness',${retryAt})
+      RETURNING *`
     if(inserted.length!==1)return[]
     const audit=await tx`INSERT INTO refund_audit_events(event_id,refund_id,payment_id,event_type,actor_type,idempotency_key,created_at,details)
-      VALUES(${eventId},${refundId},${paymentId},'eligibility_verified','system',${idempotencyKey},${now},${JSON.stringify({stage:'eligibility_verified',source:'dr60_durable_hold'})}::jsonb) RETURNING event_id`
+      VALUES(${eventId},${refundId},${paymentId},'refund_requested','system',${idempotencyKey},${now},${JSON.stringify({stage:'intent_created',source:'dr61_durable_hold'})}::jsonb) RETURNING event_id`
     if(audit.length!==1)return[]
     const released=await tx`UPDATE settlement_checkpoints SET certification_hold=NULL,certification_hold_at=NULL,certification_hold_expires_at=NULL,updated_at=NOW()
       WHERE payment_id=${paymentId} AND certification_hold='dr11_refund' AND certification_hold_at IS NOT NULL RETURNING payment_id`
@@ -414,7 +418,7 @@ export async function createDr11RefundAuthorityFromDurableHold(paymentId:string)
   })
   if(!Array.isArray(result)||result.length!==1)return null
   const persisted=normalizeCheckpoint(result[0]);if(!persisted)return null
-  if(isRedisConfigured)await redis.set(redisKey(persisted.refundId),persisted)
+  if(isRedisConfigured){try{await redis.set(redisKey(persisted.refundId),persisted)}catch(error){console.warn('[DR61] refund Redis projection deferred to durable recovery',{paymentId,refundId:persisted.refundId})}}
   return persisted
 }
 

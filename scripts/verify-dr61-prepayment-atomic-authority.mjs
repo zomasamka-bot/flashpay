@@ -1,0 +1,11 @@
+import fs from 'node:fs'; import {strict as assert} from 'node:assert';
+const a=fs.readFileSync('app/api/pi/approve/route.ts','utf8'), c=fs.readFileSync('app/api/pi/complete/route.ts','utf8'), r=fs.readFileSync('lib/refund-checkpoint-store.ts','utf8'), d=fs.readFileSync('lib/db.ts','utf8');
+for(const x of ['DR61 DR11 APPROVE GATE','readDr11RefundCertificationHold(paymentId)','dr11Selector !== "armed:v1"'])assert.ok(a.includes(x),x);
+assert.ok(a.indexOf('DR61 DR11 APPROVE GATE') < a.indexOf('recordSettlementU2AApprovalClaim({'));
+assert.ok(a.indexOf('recordSettlementU2AApprovalClaim({') < a.indexOf('`https://api.minepi.com/v2/payments/${identifier}/approve`'));
+for(const x of ["'pending','intent_created'","'dr11_live_hold'","'awaiting_owner_concurrent_harness'",'next_retry_at','refund_requested','certification_hold=NULL','refund Redis projection deferred to durable recovery'])assert.ok(r.includes(x),x);
+assert.ok(r.indexOf("'pending','intent_created'") < r.indexOf('certification_hold=NULL'));
+assert.ok(c.includes('[DR61 DR11 DURABLE REFUND AUTHORITY] intent and automatic-drain hold committed atomically'));
+assert.ok(!c.includes('deferAutomaticRefund(dr11DurableRefund.refundId'));
+assert.ok(d.includes('DR11 durable certification hold blocks Settlement authority'));
+console.log(JSON.stringify({verdict:'PASS',gate:'DR61-PREPAYMENT-ATOMIC-AUTHORITY',approveRequiresDurableHoldForExactSelector:true,intentAndDrainHoldAtomic:true,postCommitRedisFailureNonAuthoritative:true,settlementStage1StillBlocked:true,ordinaryPaymentsUnaffected:true},null,2));

@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordSettlementU2AApprovalClaim } from "@/lib/db"
+import { recordSettlementU2AApprovalClaim, readDr11RefundCertificationHold } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 export const dynamic = "force-dynamic"
@@ -210,6 +210,17 @@ export async function POST(request: NextRequest) {
         status: 400,
         headers: { "Content-Type": "application/json" },
       })
+    }
+
+    // DR61: Redis exact marker selects the owner-armed test payment; PostgreSQL hold is authority.
+    const dr11Selector = await redis.get(`flashpay:certification:dr11:payment:${paymentId}`)
+    if (dr11Selector !== null) {
+      if (dr11Selector !== "armed:v1") return new Response(JSON.stringify({ error: "DR11 selector state invalid" }), { status: 409, headers: { "Content-Type": "application/json" } })
+      const dr11Hold = await readDr11RefundCertificationHold(paymentId)
+      if (dr11Hold.outcome !== "HELD") {
+        console.error("[DR61 DR11 APPROVE GATE] exact selector lacks durable hold", { paymentId, outcome: dr11Hold.outcome })
+        return new Response(JSON.stringify({ error: "DR11 durable certification hold unavailable", code: "DR11_DURABLE_HOLD_UNAVAILABLE" }), { status: 503, headers: { "Content-Type": "application/json" } })
+      }
     }
 
     // R101-2: after every canonical/Redis gate but BEFORE Pi /approve, atomically
