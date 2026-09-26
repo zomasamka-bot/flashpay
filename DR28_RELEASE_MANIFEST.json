@@ -14,7 +14,7 @@
     "secretsEmbedded": false
   },
   "fileCount": 393,
-  "totalBytes": 2673820,
+  "totalBytes": 2674251,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 68126,
-      "sha256": "41ea795e44917dc872ef2f67e94fe41c6464c681354b7a0cd60dbfc5baaa636d"
+      "bytes": 68490,
+      "sha256": "270607cb1855d20d9ac5ef5de4ed37eb9410ae8bca99b2666b3747a2bb860711"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -43,8 +43,8 @@
     },
     {
       "path": "app/api/control/dr11/route.ts",
-      "bytes": 14355,
-      "sha256": "4d2d9256a8c4ea8794219f84bce8295e7e70e64e845626cf7dad4cfb7dc93836"
+      "bytes": 14422,
+      "sha256": "9437f54adc157d9f2d6d305df52ab13f1cc7df0cd8380f8541d4d37cf96a3a60"
     },
     {
       "path": "app/api/control/system/route.ts",

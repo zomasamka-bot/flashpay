@@ -91,7 +91,8 @@ export async function POST(request: NextRequest) {
         RETURNING c.refund_id, c.payment_id, c.stage, c.status, c.amount, c.refund_payment_id, c.refund_txid`)
       if (Array.isArray(recovered) && recovered.length === 1) {
         rows = recovered
-        console.warn("[DR67 DR11 PRISTINE HOLD RECOVERY]", { ownerUid: auth.uid, refundId: recovered[0]?.refund_id ?? null, paymentId: recovered[0]?.payment_id ?? null, financialExecutionStarted: false })
+        const recoveredRow = recovered[0] as Record<string, unknown>
+        console.warn("[DR68 DR11 PRISTINE HOLD RECOVERY]", { ownerUid: auth.uid, refundId: recoveredRow.refund_id ?? null, paymentId: recoveredRow.payment_id ?? null, financialExecutionStarted: false })
       }
     }
     if (!Array.isArray(rows) || rows.length !== 1) {
