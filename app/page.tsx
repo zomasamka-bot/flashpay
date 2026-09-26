@@ -607,7 +607,7 @@ export default function HomePage() {
             )}
           </div>
 
-          {publicConfig.ownerUid && merchantSetup.verifiedUid === publicConfig.ownerUid && payment?.status === "pending" && (
+          {payment?.status === "pending" && (
             <div className="mb-6 w-full max-w-sm rounded-xl border p-3">
               <Button type="button" variant="outline" className="w-full" onClick={handleArmDr14Stage1} disabled={dr14Arming || dr14Armed}>
                 {dr14Armed ? "DR14 armed · Stage1 durable" : dr14Arming ? "Verifying & arming DR14…" : "Arm DR14 · Stage1 durable"}

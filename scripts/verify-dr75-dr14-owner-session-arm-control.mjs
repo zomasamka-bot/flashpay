@@ -5,7 +5,6 @@ for(const x of [
 'import { unifiedStore } from "@/lib/unified-store"',
 'import { publicConfig } from "@/lib/public-config"',
 'merchant.verifiedUid === publicConfig.ownerUid',
-'merchantSetup.verifiedUid === publicConfig.ownerUid',
 'confirmation: "READINESS_DR14_ONLY"',
 'confirmation: "ARM_DR14_ONE_SHOT"',
 'Authorization: `Bearer ${accessToken}`',

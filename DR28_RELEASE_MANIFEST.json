@@ -2027,5 +2027,20 @@
     "tokenInUrl": false,
     "tokenInBody": false,
     "financialExecutionStarted": false
+  },
+  "dr76": {
+    "gate": "DR76-DR14-VISIBLE-OPERATIONAL-CONTROL",
+    "baselineProductionSha": "3db53924f9d5b1d6409ea7682c1495c705ac06cf",
+    "baselineArtifactSha256": "a7f5e571f27591451a8a1f327100b56fb5a8e6da73f29f069af488aaff9b5aae",
+    "scope": [
+      "app/page.tsx",
+      "scripts/verify-dr75-dr14-owner-session-arm-control.mjs",
+      "scripts/verify-dr76-dr14-visible-operational-control.mjs",
+      "DR28_RELEASE_MANIFEST.json"
+    ],
+    "pendingControlVisible": true,
+    "clientOwnerExecutionGate": true,
+    "serverOwnerAuthorizationRetained": true,
+    "financialSourceChanged": false
   }
 }
