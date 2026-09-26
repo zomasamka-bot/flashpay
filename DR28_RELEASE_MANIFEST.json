@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 407,
-  "totalBytes": 2716400,
+  "fileCount": 408,
+  "totalBytes": 2718256,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 70896,
-      "sha256": "c99db71e7eb7237759ac5d6f0b6d436be0e270111188d7a8967baf9cf7a25df1"
+      "bytes": 71087,
+      "sha256": "738bee9fb8cc9202b4aaca12488fded9b7c694dcf73ea6fa7057dc6741c918e8"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -279,7 +279,7 @@
     {
       "path": "app/page.tsx",
       "bytes": 38468,
-      "sha256": "c6ef9b82252085ebdd4ec8aa7314791772fd3267af2342116d3fe5222f516cf6"
+      "sha256": "2bf924ea0543661b6a48c0e53e865c49ef0167ee1ca676119e96445fe127744c"
     },
     {
       "path": "app/pay/[id]/page.tsx",
@@ -1643,8 +1643,13 @@
     },
     {
       "path": "scripts/verify-dr82-dr14-pi-durable-boundary-control.mjs",
-      "bytes": 2249,
-      "sha256": "05710c792b457b045eca3dab418b381e07ead93bd679393c872bc6f1165dc706"
+      "bytes": 1692,
+      "sha256": "4495f67ae9228af825a4ba7994439b1f99735878a964214e89156cb0b8a67b2a"
+    },
+    {
+      "path": "scripts/verify-dr83-dr14-db-durable-boundary-control.mjs",
+      "bytes": 2222,
+      "sha256": "344fcddd75f57a894482c01fd84216c85f633c2d2dd6a9d3cb4c256c07ea25c4"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",

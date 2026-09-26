@@ -1,15 +1,7 @@
 import { strict as assert } from "node:assert"
 import fs from "node:fs"
-const home=fs.readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8")
 const executor=fs.readFileSync(new URL("../lib/a2u-executor.ts",import.meta.url),"utf8")
 const harness=fs.readFileSync(new URL("../lib/dr14-live-crash-certification.ts",import.meta.url),"utf8")
-assert.ok(home.includes('const dr14Boundary = "settlement_after_pi_durable" as const'))
-assert.ok(home.includes('"DR14 armed · Pi durable"'))
-assert.ok(home.includes('"Arm DR14 · Pi durable"'))
-assert.equal(home.includes('const dr14Boundary = "settlement_after_horizon_durable" as const'),false)
-assert.ok(home.includes("readback.arm.boundary === dr14Boundary"))
-assert.ok(home.includes("readback.arm.consumedAt == null"))
-assert.ok(home.includes("Date.parse(readback.arm.expiresAt) > Date.now()"))
 const stage3=executor.indexOf('console.log("[A2U Executor] STAGE 3: Calling Pi /complete")')
 const complete=executor.indexOf("const piResult = await stage3CompletePi",stage3)
 const completeGuard=executor.indexOf("if (!piResult.ok)",complete)
@@ -20,4 +12,4 @@ const projection=executor.indexOf("ctx.payment = await persistCheckpointMerged",
 const accounting=executor.indexOf("Shared Accounting Checkpoint",projection)
 assert.ok(stage3>=0 && complete>stage3 && completeGuard>complete && durablePi>completeGuard && durableGuard>durablePi && boundary>durableGuard && projection>boundary && accounting>projection,{stage3,complete,completeGuard,durablePi,durableGuard,boundary,projection,accounting})
 assert.ok(harness.includes("'settlement_after_pi_durable'"))
-console.log(JSON.stringify({certification:"PASS",gate:"DR82-DR14-PI-DURABLE-BOUNDARY-CONTROL",boundary:"settlement_after_pi_durable",piCompleteBeforeDurableCheckpoint:true,durablePiCheckpointBeforeInterruption:true,redisProjectionAfterInterruption:true,accountingAfterInterruption:true,canonicalReadback:true,financialExecutorChanged:false},null,2))
+console.log(JSON.stringify({certification:"PASS",gate:"DR82-DR14-PI-DURABLE-BOUNDARY-HISTORICAL-INVARIANT",boundary:"settlement_after_pi_durable",piCompleteBeforeDurableCheckpoint:true,durablePiCheckpointBeforeInterruption:true,redisProjectionAfterInterruption:true,accountingAfterInterruption:true,historicalBoundaryRetained:true,financialExecutorChanged:false},null,2))
