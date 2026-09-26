@@ -218,16 +218,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       }
       const durableStatus = checkpoint.status === "completed" && checkpoint.stage === "audit_recorded" ? "refunded" : "refund_pending"
       publicPayment = {...publicPayment,status:durableStatus,txid:checkpoint.refundTxid || publicPayment.txid}
-      if (payment.status !== durableStatus || (checkpoint.refundPaymentId && payment.refundPaymentId !== checkpoint.refundPaymentId) || (checkpoint.refundTxid && payment.refundTxid !== checkpoint.refundTxid)) {
-        await compareAndSwapPaymentProjection(id, payment, {
-          ...payment,
-          status: durableStatus,
-          settlementFailureState: durableStatus === "refunded" ? "refunded" : "refund_pending",
-          ...(checkpoint.refundPaymentId ? { refundPaymentId: checkpoint.refundPaymentId } : {}),
-          ...(checkpoint.refundTxid ? { refundTxid: checkpoint.refundTxid } : {}),
-          ...(durableStatus === "refunded" ? { refundStatus: "completed" } : {}),
-        })
-      }
+      // DR67: refund_pending is a customer-facing presentation state, not the
+      // pre-submission source-of-funds state used by the refund executor. Do not
+      // write presentation status back into Redis here. The refund executor owns
+      // internal projection transitions after canonical refund evidence exists.
     }
     const successResponse = NextResponse.json({
       success: true,

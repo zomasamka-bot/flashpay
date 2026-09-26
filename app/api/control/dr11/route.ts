@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, certification: "DR11_ARMED", ttlSeconds: ARM_TTL_SECONDS, financialExecutionStarted: false }, { status: 200, headers: NO_STORE })
   }
   if (confirmation === RESOLVE_CONFIRM) {
-    const rows = await query(`
+    let rows = await query(`
       SELECT refund_id, payment_id, stage, status, amount, refund_payment_id, refund_txid
       FROM refund_checkpoints
       WHERE status='pending' AND stage='intent_created'
@@ -52,6 +52,48 @@ export async function POST(request: NextRequest) {
         AND next_retry_at>NOW()
       ORDER BY created_at DESC
       LIMIT 2`)
+
+    // DR67 one-time durable recovery for the exact pre-financial DR66 failure.
+    // The old payment-status GET wrote a presentation-only refund_pending state
+    // into Redis, all DR11 contenders then failed before Pi refund creation, and
+    // automatic recovery recorded projection_conflict. Re-arm only when PostgreSQL
+    // independently proves that absolutely no refund/settlement movement started.
+    if (Array.isArray(rows) && rows.length === 0) {
+      const recovered = await query(`
+        WITH candidate AS (
+          SELECT c.refund_id, c.payment_id
+          FROM refund_checkpoints c
+          WHERE c.status='pending' AND c.stage='intent_created'
+            AND c.refund_payment_id IS NULL AND c.refund_txid IS NULL
+            AND c.idempotency_key='dr11-live:'||c.payment_id
+            AND c.last_error_code='automatic_refund_blocked'
+            AND c.last_error_message='projection_conflict'
+            AND (SELECT count(*) FROM refund_checkpoints x WHERE x.payment_id=c.payment_id)=1
+            AND (SELECT count(*) FROM refund_accounting_records a WHERE a.payment_id=c.payment_id)=0
+            AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id)=1
+            AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_requested')=1
+            AND (SELECT count(*) FROM settlement_checkpoints s WHERE s.payment_id=c.payment_id AND s.a2u_txid IS NOT NULL)=0
+          ORDER BY c.created_at DESC
+          LIMIT 2
+        ), unique_candidate AS (
+          SELECT * FROM candidate WHERE (SELECT count(*) FROM candidate)=1
+        )
+        UPDATE refund_checkpoints c
+        SET last_error_code='dr11_live_hold',
+            last_error_message='awaiting_owner_concurrent_harness',
+            next_retry_at=NOW()+INTERVAL '24 hours', updated_at=NOW()
+        FROM unique_candidate u
+        WHERE c.refund_id=u.refund_id AND c.payment_id=u.payment_id
+          AND c.status='pending' AND c.stage='intent_created'
+          AND c.refund_payment_id IS NULL AND c.refund_txid IS NULL
+          AND c.last_error_code='automatic_refund_blocked'
+          AND c.last_error_message='projection_conflict'
+        RETURNING c.refund_id, c.payment_id, c.stage, c.status, c.amount, c.refund_payment_id, c.refund_txid`)
+      if (Array.isArray(recovered) && recovered.length === 1) {
+        rows = recovered
+        console.warn("[DR67 DR11 PRISTINE HOLD RECOVERY]", { ownerUid: auth.uid, refundId: recovered[0]?.refund_id ?? null, paymentId: recovered[0]?.payment_id ?? null, financialExecutionStarted: false })
+      }
+    }
     if (!Array.isArray(rows) || rows.length !== 1) {
       return NextResponse.json({ error: rows?.length === 0 ? "No pristine DR11 refund authority found" : "DR11 refund authority is ambiguous" }, { status: 409, headers: NO_STORE })
     }

@@ -99,9 +99,21 @@ async function verifyOriginalU2AForRefundRecovery(checkpoint: RefundCheckpoint):
 
 async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promise<RefundPaymentProjectionLoad> {
   const existing = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
-  if (existing) return refundProjectionMatchesCheckpoint(existing, checkpoint)
-    ? { outcome: 'FOUND', payment: existing, rebuilt: false }
-    : { outcome: 'BLOCKED', reason: 'projection_conflict' }
+  if (existing && refundProjectionMatchesCheckpoint(existing, checkpoint) && !(checkpoint.stage === 'intent_created' && checkpoint.status === 'pending' && !guarded(checkpoint, existing))) return { outcome: 'FOUND', payment: existing, rebuilt: false }
+
+  // DR67: Redis is projection-only. Repair a stale pre-refund projection only
+  // when it is still the same payment key, contains no merchant/refund/Horizon
+  // movement evidence, and the durable U2A + canonical Pi + PostgreSQL refund
+  // authority are independently re-proven below. Identity/amount are rebuilt from
+  // that durable authority; any financial evidence or terminal state fails closed.
+  const stalePreRefundProjection = existing !== null &&
+    existing.id === checkpoint.paymentId &&
+    (existing.status === 'settlement_failed' || existing.status === 'refund_pending') &&
+    existing.settlementFailureState === 'refund_pending' && existing.refundStatus === 'pending' &&
+    !existing.a2uPaymentId && !existing.a2uTxid && existing.a2uPreparedTxHash === undefined && existing.a2uPreparedSequence === undefined && existing.a2uPreparedEnvelopeXdr === undefined &&
+    existing.horizonSuccessFlag !== true && !existing.refundPaymentId && !existing.refundTxid &&
+    checkpoint.status === 'pending' && checkpoint.stage === 'intent_created' && !checkpoint.refundPaymentId && !checkpoint.refundTxid
+  if (existing && !stalePreRefundProjection) return { outcome: 'BLOCKED', reason: 'projection_conflict' }
 
   const durable = await verifyOriginalU2AForRefundRecovery(checkpoint)
   if (!durable) return { outcome: 'BLOCKED', reason: 'durable_projection_unproven' }
@@ -139,6 +151,15 @@ async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promis
     refundStatus: refundProjected ? 'submitted' : 'pending',
     ...(refundProjected ? { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid } : {}),
   }
+  if (stalePreRefundProjection && existing) {
+    const repaired = await compareAndSwapPaymentProjection(checkpoint.paymentId, existing, projection)
+    if (repaired.outcome !== 'UPDATED') return { outcome: 'BLOCKED', reason: repaired.outcome === 'CONFLICT' ? 'projection_conflict' : 'projection_uncertain' }
+    const repairedReadBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
+    if (!repairedReadBack || !refundProjectionMatchesCheckpoint(repairedReadBack, checkpoint) || !guarded(checkpoint, repairedReadBack)) return { outcome: 'BLOCKED', reason: 'projection_conflict' }
+    console.warn('[DR67 REFUND SOURCE PROJECTION REPAIR]', { paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, fromStatus: existing.status, toStatus: 'settlement_failed' })
+    return { outcome: 'FOUND', payment: repairedReadBack, rebuilt: true }
+  }
+
   const created = await redis.set(`payment:${checkpoint.paymentId}`, projection, { nx: true })
   const readBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
   if (!readBack || !refundProjectionMatchesCheckpoint(readBack, checkpoint)) return { outcome: 'BLOCKED', reason: 'projection_conflict' }
