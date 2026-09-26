@@ -1,22 +1,27 @@
 {
-  "gate": "DR72-DR14-LIVE-CRASH-CERTIFICATION-HARNESS",
+  "gate": "DR73-DR14-BUILD-TYPE-HARDENED-LIVE-CRASH-HARNESS",
   "schemaVersion": 1,
   "baselineGitSha": "cf8ab7467d3ea78bc3ebb8e2158fa10fbe51b98f",
+  "supersedesFailedGitSha": "fe6cef67925035a2f1dd09026e4ba2e2d65696cd",
   "artifactPolicy": {
     "forbidden": [
       ".env*",
-      "node_modules",
-      ".next",
-      ".git",
+      ".git/",
+      ".next/",
+      "node_modules/",
       "*.tsbuildinfo",
-      ".DS_Store",
-      "private-key/signing-secret literals"
+      ".DS_Store"
     ],
     "secretsEmbedded": false
   },
+  "buildFailureRepair": {
+    "confirmedCause": "DR72 accessed payment_id on query() row typed unknown",
+    "repair": "explicit Record<string, unknown> type guard before property access",
+    "uuidValidation": "RFC4122-shaped v1-v5 + variant enforced"
+  },
   "fileCount": 399,
   "listedFilesExcludingManifest": 398,
-  "totalBytesExcludingManifest": 2626955,
+  "totalBytesExcludingManifest": 2627510,
   "files": [
     {
       "path": ".gitignore",
@@ -45,8 +50,8 @@
     },
     {
       "path": "app/api/control/dr14/route.ts",
-      "bytes": 1811,
-      "sha256": "3f40d0014b37d4a88ecb50e43833dc227d8bde5ca0496d85bead6929c1364a53"
+      "bytes": 1869,
+      "sha256": "86bea29d92e7732d9d36e0ab02ac0035b6b93eebd954fab9970bb463e442a91e"
     },
     {
       "path": "app/api/control/system/route.ts",
@@ -725,8 +730,8 @@
     },
     {
       "path": "lib/dr14-live-crash-certification.ts",
-      "bytes": 4314,
-      "sha256": "a492d1b35d768111010bcbe3fb1be9a8580e18311aaa72307ab3e0944d37bcbf"
+      "bytes": 4597,
+      "sha256": "0625d55d38a818dd3dc4d0e9114a433fa0f6d7e21e97bd0b784dc87bb964182d"
     },
     {
       "path": "lib/financial-amount-stroops.ts",
@@ -1595,8 +1600,8 @@
     },
     {
       "path": "scripts/verify-dr72-dr14-live-crash-harness.mjs",
-      "bytes": 2779,
-      "sha256": "cc3e9767cf18d79a9d7e39f8622037ac8babaf9e0e7bada58ee1a0fec9d7e92c"
+      "bytes": 2993,
+      "sha256": "926990c0afc1095e39adf1b193d0ec6c89f0ffe66e7c160b3ee22bcfcf131399"
     },
     {
       "path": "scripts/verify-dr8-independent-recovery-wake.mjs",

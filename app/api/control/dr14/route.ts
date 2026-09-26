@@ -17,6 +17,6 @@ export async function GET(request:NextRequest){
  const auth=await verifyOwnerAuthorizationHeader(request.headers.get('authorization'))
  if(!auth.ok)return NextResponse.json({error:'Unauthorized'},{status:auth.status,headers:NO_STORE})
  const paymentId=request.nextUrl.searchParams.get('paymentId')??''
- if(!/^[0-9a-f-]{36}$/i.test(paymentId))return NextResponse.json({error:'Exact paymentId required'},{status:400,headers:NO_STORE})
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId))return NextResponse.json({error:'Exact paymentId required'},{status:400,headers:NO_STORE})
  return NextResponse.json({paymentId,arm:await readDr14Crash(paymentId)},{status:200,headers:NO_STORE})
 }

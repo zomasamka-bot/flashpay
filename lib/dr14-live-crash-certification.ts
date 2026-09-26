@@ -21,6 +21,7 @@ const SETTLEMENT = new Set<Dr14Boundary>(['settlement_after_stage1_durable','set
 const REFUND = new Set<Dr14Boundary>(['refund_after_pi_create_before_id_checkpoint','refund_after_prepared_before_submit','refund_after_horizon_submit_before_tx_checkpoint','refund_after_payment_checkpoint','refund_after_accounting','refund_after_audit','refund_after_completion_before_projection'])
 export function dr14BoundaryLane(boundary: Dr14Boundary): Dr14Lane { return SETTLEMENT.has(boundary) ? 'settlement' : 'refund' }
 export function isDr14Boundary(value: unknown): value is Dr14Boundary { return typeof value === 'string' && (SETTLEMENT.has(value as Dr14Boundary) || REFUND.has(value as Dr14Boundary)) }
+function isRow(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 
 async function ensureTable(): Promise<boolean> {
   const r = await query(`CREATE TABLE IF NOT EXISTS certification_fault_arms (
@@ -36,11 +37,11 @@ async function ensureTable(): Promise<boolean> {
 }
 
 export async function armDr14Crash(paymentId: string, boundary: Dr14Boundary): Promise<'ARMED'|'CONFLICT'|'INDETERMINATE'> {
-  if (!/^[0-9a-f-]{36}$/i.test(paymentId) || !isDr14Boundary(boundary)) return 'CONFLICT'
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId) || !isDr14Boundary(boundary)) return 'CONFLICT'
   if (!await ensureTable()) return 'INDETERMINATE'
   const lane=dr14BoundaryLane(boundary)
   const identity=await query(`SELECT payment_id,stage FROM settlement_checkpoints WHERE payment_id=$1 LIMIT 2`,[paymentId])
-  if (!Array.isArray(identity) || identity.length !== 1 || identity[0]?.payment_id !== paymentId) return 'CONFLICT'
+  if (!Array.isArray(identity) || identity.length !== 1 || !isRow(identity[0]) || identity[0].payment_id !== paymentId) return 'CONFLICT'
   const opposite=await query(`SELECT refund_id,status FROM refund_checkpoints WHERE payment_id=$1 AND status<>'manual_review_required' LIMIT 2`,[paymentId])
   if (!Array.isArray(opposite)) return 'INDETERMINATE'
   if (lane==='settlement' && opposite.length!==0) return 'CONFLICT'
@@ -53,7 +54,7 @@ export async function armDr14Crash(paymentId: string, boundary: Dr14Boundary): P
 }
 
 export async function consumeDr14Crash(paymentId: string, boundary: Dr14Boundary): Promise<boolean> {
-  if (process.env.VERCEL_ENV !== 'production' || !/^[0-9a-f-]{36}$/i.test(paymentId) || !isDr14Boundary(boundary)) return false
+  if (process.env.VERCEL_ENV !== 'production' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId) || !isDr14Boundary(boundary)) return false
   const r=await query(`UPDATE certification_fault_arms SET consumed_at=NOW()
     WHERE payment_id=$1 AND lane=$2 AND boundary=$3 AND consumed_at IS NULL AND expires_at>NOW()
     RETURNING payment_id`,[paymentId,dr14BoundaryLane(boundary),boundary])
