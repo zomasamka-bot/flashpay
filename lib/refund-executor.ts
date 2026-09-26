@@ -26,7 +26,7 @@ import { serverConfig } from './server-config'
 import { getDurableU2AIngressAuthoritative, query, readSettlementRefundAuthority } from './db'
 import { recordRefundAccounting } from './refund-accounting'
 import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, claimPiWalletIntent, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
-import { compareAndSwapPaymentProjection } from './payment-projection-cas'
+import { adoptUnparseableLegacyPaymentProjection, compareAndSwapPaymentProjection } from './payment-projection-cas'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission' | 'found'; refundId: string; paymentId: string; amount: number; refundPaymentId?: string }
@@ -98,7 +98,8 @@ async function verifyOriginalU2AForRefundRecovery(checkpoint: RefundCheckpoint):
 }
 
 async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promise<RefundPaymentProjectionLoad> {
-  const existing = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
+  const rawExisting = await redis.get(`payment:${checkpoint.paymentId}`)
+  const existing = paymentFromRedis(rawExisting)
   if (existing && refundProjectionMatchesCheckpoint(existing, checkpoint) && !(checkpoint.stage === 'intent_created' && checkpoint.status === 'pending' && !guarded(checkpoint, existing))) return { outcome: 'FOUND', payment: existing, rebuilt: false }
 
   // DR67: Redis is projection-only. Repair a stale pre-refund projection only
@@ -176,6 +177,18 @@ async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promis
     refundStatus: refundProjected ? 'submitted' : 'pending',
     ...(refundProjected ? { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid } : {}),
   }
+  if (!existing && rawExisting !== null && rawExisting !== undefined) {
+    const adopted = await adoptUnparseableLegacyPaymentProjection(checkpoint.paymentId, projection)
+    if (adopted.outcome !== 'UPDATED') {
+      console.warn('[DR70 UNPARSEABLE LEGACY PROJECTION BLOCKED]', { paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, adoptionOutcome: adopted.outcome })
+      return { outcome: 'BLOCKED', reason: adopted.outcome === 'UNAVAILABLE' ? 'projection_uncertain' : 'projection_conflict' }
+    }
+    const adoptedReadBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))
+    if (!adoptedReadBack || !refundProjectionMatchesCheckpoint(adoptedReadBack, checkpoint) || !guarded(checkpoint, adoptedReadBack)) return { outcome: 'BLOCKED', reason: 'projection_conflict' }
+    console.warn('[DR70 UNPARSEABLE LEGACY PROJECTION ADOPTED]', { paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, financialEvidenceAccepted: false })
+    return { outcome: 'FOUND', payment: adoptedReadBack, rebuilt: true }
+  }
+
   if (stalePreRefundProjection && existing) {
     const repaired = await compareAndSwapPaymentProjection(checkpoint.paymentId, existing, projection)
     if (repaired.outcome !== 'UPDATED') return { outcome: 'BLOCKED', reason: repaired.outcome === 'CONFLICT' ? 'projection_conflict' : 'projection_uncertain' }

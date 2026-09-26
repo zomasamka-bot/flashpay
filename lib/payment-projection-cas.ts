@@ -68,3 +68,34 @@ redis.call('SET',KEYS[1],ARGV[3]); return 1
   if (result === -1) return { outcome: 'MISSING' }
   return { outcome: 'INVALID' }
 }
+
+export async function adoptUnparseableLegacyPaymentProjection(
+  paymentId: string,
+  next: Payment,
+): Promise<PaymentProjectionCasResult> {
+  if (!isRedisConfigured) return { outcome: 'UNAVAILABLE' }
+  if (!paymentId || next.id !== paymentId) return { outcome: 'INVALID' }
+  const encodedBase = JSON.stringify(next)
+  let result: number
+  try {
+    result = Number(await redis.eval<[string, string], number>(`
+local raw=redis.call('GET',KEYS[1]); if not raw then return -1 end
+local ok,current=pcall(cjson.decode,raw); if not ok or type(current)~='table' then return -2 end
+if current.id~=ARGV[1] then return -2 end
+local function has(v) return v~=nil and v~=cjson.null and not (type(v)=='string' and v=='') end
+if has(current.a2uPaymentId) or has(current.a2uTxid) or has(current.a2uPreparedTxHash) or has(current.a2uPreparedSequence) or has(current.a2uPreparedEnvelopeXdr) then return -2 end
+if current.horizonSuccessFlag==true or current.status=='settled_to_merchant' or current.status=='refunded' then return -2 end
+if has(current.refundPaymentId) or has(current.refundTxid) or current.refundStatus=='submitted' or current.refundStatus=='completed' then return -2 end
+local version=current.redisProjectionVersion; if version==nil or version==cjson.null then version=0 end
+if type(version)~='number' or version<0 or version~=math.floor(version) or version>=9007199254740991 then return -2 end
+local nextOk,next=pcall(cjson.decode,ARGV[2]); if not nextOk or type(next)~='table' or next.id~=ARGV[1] then return -2 end
+next.redisProjectionVersion=version+1
+redis.call('SET',KEYS[1],cjson.encode(next)); return version+1
+`, [`payment:${paymentId}`], [paymentId, encodedBase]))
+  } catch { return { outcome: 'UNAVAILABLE' } }
+  if (result === -1) return { outcome: 'MISSING' }
+  if (result < 0) return { outcome: 'INVALID' }
+  const readBack = parsePayment(await redis.get(`payment:${paymentId}`))
+  if (!readBack || readBack.id !== paymentId || readBack.redisProjectionVersion !== result) return { outcome: 'INVALID' }
+  return { outcome: 'UPDATED', payment: readBack }
+}
