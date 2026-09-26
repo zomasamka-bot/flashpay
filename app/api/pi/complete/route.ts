@@ -444,6 +444,7 @@ export async function POST(request: NextRequest) {
       local dr11Candidate = ARGV[5] == '1'
       local dr11Armed = dr11Candidate and redis.call('GET', KEYS[6]) == ARGV[6]
       local dr11Refund = dr11Armed and (current.status == nil or current.status == 'pending')
+      local transitioningToPaidToApp = (current.status == nil or current.status == 'pending') and not dr11Refund
       local dr11RefundReplay = dr11Candidate and current.status == 'settlement_failed' and current.settlementFailureState == 'refund_pending' and current.refundStatus == 'pending' and current.payerRefundEligible == true and current.a2uErrorCode == 'dr11_live_concurrent_refund_certification'
       if current.status ~= nil and current.status ~= 'pending' and current.status ~= 'paid_to_app' and current.status ~= 'settlement_pending' and current.status ~= 'settled_to_merchant' and not dr11RefundReplay then return 0 end
       if dr11Refund and (current.status == nil or current.status == 'pending') then

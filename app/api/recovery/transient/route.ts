@@ -136,6 +136,16 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
     if(result.conflictSamples.length<20)result.conflictSamples.push({paymentId,reason})
   }
   for(const paymentId of page.paymentIds){
+    // DR59: an owner-armed DR11 payment is held out of Settlement rediscovery
+    // until /complete atomically consumes its exact-payment marker and persists
+    // durable Refund authority. A failed Lua EVAL rolls back marker deletion, so
+    // this also closes the post-Pi-completion crash window without authorizing
+    // any financial movement from Redis. Ordinary payments have no such marker.
+    const dr11ExactPaymentHold = await redis.get(`flashpay:certification:dr11:payment:${paymentId}`)
+    if(dr11ExactPaymentHold!==null){
+      if(dr11ExactPaymentHold!=="armed:v1"){conflict(paymentId,'dr11_exact_payment_hold_invalid');continue}
+      result.excludedRefundAuthority++;continue
+    }
     const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
     if(authority.outcome!=='CLEAR'){conflict(paymentId,`authority_${authority.outcome.toLowerCase()}`);continue}
     // A durable Refund authority is an expected XOR exclusion, not a Settlement
