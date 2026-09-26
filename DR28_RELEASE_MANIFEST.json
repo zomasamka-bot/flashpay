@@ -2067,5 +2067,18 @@
     "rawDbRowExposed": false,
     "failClosedValidation": true,
     "financialSourceChanged": false
+  },
+  "dr79": {
+    "gate": "DR79-DR14-PREPARED-BOUNDARY-CONTROL",
+    "baselineProductionSha": "903f516bf9a118889fb593e7e837f333f3e45bd8",
+    "baselineArtifactSha256": "e2033bb995711d690db6925eb881efe5f2601a25e33de36e9254409a09a4f500",
+    "boundary": "settlement_after_prepared_durable",
+    "scope": [
+      "app/page.tsx",
+      "scripts/verify-dr79-dr14-prepared-boundary-control.mjs",
+      "DR28_RELEASE_MANIFEST.json"
+    ],
+    "financialExecutorChanged": false,
+    "canonicalReadbackRetained": true
   }
 }
