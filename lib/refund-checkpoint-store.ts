@@ -1344,6 +1344,15 @@ export async function appendRefundAuditEvent(event: RefundAuditEvent): Promise<b
   return Array.isArray(result) && result.length > 0
 }
 
+function normalizeOptionalTimestamp(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const ms = Date.parse(value)
+    return Number.isFinite(ms) ? value : undefined
+  }
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString()
+  return undefined
+}
+
 function normalizeCheckpoint(value: unknown): RefundCheckpoint | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Record<string, unknown>
@@ -1372,6 +1381,6 @@ function normalizeCheckpoint(value: unknown): RefundCheckpoint | null {
     attemptCount: Number(row.attemptCount ?? row.attempt_count ?? 0),
     lastErrorCode: typeof (row.lastErrorCode ?? row.last_error_code) === 'string' ? (row.lastErrorCode ?? row.last_error_code) as string : undefined,
     lastErrorMessage: typeof (row.lastErrorMessage ?? row.last_error_message) === 'string' ? (row.lastErrorMessage ?? row.last_error_message) as string : undefined,
-    nextRetryAt: typeof (row.nextRetryAt ?? row.next_retry_at) === 'string' ? (row.nextRetryAt ?? row.next_retry_at) as string : undefined,
+    nextRetryAt: normalizeOptionalTimestamp(row.nextRetryAt ?? row.next_retry_at),
   }
 }
