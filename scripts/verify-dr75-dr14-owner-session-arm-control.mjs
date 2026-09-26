@@ -3,8 +3,6 @@ import fs from 'node:fs'
 const home=fs.readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8')
 for(const x of [
 'import { unifiedStore } from "@/lib/unified-store"',
-'import { publicConfig } from "@/lib/public-config"',
-'merchant.verifiedUid === publicConfig.ownerUid',
 'confirmation: "READINESS_DR14_ONLY"',
 'confirmation: "ARM_DR14_ONE_SHOT"',
 'Authorization: `Bearer ${accessToken}`',
@@ -17,4 +15,4 @@ assert.ok(home.indexOf('confirmation: "ARM_DR14_ONE_SHOT"') < home.indexOf('read
 assert.equal(/paymentId=.*accessToken/.test(home),false)
 assert.equal(/JSON\.stringify\([^)]*accessToken/.test(home),false)
 for(const forbidden of ['executeA2U','executeRefund','submitRefundBlockchainOnce','Pi.createPayment']) assert.equal(home.includes(forbidden),false,forbidden)
-console.log(JSON.stringify({certification:'PASS',gate:'DR75-DR14-OWNER-SESSION-ARM-CONTROL',verifiedOwnerUid:true,readinessBeforeArm:true,authenticatedReadback:true,tokenInUrl:false,tokenInBody:false,financialExecutionStarted:false},null,2))
+console.log(JSON.stringify({certification:'PASS',gate:'DR75-DR14-OWNER-SESSION-ARM-CONTROL',serverOwnerAuthorityCoveredByDR77:true,readinessBeforeArm:true,authenticatedReadback:true,tokenInUrl:false,tokenInBody:false,financialExecutionStarted:false},null,2))

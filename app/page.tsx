@@ -19,7 +19,6 @@ import { CustomerPaymentView } from "@/components/customer-payment-view"
 import { useI18n } from "@/components/i18n-provider"
 import { LOCALE_METADATA, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, isAppLocale, type AppLocale } from "@/lib/i18n/config"
 import { unifiedStore } from "@/lib/unified-store"
-import { publicConfig } from "@/lib/public-config"
 
 export default function HomePage() {
   const router = useRouter()
@@ -478,9 +477,8 @@ export default function HomePage() {
     if (!currentPaymentId || payment?.status !== "pending" || dr14Arming || dr14Armed) return
     const merchant = unifiedStore.getMerchantState()
     const accessToken = merchant.accessToken
-    const verifiedOwner = !!publicConfig.ownerUid && merchant.verifiedUid === publicConfig.ownerUid
-    if (!verifiedOwner || !accessToken) {
-      setDr14Error("Verified owner Pi session required")
+    if (!accessToken) {
+      setDr14Error("Pi session token required")
       return
     }
     setDr14Arming(true)
