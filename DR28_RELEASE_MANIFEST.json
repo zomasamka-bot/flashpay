@@ -2011,5 +2011,21 @@
       "bytes": 105,
       "sha256": "c305dc3b539a260d0c44bad7eb3d6947535c9f232ffbea33d1193bb8b731f0ef"
     }
-  ]
+  ],
+  "dr75": {
+    "gate": "DR75-DR14-OWNER-SESSION-ARM-CONTROL",
+    "baselineProductionSha": "c0caf00ca8d3dce35a586150cfd3104b15a6a9cf",
+    "baselineArtifactSha256": "25029a0a93b517ab0f56baf6a1a4d8d7f64721779845e07c0f08365afbbb1dfd",
+    "scope": [
+      "app/page.tsx",
+      "scripts/verify-dr75-dr14-owner-session-arm-control.mjs",
+      "DR28_RELEASE_MANIFEST.json"
+    ],
+    "verifiedOwnerUid": true,
+    "readinessBeforeArm": true,
+    "authenticatedReadback": true,
+    "tokenInUrl": false,
+    "tokenInBody": false,
+    "financialExecutionStarted": false
+  }
 }

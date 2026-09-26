@@ -18,6 +18,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CustomerPaymentView } from "@/components/customer-payment-view"
 import { useI18n } from "@/components/i18n-provider"
 import { LOCALE_METADATA, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, isAppLocale, type AppLocale } from "@/lib/i18n/config"
+import { unifiedStore } from "@/lib/unified-store"
+import { publicConfig } from "@/lib/public-config"
 
 export default function HomePage() {
   const router = useRouter()
@@ -52,6 +54,10 @@ export default function HomePage() {
   const [localAmount, setLocalAmount] = useState("")
   const [currency, setCurrency] = useState("USD")
   const [piRate, setPiRate] = useState("1")
+  const [dr14Arming, setDr14Arming] = useState(false)
+  const [dr14Armed, setDr14Armed] = useState(false)
+  const [dr14Error, setDr14Error] = useState<string | null>(null)
+  const dr14Boundary = "settlement_after_stage1_durable" as const
   
   useEffect(() => {
     // Check hash first (Pi Browser QR route: #/pay/{id})
@@ -468,6 +474,55 @@ export default function HomePage() {
     })
   }
 
+  const handleArmDr14Stage1 = async () => {
+    if (!currentPaymentId || payment?.status !== "pending" || dr14Arming || dr14Armed) return
+    const merchant = unifiedStore.getMerchantState()
+    const accessToken = merchant.accessToken
+    const verifiedOwner = !!publicConfig.ownerUid && merchant.verifiedUid === publicConfig.ownerUid
+    if (!verifiedOwner || !accessToken) {
+      setDr14Error("Verified owner Pi session required")
+      return
+    }
+    setDr14Arming(true)
+    setDr14Error(null)
+    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` }
+    const bodyBase = { paymentId: currentPaymentId, boundary: dr14Boundary }
+    try {
+      const readinessResponse = await fetch("/api/control/dr14", {
+        method: "POST", headers,
+        body: JSON.stringify({ ...bodyBase, confirmation: "READINESS_DR14_ONLY" }),
+      })
+      const readiness = await readinessResponse.json().catch(() => null) as { success?: boolean; readiness?: { outcome?: string } } | null
+      if (!readinessResponse.ok || readiness?.success !== true || readiness?.readiness?.outcome !== "READY") {
+        throw new Error(`DR14 readiness failed (${readiness?.readiness?.outcome ?? readinessResponse.status})`)
+      }
+      const armResponse = await fetch("/api/control/dr14", {
+        method: "POST", headers,
+        body: JSON.stringify({ ...bodyBase, confirmation: "ARM_DR14_ONE_SHOT" }),
+      })
+      const arm = await armResponse.json().catch(() => null) as { success?: boolean; outcome?: string } | null
+      if (!armResponse.ok || arm?.success !== true || arm?.outcome !== "ARMED") {
+        throw new Error(`DR14 arm failed (${arm?.outcome ?? armResponse.status})`)
+      }
+      const readbackResponse = await fetch(`/api/control/dr14?paymentId=${encodeURIComponent(currentPaymentId)}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+      const readback = await readbackResponse.json().catch(() => null) as { arm?: { paymentId?: string; boundary?: string; consumedAt?: string | null; expiresAt?: string | null } | null } | null
+      const exact = readbackResponse.ok &&
+        readback?.arm?.paymentId === currentPaymentId &&
+        readback.arm.boundary === dr14Boundary &&
+        readback.arm.consumedAt == null &&
+        typeof readback.arm.expiresAt === "string" &&
+        Date.parse(readback.arm.expiresAt) > Date.now()
+      if (!exact) throw new Error("DR14 armed readback proof failed")
+      setDr14Armed(true)
+    } catch (error) {
+      setDr14Error(error instanceof Error ? error.message : "DR14 arm failed")
+    } finally {
+      setDr14Arming(false)
+    }
+  }
+
   // Show loader while route is resolving
   if (!routeResolved) {
     return (
@@ -551,6 +606,16 @@ export default function HomePage() {
               </>
             )}
           </div>
+
+          {publicConfig.ownerUid && merchantSetup.verifiedUid === publicConfig.ownerUid && payment?.status === "pending" && (
+            <div className="mb-6 w-full max-w-sm rounded-xl border p-3">
+              <Button type="button" variant="outline" className="w-full" onClick={handleArmDr14Stage1} disabled={dr14Arming || dr14Armed}>
+                {dr14Armed ? "DR14 armed · Stage1 durable" : dr14Arming ? "Verifying & arming DR14…" : "Arm DR14 · Stage1 durable"}
+              </Button>
+              {dr14Error && <p className="mt-2 text-xs text-destructive">{dr14Error}</p>}
+              {dr14Armed && <p className="mt-2 text-xs text-muted-foreground">One-shot arm verified. Do not re-arm this payment.</p>}
+            </div>
+          )}
 
           {/* Payment Sharing Section */}
           <div className="mb-8 space-y-3">
