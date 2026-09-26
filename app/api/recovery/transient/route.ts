@@ -58,6 +58,51 @@ if current ~= ARGV[1] then return 0 end
 return redis.call("EXPIRE", KEYS[1], ARGV[2])
 `
 
+const MERCHANT_HISTORY_BOOTSTRAP_KEY = "flashpay:merchant-history:v1:bootstrap"
+
+type MerchantHistoryRecovery = { state: "already_certified" | "rebuilt"; scanned: number; indexed: number }
+
+async function recoverMerchantHistoryProjectionAfterRedisLoss(): Promise<MerchantHistoryRecovery> {
+  const marker = await redis.get(MERCHANT_HISTORY_BOOTSTRAP_KEY)
+  if (marker === "done") return { state: "already_certified", scanned: 0, indexed: 0 }
+  if (marker !== null) throw new Error("Merchant history bootstrap marker contradictory")
+
+  let cursor = "0"
+  let scanned = 0
+  let indexed = 0
+  do {
+    const page = await redis.scan(cursor, { match: "payment:*", count: 200 })
+    if (!Array.isArray(page) || page.length !== 2 || !Array.isArray(page[1])) throw new Error("Merchant history scan indeterminate")
+    const nextRaw = page[0]
+    const next = typeof nextRaw === "string" && /^[0-9]+$/.test(nextRaw) ? nextRaw : typeof nextRaw === "number" && Number.isSafeInteger(nextRaw) && nextRaw >= 0 ? String(nextRaw) : null
+    if (next === null) throw new Error("Merchant history scan cursor indeterminate")
+    for (const key of page[1]) {
+      if (typeof key !== "string" || !key.startsWith("payment:")) throw new Error("Merchant history scan key invalid")
+      const paymentId = key.slice("payment:".length)
+      if (!paymentId || paymentId !== paymentId.trim()) throw new Error("Merchant history payment id invalid")
+      const payment = parsePayment(await redis.get(key))
+      if (!payment || payment.id !== paymentId || typeof payment.merchantId !== "string" || !payment.merchantId || payment.merchantId !== payment.merchantId.trim() || typeof payment.createdAt !== "string") throw new Error("Merchant history projection invalid")
+      const createdAtMs = Date.parse(payment.createdAt)
+      if (!Number.isSafeInteger(createdAtMs) || new Date(createdAtMs).toISOString() !== payment.createdAt) throw new Error("Merchant history createdAt invalid")
+      const indexKey = `flashpay:merchant:${payment.merchantId}:payments:v1`
+      const added = await redis.eval<[string, string], number>("if redis.call('EXISTS',KEYS[1])~=1 then return -1 end return redis.call('ZADD',KEYS[2],'NX',ARGV[1],ARGV[2])", [key, indexKey], [String(createdAtMs), paymentId])
+      if (added !== 0 && added !== 1) throw new Error("Merchant history index race")
+      scanned++
+      indexed += added
+      if (scanned > 100000) throw new Error("Merchant history rebuild bound exceeded")
+    }
+    cursor = next
+  } while (cursor !== "0")
+
+  const certified = await redis.set(MERCHANT_HISTORY_BOOTSTRAP_KEY, "done", { nx: true })
+  if (certified !== "OK") {
+    const reread = await redis.get(MERCHANT_HISTORY_BOOTSTRAP_KEY)
+    if (reread !== "done") throw new Error("Merchant history bootstrap certification race")
+  }
+  console.warn("[DR56 MERCHANT HISTORY RECOVERY] certified", { scanned, indexed, source: "redis_payment_projections", financialAuthorityMutated: false })
+  return { state: "rebuilt", scanned, indexed }
+}
+
 type DurableU2AIngressRepopulation = {
   scanned:number
   repopulated:number
@@ -985,6 +1030,7 @@ local all = redis.call('KEYS', '*')
 local unknown = 0
 local activeWalletSubmit = 0
 local activeDrain = 0
+local activePaymentCreate = 0
 local function starts(s,p) return string.sub(s,1,string.len(p)) == p end
 local function legacyOwned(k)
   if string.match(k, '^a2u:[0-9a-fA-F%-]+$') then return true end
@@ -1000,6 +1046,7 @@ end
 for _,k in ipairs(all) do
   if starts(k, 'flashpay:wallet:submit:') then activeWalletSubmit = activeWalletSubmit + 1 end
   if k == 'flashpay:recovery:transient:drain-lease:v1' then activeDrain = activeDrain + 1 end
+  if starts(k, 'flashpay:payment:create-active:') then activePaymentCreate = activePaymentCreate + 1 end
   if not (starts(k,'flashpay:') or starts(k,'payment:') or starts(k,'receipt-file:') or legacyOwned(k)) then
     unknown = unknown + 1
   end
@@ -1007,6 +1054,7 @@ end
 if unknown > 0 then return {-1, #all, unknown, activeWalletSubmit + activeDrain} end
 if activeWalletSubmit > 0 then return {-2, #all, 0, activeWalletSubmit} end
 if activeDrain > 0 then return {-3, #all, 0, activeDrain} end
+if activePaymentCreate > 0 then return {-5, #all, 0, activePaymentCreate} end
 redis.call('FLUSHDB')
 return {1, #all, 0, 0}
 `
@@ -1022,7 +1070,7 @@ return {1, #all, 0, 0}
     }
     const [atomicCode,atomicPreflightKeys,atomicUnknownKeys,atomicActiveBlockers]=atomicLoss as number[]
     if(atomicCode!==1) {
-      const reason=atomicCode===-1?"unknown_keyspace":atomicCode===-2?"wallet_submit_active":atomicCode===-3?"recovery_drain_active":atomicCode===-4?"keyspace_bound":"indeterminate"
+      const reason=atomicCode===-1?"unknown_keyspace":atomicCode===-2?"wallet_submit_active":atomicCode===-3?"recovery_drain_active":atomicCode===-4?"keyspace_bound":atomicCode===-5?"payment_create_active":"indeterminate"
       console.warn("[DR51 DR10 ATOMIC TOTAL LOSS] blocked",{reason,atomicPreflightKeys,atomicUnknownKeys,atomicActiveBlockers,deletionAttempted:false})
       return NextResponse.json({error:"DR10 atomic total loss blocked",reason,atomicPreflightKeys,atomicUnknownKeys,atomicActiveBlockers,deletionAttempted:false},{status:409})
     }
@@ -2063,13 +2111,17 @@ return {1, #all, 0, 0}
   // Pi/Horizon/Settlement/Refund movement; fully lost Redis projections remain
   // execution-deferred until F2-4 removes the access-token dependency.
   let durableU2AIngressRepopulation:DurableU2AIngressRepopulation
+  let merchantHistoryRecovery: MerchantHistoryRecovery
   try {
     await repopulateDurableSettlementWork()
     durableU2AIngressRepopulation=await repopulateDurableU2AIngressWork()
-  } catch {
+    merchantHistoryRecovery=await recoverMerchantHistoryProjectionAfterRedisLoss()
+  } catch (error) {
+    console.error("[DR56 RECOVERY BOOTSTRAP] unavailable", { error: error instanceof Error ? error.message : String(error) })
     return NextResponse.json({ error: "Durable financial work repopulation unavailable" }, { status: 503 })
   }
   console.log("[F2-3 DURABLE REDISCOVERY]", durableU2AIngressRepopulation)
+  console.log("[DR56 MERCHANT HISTORY RECOVERY]", merchantHistoryRecovery)
 
   let readyBaselineAlreadyCertified = false
   let readyBaselineCoverageCertified = false

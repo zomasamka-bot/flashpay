@@ -11,6 +11,9 @@ import { readSystemState } from "@/lib/system-control"
 import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
+const DR10_MAINTENANCE_KEY = "flashpay:certification:dr10:maintenance:v1"
+const PAYMENT_CREATE_LEASE_PREFIX = "flashpay:payment:create-active:"
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -40,15 +43,27 @@ export async function OPTIONS() {
 // POST /api/payments - Create a new payment
 export async function POST(request: NextRequest) {
   const paymentTimingStartedAt = Date.now()
+  let createLeaseKey: string | null = null
   try {
-    // DR51: while the explicitly enabled live total-Redis-loss certification is
-    // armed, no NEW customer payment may enter the system. Existing completion
-    // and durable recovery remain available so already-received funds are never stranded.
-    if (process.env.FLASHPAY_DR10_TOTAL_REDIS_LOSS_TEST === "1") {
-      return NextResponse.json(
-        { error: "Service temporarily unavailable", code: "DR10_CERTIFICATION_MAINTENANCE" },
-        { status: 503, headers: corsHeaders },
-      )
+    // DR56: the DR10 environment flag grants certification capability; it is not
+    // operational maintenance state. Only the short-lived owner-triggered Redis
+    // maintenance key blocks new payment creation. Each admitted creator holds a
+    // lease that the atomic DR10 FLUSHDB script must observe and reject, closing
+    // the in-flight creation race without disabling normal production forever.
+    if (!isKvConfigured) {
+      return NextResponse.json({ error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+    const dr10Maintenance = await redis.get(DR10_MAINTENANCE_KEY)
+    if (dr10Maintenance !== null) {
+      if (typeof dr10Maintenance !== "string" || dr10Maintenance.length < 16 || dr10Maintenance.length > 128) {
+        return NextResponse.json({ error: "Service temporarily unavailable", code: "DR10_MAINTENANCE_STATE_INVALID" }, { status: 503, headers: corsHeaders })
+      }
+      return NextResponse.json({ error: "Service temporarily unavailable", code: "DR10_CERTIFICATION_MAINTENANCE" }, { status: 503, headers: corsHeaders })
+    }
+    createLeaseKey = `${PAYMENT_CREATE_LEASE_PREFIX}${crypto.randomUUID()}`
+    const createLease = await redis.set(createLeaseKey, "active", { nx: true, ex: 120 })
+    if (createLease !== "OK") {
+      return NextResponse.json({ error: "Payment creation temporarily unavailable", code: "PAYMENT_CREATE_LEASE_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
     }
     // M9: kill switch blocks creation of NEW financial flows only.
     // Existing payment completion/recovery routes remain available so funds are never stranded.
@@ -326,6 +341,10 @@ export async function POST(request: NextRequest) {
       { error: "Failed to create payment", details: String(error) },
       { status: 500, headers: corsHeaders },
     )
+  } finally {
+    if (createLeaseKey) {
+      try { await redis.del(createLeaseKey) } catch { console.warn("[DR56 PAYMENT CREATE LEASE] cleanup deferred to TTL") }
+    }
   }
 }
 
