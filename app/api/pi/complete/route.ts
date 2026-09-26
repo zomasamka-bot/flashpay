@@ -15,6 +15,24 @@ const IMMEDIATE_DRAIN_KICK_TTL_SECONDS = 90
 
 const IMMEDIATE_DRAIN_MODE = "immediate-drain"
 
+function buildDr11DurableRefundPendingResponse(input: {
+  paymentId: string
+  piPaymentId: string
+  u2aTxid: string
+  customerAmount: number
+}) {
+  return {
+    success: false,
+    status: "refund_pending",
+    paymentId: input.paymentId,
+    piPaymentId: input.piPaymentId,
+    u2aTxid: input.u2aTxid,
+    customerAmount: input.customerAmount,
+    piCompleted: true,
+    dbRecorded: false,
+  }
+}
+
 /**
  * POST /api/pi/complete
  * 
@@ -316,8 +334,21 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete] === STAGE 2: Load and validate payment state ===")
 
     // Load current payment state using flashPaymentId
-    const currentCheckpoint = await redis.get(`payment:${flashPaymentId}`)
+    let currentCheckpoint: any
+    try {
+      currentCheckpoint = await redis.get(`payment:${flashPaymentId}`)
+    } catch (error) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis projection unavailable after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: canonicalTxid, customerAmount: finalPiPayment.amount }), { status: 200 })
+      }
+      throw error
+    }
     if (!currentCheckpoint) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis payment projection missing after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: canonicalTxid, customerAmount: finalPiPayment.amount }), { status: 200 })
+      }
       console.error("[Pi Complete] Payment not found in Redis")
       return NextResponse.json({ error: "Payment not found" }, { status: 404 })
     }
@@ -445,7 +476,9 @@ export async function POST(request: NextRequest) {
     }
     
     const redisU2ATimingStartedAt = Date.now()
-    const atomicU2AResult = await redis.eval(`
+    let atomicU2AResult: unknown
+    try {
+      atomicU2AResult = await redis.eval(`
       local latest = redis.call('GET', KEYS[1])
       if not latest then return 0 end
       local ok, current = pcall(cjson.decode, latest)
@@ -494,9 +527,20 @@ export async function POST(request: NextRequest) {
       paidAt: payment.paidAt,
       settlementDispatchRequestedAt: payment.paidAt,
     }), flashPaymentId, flashPaymentId, String(IMMEDIATE_DRAIN_KICK_TTL_SECONDS), dr11RefundCertificationCandidate ? "1" : "0", "armed:v1"])
+    } catch (error) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis projection write failed after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: finalCanonicalTxid, customerAmount: finalPiAmount }), { status: 200 })
+      }
+      throw error
+    }
     console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
     const atomicU2AResultNumber = Number(atomicU2AResult)
     if (atomicU2AResultNumber !== 1 && atomicU2AResultNumber !== 2 && atomicU2AResultNumber !== 3) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis projection rejected after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, redisResult: atomicU2AResultNumber })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: finalCanonicalTxid, customerAmount: finalPiAmount }), { status: 200 })
+      }
       console.error("[Pi Complete] Atomic U2A persistence rejected")
       return NextResponse.json({ error: "Payment state conflict" }, { status: 409 })
     }

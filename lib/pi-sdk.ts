@@ -225,7 +225,7 @@ export const createPiPayment = async (
             // CRITICAL: Processing states (paid_to_app, settlement_pending) are NOT errors
             // They indicate the payment is in progress and will eventually settle
             // Do NOT route them to error callback - client should continue polling
-            if (completeData.status === "paid_to_app" || completeData.status === "settlement_pending") {
+            if (completeData.status === "paid_to_app" || completeData.status === "settlement_pending" || completeData.status === "refund_pending") {
               CoreLogger.info("Payment in processing state", { piPaymentId, txid, paymentId, status: completeData.status })
               // Processing states should be handled by polling or dedicated processing callback
               // Do NOT call onSuccess or onError - let client continue polling or use recovery flow

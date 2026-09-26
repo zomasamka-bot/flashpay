@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert'
 const complete=fs.readFileSync('app/api/pi/complete/route.ts','utf8')
 const recovery=fs.readFileSync('app/api/recovery/transient/route.ts','utf8')
 const db=fs.readFileSync('lib/db.ts','utf8')
-const luaStart=complete.indexOf('const atomicU2AResult = await redis.eval(`')
+const luaStart=complete.indexOf('atomicU2AResult = await redis.eval(`')
 const luaEnd=complete.indexOf('`, [`payment:${flashPaymentId}`',luaStart)
 assert.ok(luaStart>=0&&luaEnd>luaStart,'atomic U2A Lua not found')
 const lua=complete.slice(luaStart,luaEnd)

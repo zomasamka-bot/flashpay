@@ -94,7 +94,7 @@ export async function buildA2USuccessResponse(
   }
 
   // CRITICAL: Validate status exists and is a known value
-  const validStatuses = ["settlement_pending", "paid_to_app", "settlement_failed", "settled_to_merchant"]
+  const validStatuses = ["settlement_pending", "paid_to_app", "settlement_failed", "settled_to_merchant", "refund_pending"]
   if (!payment.status || typeof payment.status !== "string" || !validStatuses.includes(payment.status)) {
     console.error("[A2UResponse] Missing or invalid status in checkpoint - record corrupted:", {
       status: payment.status,
@@ -107,16 +107,28 @@ export async function buildA2USuccessResponse(
   const isFinalSuccess = isPaymentFinal(payment)
 
   // CRITICAL: Processing states (never success, preserve identifiers)
-  const isProcessing = payment.status === "settlement_pending" || payment.status === "paid_to_app"
+  const isProcessing = payment.status === "settlement_pending" || payment.status === "paid_to_app" || payment.status === "refund_pending"
 
   // CRITICAL: Failure state (preserve all checkpoints for recovery)
-  const isFailed = payment.status === "settlement_failed"
+  const isRefundPending = payment.status === "refund_pending" || (
+    payment.status === "settlement_failed" &&
+    payment.settlementFailureState === "refund_pending" &&
+    payment.refundStatus === "pending" &&
+    payment.payerRefundEligible === true
+  )
+  const isFailed = payment.status === "settlement_failed" && !isRefundPending
+
+  // Response projection is not financial authority. A durably refund-eligible source
+  // remains settlement_failed in storage for the refund kernel, but is presented as
+  // refund_pending so the customer callback treats it as in-progress rather than a
+  // failed payment. Never project refund_pending from settlement_failed alone.
+  const responseStatus = isRefundPending ? "refund_pending" : payment.status
 
   // Build response with ONLY values actually stored in Redis checkpoint
   // Never fabricate missing fields - use optional properties to indicate what exists
   const response: PaymentResponse = {
     success: isFinalSuccess,
-    status: payment.status,
+    status: responseStatus,
     paymentId: recordId,
     // Include identifiers only if they exist in checkpoint (never empty string fallbacks)
     ...(payment.piPaymentId && { piPaymentId: payment.piPaymentId }),

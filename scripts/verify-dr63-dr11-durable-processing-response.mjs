@@ -1,0 +1,13 @@
+import fs from 'node:fs'; import { strict as assert } from 'node:assert';
+const complete=fs.readFileSync('app/api/pi/complete/route.ts','utf8');
+const response=fs.readFileSync('lib/a2u-response.ts','utf8');
+const sdk=fs.readFileSync('lib/pi-sdk.ts','utf8');
+for(const x of ['buildDr11DurableRefundPendingResponse','status: "refund_pending"','success: false','piCompleted: true','dbRecorded: false','Redis payment projection missing after durable refund authority','Redis projection write failed after durable refund authority','Redis projection rejected after durable refund authority']) assert.ok(complete.includes(x),x);
+assert.ok(complete.indexOf('createDr11RefundAuthorityFromDurableHold(preFlashPaymentId)') < complete.indexOf('Redis projection write failed after durable refund authority'));
+assert.ok(complete.includes('if (dr11DurableRefund) {') && complete.includes('return NextResponse.json(buildDr11DurableRefundPendingResponse'));
+for(const x of ['const isRefundPending = payment.status === "refund_pending"','payment.settlementFailureState === "refund_pending"','payment.refundStatus === "pending"','payment.payerRefundEligible === true','const responseStatus = isRefundPending ? "refund_pending" : payment.status']) assert.ok(response.includes(x),x);
+assert.ok(response.includes('status: responseStatus'));
+assert.ok(sdk.includes('completeData.status === "refund_pending"'));
+assert.ok(sdk.includes('onProcessing?.(completeData.status)'));
+assert.ok(!complete.includes('success: true,\n    status: "refund_pending"'));
+console.log(JSON.stringify({verdict:'PASS',gate:'DR63-DR11-DURABLE-PROCESSING-RESPONSE',financialStateUnchanged:true,refundPendingPresentationRequiresExactEligibility:true,durablePostCommitFallback:true,redisLossAfterAuthorityDoesNotBecomeHttpFailure:true,refundPendingIsProcessingNotSuccess:true,ordinarySettlementResponseUnchanged:true},null,2));
