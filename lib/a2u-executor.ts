@@ -7,6 +7,7 @@ import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalle
 import * as StellarSDK from "@stellar/stellar-sdk"
 import { numberToExactPositiveStroops } from "@/lib/financial-amount-stroops"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
+import { consumeDr14Crash } from "@/lib/dr14-live-crash-certification"
 
 /**
  * UNIFIED A2U EXECUTOR - Single source of truth for ALL A2U execution paths
@@ -296,6 +297,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         console.error("[A2U Stage1] Durable checkpoint not proven:", durableStage1.outcome)
         return { ok: false, status: "settlement_pending", error: "A2U Stage1 durable checkpoint not proven" }
       }
+      if (await consumeDr14Crash(ctx.paymentId, 'settlement_after_stage1_durable')) return { ok:false,status:'settlement_pending',error:'DR14 one-shot interruption after durable Stage1' }
       if (durableStage1.outcome==="RECORDED" && ctx.merchantAuthority==="durable_u2a" && typeof ctx.payment.piPaymentId==="string" && ctx.payment.piPaymentId.length>0 && typeof ctx.payment.u2aTxid==="string" && ctx.payment.u2aTxid.length>0 && ctx.payment.merchantId==="hazemaboria" && ctx.merchantUid==="ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount===0.14) {
         console.log("[P7 TEST] Stage1-only interruption 0.14")
         return { ok:false,status:"settlement_pending",error:"Temporary Stage1-only interruption test" }
@@ -427,6 +429,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // Persist Stage 2 and release the exact prepared wallet intent after confirmed Horizon success.
     const finalized = await finalizeStage2AfterMove(ctx, txidFromHorizon, signResult.data.horizonFeeCharged)
     if (!finalized.ok) return finalized
+    if (await consumeDr14Crash(ctx.paymentId, 'settlement_after_horizon_durable')) return { ok:false,status:'settlement_pending',error:'DR14 one-shot interruption after durable Horizon checkpoint' }
     console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged)
   } else {
     console.log("[A2U Executor] STAGE 2: Skipping signing - txid already exists:", txidFromHorizon)
@@ -471,6 +474,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if(durablePi.outcome!=="RECORDED"&&durablePi.outcome!=="REPLAYED")
       return {ok:false,status:"settlement_pending",error:"Pi-completed durable checkpoint not proven"}
     // Replace ctx.payment with fully merged record only after durable Pi finality is proven.
+    if (await consumeDr14Crash(ctx.paymentId, 'settlement_after_pi_durable')) return {ok:false,status:'settlement_pending',error:'DR14 one-shot interruption after durable Pi checkpoint'}
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage3Updates)
     console.log("[A2U Executor] ✓ Pi /complete and durable finality succeeded")
   } else {
@@ -653,6 +657,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return {ok:false,status:"settlement_pending",error:"DB-finalized durable checkpoint not proven"}
 
     // Only NOW persist final markers after successful DB and durable-authority verification
+    if (await consumeDr14Crash(ctx.paymentId, 'settlement_after_db_durable')) return {ok:false,status:'settlement_pending',error:'DR14 one-shot interruption after durable DB finality'}
+
     const stage4Updates = {
       dbRecorded: true,
       status: "settled_to_merchant" as const,
@@ -1064,6 +1070,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     }
     console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_succeeded", { paymentId: ctx.paymentId, preparedHash: prepared.preparedHash, preparedSequence: prepared.preparedSequence })
     const { transaction, preparedHash } = prepared
+    if (await consumeDr14Crash(ctx.paymentId, 'settlement_after_prepared_durable')) return { ok:false,error:'DR14 one-shot interruption after durable prepared checkpoint',userFacingStatus:'settlement_pending' }
 
     if (ctx.isRecovery === false && ctx.merchantAuthority === "durable_u2a" && typeof ctx.payment.piPaymentId === "string" && ctx.payment.piPaymentId.length > 0 && typeof ctx.payment.u2aTxid === "string" && ctx.payment.u2aTxid.length > 0 && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.11) {
       console.log("[A2U TEST] Stage2 prepared checkpoint fault point 0.11")
@@ -1122,6 +1129,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return moved
     }
     const txidFromHorizon = moved.txidFromHorizon
+    if (await consumeDr14Crash(ctx.paymentId, 'settlement_after_horizon_submit_before_checkpoint')) return { ok:false,error:'DR14 one-shot interruption after Horizon submit before checkpoint',userFacingStatus:'settlement_pending' }
     if (ctx.isRecovery === false && ctx.merchantAuthority === "durable_u2a" && typeof ctx.payment.piPaymentId === "string" && ctx.payment.piPaymentId.length > 0 && typeof ctx.payment.u2aTxid === "string" && ctx.payment.u2aTxid.length > 0 && ctx.payment.merchantId === "hazemaboria" && ctx.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa" && ctx.customerAmount === 0.12) {
       console.log("[A2U TEST] Stage2 post-submit fault point 0.12")
       return { ok: false, error: "Temporary Stage2 post-submit fault", userFacingStatus: "settlement_pending" }

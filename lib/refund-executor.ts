@@ -27,6 +27,7 @@ import { getDurableU2AIngressAuthoritative, query, readSettlementRefundAuthority
 import { recordRefundAccounting } from './refund-accounting'
 import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, claimPiWalletIntent, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
 import { adoptUnparseableLegacyPaymentProjection, compareAndSwapPaymentProjection } from './payment-projection-cas'
+import { consumeDr14Crash } from './dr14-live-crash-certification'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission' | 'found'; refundId: string; paymentId: string; amount: number; refundPaymentId?: string }
@@ -304,6 +305,7 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
   console.warn('[refunds/executor] verified reconciliation:', { outcome: verified.outcome, payment: verified.payment })
   if (verified.outcome !== 'FOUND' || !verified.payment || verified.payment.identifier !== body.identifier) return { outcome: 'blocked', reason: 'refund_create_uncertain' }
   if (verified.payment.status.cancelled || verified.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'refund_cancelled' }
+  if (await consumeDr14Crash(checkpoint.paymentId, 'refund_after_pi_create_before_id_checkpoint')) return { outcome:'blocked',reason:'dr14_interruption' }
   const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, body.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: body.identifier } })
   if (!persisted) return { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
   return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: body.identifier }
@@ -448,6 +450,7 @@ export async function executeRefundBlockchain(refundId: string, refundAuthority?
       if (failureIntent.state === 'present' && failureIntent.owner.paymentId === checkpoint.paymentId && !await releasePiWalletIntent(refundPayment.from_address, failureIntent.owner)) return { outcome: 'blocked', reason: 'lock_conflict' }
       return { outcome: 'blocked', reason: submission.code }
     }
+    if (await consumeDr14Crash(checkpoint.paymentId, 'refund_after_horizon_submit_before_tx_checkpoint')) return { outcome:'blocked',reason:'dr14_interruption' }
     const persisted = await persistRefundBlockchainTxWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, submission.txid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_confirmed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: submission.txid } })
     if (!persisted) return { outcome: 'blocked', reason: 'tx_persistence_conflict' }
     const postSubmitIntent = await readPiWalletIntent(refundPayment.from_address)
@@ -493,6 +496,7 @@ export async function executeRefundAccounting(refundId: string): Promise<RefundE
   const fee = Number(row.fee_text)
   if (!Number.isSafeInteger(fee) || fee < 0) return { outcome: 'blocked', reason: 'accounting_uncertain' }
   const advanced = await advanceRefundAccountingWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, refundTxid, checkpoint.payerUid, checkpoint.amount, fee, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_accounting_recorded', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid, horizonFeeStroops: fee } })
+  if (advanced && await consumeDr14Crash(checkpoint.paymentId, 'refund_after_accounting')) return { outcome:'blocked',reason:'dr14_interruption' }
   return advanced ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId } : { outcome: 'blocked', reason: 'accounting_checkpoint_conflict' }
 }
 
@@ -510,6 +514,7 @@ export async function executeRefundAudit(refundId: string): Promise<RefundExecut
   if (!Number.isSafeInteger(fee) || fee < 0) return { outcome: 'blocked', reason: 'audit_uncertain' }
   const sealed = await advanceRefundAuditWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount, fee, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_audit_recorded', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, horizonFeeStroops: fee } })
   if (!sealed) return { outcome: 'blocked', reason: 'audit_checkpoint_conflict' }
+  if (await consumeDr14Crash(checkpoint.paymentId, 'refund_after_audit')) return { outcome:'blocked',reason:'dr14_interruption' }
   return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId }
 }
 
@@ -527,6 +532,7 @@ export async function executeRefundCheckpointCompletion(refundId: string): Promi
   if (!Number.isSafeInteger(fee) || fee < 0) return { outcome: 'blocked', reason: 'completion_uncertain' }
   const completed = await completeRefundCheckpointWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId, checkpoint.refundTxid, checkpoint.payerUid, checkpoint.amount, fee, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_completed', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: checkpoint.refundPaymentId, refundTxid: checkpoint.refundTxid, horizonFeeStroops: fee } })
   if (!completed) return { outcome: 'blocked', reason: 'completion_checkpoint_conflict' }
+  if (await consumeDr14Crash(checkpoint.paymentId, 'refund_after_completion_before_projection')) return { outcome:'blocked',reason:'dr14_interruption' }
   return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId }
 }
 
@@ -628,6 +634,7 @@ export async function executeRefundCompletion(refundId: string): Promise<RefundE
   if (!persistedPayment || persistedPayment.id !== payment.id || persistedPayment.status !== 'refund_pending' || persistedPayment.refundStatus !== 'submitted' || persistedPayment.settlementFailureState !== 'refund_pending' || persistedPayment.refundPaymentId !== refundPaymentId || persistedPayment.refundTxid !== refundTxid) return { outcome: 'blocked', reason: projectionCas.outcome === 'CONFLICT' ? 'projection_conflict' : 'projection_uncertain' }
   const advanced = await advanceRefundPaymentCheckpointWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId, refundTxid, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_checkpoint_updated', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId, refundTxid } })
   if (!advanced) return { outcome: 'blocked', reason: 'checkpoint_conflict' }
+  if (await consumeDr14Crash(checkpoint.paymentId, 'refund_after_payment_checkpoint')) return { outcome:'blocked',reason:'dr14_interruption' }
   return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId }
 }
 

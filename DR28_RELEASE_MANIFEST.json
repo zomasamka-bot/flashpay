@@ -1,6 +1,7 @@
 {
-  "gate": "DR-28-CLEAN-RELEASE-ARTIFACT",
+  "gate": "DR72-DR14-LIVE-CRASH-CERTIFICATION-HARNESS",
   "schemaVersion": 1,
+  "baselineGitSha": "cf8ab7467d3ea78bc3ebb8e2158fa10fbe51b98f",
   "artifactPolicy": {
     "forbidden": [
       ".env*",
@@ -13,18 +14,14 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 396,
-  "totalBytes": 2684395,
+  "fileCount": 399,
+  "listedFilesExcludingManifest": 398,
+  "totalBytesExcludingManifest": 2626955,
   "files": [
     {
       "path": ".gitignore",
       "bytes": 37,
       "sha256": "2dbc66bba289edaf9c63330e16f186f00b0ed400dbd9146ea5901c6d8ac2c042"
-    },
-    {
-      "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 68859,
-      "sha256": "eaa29534b7effc0cbd7b19f218ddd92b9a702dc032c414664a55e2b7cb14d2eb"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -45,6 +42,11 @@
       "path": "app/api/control/dr11/route.ts",
       "bytes": 14422,
       "sha256": "9437f54adc157d9f2d6d305df52ab13f1cc7df0cd8380f8541d4d37cf96a3a60"
+    },
+    {
+      "path": "app/api/control/dr14/route.ts",
+      "bytes": 1811,
+      "sha256": "3f40d0014b37d4a88ecb50e43833dc227d8bde5ca0496d85bead6929c1364a53"
     },
     {
       "path": "app/api/control/system/route.ts",
@@ -320,11 +322,6 @@
       "path": "app/transactions/page.tsx",
       "bytes": 15147,
       "sha256": "da94ab50e3675a1e47754a9738f9e929c18dbb9f7233f2bbd8522b329140be3a"
-    },
-    {
-      "path": "components.json",
-      "bytes": 427,
-      "sha256": "060762649713523e82b4a1cf131fba79ab250407a109d7ae7dc045ff482ae36d"
     },
     {
       "path": "components/back-button.tsx",
@@ -657,6 +654,11 @@
       "sha256": "0a97d84a8079b32ebee161f61bb436bd36cad333897a94a95b91b5e2835400b7"
     },
     {
+      "path": "components.json",
+      "bytes": 427,
+      "sha256": "060762649713523e82b4a1cf131fba79ab250407a109d7ae7dc045ff482ae36d"
+    },
+    {
       "path": "hooks/use-mobile.ts",
       "bytes": 565,
       "sha256": "1b43441b273aa21c1e74fefa774d5a7cb50068e5d4c192a8f63b9c95c5580431"
@@ -668,8 +670,8 @@
     },
     {
       "path": "lib/a2u-executor.ts",
-      "bytes": 99450,
-      "sha256": "a3363703c5b87d7b05b6d6e844a974574bfbd558051fd51c47ef2fb0879db9fc"
+      "bytes": 100724,
+      "sha256": "0b9be360999627a34f30ac31b9b68bbb752065bc4fd686929808a45b7c332973"
     },
     {
       "path": "lib/a2u-locked-executor.ts",
@@ -720,6 +722,11 @@
       "path": "lib/domains.ts",
       "bytes": 5845,
       "sha256": "c3c77cb2a177a90c106209a9dc55650f357418aebceffc253fb9b7ec2afd1504"
+    },
+    {
+      "path": "lib/dr14-live-crash-certification.ts",
+      "bytes": 4314,
+      "sha256": "a492d1b35d768111010bcbe3fb1be9a8580e18311aaa72307ab3e0944d37bcbf"
     },
     {
       "path": "lib/financial-amount-stroops.ts",
@@ -1048,8 +1055,8 @@
     },
     {
       "path": "lib/refund-blockchain-submit.ts",
-      "bytes": 21538,
-      "sha256": "559b523b1d5c33ae9c434e309b673920588cbef48992571a01a5132eea952bf2"
+      "bytes": 21822,
+      "sha256": "6d00d473329e92ed4c225a458368827183a0ff45efedf5cf32173c45bcc91f4c"
     },
     {
       "path": "lib/refund-checkpoint-store.ts",
@@ -1058,8 +1065,8 @@
     },
     {
       "path": "lib/refund-executor.ts",
-      "bytes": 76577,
-      "sha256": "2eac9435cd38ce03d2d65eeb0133a7f46769ff89281af35a5f5f11e317780dda"
+      "bytes": 77534,
+      "sha256": "f637d69dc868d29c2014af1e3792b16b54b7800d9139a914af5dd481956cf350"
     },
     {
       "path": "lib/refund-fee-evidence.ts",
@@ -1585,6 +1592,11 @@
       "path": "scripts/verify-dr71-refund-finality-replay-param-types.mjs",
       "bytes": 1595,
       "sha256": "84a99453166ba45cc4202789a48b2214f912dcfba1b51244ce9ed93273fd81a6"
+    },
+    {
+      "path": "scripts/verify-dr72-dr14-live-crash-harness.mjs",
+      "bytes": 2779,
+      "sha256": "cc3e9767cf18d79a9d7e39f8622037ac8babaf9e0e7bada58ee1a0fec9d7e92c"
     },
     {
       "path": "scripts/verify-dr8-independent-recovery-wake.mjs",

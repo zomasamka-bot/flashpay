@@ -19,6 +19,7 @@ import { authorizeRefundBlockchainSubmit, ensureRefundPreparedSubmit, readRefund
 import { readPiWalletIntent } from "./pi-wallet-submit-lock"
 import { classifyRefundPreparedSequence, evaluateRefundPreparedHorizonBinding } from "./refund-blockchain-evidence"
 import { exactPositiveStroopsToStellarAmount, exactStroopAmountMatch, numberToExactPositiveStroops } from "./financial-amount-stroops"
+import { consumeDr14Crash } from './dr14-live-crash-certification'
 
 export type RefundBlockchainSubmitResult =
   | { outcome: "CONFIRMED_TX"; txid: string }
@@ -197,6 +198,8 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   const preparedSequence = transaction.sequence
   const prepared = await ensureRefundPreparedSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence)
   if (!prepared || prepared.preparedNow !== true || prepared.envelopeXdr !== envelopeXdr || prepared.preparedHash !== preparedHash || prepared.preparedSequence !== preparedSequence) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
+
+  if (await consumeDr14Crash(input.checkpoint.paymentId, 'refund_after_prepared_before_submit')) return { outcome:'FAILED',code:'submit_failed',message:'DR14 one-shot interruption after refund prepared checkpoint' }
 
   if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
     console.log("[P7 TEST] Refund prepared-before-auth 0.10")
