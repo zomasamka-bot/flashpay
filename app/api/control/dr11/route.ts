@@ -46,6 +46,21 @@ export async function POST(request: NextRequest) {
   if (cp.status !== "pending" || cp.stage !== "intent_created" || cp.refundPaymentId || cp.refundTxid) {
     return NextResponse.json({ error: "DR11 live start state must be pristine intent_created", checkpoint: safeBefore }, { status: 409, headers: NO_STORE })
   }
+  if (cp.lastErrorCode !== "dr11_live_hold" || cp.lastErrorMessage !== "awaiting_owner_concurrent_harness" || typeof cp.nextRetryAt !== "string") {
+    return NextResponse.json({ error: "DR11 owner hold missing or inconsistent", checkpoint: safeBefore }, { status: 409, headers: NO_STORE })
+  }
+  const releasedRows = await query(`
+    UPDATE refund_checkpoints
+    SET last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, updated_at=NOW()
+    WHERE refund_id=$1 AND stage='intent_created' AND status='pending'
+      AND refund_payment_id IS NULL AND refund_txid IS NULL
+      AND last_error_code='dr11_live_hold' AND last_error_message='awaiting_owner_concurrent_harness'
+      AND next_retry_at>NOW()
+    RETURNING refund_id, payment_id, stage, status, refund_payment_id, refund_txid`, [refundId])
+  const released = Array.isArray(releasedRows) && releasedRows.length === 1 ? releasedRows[0] as Record<string, unknown> : null
+  if (!released || released.refund_id !== refundId || released.payment_id !== cp.paymentId || released.stage !== "intent_created" || released.status !== "pending" || released.refund_payment_id !== null || released.refund_txid !== null) {
+    return NextResponse.json({ error: "DR11 owner hold release failed" }, { status: 503, headers: NO_STORE })
+  }
 
   const rounds: Array<{ round: number; beforeStage: string; outcomes: unknown[]; afterStage: string; afterStatus: string }> = []
   for (let round = 1; round <= MAX_ROUNDS; round++) {
@@ -63,6 +78,17 @@ export async function POST(request: NextRequest) {
     console.warn("[DR11 LIVE CONCURRENT REFUND] round", { refundId, round, beforeStage: pre.checkpoint.stage, outcomes, afterStage: post.checkpoint.stage, afterStatus: post.checkpoint.status })
   }
 
+  const completedBeforeProjection = await getRefundCheckpointReadOnly(refundId)
+  if (completedBeforeProjection.state !== "present" || completedBeforeProjection.checkpoint.stage !== "audit_recorded" || completedBeforeProjection.checkpoint.status !== "completed") {
+    return NextResponse.json({ error: "DR11 financial lifecycle did not reach completed audit", rounds }, { status: 409, headers: NO_STORE })
+  }
+  // Financial movement is already complete. This single normal executor call performs
+  // only the terminal projection/audit finalization; it is deliberately not concurrent.
+  const projectionFinalization = await executeRefundNextStep(refundId)
+  if (projectionFinalization.outcome !== "found") {
+    return NextResponse.json({ error: "DR11 terminal projection finalization failed", rounds, projectionFinalization }, { status: 409, headers: NO_STORE })
+  }
+
   const after = await getRefundCheckpointReadOnly(refundId)
   if (after.state !== "present") return NextResponse.json({ error: "DR11 final checkpoint unavailable", rounds }, { status: 503, headers: NO_STORE })
   const final = after.checkpoint
@@ -74,12 +100,13 @@ export async function POST(request: NextRequest) {
       (SELECT count(DISTINCT refund_txid)::int FROM refund_accounting_records WHERE payment_id=$1) AS distinct_refund_txids,
       (SELECT count(*)::int FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_blockchain_submission_started') AS blockchain_submission_started_events,
       (SELECT count(*)::int FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_completed') AS refund_completed_events,
+      (SELECT count(*)::int FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized') AS refund_projection_finalized_events,
       (SELECT count(*)::int FROM settlement_checkpoints WHERE payment_id=$1 AND a2u_txid IS NOT NULL) AS settlement_movement_rows`,
     [final.paymentId, refundId],
   )
   const proof = Array.isArray(proofRows) && proofRows.length === 1 ? proofRows[0] as Record<string, unknown> : null
   const closed = final.stage === "audit_recorded" && final.status === "completed" && typeof final.refundPaymentId === "string" && !!final.refundPaymentId && typeof final.refundTxid === "string" && /^[0-9a-f]{64}$/.test(final.refundTxid) &&
-    proof !== null && Number(proof.payment_refund_checkpoint_count) === 1 && Number(proof.payment_refund_accounting_count) === 1 && Number(proof.distinct_refund_payment_ids) === 1 && Number(proof.distinct_refund_txids) === 1 && Number(proof.blockchain_submission_started_events) === 1 && Number(proof.refund_completed_events) === 1 && Number(proof.settlement_movement_rows) === 0
+    proof !== null && Number(proof.payment_refund_checkpoint_count) === 1 && Number(proof.payment_refund_accounting_count) === 1 && Number(proof.distinct_refund_payment_ids) === 1 && Number(proof.distinct_refund_txids) === 1 && Number(proof.blockchain_submission_started_events) === 1 && Number(proof.refund_completed_events) === 1 && Number(proof.refund_projection_finalized_events) === 1 && Number(proof.settlement_movement_rows) === 0
 
   console.warn("[DR11 LIVE CONCURRENT REFUND] final proof", { refundId, paymentId: final.paymentId, stage: final.stage, status: final.status, refundPaymentId: final.refundPaymentId ?? null, refundTxid: final.refundTxid ?? null, proof, closed })
   return NextResponse.json({ success: closed, certification: closed ? "DR11_LIVE_PASS" : "DR11_LIVE_NOT_CLOSED", contenders: CONTENDERS, rounds, final: { refundId, paymentId: final.paymentId, stage: final.stage, status: final.status, amount: final.amount, refundPaymentId: final.refundPaymentId ?? null, refundTxid: final.refundTxid ?? null }, proof }, { status: closed ? 200 : 409, headers: NO_STORE })
