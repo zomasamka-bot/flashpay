@@ -8,7 +8,7 @@ import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/re
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
-import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint, recordDr11RefundCertificationHold } from "@/lib/db"
+import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 const DR10_MAINTENANCE_KEY = "flashpay:certification:dr10:maintenance:v1"
@@ -259,10 +259,28 @@ export async function POST(request: NextRequest) {
       if (redisPersistResult === 2) {
         const durableHold = await recordDr11RefundCertificationHold({ paymentId: payment.id, merchantId: trustedMerchantId, merchantUid: verifiedMerchantUid, customerAmount: payment.amount })
         if (durableHold.outcome !== "RECORDED" && durableHold.outcome !== "REPLAYED") {
-          console.error("[DR60 DR11 DURABLE HOLD] binding failed closed", { paymentId: payment.id, outcome: durableHold.outcome })
-          return NextResponse.json({ error: "DR11 durable certification hold unavailable", code: "DR11_DURABLE_HOLD_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+          // DR62: a write error can be post-commit. Re-read PostgreSQL before any compensation.
+          const authoritativeHold = await readDr11RefundCertificationHold(payment.id)
+          if (authoritativeHold.outcome !== "HELD") {
+            console.error("[DR62 DR11 DURABLE HOLD] binding unresolved", { paymentId: payment.id, writeOutcome: durableHold.outcome, readOutcome: authoritativeHold.outcome })
+            if (authoritativeHold.outcome === "ABSENT") {
+              // Only a proven ABSENT durable hold may compensate Redis. The Lua script is exact-value
+              // guarded and atomic: payment, history member and exact selector disappear together.
+              const compensated = await redis.eval(
+                "if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end if redis.call('GET',KEYS[3])~=ARGV[2] then return 0 end redis.call('DEL',KEYS[1]); redis.call('ZREM',KEYS[2],ARGV[3]); redis.call('DEL',KEYS[3]); return 1",
+                [kvKey, historyKey, `flashpay:certification:dr11:payment:${payment.id}`],
+                [paymentString, "armed:v1", payment.id],
+              )
+              if (compensated !== 1) console.error("[DR62 DR11 COMPENSATION] exact Redis cleanup not proven", { paymentId: payment.id })
+              else console.warn("[DR62 DR11 COMPENSATION] exact non-financial Redis binding removed", { paymentId: payment.id })
+            }
+            // INDETERMINATE deliberately preserves the selector. DR61 approve gate then blocks Pi /approve
+            // until PostgreSQL authority is knowable; never delete or recreate authority on uncertainty.
+            return NextResponse.json({ error: "DR11 durable certification hold unavailable", code: "DR11_DURABLE_HOLD_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+          }
+          console.warn("[DR62 DR11 DURABLE HOLD] post-write authoritative replay confirmed", { paymentId: payment.id, writeOutcome: durableHold.outcome })
         }
-        console.warn("[DR60 DR11 DURABLE HOLD] exact payment bound", { paymentId: payment.id, amount: payment.amount, durable: true })
+        console.warn("[DR62 DR11 DURABLE HOLD] exact payment bound", { paymentId: payment.id, amount: payment.amount, durable: true })
       }
       const redisPersistDurationMs = Date.now() - redisPersistTimingStartedAt
       console.log("[API] ✅ Atomic payment and history index persistence completed successfully for key:", kvKey)

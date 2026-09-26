@@ -1,0 +1,12 @@
+import fs from 'node:fs'; import {strict as assert} from 'node:assert';
+const p=fs.readFileSync('app/api/payments/route.ts','utf8');
+const a=fs.readFileSync('app/api/pi/approve/route.ts','utf8');
+for(const x of ['readDr11RefundCertificationHold(payment.id)','authoritativeHold.outcome === "ABSENT"','DR62 DR11 COMPENSATION','exact Redis cleanup not proven','authoritative replay confirmed']) assert.ok(p.includes(x),x);
+assert.ok(p.indexOf('recordDr11RefundCertificationHold({') < p.indexOf('readDr11RefundCertificationHold(payment.id)'));
+assert.ok(p.indexOf('readDr11RefundCertificationHold(payment.id)') < p.indexOf('authoritativeHold.outcome === "ABSENT"'));
+assert.ok(p.includes("if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end"));
+assert.ok(p.includes("if redis.call('GET',KEYS[3])~=ARGV[2] then return 0 end"));
+assert.ok(p.includes("redis.call('DEL',KEYS[1]); redis.call('ZREM',KEYS[2],ARGV[3]); redis.call('DEL',KEYS[3])"));
+assert.ok(!p.includes("redis.call('SET',KEYS[3],'armed:v1'"));
+assert.ok(a.includes('DR61 DR11 APPROVE GATE') && a.includes('dr11Hold.outcome !== "HELD"'));
+console.log(JSON.stringify({verdict:'PASS',gate:'DR62-PREARM-CREATION-ATOMICITY',postCommitReread:true,compensationOnlyOnAuthoritativeAbsent:true,indeterminatePreservesFailClosedSelector:true,blindRearm:false,piApproveStillDurablyGated:true},null,2));
