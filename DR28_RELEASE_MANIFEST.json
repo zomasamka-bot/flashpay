@@ -2107,12 +2107,23 @@
       "sha256": "c305dc3b539a260d0c44bad7eb3d6947535c9f232ffbea33d1193bb8b731f0ef"
     }
   ],
-  "release": "DR92_DR11_ARM_READBACK",
+  "release": "DR93_PRODUCTION_PI_SDK_READINESS_ENTRY",
   "notes": "Route customer entry through the registered PiNet app origin, preserve exact payment identity with the DR89 signed bridge token across hash routing, verify the token before Pi SDK initialization in CustomerPaymentView, and retain DR88 durable U2A start authority. No Settlement/Refund/Horizon executor changes.",
   "baseProductionSha": "1066aebf7c62194b232b90ab4902a98253164b9d",
   "runtimeSourceChanges": [
     "app/api/control/dr11/route.ts",
     "app/page.tsx"
   ],
-  "certifier": "scripts/verify-dr92-dr11-arm-readback.mjs"
+  "certifier": "scripts/verify-dr92-dr11-arm-readback.mjs",
+  "dr93": {
+    "purpose": "Restore production Pi Browser entry and make SDK readiness mean Pi.init completed",
+    "runtimeFiles": [
+      "components/pi-sdk-loader.tsx",
+      "app/pay/[id]/payment-content-with-id.tsx"
+    ],
+    "financialExecutorChanged": false,
+    "financialMovementExecuted": false,
+    "productionDataMutated": false,
+    "certifier": "scripts/verify-dr93-production-pi-sdk-entry.mjs"
+  }
 }

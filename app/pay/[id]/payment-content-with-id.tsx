@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { ExternalLink } from "lucide-react"
-import { initializePiSDK, authenticateCustomer, authenticateCustomerForRefundRead } from "@/lib/pi-sdk"
+import { authenticateCustomer, authenticateCustomerForRefundRead } from "@/lib/pi-sdk"
 import { readCustomerRefundPresentationClient } from "@/lib/customer-refund-presentation-client"
 import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
 import { FlashPayReceiptCard } from "@/components/flashpay-receipt-card"
@@ -244,25 +244,18 @@ export default function PaymentContentWithId({
         }
       }
 
-      const hasPiSDK = typeof window !== "undefined" && !!window.Pi
-      addDiagnostic(`Checking Pi SDK: ${hasPiSDK ? "FOUND" : "NOT FOUND"}`)
+      const hasPiSDK = typeof window !== "undefined" && !!window.Pi && typeof window.Pi.init === "function"
+      addDiagnostic(`Checking initialized Pi SDK: ${hasPiSDK ? "FOUND" : "NOT FOUND"}`)
 
       if (hasPiSDK) {
-        addDiagnostic("Initializing Pi SDK...")
-        const result = await initializePiSDK()
-        setPiSDKReady(result.success)
-        
-        if (result.success) {
-          addDiagnostic("Pi SDK ready - you can now pay")
-          setAuthStatus("idle")
-        } else {
-          addDiagnostic("Pi SDK initialization failed")
-          setAuthStatus("failed")
-        }
+        // DR93: PiSDKLoader owns Pi.init. A resolved __PI_SDK_READY__ is the initialization proof.
+        setPiSDKReady(true)
+        setAuthStatus("idle")
+        addDiagnostic("Pi SDK initialized by loader - you can now pay")
       } else {
         setPiSDKReady(false)
         setAuthStatus("failed")
-        addDiagnostic("ERROR: Not in Pi Browser - window.Pi not found")
+        addDiagnostic("ERROR: Initialized Pi SDK unavailable")
       }
     }
 
@@ -542,13 +535,15 @@ export default function PaymentContentWithId({
         const response = await fetch("/api/pi/entry-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "issue", paymentId }) })
         const data = await response.json().catch(() => ({}))
         if (!response.ok || typeof data?.token !== "string") throw new Error("entry token unavailable")
-        const hashParams = new URLSearchParams()
-        hashParams.set("entry", "pi")
-        hashParams.set("lang", locale)
-        hashParams.set("bridge", data.token)
-        const piNetTarget = `pi://flashpayaefebeff3375.pinet.com/#/pay/${encodeURIComponent(paymentId)}?${hashParams.toString()}`
-        console.info("[DR91 PINET ENTRY] opening registered Pi app origin", { paymentId, host: "flashpayaefebeff3375.pinet.com" })
-        window.location.href = piNetTarget
+        const target = new URL(`https://flashpay-two.vercel.app/pay/${encodeURIComponent(paymentId)}`)
+        target.searchParams.set("amount", String(urlAmount))
+        target.searchParams.set("entry", "pi")
+        target.searchParams.set("lang", locale)
+        target.searchParams.set("bridge", data.token)
+        if (urlNote) target.searchParams.set("note", urlNote)
+        target.protocol = "pi:"
+        console.info("[DR93 PI ENTRY] opening production app URL", { paymentId, host: target.host, path: target.pathname })
+        window.location.href = target.toString()
       } catch {
         toast({ title: "Pi Browser", description: "Could not open this payment safely. Please retry from this page.", variant: "destructive" })
       }
