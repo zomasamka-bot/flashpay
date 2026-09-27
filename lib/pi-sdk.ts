@@ -120,6 +120,7 @@ export const createPiPayment = async (
   onError: (error: string, isCancelled?: boolean) => void,
   onProcessing?: (status: "paid_to_app" | "settlement_pending") => void,
   onApproved?: () => void,
+  startLeaseToken?: string,
 ) => {
   if (typeof window === "undefined") {
     onError("Cannot create payment - not in browser", false)
@@ -181,6 +182,7 @@ export const createPiPayment = async (
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             identifier: piPaymentId,
+            startLeaseToken,
             amount,
             memo,
             metadata: { paymentId, merchantId, merchantAddress },

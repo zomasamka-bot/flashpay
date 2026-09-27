@@ -173,6 +173,8 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
       app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0),
       u2a_approval_identifier TEXT,
       u2a_approval_claimed_at TIMESTAMP,
+      u2a_start_lease_token TEXT,
+      u2a_start_lease_expires_at TIMESTAMP,
       u2a_identifier TEXT,
       u2a_txid TEXT,
       payer_uid TEXT,
@@ -233,6 +235,8 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
     ALTER TABLE settlement_checkpoints
       ADD COLUMN IF NOT EXISTS u2a_approval_identifier TEXT,
       ADD COLUMN IF NOT EXISTS u2a_approval_claimed_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS u2a_start_lease_token TEXT,
+      ADD COLUMN IF NOT EXISTS u2a_start_lease_expires_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS u2a_identifier TEXT,
       ADD COLUMN IF NOT EXISTS u2a_txid TEXT,
       ADD COLUMN IF NOT EXISTS payer_uid TEXT,
@@ -483,6 +487,72 @@ export async function readSettlementU2AApprovalOwnership(paymentId: string): Pro
     console.error('[DR87 U2A APPROVAL READBACK] uncertain:', error)
     return { outcome: 'INDETERMINATE', error: 'Payment approval ownership read uncertain' }
   }
+}
+
+export type SettlementU2AStartLeaseResult =
+  | { outcome: 'ACQUIRED'; token: string; expiresAt: string }
+  | { outcome: 'BLOCKED' | 'INDETERMINATE'; error: string }
+
+/** DR88: atomic durable authority to enter Pi.createPayment. One active starter per Flash payment. */
+export async function acquireSettlementU2AStartLease(paymentId: string): Promise<SettlementU2AStartLeaseResult> {
+  if (typeof paymentId !== 'string' || paymentId.trim() === '' || paymentId !== paymentId.trim())
+    return { outcome: 'INDETERMINATE', error: 'Invalid payment identity' }
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    const token = crypto.randomUUID()
+    const rows = await client`
+      UPDATE settlement_checkpoints
+      SET u2a_start_lease_token=${token},
+          u2a_start_lease_expires_at=NOW()+INTERVAL '2 minutes',
+          updated_at=NOW()
+      WHERE payment_id=${paymentId}
+        AND stage='payment_identity'
+        AND u2a_approval_identifier IS NULL
+        AND u2a_identifier IS NULL
+        AND u2a_txid IS NULL
+        AND (u2a_start_lease_token IS NULL OR u2a_start_lease_expires_at IS NULL OR u2a_start_lease_expires_at<=NOW())
+      RETURNING u2a_start_lease_expires_at
+    `
+    if (rows.length === 1) return { outcome: 'ACQUIRED', token, expiresAt: new Date(rows[0].u2a_start_lease_expires_at as any).toISOString() }
+    const state = await client`SELECT u2a_approval_identifier,u2a_identifier,u2a_txid,u2a_start_lease_token,u2a_start_lease_expires_at FROM settlement_checkpoints WHERE payment_id=${paymentId}`
+    if (state.length !== 1) return { outcome: 'INDETERMINATE', error: 'Payment start authority absent or ambiguous' }
+    return { outcome: 'BLOCKED', error: 'Payment already initiated or another start is active' }
+  } catch (error) {
+    console.error('[DR88 U2A START LEASE] uncertain:', error)
+    return { outcome: 'INDETERMINATE', error: 'Payment start authority read/write uncertain' }
+  }
+}
+
+export type SettlementU2AStartApprovalClaimResult =
+  | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/** DR88: convert the exact active start lease into durable Pi approval ownership atomically. */
+export async function recordSettlementU2AApprovalClaimFromStartLease(params: {
+  paymentId: string; merchantId: string; merchantUid: string; customerAmount: number; u2aIdentifier: string; startLeaseToken: string
+}): Promise<SettlementU2AStartApprovalClaimResult> {
+  const canonical = (v:string) => typeof v==='string' && v.trim()!=='' && v===v.trim()
+  if(!canonical(params.paymentId)||!canonical(params.merchantId)||!canonical(params.merchantUid)||!canonical(params.u2aIdentifier)||!canonical(params.startLeaseToken)||!Number.isFinite(params.customerAmount)||params.customerAmount<=0)
+    return {outcome:'CONFLICT',error:'Invalid U2A start approval claim input'}
+  try {
+    const client=await getPostgresClient(); if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    return await client.begin(async(tx:any)=>{
+      const rows=await tx`
+        UPDATE settlement_checkpoints SET
+          version=version+1,u2a_approval_identifier=${params.u2aIdentifier},u2a_approval_claimed_at=NOW(),
+          u2a_start_lease_token=NULL,u2a_start_lease_expires_at=NULL,updated_at=NOW()
+        WHERE payment_id=${params.paymentId} AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
+          AND customer_amount=${params.customerAmount} AND app_commission=0 AND stage='payment_identity'
+          AND u2a_approval_identifier IS NULL AND u2a_identifier IS NULL AND u2a_txid IS NULL
+          AND u2a_start_lease_token=${params.startLeaseToken} AND u2a_start_lease_expires_at>NOW()
+        RETURNING version`
+      if(rows.length===1)return{outcome:'RECORDED' as const,version:Number(rows[0].version)}
+      const existing=await tx`SELECT version,u2a_approval_identifier FROM settlement_checkpoints WHERE payment_id=${params.paymentId}`
+      if(existing.length===1 && existing[0].u2a_approval_identifier===params.u2aIdentifier)return{outcome:'REPLAYED' as const,version:Number(existing[0].version)}
+      return{outcome:'CONFLICT' as const,error:'U2A start lease or approval ownership conflict'}
+    })
+  } catch(error){console.error('[DR88 U2A START->APPROVAL] uncertain:',error);return{outcome:'INDETERMINATE',error:'U2A start approval durability uncertain'}}
 }
 
 export type SettlementU2AApprovalClaimResult =

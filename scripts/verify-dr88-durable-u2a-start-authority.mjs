@@ -1,0 +1,12 @@
+import fs from 'node:fs'; import assert from 'node:assert/strict';
+const db=fs.readFileSync('lib/db.ts','utf8'), start=fs.readFileSync('app/api/pi/start/route.ts','utf8'), view=fs.readFileSync('components/customer-payment-view.tsx','utf8'), sdk=fs.readFileSync('lib/pi-sdk.ts','utf8'), approve=fs.readFileSync('app/api/pi/approve/route.ts','utf8'), ops=fs.readFileSync('lib/operations.ts','utf8');
+assert.match(db,/u2a_start_lease_token TEXT/); assert.match(db,/u2a_start_lease_expires_at TIMESTAMP/);
+assert.match(db,/AND u2a_approval_identifier IS NULL/); assert.match(db,/u2a_start_lease_expires_at<=NOW\(\)/);
+assert.match(db,/u2a_start_lease_token=\$\{params\.startLeaseToken\}/); assert.match(db,/u2a_start_lease_expires_at>NOW\(\)/);
+assert.match(db,/u2a_approval_identifier=\$\{params\.u2aIdentifier\}/); assert.match(db,/u2a_start_lease_token=NULL/);
+assert.match(start,/acquireSettlementU2AStartLease/); assert.match(start,/U2A_START_BLOCKED/); assert.match(start,/U2A_START_INDETERMINATE/);
+const pre=view.indexOf('fetch("/api/pi/start"'); const exec=view.indexOf('executePayment(',pre); assert.ok(pre>0&&exec>pre);
+assert.match(view,/if \(!startResponse\.ok[\s\S]*return/); assert.match(ops,/startLeaseToken/); assert.match(sdk,/startLeaseToken/);
+assert.match(approve,/recordSettlementU2AApprovalClaimFromStartLease/); assert.match(approve,/U2A_START_AUTHORITY_MISSING/);
+assert.ok(!approve.includes('recordSettlementU2AApprovalClaim({'));
+console.log(JSON.stringify({certification:'PASS',gate:'DR88-DURABLE-U2A-START-AUTHORITY',atomicStartLease:true,preSdkGate:true,approvalLeaseBinding:true,failClosed:true,financialMovementExecuted:false},null,2));

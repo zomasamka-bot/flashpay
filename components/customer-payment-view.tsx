@@ -158,8 +158,30 @@ export function CustomerPaymentView({
     console.log("[v0][CustomerView] Authentication will be handled inside createPiPayment")
     
     setIsPaying(true)
-    setProgressMessage("Opening Pi Wallet...")
+    setProgressMessage("Securing payment start...")
 
+    let startLeaseToken = ""
+    try {
+      const startResponse = await fetch("/api/pi/start", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paymentId: payment.id }),
+      })
+      const startBody = await startResponse.json().catch(() => ({}))
+      if (!startResponse.ok || startBody?.success !== true || typeof startBody?.startLeaseToken !== "string" || !startBody.startLeaseToken) {
+        setPiPaymentInitiated(startResponse.status === 409)
+        setIsPaying(false)
+        setProgressMessage("")
+        toast({ title: "Payment already initiated", description: startResponse.status === 409 ? "This payment already has an active Pi payment. A second payment was blocked." : "Payment start authority is temporarily unavailable. No Pi payment was created.", variant: "destructive" })
+        return
+      }
+      startLeaseToken = startBody.startLeaseToken
+    } catch {
+      setIsPaying(false)
+      setProgressMessage("")
+      toast({ title: "Payment start unavailable", description: "No Pi payment was created. Please try again later.", variant: "destructive" })
+      return
+    }
+
+    setProgressMessage("Opening Pi Wallet...")
     executePayment(
       payment.id,
       (u2aTxid) => {
@@ -224,6 +246,7 @@ export function CustomerPaymentView({
         setPiPaymentInitiated(true)
         setProgressMessage("Payment initiated. Complete it in Pi Wallet...")
       },
+      startLeaseToken,
     )
   }
 

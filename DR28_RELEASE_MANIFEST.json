@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 412,
-  "totalBytes": 2736459,
+  "fileCount": 414,
+  "totalBytes": 2745826,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 71861,
-      "sha256": "bbd96ab59938296540fcff0a939fd1867a24a7123cca9167a169db0c7bfb67fc"
+      "bytes": 72058,
+      "sha256": "e298db1487cd31cf6bb7e9f45e302ee3258453178a09f2e135855901a51dd87a"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -138,13 +138,18 @@
     },
     {
       "path": "app/api/pi/approve/route.ts",
-      "bytes": 17106,
-      "sha256": "7b85cc7a5f21f977379c7252fa5cac54703749198dbae4429155b81f49705771"
+      "bytes": 17484,
+      "sha256": "dccd9afed7c765201b4eb6a8228c0c514fa4fe70227541618831fc85e3068cb9"
     },
     {
       "path": "app/api/pi/complete/route.ts",
       "bytes": 38883,
       "sha256": "9bf5fad74c388b30272e6079c897ad1924ca928e560bb9576b537d6ffecc0fb9"
+    },
+    {
+      "path": "app/api/pi/start/route.ts",
+      "bytes": 1098,
+      "sha256": "193c2dc387adc045dd043f3a5baa2e0ec8af5dc1a449fd00657e856687e99607"
     },
     {
       "path": "app/api/pi/verify-uid/route.ts",
@@ -338,8 +343,8 @@
     },
     {
       "path": "components/customer-payment-view.tsx",
-      "bytes": 15287,
-      "sha256": "877c731469bab060dbab08cb09ca01b469829452bda4236add4636ae5e356bf1"
+      "bytes": 16509,
+      "sha256": "9f4f354d55fb0fb00ccf7292c0f7a2da6770e61f96bb69caad2161acc97cc9ca"
     },
     {
       "path": "components/customer-refund-status-card.tsx",
@@ -713,8 +718,8 @@
     },
     {
       "path": "lib/db.ts",
-      "bytes": 144391,
-      "sha256": "1cc840a1f524b12466a8123ace62b8fee85c2886dc5e73dd8f38fcf61e457692"
+      "bytes": 149090,
+      "sha256": "457586325a511809802cdce10d2ea7ce317d7c7bb01d386d202e80f5e8f939b8"
     },
     {
       "path": "lib/domain-control.ts",
@@ -978,8 +983,8 @@
     },
     {
       "path": "lib/operations.ts",
-      "bytes": 24022,
-      "sha256": "d87af93815bd879973f99fffd5c28a1e7f3f5b794d8e5c5fe30d5bf57a53fbae"
+      "bytes": 24073,
+      "sha256": "155077fb08cdac77d0d45a234ee1b77c7d6094404172018ec36072fd05917c60"
     },
     {
       "path": "lib/owner-auth.ts",
@@ -1013,8 +1018,8 @@
     },
     {
       "path": "lib/pi-sdk.ts",
-      "bytes": 21742,
-      "sha256": "fb42670b277a5cff7b1c1251746a675b36c2ab5d8c6b0c1228c27558884f6b0c"
+      "bytes": 21799,
+      "sha256": "bc62633adb95b0bfbb322187f8b50794b8e8db068c8014ace3964b8ae959d086"
     },
     {
       "path": "lib/pi-wallet-submit-lock.ts",
@@ -1670,6 +1675,11 @@
       "path": "scripts/verify-dr87-u2a-approval-owner-client-idempotency.mjs",
       "bytes": 1967,
       "sha256": "58a2ace09792d907c6a559464260dd8142aa28172d7ff7677bb8a72ecfecb702"
+    },
+    {
+      "path": "scripts/verify-dr88-durable-u2a-start-authority.mjs",
+      "bytes": 1665,
+      "sha256": "b0982ac4554dd450dd38eac6a89911ec8676cc9d69f2abd2c05e64e31bc59f57"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",

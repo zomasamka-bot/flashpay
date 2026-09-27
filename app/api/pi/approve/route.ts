@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordSettlementU2AApprovalClaim, readDr11RefundCertificationHold } from "@/lib/db"
+import { recordSettlementU2AApprovalClaimFromStartLease, readDr11RefundCertificationHold } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 export const dynamic = "force-dynamic"
@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
 
   try {
     // Extract only identifier from untrusted request body
-    const body: { identifier?: unknown } = await request.json()
+    const body: { identifier?: unknown; startLeaseToken?: unknown } = await request.json()
+    const startLeaseToken = typeof body?.startLeaseToken === "string" ? body.startLeaseToken.trim() : ""
     const identifier = typeof body?.identifier === "string" ? body.identifier.trim() : ""
 
     if (!identifier) {
@@ -235,12 +236,11 @@ export async function POST(request: NextRequest) {
         headers: { "Content-Type": "application/json" },
       })
     }
-    const approvalClaim = await recordSettlementU2AApprovalClaim({
-      paymentId,
-      merchantId,
-      merchantUid,
-      customerAmount: redisPayment.amount,
-      u2aIdentifier: identifier,
+    if (!startLeaseToken) {
+      return new Response(JSON.stringify({ error: "Payment start authority missing", code: "U2A_START_AUTHORITY_MISSING" }), { status: 409, headers: { "Content-Type": "application/json" } })
+    }
+    const approvalClaim = await recordSettlementU2AApprovalClaimFromStartLease({
+      paymentId, merchantId, merchantUid, customerAmount: redisPayment.amount, u2aIdentifier: identifier, startLeaseToken,
     })
     if (approvalClaim.outcome !== "RECORDED" && approvalClaim.outcome !== "REPLAYED") {
       console.error("[R101-2 U2A APPROVAL CLAIM] approval ownership unavailable", { paymentId, outcome: approvalClaim.outcome })
