@@ -56,6 +56,9 @@ export default function HomePage() {
   const [dr14Arming, setDr14Arming] = useState(false)
   const [dr14Armed, setDr14Armed] = useState(false)
   const [dr14Error, setDr14Error] = useState<string | null>(null)
+  const [dr14RefundPrepared, setDr14RefundPrepared] = useState(false)
+  const [dr14RefundPreparing, setDr14RefundPreparing] = useState(false)
+  const [dr14RefundStarted, setDr14RefundStarted] = useState(false)
   const dr14Boundary = "refund_after_pi_create_before_id_checkpoint" as const
   
   useEffect(() => {
@@ -236,6 +239,20 @@ export default function HomePage() {
     setDisplayAmount(value.toFixed(2))
   }
 
+  const handlePrepareDr14RefundPayment = async () => {
+    if (dr14RefundPreparing || dr14RefundPrepared || Number.parseFloat(amount) !== 0.1) return
+    const accessToken = unifiedStore.getMerchantState().accessToken
+    if (!accessToken) { setDr14Error("Pi session token required"); return }
+    setDr14RefundPreparing(true); setDr14Error(null)
+    try {
+      const response = await fetch("/api/control/dr11", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` }, body: JSON.stringify({ confirmation: "ARM_DR11_NEXT_010_PAYMENT" }) })
+      const body = await response.json().catch(() => null) as { success?: boolean; certification?: string } | null
+      if (!response.ok || body?.success !== true || body?.certification !== "DR11_ARMED") throw new Error("Refund pre-payment hold arm failed")
+      setDr14RefundPrepared(true)
+    } catch (error) { setDr14Error(error instanceof Error ? error.message : "Refund pre-payment hold arm failed") }
+    finally { setDr14RefundPreparing(false) }
+  }
+
   const handleGenerateQR = async () => {
     const amountNum = Number.parseFloat(amount)
 
@@ -254,6 +271,11 @@ export default function HomePage() {
         description: "Please connect your Pi Wallet first to accept payments",
         variant: "destructive",
       })
+      return
+    }
+
+    if (amountNum === 0.1 && !dr14RefundPrepared) {
+      setDr14Error("Prepare DR14 refund payment before generating this 0.10 Pi certification payment")
       return
     }
 
@@ -514,6 +536,10 @@ export default function HomePage() {
         Date.parse(readback.arm.expiresAt) > Date.now()
       if (!exact) throw new Error("DR14 armed readback proof failed")
       setDr14Armed(true)
+      const startResponse = await fetch("/api/control/dr14", { method: "POST", headers, body: JSON.stringify({ ...bodyBase, confirmation: "START_DR14_REFUND_ONCE" }) })
+      const start = await startResponse.json().catch(() => null) as { success?: boolean; outcome?: string } | null
+      if (!startResponse.ok || start?.success !== true || start?.outcome !== "STARTED") throw new Error(`DR14 refund start failed (${start?.outcome ?? startResponse.status})`)
+      setDr14RefundStarted(true)
     } catch (error) {
       setDr14Error(error instanceof Error ? error.message : "DR14 arm failed")
     } finally {
@@ -605,13 +631,13 @@ export default function HomePage() {
             )}
           </div>
 
-          {payment?.status === "pending" && (
+          {payment?.status === "settlement_failed" && (
             <div className="mb-6 w-full max-w-sm rounded-xl border p-3">
               <Button type="button" variant="outline" className="w-full" onClick={handleArmDr14Stage1} disabled={dr14Arming || dr14Armed}>
                 {dr14Armed ? "DR14 armed · Refund Pi create" : dr14Arming ? "Verifying & arming DR14…" : "Arm DR14 · Refund Pi create"}
               </Button>
               {dr14Error && <p className="mt-2 text-xs text-destructive">{dr14Error}</p>}
-              {dr14Armed && <p className="mt-2 text-xs text-muted-foreground">One-shot arm verified. Do not re-arm this payment.</p>}
+              {dr14Armed && <p className="mt-2 text-xs text-muted-foreground">One-shot arm verified. Refund start released exactly once{dr14RefundStarted ? "; crash boundary is active." : "."}</p>}
             </div>
           )}
 
@@ -815,6 +841,17 @@ export default function HomePage() {
             .
           </Button>
         </div>
+
+
+        {Number.parseFloat(amount) === 0.1 && (
+          <div className="mb-3 rounded-xl border p-3">
+            <Button type="button" variant="outline" className="w-full" onClick={handlePrepareDr14RefundPayment} disabled={dr14RefundPreparing || dr14RefundPrepared || !merchantSetup.isSetupComplete}>
+              {dr14RefundPrepared ? "DR14 refund payment prepared" : dr14RefundPreparing ? "Preparing durable refund hold…" : "Prepare next 0.10 Pi for DR14 refund"}
+            </Button>
+            {dr14RefundPrepared && <p className="mt-2 text-xs text-muted-foreground">Durable pre-payment selector armed. Generate exactly one QR, then pay it once.</p>}
+            {dr14Error && !showQR && <p className="mt-2 text-xs text-destructive">{dr14Error}</p>}
+          </div>
+        )}
 
         {/* Generate QR Button */}
         <Button
