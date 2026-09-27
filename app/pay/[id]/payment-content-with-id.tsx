@@ -548,7 +548,12 @@ export default function PaymentContentWithId({
         target.searchParams.set("lang", locale)
         target.searchParams.set("bridge", data.token)
         if (urlNote) target.searchParams.set("note", urlNote)
-        window.location.href = `pi://browser.open?url=${encodeURIComponent(target.toString())}`
+        // DR90: use the direct Pi deep-link shape proven to reach this production host.
+        // Keep the DR89 signed bridge token in the exact current-payment URL so any stale
+        // path replay fails closed at entry-token verification before the Pi SDK initializes.
+        target.protocol = "pi:"
+        console.info("[DR90 PI ENTRY] opening exact payment", { paymentId, host: target.host, path: target.pathname })
+        window.location.href = target.toString()
       } catch {
         toast({ title: "Pi Browser", description: "Could not open this payment safely. Please retry from this page.", variant: "destructive" })
       }

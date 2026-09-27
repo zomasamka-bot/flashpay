@@ -4,7 +4,7 @@ const view=fs.readFileSync('app/pay/[id]/payment-content-with-id.tsx','utf8');
 const route=fs.readFileSync('app/api/pi/entry-token/route.ts','utf8');
 assert(page.includes('https://flashpay-two.vercel.app/pay/') && page.includes('entry=share'));
 assert(!page.includes('pi://flashpay-two.vercel.app/pay/'));
-assert(view.includes('pi://browser.open?url=${encodeURIComponent(target.toString())}'));
+assert(view.includes('pi://browser.open?url=${encodeURIComponent(target.toString())}') || (view.includes('target.protocol = "pi:"') && view.includes('window.location.href = target.toString()')));
 assert(view.includes('target.searchParams.set("bridge", data.token)'));
 assert(view.includes('entryMode !== "pi" || piEntryVerified !== true || authoritativeLoaded !== true'));
 assert(view.includes('entryMode === "pi" && piEntryVerified'));
