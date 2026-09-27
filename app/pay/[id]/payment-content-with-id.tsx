@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { ExternalLink } from "lucide-react"
-import { authenticateCustomer, authenticateCustomerForRefundRead } from "@/lib/pi-sdk"
+import { initializePiSDK, authenticateCustomer, authenticateCustomerForRefundRead } from "@/lib/pi-sdk"
 import { readCustomerRefundPresentationClient } from "@/lib/customer-refund-presentation-client"
 import CustomerRefundStatusCard from "@/components/customer-refund-status-card"
 import { FlashPayReceiptCard } from "@/components/flashpay-receipt-card"
@@ -14,7 +14,7 @@ import { toReceiptStatus } from "@/lib/receipt-presentation"
 import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
 import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/operations"
-import { getPiNetUrl } from "@/lib/router"
+import { getPaymentUrl } from "@/lib/router"
 import { unifiedStore } from "@/lib/unified-store"
 import type { Payment, RefundPresentation } from "@/lib/types"
 import { useI18n } from "@/components/i18n-provider"
@@ -244,18 +244,25 @@ export default function PaymentContentWithId({
         }
       }
 
-      const hasPiSDK = typeof window !== "undefined" && !!window.Pi && typeof window.Pi.init === "function"
-      addDiagnostic(`Checking initialized Pi SDK: ${hasPiSDK ? "FOUND" : "NOT FOUND"}`)
+      const hasPiSDK = typeof window !== "undefined" && !!window.Pi
+      addDiagnostic(`Checking Pi SDK: ${hasPiSDK ? "FOUND" : "NOT FOUND"}`)
 
       if (hasPiSDK) {
-        // DR93: PiSDKLoader owns Pi.init. A resolved __PI_SDK_READY__ is the initialization proof.
-        setPiSDKReady(true)
-        setAuthStatus("idle")
-        addDiagnostic("Pi SDK initialized by loader - you can now pay")
+        addDiagnostic("Initializing Pi SDK...")
+        const result = await initializePiSDK()
+        setPiSDKReady(result.success)
+        
+        if (result.success) {
+          addDiagnostic("Pi SDK ready - you can now pay")
+          setAuthStatus("idle")
+        } else {
+          addDiagnostic("Pi SDK initialization failed")
+          setAuthStatus("failed")
+        }
       } else {
         setPiSDKReady(false)
         setAuthStatus("failed")
-        addDiagnostic("ERROR: Initialized Pi SDK unavailable")
+        addDiagnostic("ERROR: Not in Pi Browser - window.Pi not found")
       }
     }
 
@@ -535,15 +542,13 @@ export default function PaymentContentWithId({
         const response = await fetch("/api/pi/entry-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "issue", paymentId }) })
         const data = await response.json().catch(() => ({}))
         if (!response.ok || typeof data?.token !== "string") throw new Error("entry token unavailable")
-        const target = new URL(`https://flashpay-two.vercel.app/pay/${encodeURIComponent(paymentId)}`)
-        target.searchParams.set("amount", String(urlAmount))
-        target.searchParams.set("entry", "pi")
-        target.searchParams.set("lang", locale)
-        target.searchParams.set("bridge", data.token)
-        if (urlNote) target.searchParams.set("note", urlNote)
-        target.protocol = "pi:"
-        console.info("[DR93 PI ENTRY] opening production app URL", { paymentId, host: target.host, path: target.pathname })
-        window.location.href = target.toString()
+        const hashParams = new URLSearchParams()
+        hashParams.set("entry", "pi")
+        hashParams.set("lang", locale)
+        hashParams.set("bridge", data.token)
+        const appTarget = `pi://flashpay.pi/pay/${encodeURIComponent(paymentId)}?${hashParams.toString()}`
+        console.info("[DR93 PI APP ENTRY] opening registered Pi Browser app URL", { paymentId, host: "flashpay.pi" })
+        window.location.href = appTarget
       } catch {
         toast({ title: "Pi Browser", description: "Could not open this payment safely. Please retry from this page.", variant: "destructive" })
       }
@@ -638,7 +643,7 @@ export default function PaymentContentWithId({
 
   const isPaid = payment.status === "settled_to_merchant"
   const isRefundView = entryMode === "pi" && authoritativeLoaded && ["settlement_failed", "refund_pending", "refunded"].includes(payment.status)
-  const paymentQR = getPiNetUrl(paymentId, locale)
+  const paymentQR = `${getPaymentUrl(paymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share&lang=${encodeURIComponent(locale)}${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
 
   if (isRefundView) {
     return (
@@ -659,7 +664,7 @@ export default function PaymentContentWithId({
 
   // CRITICAL: Log the origin context to diagnose app_id mismatches
   if (typeof window !== "undefined") {
-    const qrOrigin = paymentQR.match(/pi:\/\/([^\/]+)/)?.[1]
+    const qrOrigin = new URL(paymentQR).hostname
     if (qrOrigin === window.location.hostname) {
     } else {
     }

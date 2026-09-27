@@ -46,88 +46,105 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const isPayRoute = pathname?.startsWith("/pay/") || (typeof window !== "undefined" && /^#\/pay\/[0-9a-f-]{36}\/?(?:\?.*)?$/i.test(window.location.hash))
 
   useEffect(() => {
+    // Skip SDK loading for admin routes - owner is already verified
     if (shouldSkipSDK) {
       setScriptLoaded(true)
       return
     }
 
-    if (isPayRoute) setScriptLoaded(true)
-
-    let cancelled = false
-    let timeoutId: ReturnType<typeof setTimeout> | null = null
-
-    const initializeLoadedSDK = async () => {
-      if (!window.Pi || typeof window.Pi.init !== "function") throw new Error("Pi SDK loaded but Pi.init not available")
-      await window.Pi.init({ version: "2.0", sandbox: false })
-      window.__PI_SDK_LOADED__ = true
-      CoreLogger.info("[DR93 PI SDK] loaded and initialized", { pathname })
+    // For /pay/[id] routes, render children immediately
+    if (isPayRoute) {
+      setScriptLoaded(true)
     }
 
-    // DR93: __PI_SDK_READY__ means one thing only: the SDK script is present AND Pi.init resolved.
-    // Never publish a resolved readiness promise merely because window.Pi exists.
-    if (!window.__PI_SDK_READY__) {
-      window.__PI_SDK_READY__ = new Promise<void>((resolve, reject) => {
-        const finish = async () => {
-          try {
-            await initializeLoadedSDK()
-            if (timeoutId) clearTimeout(timeoutId)
-            resolve()
-            if (!cancelled && !isPayRoute) setScriptLoaded(true)
-          } catch (cause) {
-            if (timeoutId) clearTimeout(timeoutId)
-            const sdkError = cause instanceof Error ? cause : new Error(String(cause))
-            CoreLogger.error("[DR93 PI SDK] initialization failed", { error: sdkError.message })
-            if (!cancelled) {
-              setError(sdkError.message || "Pi SDK initialization failed")
-              if (!isPayRoute) setScriptLoaded(true)
-            }
-            reject(sdkError)
-          }
-        }
-
-        timeoutId = setTimeout(() => {
-          const timeoutError = new Error("Pi SDK readiness timeout (15s)")
-          CoreLogger.error("[DR93 PI SDK] readiness timeout", { error: timeoutError.message })
-          if (!cancelled) setError("Pi SDK not available (timeout)")
-          reject(timeoutError)
-        }, 15000)
-
-        if (window.Pi && typeof window.Pi.init === "function") {
-          void finish()
-          return
-        }
-
-        const existing = document.querySelector<HTMLScriptElement>('script[src="https://sdk.minepi.com/pi-sdk.js"]')
-        const script = existing ?? document.createElement("script")
-        if (!existing) {
-          script.src = "https://sdk.minepi.com/pi-sdk.js"
-          script.async = false
-          script.defer = false
-          document.head.appendChild(script)
-        }
-        script.addEventListener("load", () => { void finish() }, { once: true })
-        script.addEventListener("error", () => {
-          const loadError = new Error("Failed to load Pi SDK from CDN")
-          if (timeoutId) clearTimeout(timeoutId)
-          CoreLogger.error("[DR93 PI SDK] script load failed", { url: script.src })
-          if (!cancelled) setError(loadError.message)
-          reject(loadError)
-        }, { once: true })
-      })
+    // Check if script is already loaded
+    if (window.__PI_SDK_LOADED__ || (window.Pi && typeof window.Pi.init === "function")) {
+      if (!isPayRoute) {
+        setScriptLoaded(true)
+      }
+      // Ensure readiness promise is set
+      if (!window.__PI_SDK_READY__) {
+        window.__PI_SDK_READY__ = Promise.resolve()
+      }
+      return
     }
 
-    // Observe the shared readiness promise so non-pay routes leave their loading shell.
-    void window.__PI_SDK_READY__.then(() => {
-      if (!cancelled && !isPayRoute) setScriptLoaded(true)
-    }).catch(() => {
-      if (!cancelled && !isPayRoute) setScriptLoaded(true)
+    // Create script element
+    const script = document.createElement("script")
+    script.src = "https://sdk.minepi.com/pi-sdk.js"
+    script.async = false
+    script.defer = false
+
+    // Create a promise that resolves when window.Pi.init is available
+    let resolveReady: () => void
+    let rejectReady: (error: Error) => void
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
     })
 
-    return () => {
-      cancelled = true
-      if (timeoutId) clearTimeout(timeoutId)
+    // Set timeout to reject promise after 15s
+    const timeoutId = setTimeout(() => {
+      const timeoutError = new Error("Pi SDK readiness timeout (15s)")
+      CoreLogger.error("Pi SDK readiness timeout", { error: timeoutError.message })
+      rejectReady(timeoutError)
+      // For /pay routes, set error to release UI after timeout
+      if (isPayRoute) {
+        setError("Pi SDK not available (timeout)")
+      }
+    }, 15000)
+
+    // Handle successful load
+    script.onload = () => {
+      setTimeout(() => {
+        if (window.Pi && typeof window.Pi.init === "function") {
+          window.__PI_SDK_LOADED__ = true
+          window.__PI_SDK_READY__ = Promise.resolve()
+          clearTimeout(timeoutId)
+          resolveReady()
+          if (!isPayRoute) {
+            setScriptLoaded(true)
+          }
+        } else {
+          CoreLogger.error("Pi SDK script loaded but Pi object not available", {
+            hasPi: !!window.Pi,
+            piType: typeof window.Pi,
+          })
+          clearTimeout(timeoutId)
+          rejectReady(new Error("Pi SDK loaded but Pi.init not available"))
+          setError("Pi SDK loaded but not initialized properly")
+          if (!isPayRoute) {
+            setScriptLoaded(true)
+          }
+        }
+      }, 100)
     }
-  }, [isPayRoute, pathname, shouldSkipSDK])
+
+    // Handle load error
+    script.onerror = (event) => {
+      CoreLogger.error("Failed to load Pi SDK script", {
+        error: event,
+        url: script.src,
+      })
+      clearTimeout(timeoutId)
+      rejectReady(new Error("Failed to load Pi SDK from CDN"))
+      setError("Failed to load Pi SDK from CDN")
+      if (!isPayRoute) {
+        setScriptLoaded(true)
+      }
+    }
+
+    // Set readiness promise immediately for /pay routes
+    window.__PI_SDK_READY__ = readyPromise
+
+    // Add script to document
+    document.head.appendChild(script)
+
+    // Cleanup: never remove the loaded script
+    return () => {
+      clearTimeout(timeoutId)
+    }
+  }, [isPayRoute, shouldSkipSDK])
 
   // For /pay/[id] routes, render children immediately but show error if SDK failed
   if (isPayRoute) {
