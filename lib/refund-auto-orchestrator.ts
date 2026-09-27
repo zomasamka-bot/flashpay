@@ -25,6 +25,7 @@ const SHORT_RETRY_REASONS = new Set([
   "blockchain_claim_conflict",
   "submit_failed",
   "completion_unverified",
+  "dr14_interruption",
   "intent_409",
   "intent_503",
 ])

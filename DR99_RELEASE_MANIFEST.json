@@ -1,0 +1,14 @@
+{
+  "release": "DR99",
+  "title": "DR14 SHORT RETRY RECOVERY",
+  "baselineProductionSha": "6dfd0f18851a2e1297b833f9e05ffe71a1f758cf",
+  "runtimeChanges": [
+    "lib/refund-auto-orchestrator.ts",
+    "lib/refund-checkpoint-store.ts"
+  ],
+  "purpose": "Treat intentional DR14 crash interruption as a 60-second retry and allow already-deferred DR14 checkpoints to become recovery-eligible after 60 seconds without re-arming or re-executing the financial start.",
+  "financialExecutorChanged": false,
+  "piCreateLogicChanged": false,
+  "horizonSubmitLogicChanged": false,
+  "certifier": "scripts/verify-dr99-dr14-short-retry-recovery.mjs"
+}
