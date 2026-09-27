@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 420,
-  "totalBytes": 2762626,
+  "fileCount": 422,
+  "totalBytes": 2766702,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 73461,
-      "sha256": "5b643785955de66f5ab9fd86310dc382acb82231bd2cade19d1e45a683655548"
+      "bytes": 74111,
+      "sha256": "be623cdb2fae330aa4a01da9960582ae1f5d4f3651282b36f28c2090ba80a3ee"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -298,8 +298,8 @@
     },
     {
       "path": "app/pay/[id]/payment-content-with-id.tsx",
-      "bytes": 30859,
-      "sha256": "716f71893544c5a3f71339559f545144c860d1812c1b38e082901b8ea153e647"
+      "bytes": 30730,
+      "sha256": "b92c16e1cac41dd0605b65390524a1823b5f40c07fa40088bac6b33e26565bdb"
     },
     {
       "path": "app/payments/page.tsx",
@@ -403,8 +403,8 @@
     },
     {
       "path": "components/pi-sdk-loader.tsx",
-      "bytes": 6046,
-      "sha256": "ac3090c105a4e47cb05931a5026f84ec02f7c7480f027960df956b1b255a39ca"
+      "bytes": 6282,
+      "sha256": "6721e0fa4d0dfc03e891d5d9d4f6213a2f14648d6f4ce91404ba36ccfd190799"
     },
     {
       "path": "components/qr-code.tsx",
@@ -1712,6 +1712,16 @@
       "sha256": "b209275e9b690e0ed6f8f8e87074884dea6dd0b8b54029fe3d7814ac42734e4c"
     },
     {
+      "path": "scripts/verify-dr94-entry-only-baseline.mjs",
+      "bytes": 1471,
+      "sha256": "bb897c92e39c5b88c1982be5f19a64e746f5d0bb0b10e1b010a82397f888fc00"
+    },
+    {
+      "path": "scripts/verify-dr95-production-baseline-lock.mjs",
+      "bytes": 1848,
+      "sha256": "6424d4bbe883d4e9f235f25e127ff0bbb562ffc8c4b4271db864c7d505466ccf"
+    },
+    {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
       "bytes": 1986,
       "sha256": "03f0f36720881fe917386a89dc3c25c20dfd17aa5af0d8d25379c8ce5180e039"
@@ -2116,13 +2126,5 @@
       "bytes": 105,
       "sha256": "c305dc3b539a260d0c44bad7eb3d6947535c9f232ffbea33d1193bb8b731f0ef"
     }
-  ],
-  "release": "DR94_PI_BROWSER_ENTRY_BASELINE_REPAIR",
-  "notes": "Repair DR93 baseline contamination: restore single-owner Pi SDK initialization semantics while retaining only the registered flashpay.pi signed payment-bound entry change. Preserve DR88 durable U2A start authority, DR87 approval ownership, DR92 DR11 ARM readback, and DR84 refund boundary. No Settlement/Refund/Horizon executor changes.",
-  "baseProductionSha": "3b957fe64527dfd94707a9a96cc462aef8e2d2ec",
-  "runtimeSourceChanges": [
-    "components/pi-sdk-loader.tsx",
-    "app/pay/[id]/payment-content-with-id.tsx"
-  ],
-  "certifier": "scripts/verify-dr94-entry-only-baseline.mjs"
+  ]
 }
