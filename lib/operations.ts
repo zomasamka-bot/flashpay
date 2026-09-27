@@ -264,6 +264,7 @@ export function executePayment(
   onSuccess: (txid: string) => void,
   onError: (error: string, trackingId?: string) => void,
   onProcessing?: (status: "paid_to_app" | "settlement_pending") => void,
+  onApproved?: () => void,
 ): void {
   const operation = "executePayment"
   CoreLogger.operation(operation, { paymentId })
@@ -412,6 +413,7 @@ export function executePayment(
         onError(error, trackingId)
       },
       onProcessing,
+      onApproved,
     )
 }
 

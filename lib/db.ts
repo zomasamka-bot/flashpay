@@ -460,6 +460,31 @@ export async function readDr11RefundCertificationHold(paymentId:string):Promise<
   }catch(e){return{outcome:'INDETERMINATE',error:'DR11 hold read uncertain'}}
 }
 
+export type SettlementU2AApprovalOwnershipRead =
+  | { outcome: 'UNCLAIMED' }
+  | { outcome: 'CLAIMED' }
+  | { outcome: 'INDETERMINATE'; error: string }
+
+/** DR87: public-safe durable readback of whether a Pi U2A approval owner exists.
+ * Never returns the Pi identifier. PostgreSQL uncertainty fails closed. */
+export async function readSettlementU2AApprovalOwnership(paymentId: string): Promise<SettlementU2AApprovalOwnershipRead> {
+  if (typeof paymentId !== 'string' || paymentId.trim() === '' || paymentId !== paymentId.trim())
+    return { outcome: 'INDETERMINATE', error: 'Invalid payment identity' }
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    const rows = await client`SELECT u2a_approval_identifier,u2a_approval_claimed_at FROM settlement_checkpoints WHERE payment_id=${paymentId}`
+    if (rows.length !== 1) return { outcome: 'INDETERMINATE', error: 'Payment approval ownership absent or ambiguous' }
+    const row = rows[0] as Record<string, unknown>
+    if (row.u2a_approval_identifier == null && row.u2a_approval_claimed_at == null) return { outcome: 'UNCLAIMED' }
+    if (typeof row.u2a_approval_identifier === 'string' && row.u2a_approval_identifier.trim() !== '' && row.u2a_approval_identifier === row.u2a_approval_identifier.trim() && row.u2a_approval_claimed_at != null) return { outcome: 'CLAIMED' }
+    return { outcome: 'INDETERMINATE', error: 'Payment approval ownership contradictory' }
+  } catch (error) {
+    console.error('[DR87 U2A APPROVAL READBACK] uncertain:', error)
+    return { outcome: 'INDETERMINATE', error: 'Payment approval ownership read uncertain' }
+  }
+}
+
 export type SettlementU2AApprovalClaimResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }

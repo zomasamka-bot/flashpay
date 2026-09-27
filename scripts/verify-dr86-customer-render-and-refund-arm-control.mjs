@@ -11,7 +11,7 @@ const checks={
   customerSdkBounded: customer.includes('Promise.race([') && customer.includes('Pi SDK initialization timed out'),
   customerSdkErrorVisible: customer.includes('role="alert"') && customer.includes('Pi Network connection failed') && customer.includes('{authError}'),
   customerPaymentFetchPreserved: customer.includes('getPaymentFromServer(paymentId, true)'),
-  customerPayPendingOnly: customer.includes('if (payment.status !== "pending") return'),
+  customerPayPendingOnly: customer.includes('if (payment.status !== "pending" || piPaymentInitiated) return'),
 }
 for(const [k,v] of Object.entries(checks)) if(!v) throw new Error(`DR86 gate failed: ${k}`)
 console.log(JSON.stringify({certification:'PASS',gate:'DR86-CUSTOMER-RENDER-AND-REFUND-ARM-CONTROL',...checks},null,2))

@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 411,
-  "totalBytes": 2731050,
+  "fileCount": 412,
+  "totalBytes": 2736459,
   "files": [
     {
       "path": ".gitignore",
@@ -24,7 +24,7 @@
     {
       "path": "DR28_RELEASE_MANIFEST.json",
       "bytes": 71861,
-      "sha256": "f7d51d66ffdda94bb274e95eceed0ab76a3ae34204f897fdaae59a1439ea0605"
+      "sha256": "bbd96ab59938296540fcff0a939fd1867a24a7123cca9167a169db0c7bfb67fc"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -118,8 +118,8 @@
     },
     {
       "path": "app/api/payments/[id]/route.ts",
-      "bytes": 14341,
-      "sha256": "2a1204491755574c0a1e874ffa59745ac0485cc5deb8d2f6e8e6d5578ca6e1f6"
+      "bytes": 14981,
+      "sha256": "dfcda756447c2e46836c8626906fc1c4ae88f6c4f95d710d9c116ee24481635d"
     },
     {
       "path": "app/api/payments/history/route.ts",
@@ -338,8 +338,8 @@
     },
     {
       "path": "components/customer-payment-view.tsx",
-      "bytes": 14445,
-      "sha256": "002430a4559a37df3446e68cf852c35288d7e4da3256c06fa0b2b117b33e11d2"
+      "bytes": 15287,
+      "sha256": "877c731469bab060dbab08cb09ca01b469829452bda4236add4636ae5e356bf1"
     },
     {
       "path": "components/customer-refund-status-card.tsx",
@@ -713,8 +713,8 @@
     },
     {
       "path": "lib/db.ts",
-      "bytes": 142694,
-      "sha256": "c78999cfb5efaf3b109e0bf2fa6a6b12e8dee42ea869dfd9cc3f584ab2b94622"
+      "bytes": 144391,
+      "sha256": "1cc840a1f524b12466a8123ace62b8fee85c2886dc5e73dd8f38fcf61e457692"
     },
     {
       "path": "lib/domain-control.ts",
@@ -978,8 +978,8 @@
     },
     {
       "path": "lib/operations.ts",
-      "bytes": 23977,
-      "sha256": "0e59b9e64da9b0dfefbaa4b26a1e583a2c14bead1575fa20c1bb93e3315e5ce4"
+      "bytes": 24022,
+      "sha256": "d87af93815bd879973f99fffd5c28a1e7f3f5b794d8e5c5fe30d5bf57a53fbae"
     },
     {
       "path": "lib/owner-auth.ts",
@@ -1013,8 +1013,8 @@
     },
     {
       "path": "lib/pi-sdk.ts",
-      "bytes": 21686,
-      "sha256": "610ea777138e3f1f1bd6d922a71ed9a3de3b55277abed1ca25c65d8442942105"
+      "bytes": 21742,
+      "sha256": "fb42670b277a5cff7b1c1251746a675b36c2ab5d8c6b0c1228c27558884f6b0c"
     },
     {
       "path": "lib/pi-wallet-submit-lock.ts",
@@ -1153,8 +1153,8 @@
     },
     {
       "path": "lib/types.ts",
-      "bytes": 25283,
-      "sha256": "28119fe0e923519eb2da79c2d1afa00b7673ee9b2f2b20ed668921f0d0367111"
+      "bytes": 25387,
+      "sha256": "bc19c618ef891caa83ee1c322af8446e4a7fdb0c7560a150e6a217cb56b5f896"
     },
     {
       "path": "lib/unified-store.ts",
@@ -1608,8 +1608,8 @@
     },
     {
       "path": "scripts/verify-dr76-dr14-visible-operational-control.mjs",
-      "bytes": 997,
-      "sha256": "fd8f1c1b9ed7b5529674103f00060386118b8e1da53b38c9113be485d9ab6520"
+      "bytes": 1033,
+      "sha256": "d78db4aaaa254995ac9461d2b1194693d4664f9a015774d5b2a6f2de262e4111"
     },
     {
       "path": "scripts/verify-dr77-dr14-server-owner-authority.mjs",
@@ -1663,8 +1663,13 @@
     },
     {
       "path": "scripts/verify-dr86-customer-render-and-refund-arm-control.mjs",
-      "bytes": 1347,
-      "sha256": "ae1b4e536ac2d0b6f75a19a186522d353229454fa2b5d76dbc4a3017b3826f76"
+      "bytes": 1369,
+      "sha256": "a1087312da2bf9b4e73caa967011a9480bb66cda2823baab06d0c85843336de9"
+    },
+    {
+      "path": "scripts/verify-dr87-u2a-approval-owner-client-idempotency.mjs",
+      "bytes": 1967,
+      "sha256": "58a2ace09792d907c6a559464260dd8142aa28172d7ff7677bb8a72ecfecb702"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",

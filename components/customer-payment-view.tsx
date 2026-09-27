@@ -34,6 +34,7 @@ export function CustomerPaymentView({
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [authError, setAuthError] = useState<string>("")
   const [isPaymentPaid, setIsPaymentPaid] = useState(false)
+  const [piPaymentInitiated, setPiPaymentInitiated] = useState(false)
   const [isInPiBrowser, setIsInPiBrowser] = useState(true)
   const hasPayment = payment !== null
   // CRITICAL: Store executed paymentId to prevent multi-execution per paymentId (synchronous ref guard)
@@ -121,6 +122,7 @@ export function CustomerPaymentView({
 
         setPaymentStatus(serverPayment.status)
         setIsPaymentPaid(isPaymentSettled(serverPayment.status))
+        setPiPaymentInitiated(serverPayment.piPaymentInitiated === true)
       } else {
         console.log("[v0][CustomerView] Payment not found")
         setPayment(null)
@@ -150,7 +152,7 @@ export function CustomerPaymentView({
       console.log("[v0][CustomerView] - piSDKReady:", piSDKReady)
       return
     }
-    if (payment.status !== "pending") return
+    if (payment.status !== "pending" || piPaymentInitiated) return
 
     console.log("[v0][CustomerView] ========== PAYMENT BUTTON CLICKED ==========")
     console.log("[v0][CustomerView] Authentication will be handled inside createPiPayment")
@@ -215,6 +217,12 @@ export function CustomerPaymentView({
         setPayment((current) => current ? { ...current, status } : current)
         setPaymentStatus(status)
         setIsPaying(false)
+      },
+      () => {
+        // DR87: once backend approval succeeds, lock this FlashPay payment locally immediately.
+        // Durable PostgreSQL readback keeps the lock across reload/device/entry changes.
+        setPiPaymentInitiated(true)
+        setProgressMessage("Payment initiated. Complete it in Pi Wallet...")
       },
     )
   }
@@ -317,7 +325,7 @@ export function CustomerPaymentView({
               <>
                 <Button
                   onClick={handlePay}
-                  disabled={isPaying || payment.status !== "pending"}
+                  disabled={isPaying || payment.status !== "pending" || piPaymentInitiated}
                   className="w-full"
                   size="lg"
                 >
@@ -333,6 +341,11 @@ export function CustomerPaymentView({
                 {isPaying && progressMessage && (
                   <p className="text-xs text-center text-muted-foreground">
                     {progressMessage}
+                  </p>
+                )}
+                {piPaymentInitiated && payment.status === "pending" && (
+                  <p role="status" className="text-sm text-center text-muted-foreground">
+                    Payment already initiated. Complete the existing payment in Pi Wallet; a second payment cannot be created.
                   </p>
                 )}
               </>

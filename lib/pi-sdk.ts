@@ -119,6 +119,7 @@ export const createPiPayment = async (
   onSuccess: (txid: string) => void,
   onError: (error: string, isCancelled?: boolean) => void,
   onProcessing?: (status: "paid_to_app" | "settlement_pending") => void,
+  onApproved?: () => void,
 ) => {
   if (typeof window === "undefined") {
     onError("Cannot create payment - not in browser", false)
@@ -188,6 +189,7 @@ export const createPiPayment = async (
           .then((response) => {
             if (response.ok) {
               CoreLogger.info("Payment approved on backend", { piPaymentId, paymentId })
+              onApproved?.()
             } else {
               CoreLogger.error("Approval failed", { status: response.status, piPaymentId })
               onError(`Approval failed: ${response.statusText}`, false)

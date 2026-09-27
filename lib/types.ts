@@ -26,6 +26,7 @@ export interface Payment {
   
   // U2A recovery tracking
   piPaymentId?: string // U2A identifier from Pi webhook
+  piPaymentInitiated?: boolean // DR87 public-safe durable approval ownership flag; never an identifier
   u2aTxid?: string // U2A transaction ID (customer-to-app txid)
   
   // A2U recovery for atomic idempotency

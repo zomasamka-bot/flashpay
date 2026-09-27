@@ -7,7 +7,7 @@ export const runtime = 'nodejs'
 import { redis, isRedisConfigured as isKvConfigured } from "@/lib/redis"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
-import { getDurableU2AIngressAuthoritative, getSettlementCheckpointAuthoritative, readSettlementPaymentIdentityPresence, readSettlementRefundAuthority } from "@/lib/db"
+import { getDurableU2AIngressAuthoritative, getSettlementCheckpointAuthoritative, readSettlementPaymentIdentityPresence, readSettlementRefundAuthority, readSettlementU2AApprovalOwnership } from "@/lib/db"
 import { getRefundCheckpointsByPaymentIds } from "@/lib/refund-checkpoint-store"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 
@@ -192,7 +192,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     console.log("[API] Payment retrieved:", id, "status:", payment.status)
 
-    let publicPayment = getPublicPayment(payment)
+    // DR87: expose only a boolean derived from durable PostgreSQL approval ownership.
+    // Never expose the Pi identifier. Uncertainty fails closed before a pending payment can be retried.
+    const approvalOwnership = await readSettlementU2AApprovalOwnership(id)
+    if (approvalOwnership.outcome === "INDETERMINATE") {
+      const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
+      return allowCors && origin ? addCorsHeaders(response, origin) : response
+    }
+
+    let publicPayment = { ...getPublicPayment(payment), piPaymentInitiated: approvalOwnership.outcome === "CLAIMED" }
     if (authority.settlementActive) {
       const durable = await getSettlementCheckpointAuthoritative(id)
       if (durable.outcome !== "FOUND") {
