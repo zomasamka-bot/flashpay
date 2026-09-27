@@ -469,8 +469,48 @@ export default function PaymentContentWithId({
       setAuthStatus("authenticated")
     }
 
-    addDiagnostic("Calling Pi.createPayment()...")
+    addDiagnostic("Acquiring durable payment start authority...")
     setIsPaying(true)
+
+    let startLeaseToken = ""
+    try {
+      const startResponse = await fetch("/api/pi/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentId }),
+      })
+      const startBody = await startResponse.json().catch(() => ({}))
+      if (
+        !startResponse.ok ||
+        startBody?.success !== true ||
+        typeof startBody?.startLeaseToken !== "string" ||
+        !startBody.startLeaseToken
+      ) {
+        addDiagnostic(`Payment start authority unavailable: ${startResponse.status}`)
+        setIsPaying(false)
+        toast({
+          title: t("pay.toast.failedTitle"),
+          description: startResponse.status === 409
+            ? "This payment has already been initiated. A duplicate Pi payment was blocked."
+            : "Payment start authority is temporarily unavailable. No Pi payment was created.",
+          variant: "destructive",
+        })
+        return
+      }
+      startLeaseToken = startBody.startLeaseToken
+      addDiagnostic("Durable payment start authority acquired")
+    } catch (error) {
+      addDiagnostic(`Payment start authority request failed: ${error}`)
+      setIsPaying(false)
+      toast({
+        title: t("pay.toast.failedTitle"),
+        description: "Payment start authority is temporarily unavailable. No Pi payment was created.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    addDiagnostic("Calling Pi.createPayment()...")
 
     executePayment(
       paymentId,
@@ -513,6 +553,8 @@ export default function PaymentContentWithId({
         void persistReceiptIdentity()
         startPostSubmitPolling("", status)
       },
+      undefined,
+      startLeaseToken,
     )
   }
 
