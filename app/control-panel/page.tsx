@@ -28,6 +28,11 @@ function ControlPanelContent() {
   const [isDr10Running, setIsDr10Running] = useState(false)
   const [isDr11Running, setIsDr11Running] = useState(false)
   const [dr11RefundId, setDr11RefundId] = useState("")
+  const [isDr14Running, setIsDr14Running] = useState(false)
+  const [dr14PaymentId, setDr14PaymentId] = useState("")
+  const [dr14Ready, setDr14Ready] = useState(false)
+  const [dr14Armed, setDr14Armed] = useState(false)
+  const dr14Boundary = "refund_after_pi_create_before_id_checkpoint" as const
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [reason, setReason] = useState("")
@@ -168,8 +173,13 @@ function ControlPanelContent() {
       if (!response.ok) throw new Error(data?.error || `DR11 resolve failed (${response.status})`)
       const refundId = typeof data?.checkpoint?.refundId === "string" ? data.checkpoint.refundId : ""
       if (!/^[A-Za-z0-9-]{8,128}$/.test(refundId)) throw new Error("DR11 resolver returned an invalid refund ID")
+      const paymentId = typeof data?.checkpoint?.paymentId === "string" ? data.checkpoint.paymentId : ""
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId)) throw new Error("DR11 resolver returned an invalid payment ID")
       setDr11RefundId(refundId)
-      setSuccess(`DR11 authority resolved · refund ${refundId} · payment ${data?.checkpoint?.paymentId ?? "?"} · financial execution 0`)
+      setDr14PaymentId(paymentId)
+      setDr14Ready(false)
+      setDr14Armed(false)
+      setSuccess(`DR11 authority resolved · refund ${refundId} · payment ${paymentId} · financial execution 0`)
     } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR11 resolve failed") } finally { setIsDr11Running(false) }
   }, [isDr11Running, uidData.accessToken])
 
@@ -191,6 +201,62 @@ function ControlPanelContent() {
       setSuccess(live ? `DR11 ${data?.certification ?? "result"} · refund ${data?.final?.refundId ?? refundId} · tx ${data?.final?.refundTxid ?? "?"}` : `DR11 ready · stage ${data?.checkpoint?.stage ?? "?"} · status ${data?.checkpoint?.status ?? "?"} · financial execution 0`)
     } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR11 request failed") } finally { setIsDr11Running(false) }
   }, [isDr11Running, dr11RefundId, uidData.accessToken])
+
+  const readDr14Arm = useCallback(async (paymentId: string) => {
+    if (!uidData.accessToken) throw new Error("Owner authorization unavailable")
+    const response = await fetch(`/api/control/dr14?paymentId=${encodeURIComponent(paymentId)}`, { headers: { Authorization: `Bearer ${uidData.accessToken}` }, cache: "no-store" })
+    const data = await response.json().catch(() => null)
+    if (!response.ok) throw new Error(data?.error || `DR14 readback failed (${response.status})`)
+    return data?.arm ?? null
+  }, [uidData.accessToken])
+
+  const checkDr14Readiness = useCallback(async () => {
+    if (isDr14Running || !uidData.accessToken) return
+    const paymentId = dr14PaymentId.trim()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId)) { setError("Load the exact current DR11 refund first; its payment ID is required for DR14."); return }
+    setIsDr14Running(true); setError(null); setSuccess("DR14 read-only readiness check running…"); setDr14Ready(false); setDr14Armed(false)
+    try {
+      const response = await fetch("/api/control/dr14", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ paymentId, boundary: dr14Boundary, confirmation: "READINESS_DR14_ONLY" }) })
+      const data = await response.json().catch(() => null)
+      if (!response.ok || data?.readiness?.outcome !== "READY") throw new Error(data?.readiness?.reason || data?.error || `DR14 not ready (${response.status})`)
+      setDr14Ready(true)
+      setSuccess(`DR14 READY · payment ${paymentId} · boundary ${dr14Boundary} · financial execution 0`)
+    } catch (err) { setSuccess(null); setError((err as Error)?.message || "DR14 readiness failed") } finally { setIsDr14Running(false) }
+  }, [isDr14Running, uidData.accessToken, dr14PaymentId])
+
+  const armDr14 = useCallback(async () => {
+    if (isDr14Running || !uidData.accessToken || !dr14Ready) return
+    const paymentId = dr14PaymentId.trim()
+    const typed = window.prompt(document.documentElement.lang === "ar" ? "تسليح نقطة DR14 الأولى فقط. اكتب ARM_DR14_ONE_SHOT للمتابعة." : "Arm only the first DR14 refund boundary. Type ARM_DR14_ONE_SHOT to continue.")
+    if ((typed?.trim() ?? "") !== "ARM_DR14_ONE_SHOT") { setError(typed === null ? "DR14 arming cancelled." : "DR14 arming confirmation did not match exactly. No request was sent."); return }
+    setIsDr14Running(true); setError(null); setSuccess("Arming exact DR14 refund boundary…"); setDr14Armed(false)
+    try {
+      const response = await fetch("/api/control/dr14", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ paymentId, boundary: dr14Boundary, confirmation: "ARM_DR14_ONE_SHOT" }) })
+      const data = await response.json().catch(() => null)
+      if (!response.ok || data?.outcome !== "ARMED") throw new Error(data?.readiness?.reason || data?.error || `DR14 arm failed (${response.status})`)
+      const arm = await readDr14Arm(paymentId)
+      if (!arm || arm.paymentId !== paymentId || arm.boundary !== dr14Boundary || arm.lane !== "refund" || arm.consumedAt !== null || Date.parse(arm.expiresAt) <= Date.now()) throw new Error("DR14 arm readback did not match exact live authority")
+      setDr14Armed(true)
+      setSuccess(`DR14 ARMED · exact payment ${paymentId} · expires ${arm.expiresAt} · financial execution 0`)
+    } catch (err) { setSuccess(null); setDr14Ready(false); setError((err as Error)?.message || "DR14 arm failed") } finally { setIsDr14Running(false) }
+  }, [isDr14Running, uidData.accessToken, dr14Ready, dr14PaymentId, readDr14Arm])
+
+  const startDr14Refund = useCallback(async () => {
+    if (isDr14Running || !uidData.accessToken || !dr14Armed) return
+    const paymentId = dr14PaymentId.trim()
+    const typed = window.prompt(document.documentElement.lang === "ar" ? "هذا يبدأ تنفيذ Refund المالي الحي مرة واحدة. اكتب START_DR14_REFUND_ONCE للمتابعة." : "This starts one live financial refund execution. Type START_DR14_REFUND_ONCE to continue.")
+    if ((typed?.trim() ?? "") !== "START_DR14_REFUND_ONCE") { setError(typed === null ? "DR14 start cancelled." : "DR14 start confirmation did not match exactly. No financial request was sent."); return }
+    setIsDr14Running(true); setError(null); setSuccess("Re-reading exact DR14 arm before financial start…")
+    try {
+      const arm = await readDr14Arm(paymentId)
+      if (!arm || arm.paymentId !== paymentId || arm.boundary !== dr14Boundary || arm.lane !== "refund" || arm.consumedAt !== null || Date.parse(arm.expiresAt) <= Date.now()) throw new Error("DR14 live arm is absent, consumed, mismatched, or expired. Financial start blocked.")
+      const response = await fetch("/api/control/dr14", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uidData.accessToken}` }, body: JSON.stringify({ paymentId, boundary: dr14Boundary, confirmation: "START_DR14_REFUND_ONCE" }) })
+      const data = await response.json().catch(() => null)
+      if (!response.ok || data?.success !== true || data?.financialExecutionStarted !== true || data?.outcome !== "STARTED") throw new Error(data?.error || data?.outcome || `DR14 start failed (${response.status})`)
+      setDr14Armed(false); setDr14Ready(false)
+      setSuccess(`DR14 refund execution STARTED · payment ${paymentId} · refund ${data?.refundId ?? "?"} · boundary ${dr14Boundary}`)
+    } catch (err) { setSuccess(null); setDr14Armed(false); setError((err as Error)?.message || "DR14 financial start failed") } finally { setIsDr14Running(false) }
+  }, [isDr14Running, uidData.accessToken, dr14Armed, dr14PaymentId, readDr14Arm])
 
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
@@ -253,6 +319,20 @@ function ControlPanelContent() {
         <Card className="border-orange-500/50">
           <CardHeader><CardTitle>DR11 Live Concurrent Refund Certification</CardTitle><CardDescription>Owner-only, production-only, two-contender certification over one exact refund. Readiness is read-only; live execution requires an exact pristine intent_created refund and explicit confirmation.</CardDescription></CardHeader>
           <CardContent className="space-y-4"><Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>First arm exactly one matching 0.10 Pi Testnet payment for 10 minutes. The arm is owner-authenticated, one-shot, and atomically consumed only by the exact DR11 payment gate. Then use the resulting exact refund ID below.</AlertDescription></Alert><Button onClick={() => void armDr11()} disabled={isDr11Running} variant="outline" className="w-full">Arm Next DR11 0.10 Payment</Button><Button onClick={() => void resolveDr11()} disabled={isDr11Running} variant="outline" className="w-full">Load Current DR11 Refund</Button><input value={dr11RefundId} onChange={(e) => setDr11RefundId(e.target.value.slice(0,128))} disabled={isDr11Running} placeholder="Exact DR11 refund ID" className="w-full rounded-md border bg-background px-3 py-2 text-sm font-mono" /><div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><Button onClick={() => void executeDr11(false)} disabled={isDr11Running || !dr11RefundId.trim()} variant="outline">Check DR11 Readiness</Button><Button onClick={() => void executeDr11(true)} disabled={isDr11Running || !dr11RefundId.trim()} variant="destructive">Run DR11 Concurrent Refund</Button></div></CardContent>
+        </Card>
+
+
+
+        <Card className="border-red-500/50">
+          <CardHeader><CardTitle>DR14 Live Refund Crash Certification — Boundary 1</CardTitle><CardDescription>Owner-only control for the exact DR11 payment. Readiness and arming do not execute money. The red start button is the only action here that releases the held refund into live execution.</CardDescription></CardHeader>
+          <CardContent className="space-y-4">
+            <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Current certified boundary only: refund_after_pi_create_before_id_checkpoint. Load the current DR11 refund first so the payment ID comes from server authority, not manual entry.</AlertDescription></Alert>
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs font-mono break-all">Payment: {dr14PaymentId || "Load Current DR11 Refund first"}</div>
+            <Button onClick={() => void checkDr14Readiness()} disabled={isDr14Running || !dr14PaymentId} variant="outline" className="w-full">Check DR14 Readiness</Button>
+            <Button onClick={() => void armDr14()} disabled={isDr14Running || !dr14Ready} variant="outline" className="w-full">Arm DR14 Boundary 1 — One Shot</Button>
+            <Button onClick={() => void startDr14Refund()} disabled={isDr14Running || !dr14Armed} variant="destructive" className="w-full">Start DR14 Refund Once</Button>
+            <p className="text-xs text-muted-foreground">State: {dr14Armed ? "ARMED — live financial start enabled" : dr14Ready ? "READY — arm is enabled" : "NOT READY — financial start disabled"}</p>
+          </CardContent>
         </Card>
 
         <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>

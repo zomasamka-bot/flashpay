@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 424,
-  "totalBytes": 2768525,
+  "fileCount": 425,
+  "totalBytes": 2778546,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 74010,
-      "sha256": "152c313300ad98cf61a831d719e820441ae2e3a6d0870d412d8f101761317597"
+      "bytes": 74193,
+      "sha256": "4941e50de06f7166a5f0546007a6453e9076f2e39006faaf074ceeefe3546804"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -233,8 +233,8 @@
     },
     {
       "path": "app/control-panel/page.tsx",
-      "bytes": 21139,
-      "sha256": "c71f480758372ec578c40b38f1a51759fc02d1c0835926772eff5a6aeb6f4ca8"
+      "bytes": 29225,
+      "sha256": "2f1d8c7fe757bddf08723b20c6d9a8312b08f54ef51f8a88654688db5089703b"
     },
     {
       "path": "app/create/page.tsx",
@@ -1730,6 +1730,11 @@
       "path": "scripts/verify-dr97-live-payment-start-lease.mjs",
       "bytes": 1764,
       "sha256": "d17bebc8ba86354845a6b46dda3f52dc46c747756256b0477edb17f6af053d01"
+    },
+    {
+      "path": "scripts/verify-dr98-dr14-visible-owner-control.mjs",
+      "bytes": 1752,
+      "sha256": "1fba402d47d6da3b1da7179d3a7ecc9c5fd0d9f4efcb2ab8a7993fdb47e44509"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
