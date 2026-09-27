@@ -1,0 +1,18 @@
+import fs from 'node:fs'
+const read=p=>fs.readFileSync(p,'utf8')
+const pay=read('app/pay/[id]/payment-content-with-id.tsx')
+const home=read('app/page.tsx')
+const loader=read('components/pi-sdk-loader.tsx')
+const cv=read('components/customer-payment-view.tsx')
+const must=(x,m)=>{if(!x)throw new Error(m)}
+must(pay.includes('pi://flashpayaefebeff3375.pinet.com/#/pay/${encodeURIComponent(paymentId)}?${hashParams.toString()}'),'registered PiNet origin missing')
+must(pay.includes('hashParams.set("bridge", data.token)'),'bridge missing from PiNet hash')
+must(!pay.includes('target.protocol = "pi:"'),'DR90 Vercel-origin deep link still present')
+must(home.includes('const bridgeToken = hashParams.get("bridge")'),'hash bridge parse missing')
+must(home.includes('bridgeToken={customerBridgeToken}'),'bridge not passed to customer view')
+must(loader.includes('/^#\\/pay\\/[0-9a-f-]{36}\\/?(?:\\?.*)?$/i.test(window.location.hash)'),'loader does not recognize signed hash route')
+must(cv.includes('body: JSON.stringify({ action: "verify", paymentId, token: bridgeToken })'),'customer entry verification missing')
+must(cv.includes('if (!entryVerified) return'),'SDK not gated by entry verification')
+must(cv.includes('if (!payment || !entryVerified || !piSDKReady)'),'payment start not gated by entry verification')
+must(cv.includes('fetch("/api/pi/start"'),'DR88 durable start authority missing')
+console.log('DR91 PINET REGISTERED ENTRY: PASS')

@@ -542,18 +542,13 @@ export default function PaymentContentWithId({
         const response = await fetch("/api/pi/entry-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "issue", paymentId }) })
         const data = await response.json().catch(() => ({}))
         if (!response.ok || typeof data?.token !== "string") throw new Error("entry token unavailable")
-        const target = new URL(`https://flashpay-two.vercel.app/pay/${encodeURIComponent(paymentId)}`)
-        target.searchParams.set("amount", urlAmount)
-        target.searchParams.set("entry", "pi")
-        target.searchParams.set("lang", locale)
-        target.searchParams.set("bridge", data.token)
-        if (urlNote) target.searchParams.set("note", urlNote)
-        // DR90: use the direct Pi deep-link shape proven to reach this production host.
-        // Keep the DR89 signed bridge token in the exact current-payment URL so any stale
-        // path replay fails closed at entry-token verification before the Pi SDK initializes.
-        target.protocol = "pi:"
-        console.info("[DR90 PI ENTRY] opening exact payment", { paymentId, host: target.host, path: target.pathname })
-        window.location.href = target.toString()
+        const hashParams = new URLSearchParams()
+        hashParams.set("entry", "pi")
+        hashParams.set("lang", locale)
+        hashParams.set("bridge", data.token)
+        const piNetTarget = `pi://flashpayaefebeff3375.pinet.com/#/pay/${encodeURIComponent(paymentId)}?${hashParams.toString()}`
+        console.info("[DR91 PINET ENTRY] opening registered Pi app origin", { paymentId, host: "flashpayaefebeff3375.pinet.com" })
+        window.location.href = piNetTarget
       } catch {
         toast({ title: "Pi Browser", description: "Could not open this payment safely. Please retry from this page.", variant: "destructive" })
       }

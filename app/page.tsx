@@ -46,6 +46,7 @@ export default function HomePage() {
   // CRITICAL: Check for payment ID on mount
   const [isCustomerView, setIsCustomerView] = useState(false)
   const [customerPaymentId, setCustomerPaymentId] = useState<string | null>(null)
+  const [customerBridgeToken, setCustomerBridgeToken] = useState<string | null>(null)
   const [routeResolved, setRouteResolved] = useState(false)
   const [showShareMenu, setShowShareMenu] = useState(false)
   const [showConversion, setShowConversion] = useState(false)
@@ -63,10 +64,13 @@ export default function HomePage() {
   
   useEffect(() => {
     // Check hash first (Pi Browser QR route: #/pay/{id})
-    const hashMatch = window.location.hash.match(/^#\/pay\/([0-9a-f-]{36})\/?(?:\?lang=([a-z]{2}))?$/i)
+    const hashMatch = window.location.hash.match(/^#\/pay\/([0-9a-f-]{36})\/?(?:\?(.*))?$/i)
     if (hashMatch && hashMatch[1]) {
       const id = hashMatch[1]
-      const localeHint = hashMatch[2]?.toLowerCase()
+      const hashParams = new URLSearchParams(hashMatch[2] || "")
+      const localeHint = hashParams.get("lang")?.toLowerCase()
+      const bridgeToken = hashParams.get("bridge")
+      setCustomerBridgeToken(bridgeToken)
       if (isAppLocale(localeHint)) {
         try { window.localStorage.setItem(LOCALE_STORAGE_KEY, localeHint) } catch {}
         setLocale(localeHint)
@@ -561,7 +565,7 @@ export default function HomePage() {
 
   // CUSTOMER VIEW: Show payment page when ID detected in URL
   if (isCustomerView && customerPaymentId) {
-    return <CustomerPaymentView paymentId={customerPaymentId} />
+    return <CustomerPaymentView paymentId={customerPaymentId} bridgeToken={customerBridgeToken} />
   }
 
   if (showQR && currentPaymentId) {

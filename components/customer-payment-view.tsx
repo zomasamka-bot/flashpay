@@ -15,11 +15,13 @@ import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSe
 import type { Payment, PaymentStatus } from "@/lib/types"
 
 export function CustomerPaymentView({ 
-  paymentId, 
+  paymentId,
+  bridgeToken,
   onSuccess, 
   onError 
 }: { 
   paymentId: string
+  bridgeToken?: string | null
   onSuccess?: (u2aTxid: string) => void
   onError?: (error: string) => void
 }) {
@@ -31,6 +33,7 @@ export function CustomerPaymentView({
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
   const [progressMessage, setProgressMessage] = useState<string>("")
   const [piSDKReady, setPiSDKReady] = useState(false)
+  const [entryVerified, setEntryVerified] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [authError, setAuthError] = useState<string>("")
   const [isPaymentPaid, setIsPaymentPaid] = useState(false)
@@ -41,6 +44,29 @@ export function CustomerPaymentView({
   const successCallbackExecutedPaymentIdRef = useRef<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
+    setEntryVerified(false)
+    setPiSDKReady(false)
+    setAuthError("")
+    if (!bridgeToken) {
+      setAuthError("This payment link must be reopened from the current FlashPay request.")
+      return () => { cancelled = true }
+    }
+    fetch("/api/pi/entry-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "verify", paymentId, token: bridgeToken }),
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("invalid")
+      if (!cancelled) setEntryVerified(true)
+    }).catch(() => {
+      if (!cancelled) setAuthError("This payment link is stale or mismatched. Reopen the current FlashPay request.")
+    })
+    return () => { cancelled = true }
+  }, [paymentId, bridgeToken])
+
+  useEffect(() => {
+    if (!entryVerified) return
     console.log("[v0][CustomerView] Mounted with payment ID:", paymentId)
     console.log("[v0][CustomerView] Current domain:", typeof window !== "undefined" ? window.location.hostname : "N/A")
     
@@ -80,7 +106,7 @@ export function CustomerPaymentView({
     }
     
     init()
-  }, [paymentId, toast])
+  }, [paymentId, toast, entryVerified])
 
   useEffect(() => {
     async function fetchPayment() {
@@ -146,7 +172,7 @@ export function CustomerPaymentView({
   }, [paymentId, paymentStatus, hasPayment, isPaymentPaid, isPaying, loading])
 
   const handlePay = async () => {
-    if (!payment || !piSDKReady) {
+    if (!payment || !entryVerified || !piSDKReady) {
       console.log("[v0][CustomerView] Cannot pay - missing requirements")
       console.log("[v0][CustomerView] - payment:", !!payment)
       console.log("[v0][CustomerView] - piSDKReady:", piSDKReady)
