@@ -352,7 +352,7 @@ export default function HomePage() {
 
   // Payment data is fetched from backend by ID, not from URL (authoritative source)
   const paymentLink = currentPaymentId && payment
-    ? `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=pi&lang=${encodeURIComponent(locale)}${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    ? `https://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share&lang=${encodeURIComponent(locale)}${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
@@ -571,7 +571,7 @@ export default function HomePage() {
       console.log("[v0][HomePage-QR] Payment QR URL:", paymentLink)
       console.log("[v0][HomePage-QR]")
       console.log("[v0][HomePage-QR] When customer scans this QR:")
-      const qrOrigin = paymentLink.match(/pi:\/\/([^\/\?]+)/)?.[1]
+      const qrOrigin = paymentLink ? new URL(paymentLink).hostname : undefined
       console.log("[v0][HomePage-QR]   → Will redirect to:", `https://${qrOrigin}`)
       console.log("[v0][HomePage-QR]   → Customer will authenticate under:", `${qrOrigin}`)
       console.log("[v0][HomePage-QR]   → Merchant authenticated under:", window.location.hostname)

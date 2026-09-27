@@ -1,0 +1,15 @@
+import fs from 'node:fs'; import assert from 'node:assert/strict';
+const page=fs.readFileSync('app/page.tsx','utf8');
+const view=fs.readFileSync('app/pay/[id]/payment-content-with-id.tsx','utf8');
+const route=fs.readFileSync('app/api/pi/entry-token/route.ts','utf8');
+assert(page.includes('https://flashpay-two.vercel.app/pay/') && page.includes('entry=share'));
+assert(!page.includes('pi://flashpay-two.vercel.app/pay/'));
+assert(view.includes('pi://browser.open?url=${encodeURIComponent(target.toString())}'));
+assert(view.includes('target.searchParams.set("bridge", data.token)'));
+assert(view.includes('entryMode !== "pi" || piEntryVerified !== true || authoritativeLoaded !== true'));
+assert(view.includes('entryMode === "pi" && piEntryVerified'));
+assert(route.includes('decoded?.paymentId === paymentId'));
+assert(route.includes('decoded.exp >= Date.now()'));
+assert(route.includes('timingSafeEqual'));
+assert(route.includes('TTL_MS = 90_000'));
+console.log('DR89 PI ENTRY IDENTITY: PASS');

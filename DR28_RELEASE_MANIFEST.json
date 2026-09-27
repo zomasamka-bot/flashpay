@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 414,
-  "totalBytes": 2745826,
+  "fileCount": 416,
+  "totalBytes": 2752041,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 72058,
-      "sha256": "e298db1487cd31cf6bb7e9f45e302ee3258453178a09f2e135855901a51dd87a"
+      "bytes": 72404,
+      "sha256": "6a941953f13d0905fa8a6a2ef4767cca7a3fdf0ee5d0d67f2ee0ad58f7d767c9"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -145,6 +145,11 @@
       "path": "app/api/pi/complete/route.ts",
       "bytes": 38883,
       "sha256": "9bf5fad74c388b30272e6079c897ad1924ca928e560bb9576b537d6ffecc0fb9"
+    },
+    {
+      "path": "app/api/pi/entry-token/route.ts",
+      "bytes": 2357,
+      "sha256": "9192593fa95e9279c75dcebc4b4dad4b8d71f1297fbb71354adb364323508826"
     },
     {
       "path": "app/api/pi/start/route.ts",
@@ -283,8 +288,8 @@
     },
     {
       "path": "app/page.tsx",
-      "bytes": 41300,
-      "sha256": "13210b0287ccb0adf6575414c162d24a35cb9b55da952e32b73a69760d329c35"
+      "bytes": 41318,
+      "sha256": "80fca341dac94de45a2aeef20bde5e0260793b7f0b938a724ececd1ee5fbb3ba"
     },
     {
       "path": "app/pay/[id]/page.tsx",
@@ -293,8 +298,8 @@
     },
     {
       "path": "app/pay/[id]/payment-content-with-id.tsx",
-      "bytes": 28234,
-      "sha256": "21be38ed2e374830be68f5b130c2dc21e1f6b63e7445a384a0093ec8a96abfa6"
+      "bytes": 30730,
+      "sha256": "8f19011c6cbaa2af50b617eb1e0c8cef8cfbf247b88fd7dcf5293bc86de5ce95"
     },
     {
       "path": "app/payments/page.tsx",
@@ -1680,6 +1685,11 @@
       "path": "scripts/verify-dr88-durable-u2a-start-authority.mjs",
       "bytes": 1665,
       "sha256": "b0982ac4554dd450dd38eac6a89911ec8676cc9d69f2abd2c05e64e31bc59f57"
+    },
+    {
+      "path": "scripts/verify-dr89-pi-entry-identity.mjs",
+      "bytes": 998,
+      "sha256": "96fc6f4898e62474ecdef9c87da930b373e18dc0fa862676df5b62f1027b703c"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
