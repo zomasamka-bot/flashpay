@@ -2117,11 +2117,12 @@
       "sha256": "c305dc3b539a260d0c44bad7eb3d6947535c9f232ffbea33d1193bb8b731f0ef"
     }
   ],
-  "release": "DR93_PI_BROWSER_APP_ENTRY_FIX",
-  "notes": "Restore customer payment entry to the registered Pi Browser app identity flashpay.pi instead of the PiNet sharing facade. Preserve DR89 signed payment-bound bridge token, verify it before SDK initialization, preserve DR88 durable U2A start authority and R101 approval ownership. Secondary QR returns to the signed share bridge. No Settlement/Refund/Horizon executor changes.",
-  "baseProductionSha": "618f31a3c61c9def3ddfa6f8475bfdd8294a04d7",
+  "release": "DR94_PI_BROWSER_ENTRY_BASELINE_REPAIR",
+  "notes": "Repair DR93 baseline contamination: restore single-owner Pi SDK initialization semantics while retaining only the registered flashpay.pi signed payment-bound entry change. Preserve DR88 durable U2A start authority, DR87 approval ownership, DR92 DR11 ARM readback, and DR84 refund boundary. No Settlement/Refund/Horizon executor changes.",
+  "baseProductionSha": "3b957fe64527dfd94707a9a96cc462aef8e2d2ec",
   "runtimeSourceChanges": [
+    "components/pi-sdk-loader.tsx",
     "app/pay/[id]/payment-content-with-id.tsx"
   ],
-  "certifier": "scripts/verify-dr93-pi-browser-app-entry.mjs"
+  "certifier": "scripts/verify-dr94-entry-only-baseline.mjs"
 }
