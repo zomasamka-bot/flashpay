@@ -43,8 +43,6 @@ export default function PaymentContentWithId({
   const [diagnostics, setDiagnostics] = useState<string[]>([])
   const [entryMode, setEntryMode] = useState<"pi" | "share">(entry)
   const [authoritativeLoaded, setAuthoritativeLoaded] = useState(false)
-  const [piEntryVerified, setPiEntryVerified] = useState(entry !== "pi")
-  const [piEntryError, setPiEntryError] = useState("")
   const [refundPresentation, setRefundPresentation] = useState<RefundPresentation | undefined>()
   const [refundViewStatus, setRefundViewStatus] = useState<"loading" | "ready" | "indeterminate">("loading")
   const refundAccessTokenRef = useRef<string | null>(null)
@@ -101,16 +99,6 @@ export default function PaymentContentWithId({
     }
   }, [])
 
-  useEffect(() => {
-    if (entryMode !== "pi" || typeof window === "undefined") { setPiEntryVerified(entryMode !== "pi"); return }
-    const token = new URLSearchParams(window.location.search).get("bridge") || ""
-    if (!token) { setPiEntryVerified(false); setPiEntryError("This Pi Browser payment link is stale. Reopen the current payment link."); return }
-    let cancelled = false
-    fetch("/api/pi/entry-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "verify", paymentId, token }) })
-      .then(async (response) => { if (!response.ok) throw new Error("invalid"); if (!cancelled) { sessionStorage.setItem(`flashpay_pi_entry:${paymentId}`, token); setPiEntryVerified(true); setPiEntryError("") } })
-      .catch(() => { if (!cancelled) { setPiEntryVerified(false); setPiEntryError("This Pi Browser payment link is stale or mismatched. Reopen the current payment link.") } })
-    return () => { cancelled = true }
-  }, [entryMode, paymentId])
 
   useEffect(() => {
     let abortController: AbortController | null = null
@@ -261,7 +249,7 @@ export default function PaymentContentWithId({
 
     fetchPayment()
     // Only initialize Pi SDK if entry mode is "pi" (not "share")
-    if (entryMode === "pi" && piEntryVerified) {
+    if (entryMode === "pi") {
       initPiSDK()
     } else {
       // Shared link mode - no Pi SDK initialization
@@ -272,7 +260,7 @@ export default function PaymentContentWithId({
     return () => {
       if (abortController) abortController.abort()
     }
-  }, [paymentId, entryMode, piEntryVerified, toast])
+  }, [paymentId, entryMode, toast])
 
   const paymentStatus = payment?.status
 
@@ -443,7 +431,7 @@ export default function PaymentContentWithId({
       return
     }
 
-    if (entryMode !== "pi" || piEntryVerified !== true || authoritativeLoaded !== true || payment.status !== "pending") return
+    if (authoritativeLoaded !== true || payment.status !== "pending") return
 
     if (isPaymentPaid(paymentId)) {
       addDiagnostic("Payment already completed")
@@ -530,22 +518,7 @@ export default function PaymentContentWithId({
 
   // If entry mode is "share", show bridge UI to open Pi Browser
   if (entryMode === "share" && urlAmount) {
-    const openCurrentPaymentInPiBrowser = async () => {
-      try {
-        const response = await fetch("/api/pi/entry-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "issue", paymentId }) })
-        const data = await response.json().catch(() => ({}))
-        if (!response.ok || typeof data?.token !== "string") throw new Error("entry token unavailable")
-        const hashParams = new URLSearchParams()
-        hashParams.set("entry", "pi")
-        hashParams.set("lang", locale)
-        hashParams.set("bridge", data.token)
-        const appTarget = `pi://flashpay.pi/pay/${encodeURIComponent(paymentId)}?${hashParams.toString()}`
-        console.info("[DR93 PI APP ENTRY] opening registered Pi Browser app URL", { paymentId, host: "flashpay.pi" })
-        window.location.href = appTarget
-      } catch {
-        toast({ title: "Pi Browser", description: "Could not open this payment safely. Please retry from this page.", variant: "destructive" })
-      }
-    }
+    const piDeepLink = `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(paymentId)}?amount=${encodeURIComponent(urlAmount)}&entry=pi&lang=${encodeURIComponent(locale)}${urlNote ? `&note=${encodeURIComponent(urlNote)}` : ""}`
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 py-8 px-4 flex items-center">
@@ -572,7 +545,7 @@ export default function PaymentContentWithId({
               </div>
 
               <Button
-                onClick={() => { void openCurrentPaymentInPiBrowser() }}
+                onClick={() => { window.location.href = piDeepLink }}
                 className="w-full h-12 text-lg gap-2"
                 size="lg"
               >
@@ -585,14 +558,6 @@ export default function PaymentContentWithId({
             </CardContent>
           </Card>
         </div>
-      </div>
-    )
-  }
-
-  if (entryMode === "pi" && !piEntryVerified && piEntryError) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <Card className="max-w-md w-full"><CardHeader><CardTitle>Payment link needs reopening</CardTitle></CardHeader><CardContent className="space-y-3 text-center"><p className="text-sm text-muted-foreground">{piEntryError}</p><p className="text-xs font-mono" dir="ltr">{paymentId}</p></CardContent></Card>
       </div>
     )
   }

@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 422,
-  "totalBytes": 2766702,
+  "fileCount": 423,
+  "totalBytes": 2765045,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 74111,
-      "sha256": "be623cdb2fae330aa4a01da9960582ae1f5d4f3651282b36f28c2090ba80a3ee"
+      "bytes": 73822,
+      "sha256": "a72be28001f318b65a40bcf6d2cc84fc030b5ed1a176e1f15a963f70631ae03d"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -298,8 +298,8 @@
     },
     {
       "path": "app/pay/[id]/payment-content-with-id.tsx",
-      "bytes": 30730,
-      "sha256": "b92c16e1cac41dd0605b65390524a1823b5f40c07fa40088bac6b33e26565bdb"
+      "bytes": 28227,
+      "sha256": "e94b3d7ca250a39f665faa02a655d37dcd4d17bbe133b53344db099a48af57c6"
     },
     {
       "path": "app/payments/page.tsx",
@@ -1720,6 +1720,11 @@
       "path": "scripts/verify-dr95-production-baseline-lock.mjs",
       "bytes": 1848,
       "sha256": "6424d4bbe883d4e9f235f25e127ff0bbb562ffc8c4b4271db864c7d505466ccf"
+    },
+    {
+      "path": "scripts/verify-dr96-vercel-payment-transport-lock.mjs",
+      "bytes": 1135,
+      "sha256": "bfa9d124376cf083623d321f6762882430a342f24763061209fdd780754084ee"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
