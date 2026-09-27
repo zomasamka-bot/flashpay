@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 425,
-  "totalBytes": 2778546,
+  "fileCount": 429,
+  "totalBytes": 2783682,
   "files": [
     {
       "path": ".gitignore",
@@ -22,9 +22,19 @@
       "sha256": "2dbc66bba289edaf9c63330e16f186f00b0ed400dbd9146ea5901c6d8ac2c042"
     },
     {
+      "path": "DR100_RELEASE_MANIFEST.json",
+      "bytes": 756,
+      "sha256": "db508b835327b732d12ee0e97d84404566a3a70d75bc4540298a2554519c8502"
+    },
+    {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 74193,
-      "sha256": "4941e50de06f7166a5f0546007a6453e9076f2e39006faaf074ceeefe3546804"
+      "bytes": 74378,
+      "sha256": "ab547a42ebcd61c14f7dc9d870751405c6461c0d1a8123f316f04c2b086382b3"
+    },
+    {
+      "path": "DR99_RELEASE_MANIFEST.json",
+      "bytes": 637,
+      "sha256": "76c3c5810216e6100762f1825995f125add976edd3d69f9338b13b8212b4bb56"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -233,8 +243,8 @@
     },
     {
       "path": "app/control-panel/page.tsx",
-      "bytes": 29225,
-      "sha256": "2f1d8c7fe757bddf08723b20c6d9a8312b08f54ef51f8a88654688db5089703b"
+      "bytes": 29216,
+      "sha256": "cbf49320a62e03977718fee35eaf6cee17c28b216ba04ee4cef7372f4f09a237"
     },
     {
       "path": "app/create/page.tsx",
@@ -1058,8 +1068,8 @@
     },
     {
       "path": "lib/refund-auto-orchestrator.ts",
-      "bytes": 13480,
-      "sha256": "5c86de746139904a83e575b1d518e42bca9acb240bf35dd33ba22969dbb664f0"
+      "bytes": 13503,
+      "sha256": "36a1a9a77c683b133ab66cb72cff244b4dd22adf79cfec738d6aad01cd0236c5"
     },
     {
       "path": "lib/refund-blockchain-evidence.ts",
@@ -1073,8 +1083,8 @@
     },
     {
       "path": "lib/refund-checkpoint-store.ts",
-      "bytes": 107967,
-      "sha256": "00fafeb254177f2a0221804a7768ba65cb1246cd0e7b5ee3069062f4241fadd5"
+      "bytes": 108190,
+      "sha256": "498211b7df6a6ca4026da7ae68044bab360a5dd20bf871e592b027120c6cd570"
     },
     {
       "path": "lib/refund-executor.ts",
@@ -1290,6 +1300,11 @@
       "path": "scripts/verify-dr10-lost-kick-lost-redis-recovery.mjs",
       "bytes": 3548,
       "sha256": "77c6c34ccf752b57e7d4091e741d88d4ff1929d7a1340f6b543a0dd3c3478766"
+    },
+    {
+      "path": "scripts/verify-dr100-dr14-refund-boundary2-owner-control.mjs",
+      "bytes": 1900,
+      "sha256": "342a789caa0dcbfee27c490dbaeeb778f5b947adb915c1e9f67614696b527110"
     },
     {
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",
@@ -1733,8 +1748,13 @@
     },
     {
       "path": "scripts/verify-dr98-dr14-visible-owner-control.mjs",
-      "bytes": 1752,
-      "sha256": "1fba402d47d6da3b1da7179d3a7ecc9c5fd0d9f4efcb2ab8a7993fdb47e44509"
+      "bytes": 1929,
+      "sha256": "d7fc5c7f86a3c8cbabc883b945601bc2f1e7b3cb2728330282d3ff13b9fbef7d"
+    },
+    {
+      "path": "scripts/verify-dr99-dr14-short-retry-recovery.mjs",
+      "bytes": 1244,
+      "sha256": "dae16b4b34f498aa52baa2eb6d5d58b26b562de7f4805b79f46256645f323ef4"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
