@@ -243,6 +243,31 @@ export default function HomePage() {
     setDisplayAmount(value.toFixed(2))
   }
 
+
+  const readDr11ArmStatus = async (): Promise<boolean> => {
+    const accessToken = unifiedStore.getMerchantState().accessToken
+    if (!accessToken) throw new Error("Pi session token required")
+    const response = await fetch("/api/control/dr11", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ confirmation: "READ_DR11_NEXT_010_PAYMENT_ARM" }),
+    })
+    const body = await response.json().catch(() => null) as { success?: boolean; certification?: string; armed?: boolean; ttlSeconds?: number } | null
+    if (!response.ok || body?.success !== true) throw new Error("DR11 arm readback unavailable")
+    return body.armed === true && body.certification === "DR11_ARMED" && typeof body.ttlSeconds === "number" && body.ttlSeconds > 0
+  }
+
+  useEffect(() => {
+    if (Number.parseFloat(amount) !== 0.1 || !merchantSetup.isSetupComplete || dr14RefundPrepared || dr14RefundPreparing) return
+    let cancelled = false
+    readDr11ArmStatus().then((armed) => {
+      if (!cancelled) setDr14RefundPrepared(armed)
+    }).catch(() => {
+      if (!cancelled) setDr14RefundPrepared(false)
+    })
+    return () => { cancelled = true }
+  }, [amount, merchantSetup.isSetupComplete])
+
   const handlePrepareDr14RefundPayment = async () => {
     if (dr14RefundPreparing || dr14RefundPrepared || Number.parseFloat(amount) !== 0.1) return
     const accessToken = unifiedStore.getMerchantState().accessToken
@@ -278,9 +303,19 @@ export default function HomePage() {
       return
     }
 
-    if (amountNum === 0.1 && !dr14RefundPrepared) {
-      setDr14Error("Prepare DR14 refund payment before generating this 0.10 Pi certification payment")
-      return
+    if (amountNum === 0.1) {
+      try {
+        const armed = await readDr11ArmStatus()
+        setDr14RefundPrepared(armed)
+        if (!armed) {
+          setDr14Error("Prepare DR14 refund payment before generating this 0.10 Pi certification payment")
+          return
+        }
+      } catch {
+        setDr14RefundPrepared(false)
+        setDr14Error("DR11 arm readback unavailable; payment generation blocked")
+        return
+      }
     }
 
     try {

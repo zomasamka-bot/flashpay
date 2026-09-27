@@ -13,6 +13,7 @@ const LIVE_CONFIRM = "DR11_CONCURRENT_REFUND"
 const READINESS_CONFIRM = "READINESS_ONLY"
 const RESOLVE_CONFIRM = "RESOLVE_CURRENT"
 const ARM_CONFIRM = "ARM_DR11_NEXT_010_PAYMENT"
+const ARM_STATUS_CONFIRM = "READ_DR11_NEXT_010_PAYMENT_ARM"
 const ARM_KEY = "flashpay:certification:dr11:next-010:v1"
 const ARM_VALUE = "armed:v1"
 const ARM_TTL_SECONDS = 600
@@ -35,6 +36,17 @@ export async function POST(request: NextRequest) {
   }
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   const confirmation = body?.confirmation
+  if (confirmation === ARM_STATUS_CONFIRM) {
+    try {
+      const value = await redis.get(ARM_KEY)
+      const ttlSeconds = await redis.ttl(ARM_KEY)
+      const armed = value === ARM_VALUE && Number.isFinite(ttlSeconds) && ttlSeconds > 0
+      console.warn("[DR92 DR11 ARM READBACK]", { ownerUid: auth.uid, armed, ttlSeconds: armed ? ttlSeconds : 0, financialExecutionStarted: false })
+      return NextResponse.json({ success: true, certification: armed ? "DR11_ARMED" : "DR11_NOT_ARMED", armed, ttlSeconds: armed ? ttlSeconds : 0, financialExecutionStarted: false }, { status: 200, headers: NO_STORE })
+    } catch {
+      return NextResponse.json({ error: "DR11 arm readback unavailable" }, { status: 503, headers: NO_STORE })
+    }
+  }
   if (confirmation === ARM_CONFIRM) {
     const armed = await redis.set(ARM_KEY, ARM_VALUE, { nx: true, ex: ARM_TTL_SECONDS })
     if (armed !== "OK") return NextResponse.json({ error: "DR11 next-payment gate is already armed" }, { status: 409, headers: NO_STORE })
