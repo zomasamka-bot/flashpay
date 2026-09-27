@@ -58,7 +58,12 @@ export function CustomerPaymentView({
     
     async function init() {
       console.log("[v0][CustomerView] Initializing Pi SDK...")
-      const sdkResult = await initializePiSDK()
+      const sdkResult = await Promise.race([
+        initializePiSDK(),
+        new Promise<{ success: false; error: string }>((resolve) =>
+          setTimeout(() => resolve({ success: false, error: "Pi SDK initialization timed out. Close and reopen this payment in Pi Browser." }), 8000),
+        ),
+      ])
       setPiSDKReady(sdkResult.success)
       console.log("[v0][CustomerView] Pi SDK ready:", sdkResult.success)
 
@@ -333,10 +338,20 @@ export function CustomerPaymentView({
               </>
             )}
 
-            {isInPiBrowser && !piSDKReady && !isPaymentPaid && (
+            {isInPiBrowser && !piSDKReady && !isPaymentPaid && !authError && (
               <div className="text-center text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin mx-auto mb-2" />
                 Connecting to Pi Network...
+              </div>
+            )}
+
+            {isInPiBrowser && !piSDKReady && !isPaymentPaid && authError && (
+              <div role="alert" className="space-y-2 rounded-lg border border-destructive/30 bg-background p-4 text-center">
+                <p className="font-medium text-destructive">Pi Network connection failed</p>
+                <p className="text-sm text-muted-foreground">{authError}</p>
+                <Button type="button" variant="outline" onClick={() => window.location.reload()} className="w-full">
+                  Reload payment
+                </Button>
               </div>
             )}
 

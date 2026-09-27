@@ -496,7 +496,7 @@ export default function HomePage() {
   }
 
   const handleArmDr14Stage1 = async () => {
-    if (!currentPaymentId || payment?.status !== "pending" || dr14Arming || dr14Armed) return
+    if (!currentPaymentId || payment?.status !== "settlement_failed" || dr14Arming || dr14Armed) return
     const merchant = unifiedStore.getMerchantState()
     const accessToken = merchant.accessToken
     if (!accessToken) {

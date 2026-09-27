@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 410,
-  "totalBytes": 2728482,
+  "fileCount": 411,
+  "totalBytes": 2731050,
   "files": [
     {
       "path": ".gitignore",
@@ -23,8 +23,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 71475,
-      "sha256": "6caf7c0cecf845c220b002ea276fb72c9d49885748baae6a3b89c729c3c4390d"
+      "bytes": 71861,
+      "sha256": "f7d51d66ffdda94bb274e95eceed0ab76a3ae34204f897fdaae59a1439ea0605"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -278,8 +278,8 @@
     },
     {
       "path": "app/page.tsx",
-      "bytes": 41290,
-      "sha256": "2f87d8c65b27098aed22681a081037feae40270265daf5aec8e7c2167fe7f036"
+      "bytes": 41300,
+      "sha256": "13210b0287ccb0adf6575414c162d24a35cb9b55da952e32b73a69760d329c35"
     },
     {
       "path": "app/pay/[id]/page.tsx",
@@ -338,8 +338,8 @@
     },
     {
       "path": "components/customer-payment-view.tsx",
-      "bytes": 13582,
-      "sha256": "0e321a6ff28ad8ea24f4931c64c5f4413449aff218e349cf9bf0554887846046"
+      "bytes": 14445,
+      "sha256": "002430a4559a37df3446e68cf852c35288d7e4da3256c06fa0b2b117b33e11d2"
     },
     {
       "path": "components/customer-refund-status-card.tsx",
@@ -1613,8 +1613,8 @@
     },
     {
       "path": "scripts/verify-dr77-dr14-server-owner-authority.mjs",
-      "bytes": 1424,
-      "sha256": "4400a5a545dc44268fd2847c6e5f376ed0696c573412075e7b7bbab4a943a08f"
+      "bytes": 1386,
+      "sha256": "abb8cd27b828d8f0bc9f20d8b6a9c6ca37add038e35bf9f0d7a5fa0ea7a78761"
     },
     {
       "path": "scripts/verify-dr78-dr14-canonical-readback.mjs",
@@ -1660,6 +1660,11 @@
       "path": "scripts/verify-dr85-dr14-refund-prepayment-control.mjs",
       "bytes": 2105,
       "sha256": "653a2d115e161a42923754e6e0a235438ff1c19cdcdcbe788f0151b8efd032a7"
+    },
+    {
+      "path": "scripts/verify-dr86-customer-render-and-refund-arm-control.mjs",
+      "bytes": 1347,
+      "sha256": "ae1b4e536ac2d0b6f75a19a186522d353229454fa2b5d76dbc4a3017b3826f76"
     },
     {
       "path": "scripts/verify-f3-1-public-status-reader-authority-map.mjs",
