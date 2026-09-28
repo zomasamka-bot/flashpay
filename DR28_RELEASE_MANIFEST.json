@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 431,
-  "totalBytes": 2790105,
+  "fileCount": 433,
+  "totalBytes": 2796336,
   "files": [
     {
       "path": ".gitignore",
@@ -32,9 +32,14 @@
       "sha256": "c838ecc8b8ce0d11fc7eafdab5c2765fe812bad30614d5799dbcab3a79a97292"
     },
     {
+      "path": "DR102_RELEASE_MANIFEST.json",
+      "bytes": 919,
+      "sha256": "dd13769ccfd1168814c6ebbc4a0012859620e11f550ae5bcf5a844a3f3bc7937"
+    },
+    {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 75434,
-      "sha256": "a6ad12a59840a89fca9d8ca6742691d6e6551f3569ebf4043e7851f18e824f14"
+      "bytes": 75790,
+      "sha256": "49093223b059dd3fe325d39b719420c32c695daa1efee88339f9aba712e5d6eb"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -248,8 +253,8 @@
     },
     {
       "path": "app/control-panel/page.tsx",
-      "bytes": 29241,
-      "sha256": "89770fec28af16911bcfb7e504fca445c5c7abc5658e28daf7d2a4b49120758d"
+      "bytes": 29208,
+      "sha256": "f43636c8639081677cbf18186166197f802342f534bb59e7e84d2fcc1cdbbdba"
     },
     {
       "path": "app/create/page.tsx",
@@ -1315,6 +1320,11 @@
       "path": "scripts/verify-dr101-dr14-refund-boundary3-owner-control.mjs",
       "bytes": 4449,
       "sha256": "3b8785ec5712ee3000df0c83f54267d6832584870395ec84cf752b8a993a2f6a"
+    },
+    {
+      "path": "scripts/verify-dr102-dr14-refund-boundary4-owner-control.mjs",
+      "bytes": 4989,
+      "sha256": "ad48eb1dbbb78bed8d533ce1c04a1b2a7292f4bc87da15bab78c190cb2722876"
     },
     {
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",

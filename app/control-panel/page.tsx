@@ -32,7 +32,7 @@ function ControlPanelContent() {
   const [dr14PaymentId, setDr14PaymentId] = useState("")
   const [dr14Ready, setDr14Ready] = useState(false)
   const [dr14Armed, setDr14Armed] = useState(false)
-  const dr14Boundary = "refund_after_horizon_submit_before_tx_checkpoint" as const
+  const dr14Boundary = "refund_after_payment_checkpoint" as const
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [reason, setReason] = useState("")
@@ -227,7 +227,7 @@ function ControlPanelContent() {
   const armDr14 = useCallback(async () => {
     if (isDr14Running || !uidData.accessToken || !dr14Ready) return
     const paymentId = dr14PaymentId.trim()
-    const typed = window.prompt(document.documentElement.lang === "ar" ? "تسليح نقطة DR14 الثالثة فقط. اكتب ARM_DR14_ONE_SHOT للمتابعة." : "Arm only the third DR14 refund boundary. Type ARM_DR14_ONE_SHOT to continue.")
+    const typed = window.prompt(document.documentElement.lang === "ar" ? "تسليح نقطة DR14 الرابعة فقط. اكتب ARM_DR14_ONE_SHOT للمتابعة." : "Arm only the fourth DR14 refund boundary. Type ARM_DR14_ONE_SHOT to continue.")
     if ((typed?.trim() ?? "") !== "ARM_DR14_ONE_SHOT") { setError(typed === null ? "DR14 arming cancelled." : "DR14 arming confirmation did not match exactly. No request was sent."); return }
     setIsDr14Running(true); setError(null); setSuccess("Arming exact DR14 refund boundary…"); setDr14Armed(false)
     try {
@@ -324,12 +324,12 @@ function ControlPanelContent() {
 
 
         <Card className="border-red-500/50">
-          <CardHeader><CardTitle>DR14 Live Refund Crash Certification — Boundary 3</CardTitle><CardDescription>Owner-only control for the exact DR11 payment. Readiness and arming do not execute money. The red start button is the only action here that releases the held refund into live execution.</CardDescription></CardHeader>
+          <CardHeader><CardTitle>DR14 Live Refund Crash Certification — Boundary 4</CardTitle><CardDescription>Owner-only control for the exact DR11 payment. Readiness and arming do not execute money. The red start button is the only action here that releases the held refund into live execution.</CardDescription></CardHeader>
           <CardContent className="space-y-4">
-            <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Current certification boundary only: refund_after_horizon_submit_before_tx_checkpoint. Load the current DR11 refund first so the payment ID comes from server authority, not manual entry.</AlertDescription></Alert>
+            <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Current certification boundary only: refund_after_payment_checkpoint. Load the current DR11 refund first so the payment ID comes from server authority, not manual entry.</AlertDescription></Alert>
             <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs font-mono break-all">Payment: {dr14PaymentId || "Load Current DR11 Refund first"}</div>
             <Button onClick={() => void checkDr14Readiness()} disabled={isDr14Running || !dr14PaymentId} variant="outline" className="w-full">Check DR14 Readiness</Button>
-            <Button onClick={() => void armDr14()} disabled={isDr14Running || !dr14Ready} variant="outline" className="w-full">Arm DR14 Boundary 3 — One Shot</Button>
+            <Button onClick={() => void armDr14()} disabled={isDr14Running || !dr14Ready} variant="outline" className="w-full">Arm DR14 Boundary 4 — One Shot</Button>
             <Button onClick={() => void startDr14Refund()} disabled={isDr14Running || !dr14Armed} variant="destructive" className="w-full">Start DR14 Refund Once</Button>
             <p className="text-xs text-muted-foreground">State: {dr14Armed ? "ARMED — live financial start enabled" : dr14Ready ? "READY — arm is enabled" : "NOT READY — financial start disabled"}</p>
           </CardContent>
