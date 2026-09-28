@@ -1,0 +1,20 @@
+{
+  "release": "DR106",
+  "date": "2026-09-28",
+  "title": "DR8 Independent Wake Platform Gate",
+  "baseline": "DR105 clean release / production SHA 5573ac0b7fe3893cb72b6c4874b6ae40e97b06c2",
+  "purpose": "Close false-positive risk around DR8 and preserve deployability while the 1-10 minute independent scheduler proof is platform-blocked.",
+  "runtimeFilesChanged": [],
+  "financialFilesChanged": [],
+  "addedFiles": [
+    "scripts/verify-dr106-dr8-independent-wake-platform-gate.mjs",
+    "DR106_RELEASE_MANIFEST.json"
+  ],
+  "currentVercelCron": "0 21 * * *",
+  "requiredIndependentWake": "1-10 minutes",
+  "dr8Status": "OPEN_PLATFORM_PROOF_GAP",
+  "financialAuthorityChanged": false,
+  "financialMovementExecuted": false,
+  "productionDataMutated": false,
+  "nextAction": "Provide <=10-minute independent scheduler capability, deploy same financial runtime, then collect live scheduler-origin proof."
+}
