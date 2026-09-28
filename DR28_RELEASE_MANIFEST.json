@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 434,
-  "totalBytes": 2801029,
+  "fileCount": 433,
+  "totalBytes": 2795983,
   "files": [
     {
       "path": ".gitignore",
@@ -32,14 +32,14 @@
       "sha256": "c838ecc8b8ce0d11fc7eafdab5c2765fe812bad30614d5799dbcab3a79a97292"
     },
     {
-      "path": "DR103_RELEASE_MANIFEST.json",
-      "bytes": 954,
-      "sha256": "4328c91d229b43e2f673a862c61b6dd46184ccd207c2eb2efa0905cc5011cd0d"
+      "path": "DR104_RELEASE_MANIFEST.json",
+      "bytes": 985,
+      "sha256": "95b6cfe8d3ed572660f5c30fdf21f28f6099259159e4cbe116c398a87162bea7"
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 75985,
-      "sha256": "ef6d0873a3ee60a0e4892c03d53f8c4e8a4529d95427051b88b928596c7df4cc"
+      "bytes": 75790,
+      "sha256": "d888bd1f85004a77aa688fc984d7c5f494ba91e033aa241af067b583a1cf9bb3"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -253,8 +253,8 @@
     },
     {
       "path": "app/control-panel/page.tsx",
-      "bytes": 29191,
-      "sha256": "92364f60b7278bef321b503bf6ddd7664a5c48f60a8eacc4e0e147666b3bc536"
+      "bytes": 29181,
+      "sha256": "acee408d635956472d59a788819e741e196a00975a3fc1f50bfff6feb8610fe1"
     },
     {
       "path": "app/create/page.tsx",
@@ -1322,14 +1322,9 @@
       "sha256": "3b8785ec5712ee3000df0c83f54267d6832584870395ec84cf752b8a993a2f6a"
     },
     {
-      "path": "scripts/verify-dr102-dr14-refund-boundary4-owner-control.mjs",
-      "bytes": 4989,
-      "sha256": "ad48eb1dbbb78bed8d533ce1c04a1b2a7292f4bc87da15bab78c190cb2722876"
-    },
-    {
-      "path": "scripts/verify-dr103-dr14-refund-boundary5-owner-control.mjs",
-      "bytes": 4480,
-      "sha256": "d99024a34a1f959cf14e74bae2faafab7c71db55f7a3d9bedb7787d4ad067139"
+      "path": "scripts/verify-dr104-dr14-refund-boundary6-owner-control.mjs",
+      "bytes": 4597,
+      "sha256": "d1bbc05c3f9273f0d79a8c8ce7d2a4149b2fa36c02cd971422492734776a7a2a"
     },
     {
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",

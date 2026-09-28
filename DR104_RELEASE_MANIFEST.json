@@ -1,0 +1,15 @@
+{
+  "release": "DR104",
+  "title": "DR14 REFUND BOUNDARY 6 OWNER CONTROL",
+  "baselineProductionSha": "39bd880400692ad803ecda0f54a46def68118730",
+  "baselineArtifactSha256": "4b068bf7a2b3cffe2a35775060d217188cbd13b83373b348b77889f6bb617a9f",
+  "runtimeChanges": [
+    "app/control-panel/page.tsx"
+  ],
+  "purpose": "Advance the visible owner DR14 refund crash certification control from closed Boundary 5 to refund_after_audit while preserving the existing financial hook after the durable audit_recorded checkpoint and exact refund_audit_recorded event are committed. Recovery from audit_recorded proceeds to durable completion without recreating the Pi refund, resubmitting Horizon movement, reinserting accounting, or recreating the audit checkpoint.",
+  "financialExecutorChanged": false,
+  "piCreateLogicChanged": false,
+  "horizonSubmitLogicChanged": false,
+  "existingBoundary6HookChanged": false,
+  "certifier": "scripts/verify-dr104-dr14-refund-boundary6-owner-control.mjs"
+}
