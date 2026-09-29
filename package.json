@@ -37,7 +37,9 @@
     "certify:f3-2": "node scripts/verify-f3-2-stale-state-matrix.mjs",
     "certify:f3-3": "node scripts/verify-f3-3-durable-public-status-authority.mjs",
     "certify:f3-4": "node scripts/verify-f3-4-projection-self-healing.mjs",
-    "certify:f3-5": "node scripts/verify-f3-5-runtime-conflict-certification.mjs"
+    "certify:f3-5": "node scripts/verify-f3-5-runtime-conflict-certification.mjs",
+    "certify:dr17:isolated-live": "node scripts/run-dr17-isolated-live-10k.mjs",
+    "certify:dr107": "node scripts/verify-dr107-dr17-isolated-live-harness.mjs"
   },
   "overrides": {
     "react": "^19",

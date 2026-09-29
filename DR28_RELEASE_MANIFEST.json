@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 434,
-  "totalBytes": 2723536,
+  "fileCount": 437,
+  "totalBytes": 2806707,
   "files": [
     {
       "path": ".gitignore",
@@ -40,6 +40,11 @@
       "path": "DR106_RELEASE_MANIFEST.json",
       "bytes": 908,
       "sha256": "698968a13e8b985f49810b666ae2e78abd62dfeec5e3089e8c64e626f03042ba"
+    },
+    {
+      "path": "DR28_RELEASE_MANIFEST.json",
+      "bytes": 75984,
+      "sha256": "90cd9f28ed55b027fe2de755ee51a0865abe1ab9c20ba5b12b16444955852cce"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -1233,8 +1238,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 5097,
-      "sha256": "221909aac220c20b00d75fa9f50da9d245065eac7225807208c38d9c1a74e7bd"
+      "bytes": 5259,
+      "sha256": "45a124adb60f2b72673728b7ef873f9761adc4e89a746d65117f822242449254"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1302,6 +1307,11 @@
       "sha256": "c8495e2cb46711ddc1b406ffb9b5965a58caf2b5374acacef2389abeecd1fdf2"
     },
     {
+      "path": "scripts/run-dr17-isolated-live-10k.mjs",
+      "bytes": 5828,
+      "sha256": "30d4943ad90d7d47550b197680007ba089e48fde83506a8566745d1067a2e396"
+    },
+    {
       "path": "scripts/run-financial-recovery-build-verifier.mjs",
       "bytes": 1944,
       "sha256": "d77c416f0cb42cd7ae5f53c0dfc229dc45cb84486bf33f4c46de131a09cb33eb"
@@ -1330,6 +1340,11 @@
       "path": "scripts/verify-dr106-dr8-independent-wake-platform-gate.mjs",
       "bytes": 1891,
       "sha256": "a36a521660792b2a1c95c3f207ab488c2c53011bbfd1e1e11f07289cc0471778"
+    },
+    {
+      "path": "scripts/verify-dr107-dr17-isolated-live-harness.mjs",
+      "bytes": 1197,
+      "sha256": "65f33309ed2f726f24dedf1ae36ea550d47485b47f85781817579904e299303e"
     },
     {
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",
