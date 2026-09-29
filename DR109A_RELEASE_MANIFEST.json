@@ -1,0 +1,25 @@
+{
+  "release": "DR109A",
+  "gate": "DR17_EXECUTION_BRIDGE_TYPESCRIPT_BUILD_FIX",
+  "failedProductionGitSha": "ec9688dd74177e933f839d730b51904555dfc64d",
+  "failedDeployment": "dpl_EVe84BLkSpYMZwk9FtcXT291vm13",
+  "baselineLastReadyGitSha": "caa144f15527f9c323888bb1aee04effd6341b61",
+  "runtimeFinancialSourceChanged": false,
+  "executionBridgeBehaviorChanged": false,
+  "financialHarnessBehaviorChanged": false,
+  "fix": "Add the TypeScript ESM declaration companion for lib/dr17-shared-certification.mjs and bind it into the DR109 verifier.",
+  "filesChangedFromDR109": [
+    "lib/dr17-shared-certification.d.mts",
+    "scripts/verify-dr109-dr17-execution-bridge.mjs",
+    "DR109A_RELEASE_MANIFEST.json",
+    "DR28_RELEASE_MANIFEST.json"
+  ],
+  "verification": {
+    "dr109StaticGate": "PASS",
+    "dr14FullCrashMatrix": "PASS",
+    "r10115FullFinancialRegression": "PASS",
+    "financialRecoveryBuildVerifier": "PASS",
+    "dr28CleanRelease": "PASS"
+  },
+  "claimBoundary": "Build-fix only. DR17 Live remains OPEN until the authenticated one-shot 10K route executes and measured evidence is inspected."
+}

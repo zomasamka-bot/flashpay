@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 445,
-  "totalBytes": 2826877,
+  "fileCount": 447,
+  "totalBytes": 2829805,
   "files": [
     {
       "path": ".gitignore",
@@ -52,14 +52,19 @@
       "sha256": "a2a59f8ba417a41e2cfc21dd2dadd281eb296772d146c479f4c736cbdf0a579f"
     },
     {
+      "path": "DR109A_RELEASE_MANIFEST.json",
+      "bytes": 1108,
+      "sha256": "bc6081710f057ade2eb149843e483ca3a17cfa92112f6f42ef9b44a9e934c95d"
+    },
+    {
       "path": "DR109_RELEASE_MANIFEST.json",
       "bytes": 1305,
       "sha256": "aea1c389f4d103d18e74775e9078ba4bab40411e714fc37c7a40667316f6ef53"
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 77202,
-      "sha256": "5fd9306518167d986c62a4ff4a5865c8296510dddfc2bdbb2aa64db703074913"
+      "bytes": 78055,
+      "sha256": "6c748c79f5969c5a2e1fca3009186fbabb03b5c7350fc4554a34d0b137bcfc23"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -787,6 +792,11 @@
       "sha256": "f88490bacef8d177c41d30b1fe0aff4bbbe5577bf8c74196b1064a50c3353ff5"
     },
     {
+      "path": "lib/dr17-shared-certification.d.mts",
+      "bytes": 720,
+      "sha256": "c0ba7ef0b66a394bff928ec21bc3baadb4ae1039e9404d307eeb947c8522f40d"
+    },
+    {
       "path": "lib/dr17-shared-certification.mjs",
       "bytes": 7268,
       "sha256": "f1342976305a5741e195ce131ed5a41f815b87aded541541c9e04bd68cb7772b"
@@ -1383,8 +1393,8 @@
     },
     {
       "path": "scripts/verify-dr109-dr17-execution-bridge.mjs",
-      "bytes": 1622,
-      "sha256": "1ad18c51878fdbc5487e74ad673b86d211e24921fc0b073b43af1c1483e13158"
+      "bytes": 1869,
+      "sha256": "f82bc2a4fd33eaad1d853568c348ed2b59ca58ea949d2b143413e7d16618a5f7"
     },
     {
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",
