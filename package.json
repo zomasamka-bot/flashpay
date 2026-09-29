@@ -41,7 +41,8 @@
     "certify:dr17:isolated-live": "node scripts/run-dr17-isolated-live-10k.mjs",
     "certify:dr107": "node scripts/verify-dr107-dr17-isolated-live-harness.mjs",
     "certify:dr17:shared-safe": "node scripts/run-dr17-shared-resource-safe-10k.mjs",
-    "certify:dr108": "node scripts/verify-dr108-dr17-shared-resource-safe-harness.mjs"
+    "certify:dr108": "node scripts/verify-dr108-dr17-shared-resource-safe-harness.mjs",
+    "certify:dr109": "node scripts/verify-dr109-dr17-execution-bridge.mjs"
   },
   "overrides": {
     "react": "^19",
