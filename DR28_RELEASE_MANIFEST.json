@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 447,
-  "totalBytes": 2829805,
+  "fileCount": 449,
+  "totalBytes": 2833762,
   "files": [
     {
       "path": ".gitignore",
@@ -57,14 +57,19 @@
       "sha256": "bc6081710f057ade2eb149843e483ca3a17cfa92112f6f42ef9b44a9e934c95d"
     },
     {
+      "path": "DR109B_RELEASE_MANIFEST.json",
+      "bytes": 1034,
+      "sha256": "4c626471eb9d655c4a01f6ac55c420a439795c32a33853635cdeb274195cc6fc"
+    },
+    {
       "path": "DR109_RELEASE_MANIFEST.json",
       "bytes": 1305,
       "sha256": "aea1c389f4d103d18e74775e9078ba4bab40411e714fc37c7a40667316f6ef53"
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 78055,
-      "sha256": "6c748c79f5969c5a2e1fca3009186fbabb03b5c7350fc4554a34d0b137bcfc23"
+      "bytes": 78404,
+      "sha256": "e9f95d01f995eb0059382881d7aebd334d2f2dc1a3981214958cf772946385ae"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -73,8 +78,8 @@
     },
     {
       "path": "app/api/certification/dr17/run/route.ts",
-      "bytes": 4050,
-      "sha256": "fd37fd1365eed200a25b2ac6cd3af2385290e67a7c7bc2a4ffe0b70028603d3d"
+      "bytes": 4598,
+      "sha256": "88730346922ad03b231de362538f95852a67a087c23b15ab6768a8302e918284"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -1273,8 +1278,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 5509,
-      "sha256": "5b1cc2d5dd1130d4ea9dbe64c6f1d54250b7db7a33ed7adfa833cc8a77145e30"
+      "bytes": 5591,
+      "sha256": "89e31c3e6cf0a1dc0f14f7c80516be78dae1cb613811671d709ca36e170c30fd"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1395,6 +1400,11 @@
       "path": "scripts/verify-dr109-dr17-execution-bridge.mjs",
       "bytes": 1869,
       "sha256": "f82bc2a4fd33eaad1d853568c348ed2b59ca58ea949d2b143413e7d16618a5f7"
+    },
+    {
+      "path": "scripts/verify-dr109b-dr17-build-auth-hardening.mjs",
+      "bytes": 1944,
+      "sha256": "b42601ad319ca87bc4237a5ecb749a78f87bca104777b46c6efb316bb76c83eb"
     },
     {
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",
