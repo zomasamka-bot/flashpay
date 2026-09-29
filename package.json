@@ -39,7 +39,9 @@
     "certify:f3-4": "node scripts/verify-f3-4-projection-self-healing.mjs",
     "certify:f3-5": "node scripts/verify-f3-5-runtime-conflict-certification.mjs",
     "certify:dr17:isolated-live": "node scripts/run-dr17-isolated-live-10k.mjs",
-    "certify:dr107": "node scripts/verify-dr107-dr17-isolated-live-harness.mjs"
+    "certify:dr107": "node scripts/verify-dr107-dr17-isolated-live-harness.mjs",
+    "certify:dr17:shared-safe": "node scripts/run-dr17-shared-resource-safe-10k.mjs",
+    "certify:dr108": "node scripts/verify-dr108-dr17-shared-resource-safe-harness.mjs"
   },
   "overrides": {
     "react": "^19",

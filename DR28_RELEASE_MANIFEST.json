@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 437,
-  "totalBytes": 2806707,
+  "fileCount": 441,
+  "totalBytes": 2818670,
   "files": [
     {
       "path": ".gitignore",
@@ -42,9 +42,19 @@
       "sha256": "698968a13e8b985f49810b666ae2e78abd62dfeec5e3089e8c64e626f03042ba"
     },
     {
+      "path": "DR107_RELEASE_MANIFEST.json",
+      "bytes": 1326,
+      "sha256": "f6b45cef5b3757255398be29e7d781bcdf323c53a9bca12d8c6316f918ce76d1"
+    },
+    {
+      "path": "DR108_RELEASE_MANIFEST.json",
+      "bytes": 1407,
+      "sha256": "a2a59f8ba417a41e2cfc21dd2dadd281eb296772d146c479f4c736cbdf0a579f"
+    },
+    {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 75984,
-      "sha256": "90cd9f28ed55b027fe2de755ee51a0865abe1ab9c20ba5b12b16444955852cce"
+      "bytes": 76505,
+      "sha256": "3d6c9a17ed52a6b435cb0fdf155429dbd819ba6b0fcd89e0e56b13a6aaaf6de3"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -1238,8 +1248,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 5259,
-      "sha256": "45a124adb60f2b72673728b7ef873f9761adc4e89a746d65117f822242449254"
+      "bytes": 5433,
+      "sha256": "40c2966443c532dfc45147b20d78b55aca6fb0fedbd6a19b74a1b54838512b2d"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1312,6 +1322,11 @@
       "sha256": "30d4943ad90d7d47550b197680007ba089e48fde83506a8566745d1067a2e396"
     },
     {
+      "path": "scripts/run-dr17-shared-resource-safe-10k.mjs",
+      "bytes": 6993,
+      "sha256": "2c6f83d1c1cfdf4351df96b1feed0967140463d0c5831767e267ab1a7d730cdc"
+    },
+    {
       "path": "scripts/run-financial-recovery-build-verifier.mjs",
       "bytes": 1944,
       "sha256": "d77c416f0cb42cd7ae5f53c0dfc229dc45cb84486bf33f4c46de131a09cb33eb"
@@ -1345,6 +1360,11 @@
       "path": "scripts/verify-dr107-dr17-isolated-live-harness.mjs",
       "bytes": 1197,
       "sha256": "65f33309ed2f726f24dedf1ae36ea550d47485b47f85781817579904e299303e"
+    },
+    {
+      "path": "scripts/verify-dr108-dr17-shared-resource-safe-harness.mjs",
+      "bytes": 1542,
+      "sha256": "31ce755214428e4d21e03c4fe1adb5ec25f981a7955ef58c418b6d25cf5c46f2"
     },
     {
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",
