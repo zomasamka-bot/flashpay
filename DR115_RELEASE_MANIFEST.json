@@ -1,0 +1,50 @@
+{
+  "release": "DR115",
+  "date": "2026-09-29",
+  "baselineProductionSha": "74d710b9ebc8831db9ba49149728f7bdf1f4ab28",
+  "purpose": "Pre-Pi-review surgical removal of certification activation/reviewer scaffolding while preserving financial kernel and historical durable authority safety.",
+  "removed": {
+    "reviewerUI": [
+      "DR10/DR11/DR14 controls from owner/public UI",
+      "legacy /reset UI"
+    ],
+    "activation": [
+      "DR10/DR11/DR14 control routes",
+      "DR10 destructive recovery modes",
+      "DR14 consume hooks/helper",
+      "DR11 new-payment arm producer and approve selector gate"
+    ],
+    "legacy": [
+      "/api/reset/payments",
+      "/api/settlements"
+    ],
+    "productionTestInterruptions": [
+      "0.11 prepared",
+      "0.12 post-submit",
+      "0.13 fresh dispatch",
+      "0.14 stage1-only"
+    ]
+  },
+  "preserved": [
+    "DR11 historical durable hold handling in complete/recovery",
+    "all normal Settlement/Refund authority",
+    "R101 approval ownership",
+    "DR17 evidence route/engine",
+    "non-production-only refund P7 hooks",
+    "payment create lease"
+  ],
+  "noNewFinancialAuthority": true,
+  "verification": [
+    "DR115 dedicated cleanup verifier PASS",
+    "DR109B DR17 auth/build hardening PASS",
+    "DR14 full financial crash matrix PASS: 26 windows, 10K synthetic, 0 duplicate/overlap/lost",
+    "R101-15 full financial regression PASS",
+    "Financial recovery build verifier PASS",
+    "DR28 clean artifact PASS",
+    "Critical permanent files byte-identical: db.ts, refund-checkpoint-store.ts, payment-projection-cas.ts, pi-wallet-submit-lock.ts, system-control.ts, control system/domain/availability, DR17 route/engine, vercel.json",
+    "Adversarial executor diff: only DR14 consume calls/imports and P7 0.11/0.12/0.14 branches removed; no added lines",
+    "Pi complete diff: only P7 0.13 early-return branch removed; historical DR11 durable handling and normal canonical response preserved",
+    "Source-wide production 0.11/0.12/0.13/0.14 exact-amount interruption scan: zero hits",
+    "tsc attempted but dependency resolution unavailable in clean ZIP (no node_modules); missing react/next/@types/node modules prevent meaningful local typecheck"
+  ]
+}

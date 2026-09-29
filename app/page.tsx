@@ -54,13 +54,6 @@ export default function HomePage() {
   const [localAmount, setLocalAmount] = useState("")
   const [currency, setCurrency] = useState("USD")
   const [piRate, setPiRate] = useState("1")
-  const [dr14Arming, setDr14Arming] = useState(false)
-  const [dr14Armed, setDr14Armed] = useState(false)
-  const [dr14Error, setDr14Error] = useState<string | null>(null)
-  const [dr14RefundPrepared, setDr14RefundPrepared] = useState(false)
-  const [dr14RefundPreparing, setDr14RefundPreparing] = useState(false)
-  const [dr14RefundStarted, setDr14RefundStarted] = useState(false)
-  const dr14Boundary = "refund_after_pi_create_before_id_checkpoint" as const
   
   useEffect(() => {
     // Check hash first (Pi Browser QR route: #/pay/{id})
@@ -244,44 +237,6 @@ export default function HomePage() {
   }
 
 
-  const readDr11ArmStatus = async (): Promise<boolean> => {
-    const accessToken = unifiedStore.getMerchantState().accessToken
-    if (!accessToken) throw new Error("Pi session token required")
-    const response = await fetch("/api/control/dr11", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({ confirmation: "READ_DR11_NEXT_010_PAYMENT_ARM" }),
-    })
-    const body = await response.json().catch(() => null) as { success?: boolean; certification?: string; armed?: boolean; ttlSeconds?: number } | null
-    if (!response.ok || body?.success !== true) throw new Error("DR11 arm readback unavailable")
-    return body.armed === true && body.certification === "DR11_ARMED" && typeof body.ttlSeconds === "number" && body.ttlSeconds > 0
-  }
-
-  useEffect(() => {
-    if (Number.parseFloat(amount) !== 0.1 || !merchantSetup.isSetupComplete || dr14RefundPrepared || dr14RefundPreparing) return
-    let cancelled = false
-    readDr11ArmStatus().then((armed) => {
-      if (!cancelled) setDr14RefundPrepared(armed)
-    }).catch(() => {
-      if (!cancelled) setDr14RefundPrepared(false)
-    })
-    return () => { cancelled = true }
-  }, [amount, merchantSetup.isSetupComplete])
-
-  const handlePrepareDr14RefundPayment = async () => {
-    if (dr14RefundPreparing || dr14RefundPrepared || Number.parseFloat(amount) !== 0.1) return
-    const accessToken = unifiedStore.getMerchantState().accessToken
-    if (!accessToken) { setDr14Error("Pi session token required"); return }
-    setDr14RefundPreparing(true); setDr14Error(null)
-    try {
-      const response = await fetch("/api/control/dr11", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` }, body: JSON.stringify({ confirmation: "ARM_DR11_NEXT_010_PAYMENT" }) })
-      const body = await response.json().catch(() => null) as { success?: boolean; certification?: string } | null
-      if (!response.ok || body?.success !== true || body?.certification !== "DR11_ARMED") throw new Error("Refund pre-payment hold arm failed")
-      setDr14RefundPrepared(true)
-    } catch (error) { setDr14Error(error instanceof Error ? error.message : "Refund pre-payment hold arm failed") }
-    finally { setDr14RefundPreparing(false) }
-  }
-
   const handleGenerateQR = async () => {
     const amountNum = Number.parseFloat(amount)
 
@@ -303,20 +258,6 @@ export default function HomePage() {
       return
     }
 
-    if (amountNum === 0.1) {
-      try {
-        const armed = await readDr11ArmStatus()
-        setDr14RefundPrepared(armed)
-        if (!armed) {
-          setDr14Error("Prepare DR14 refund payment before generating this 0.10 Pi certification payment")
-          return
-        }
-      } catch {
-        setDr14RefundPrepared(false)
-        setDr14Error("DR11 arm readback unavailable; payment generation blocked")
-        return
-      }
-    }
 
     try {
       const result = await createPayment(amountNum, "")
@@ -534,58 +475,6 @@ export default function HomePage() {
     })
   }
 
-  const handleArmDr14Stage1 = async () => {
-    if (!currentPaymentId || payment?.status !== "settlement_failed" || dr14Arming || dr14Armed) return
-    const merchant = unifiedStore.getMerchantState()
-    const accessToken = merchant.accessToken
-    if (!accessToken) {
-      setDr14Error("Pi session token required")
-      return
-    }
-    setDr14Arming(true)
-    setDr14Error(null)
-    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` }
-    const bodyBase = { paymentId: currentPaymentId, boundary: dr14Boundary }
-    try {
-      const readinessResponse = await fetch("/api/control/dr14", {
-        method: "POST", headers,
-        body: JSON.stringify({ ...bodyBase, confirmation: "READINESS_DR14_ONLY" }),
-      })
-      const readiness = await readinessResponse.json().catch(() => null) as { success?: boolean; readiness?: { outcome?: string } } | null
-      if (!readinessResponse.ok || readiness?.success !== true || readiness?.readiness?.outcome !== "READY") {
-        throw new Error(`DR14 readiness failed (${readiness?.readiness?.outcome ?? readinessResponse.status})`)
-      }
-      const armResponse = await fetch("/api/control/dr14", {
-        method: "POST", headers,
-        body: JSON.stringify({ ...bodyBase, confirmation: "ARM_DR14_ONE_SHOT" }),
-      })
-      const arm = await armResponse.json().catch(() => null) as { success?: boolean; outcome?: string } | null
-      if (!armResponse.ok || arm?.success !== true || arm?.outcome !== "ARMED") {
-        throw new Error(`DR14 arm failed (${arm?.outcome ?? armResponse.status})`)
-      }
-      const readbackResponse = await fetch(`/api/control/dr14?paymentId=${encodeURIComponent(currentPaymentId)}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      })
-      const readback = await readbackResponse.json().catch(() => null) as { arm?: { paymentId?: string; boundary?: string; consumedAt?: string | null; expiresAt?: string | null } | null } | null
-      const exact = readbackResponse.ok &&
-        readback?.arm?.paymentId === currentPaymentId &&
-        readback.arm.boundary === dr14Boundary &&
-        readback.arm.consumedAt == null &&
-        typeof readback.arm.expiresAt === "string" &&
-        Date.parse(readback.arm.expiresAt) > Date.now()
-      if (!exact) throw new Error("DR14 armed readback proof failed")
-      setDr14Armed(true)
-      const startResponse = await fetch("/api/control/dr14", { method: "POST", headers, body: JSON.stringify({ ...bodyBase, confirmation: "START_DR14_REFUND_ONCE" }) })
-      const start = await startResponse.json().catch(() => null) as { success?: boolean; outcome?: string } | null
-      if (!startResponse.ok || start?.success !== true || start?.outcome !== "STARTED") throw new Error(`DR14 refund start failed (${start?.outcome ?? startResponse.status})`)
-      setDr14RefundStarted(true)
-    } catch (error) {
-      setDr14Error(error instanceof Error ? error.message : "DR14 arm failed")
-    } finally {
-      setDr14Arming(false)
-    }
-  }
-
   // Show loader while route is resolving
   if (!routeResolved) {
     return (
@@ -669,16 +558,6 @@ export default function HomePage() {
               </>
             )}
           </div>
-
-          {payment?.status === "settlement_failed" && (
-            <div className="mb-6 w-full max-w-sm rounded-xl border p-3">
-              <Button type="button" variant="outline" className="w-full" onClick={handleArmDr14Stage1} disabled={dr14Arming || dr14Armed}>
-                {dr14Armed ? "DR14 armed · Refund Pi create" : dr14Arming ? "Verifying & arming DR14…" : "Arm DR14 · Refund Pi create"}
-              </Button>
-              {dr14Error && <p className="mt-2 text-xs text-destructive">{dr14Error}</p>}
-              {dr14Armed && <p className="mt-2 text-xs text-muted-foreground">One-shot arm verified. Refund start released exactly once{dr14RefundStarted ? "; crash boundary is active." : "."}</p>}
-            </div>
-          )}
 
           {/* Payment Sharing Section */}
           <div className="mb-8 space-y-3">
@@ -880,17 +759,6 @@ export default function HomePage() {
             .
           </Button>
         </div>
-
-
-        {Number.parseFloat(amount) === 0.1 && (
-          <div className="mb-3 rounded-xl border p-3">
-            <Button type="button" variant="outline" className="w-full" onClick={handlePrepareDr14RefundPayment} disabled={dr14RefundPreparing || dr14RefundPrepared || !merchantSetup.isSetupComplete}>
-              {dr14RefundPrepared ? "DR14 refund payment prepared" : dr14RefundPreparing ? "Preparing durable refund hold…" : "Prepare next 0.10 Pi for DR14 refund"}
-            </Button>
-            {dr14RefundPrepared && <p className="mt-2 text-xs text-muted-foreground">Durable pre-payment selector armed. Generate exactly one QR, then pay it once.</p>}
-            {dr14Error && !showQR && <p className="mt-2 text-xs text-destructive">{dr14Error}</p>}
-          </div>
-        )}
 
         {/* Generate QR Button */}
         <Button

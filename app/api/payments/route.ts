@@ -8,10 +8,9 @@ import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/re
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
-import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold } from "@/lib/db"
+import { ensureSettlementCheckpointTable, recordSettlementPaymentIdentityCheckpoint } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
-const DR10_MAINTENANCE_KEY = "flashpay:certification:dr10:maintenance:v1"
 const PAYMENT_CREATE_LEASE_PREFIX = "flashpay:payment:create-active:"
 
 const corsHeaders = {
@@ -45,20 +44,8 @@ export async function POST(request: NextRequest) {
   const paymentTimingStartedAt = Date.now()
   let createLeaseKey: string | null = null
   try {
-    // DR56: the DR10 environment flag grants certification capability; it is not
-    // operational maintenance state. Only the short-lived owner-triggered Redis
-    // maintenance key blocks new payment creation. Each admitted creator holds a
-    // lease that the atomic DR10 FLUSHDB script must observe and reject, closing
-    // the in-flight creation race without disabling normal production forever.
     if (!isKvConfigured) {
       return NextResponse.json({ error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
-    }
-    const dr10Maintenance = await redis.get(DR10_MAINTENANCE_KEY)
-    if (dr10Maintenance !== null) {
-      if (typeof dr10Maintenance !== "string" || dr10Maintenance.length < 16 || dr10Maintenance.length > 128) {
-        return NextResponse.json({ error: "Service temporarily unavailable", code: "DR10_MAINTENANCE_STATE_INVALID" }, { status: 503, headers: corsHeaders })
-      }
-      return NextResponse.json({ error: "Service temporarily unavailable", code: "DR10_CERTIFICATION_MAINTENANCE" }, { status: 503, headers: corsHeaders })
     }
     createLeaseKey = `${PAYMENT_CREATE_LEASE_PREFIX}${crypto.randomUUID()}`
     const createLease = await redis.set(createLeaseKey, "active", { nx: true, ex: 120 })
@@ -247,40 +234,13 @@ export async function POST(request: NextRequest) {
       console.log("[API]   - JSON includes 'createdAt':", paymentString.includes('"createdAt"'))
       
       const redisPersistTimingStartedAt = Date.now()
-      const dr11CreationCandidate = process.env.VERCEL_ENV === "production" && payment.amount === 0.1 && payment.merchantId === "hazemaboria" && payment.merchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"
       const redisPersistResult = await redis.eval(
-        "if redis.call('EXISTS',KEYS[1])~=0 then return 0 end local a=redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) if a~=1 then return -1 end redis.call('SET',KEYS[1],ARGV[1]) if ARGV[4]=='1' and redis.call('GET',KEYS[3])==ARGV[5] then redis.call('SET',KEYS[4],ARGV[5],'EX',ARGV[6]); redis.call('DEL',KEYS[3]); return 2 end return 1",
-        [kvKey, historyKey, "flashpay:certification:dr11:next-010:v1", `flashpay:certification:dr11:payment:${payment.id}`],
-        [paymentString, String(historyScore), payment.id, dr11CreationCandidate ? "1" : "0", "armed:v1", "900"]
+        "if redis.call('EXISTS',KEYS[1])~=0 then return 0 end local a=redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) if a~=1 then return -1 end redis.call('SET',KEYS[1],ARGV[1]) return 1",
+        [kvKey, historyKey],
+        [paymentString, String(historyScore), payment.id]
       )
-      if (redisPersistResult !== 1 && redisPersistResult !== 2) {
+      if (redisPersistResult !== 1) {
         throw new Error("Atomic payment persistence failed")
-      }
-      if (redisPersistResult === 2) {
-        const durableHold = await recordDr11RefundCertificationHold({ paymentId: payment.id, merchantId: trustedMerchantId, merchantUid: verifiedMerchantUid, customerAmount: payment.amount })
-        if (durableHold.outcome !== "RECORDED" && durableHold.outcome !== "REPLAYED") {
-          // DR62: a write error can be post-commit. Re-read PostgreSQL before any compensation.
-          const authoritativeHold = await readDr11RefundCertificationHold(payment.id)
-          if (authoritativeHold.outcome !== "HELD") {
-            console.error("[DR62 DR11 DURABLE HOLD] binding unresolved", { paymentId: payment.id, writeOutcome: durableHold.outcome, readOutcome: authoritativeHold.outcome })
-            if (authoritativeHold.outcome === "ABSENT") {
-              // Only a proven ABSENT durable hold may compensate Redis. The Lua script is exact-value
-              // guarded and atomic: payment, history member and exact selector disappear together.
-              const compensated = await redis.eval(
-                "if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end if redis.call('GET',KEYS[3])~=ARGV[2] then return 0 end redis.call('DEL',KEYS[1]); redis.call('ZREM',KEYS[2],ARGV[3]); redis.call('DEL',KEYS[3]); return 1",
-                [kvKey, historyKey, `flashpay:certification:dr11:payment:${payment.id}`],
-                [paymentString, "armed:v1", payment.id],
-              )
-              if (compensated !== 1) console.error("[DR62 DR11 COMPENSATION] exact Redis cleanup not proven", { paymentId: payment.id })
-              else console.warn("[DR62 DR11 COMPENSATION] exact non-financial Redis binding removed", { paymentId: payment.id })
-            }
-            // INDETERMINATE deliberately preserves the selector. DR61 approve gate then blocks Pi /approve
-            // until PostgreSQL authority is knowable; never delete or recreate authority on uncertainty.
-            return NextResponse.json({ error: "DR11 durable certification hold unavailable", code: "DR11_DURABLE_HOLD_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
-          }
-          console.warn("[DR62 DR11 DURABLE HOLD] post-write authoritative replay confirmed", { paymentId: payment.id, writeOutcome: durableHold.outcome })
-        }
-        console.warn("[DR62 DR11 DURABLE HOLD] exact payment bound", { paymentId: payment.id, amount: payment.amount, durable: true })
       }
       const redisPersistDurationMs = Date.now() - redisPersistTimingStartedAt
       console.log("[API] ✅ Atomic payment and history index persistence completed successfully for key:", kvKey)

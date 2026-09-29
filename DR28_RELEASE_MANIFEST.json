@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 457,
-  "totalBytes": 2857989,
+  "fileCount": 452,
+  "totalBytes": 2768484,
   "files": [
     {
       "path": ".gitignore",
@@ -87,9 +87,14 @@
       "sha256": "6e490c9f53da9602870d0101ebfe016921140b417b301fb100a31e6b2a281674"
     },
     {
+      "path": "DR115_RELEASE_MANIFEST.json",
+      "bytes": 2226,
+      "sha256": "62a8beebf0927fb1fbcf6a8738638a82aa864d8b8cc4a93b4f722157d59b29bb"
+    },
+    {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 79778,
-      "sha256": "225fbfeacb121f5905809467f4e46eb5d723e6d82a0bb3adc360a72be56c5fc5"
+      "bytes": 79314,
+      "sha256": "0771b2a82a0799a88264292d8b3b8d950e5309d77fe5a90e728c3f606a1f3ee9"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -110,21 +115,6 @@
       "path": "app/api/control/domain/route.ts",
       "bytes": 3858,
       "sha256": "3ec0c6a1ccf8732e2274c443af71415a0f47b637152f20967c22bbadeae9bace"
-    },
-    {
-      "path": "app/api/control/dr10/route.ts",
-      "bytes": 4592,
-      "sha256": "cccf75b0389163207b0d06177fc587b83d815364c2885be709419e4f80541606"
-    },
-    {
-      "path": "app/api/control/dr11/route.ts",
-      "bytes": 15223,
-      "sha256": "c3b0aa38544495451ed82a9df8b61efcf623b9af2b398ae5f8d73c9a05de7a36"
-    },
-    {
-      "path": "app/api/control/dr14/route.ts",
-      "bytes": 4336,
-      "sha256": "d5f560c1792ce5e2a7749f824c69eea4cdebadad7441cb4f06414979534c7dc9"
     },
     {
       "path": "app/api/control/system/route.ts",
@@ -203,8 +193,8 @@
     },
     {
       "path": "app/api/payments/route.ts",
-      "bytes": 20940,
-      "sha256": "4deef7b587406089319d6eb06604849dd48f0f961a00cddc9270cd53aa1bc3f5"
+      "bytes": 16892,
+      "sha256": "92e4c8ef63e5d51679042b4221cebe3edabc025ddee98fb65665d310927cd1ba"
     },
     {
       "path": "app/api/pi/a2u/route.ts",
@@ -213,13 +203,13 @@
     },
     {
       "path": "app/api/pi/approve/route.ts",
-      "bytes": 17484,
-      "sha256": "dccd9afed7c765201b4eb6a8228c0c514fa4fe70227541618831fc85e3068cb9"
+      "bytes": 16581,
+      "sha256": "766c30244c7edb9493e6af7cd901b0772b180dca3dfe98d285573e63d20e4133"
     },
     {
       "path": "app/api/pi/complete/route.ts",
-      "bytes": 38883,
-      "sha256": "9bf5fad74c388b30272e6079c897ad1924ca928e560bb9576b537d6ffecc0fb9"
+      "bytes": 38464,
+      "sha256": "8856935d78fd46578ce84376b81b616d56f2f28161f09b0b1f09efaceedc4406"
     },
     {
       "path": "app/api/pi/entry-token/route.ts",
@@ -263,8 +253,8 @@
     },
     {
       "path": "app/api/recovery/transient/route.ts",
-      "bytes": 220133,
-      "sha256": "2400388532b1761e365ccea81257248517705bb6d2dbb2f7c11e156c23ecadb6"
+      "bytes": 206889,
+      "sha256": "a0ea7557d67f568f3569a2af3cddc4d131b5f81d9474cc6fab77652003778023"
     },
     {
       "path": "app/api/refunds/customer-status/route.ts",
@@ -292,24 +282,14 @@
       "sha256": "9fe3ab869731f3c09c33f128c3f2365685aa2cd76b22010b2141a7cfddacdd75"
     },
     {
-      "path": "app/api/reset/payments/route.ts",
-      "bytes": 1000,
-      "sha256": "b17bd1599990496a9db246330c4e54a0b1e4a2e1166564322c5e05d665335cd8"
-    },
-    {
-      "path": "app/api/settlements/route.ts",
-      "bytes": 338,
-      "sha256": "b7826911a4e01dae0baf06703e18263c039afd238c422aa8122e291c0aa429af"
-    },
-    {
       "path": "app/api/transactions/route.ts",
       "bytes": 9804,
       "sha256": "ffd5522de3cc0930929f31c2eb38179c3a3c700977f274d50434bb66aefe5d97"
     },
     {
       "path": "app/control-panel/page.tsx",
-      "bytes": 29229,
-      "sha256": "27a14bb92b6734cc3f38be6bbabff6f3be9ed9e3331f6a2df8546ba46c1f7a8a"
+      "bytes": 7982,
+      "sha256": "08675bac072a2ee8f07d58f7e8e468c8ba2d092786381a8026cfd2b1f6f22a91"
     },
     {
       "path": "app/create/page.tsx",
@@ -363,8 +343,8 @@
     },
     {
       "path": "app/page.tsx",
-      "bytes": 43140,
-      "sha256": "de33ae15df4be27eee1a6e4a80320ab1587fc14d11ad6e8e99a816ebc0e0a7de"
+      "bytes": 35338,
+      "sha256": "195a299941a5bfba9837431ee0e8b15f9b3499d37b731e4b8a919f9462bc102f"
     },
     {
       "path": "app/pay/[id]/page.tsx",
@@ -395,11 +375,6 @@
       "path": "app/receipts/[id]/page.tsx",
       "bytes": 3142,
       "sha256": "eaeccabb9cbc2773997915d499f1d87ea9f3b8c15c7b46539d966c2b2e3dced2"
-    },
-    {
-      "path": "app/reset/page.tsx",
-      "bytes": 10299,
-      "sha256": "30b5bb5f23e137af6a02c0647d50ea358f68d3adad4647ed028a7cb3912cdeb2"
     },
     {
       "path": "app/terms/page.tsx",
@@ -758,8 +733,8 @@
     },
     {
       "path": "lib/a2u-executor.ts",
-      "bytes": 100724,
-      "sha256": "0b9be360999627a34f30ac31b9b68bbb752065bc4fd686929808a45b7c332973"
+      "bytes": 97757,
+      "sha256": "f0df02fb402350488da4820db8ce9b1cad2e53f3bc2c21917da8d74547b55193"
     },
     {
       "path": "lib/a2u-locked-executor.ts",
@@ -810,11 +785,6 @@
       "path": "lib/domains.ts",
       "bytes": 5845,
       "sha256": "c3c77cb2a177a90c106209a9dc55650f357418aebceffc253fb9b7ec2afd1504"
-    },
-    {
-      "path": "lib/dr14-live-crash-certification.ts",
-      "bytes": 7185,
-      "sha256": "f88490bacef8d177c41d30b1fe0aff4bbbe5577bf8c74196b1064a50c3353ff5"
     },
     {
       "path": "lib/dr17-shared-certification.d.mts",
@@ -1153,8 +1123,8 @@
     },
     {
       "path": "lib/refund-blockchain-submit.ts",
-      "bytes": 21822,
-      "sha256": "6d00d473329e92ed4c225a458368827183a0ff45efedf5cf32173c45bcc91f4c"
+      "bytes": 21539,
+      "sha256": "5c1d3fed956acceec98a2d0d4c522f991e44f7afb42e4af7baf66d5b96e80135"
     },
     {
       "path": "lib/refund-checkpoint-store.ts",
@@ -1163,8 +1133,8 @@
     },
     {
       "path": "lib/refund-executor.ts",
-      "bytes": 77534,
-      "sha256": "f637d69dc868d29c2014af1e3792b16b54b7800d9139a914af5dd481956cf350"
+      "bytes": 76577,
+      "sha256": "2eac9435cd38ce03d2d65eeb0133a7f46769ff89281af35a5f5f11e317780dda"
     },
     {
       "path": "lib/refund-fee-evidence.ts",
@@ -1298,8 +1268,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 5907,
-      "sha256": "2032018e5db85e68a524f08788a1b4881884e64434e153b72eebb9049e755526"
+      "bytes": 5980,
+      "sha256": "356d9fe4b086b739ce9774fab984b4d00f94cb84c15cf0c3fcda617e4684fa20"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1450,6 +1420,11 @@
       "path": "scripts/verify-dr113-dr17-post-cert-cleanup.mjs",
       "bytes": 2419,
       "sha256": "a1109fd110d5d47527820cc8ddccf55fd1cbdac5c1d5a8ced5ed17bb43f2a03e"
+    },
+    {
+      "path": "scripts/verify-dr115-pre-review-cleanup.mjs",
+      "bytes": 3503,
+      "sha256": "f7f79f89125408f1bf6a47d83d15c6318983be796eea2c09c621644f8dad1521"
     },
     {
       "path": "scripts/verify-dr12-approval-ownership-replay-edge.mjs",
