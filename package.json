@@ -44,7 +44,8 @@
     "certify:dr108": "node scripts/verify-dr108-dr17-shared-resource-safe-harness.mjs",
     "certify:dr109": "node scripts/verify-dr109-dr17-execution-bridge.mjs",
     "certify:dr109b": "node scripts/verify-dr109b-dr17-build-auth-hardening.mjs",
-    "certify:dr110": "node scripts/verify-dr110-dr17-trusted-auto-trigger.mjs"
+    "certify:dr110": "node scripts/verify-dr110-dr17-trusted-auto-trigger.mjs",
+    "certify:dr111": "node scripts/verify-dr111-dr17-forensic-rerun-harness.mjs"
   },
   "overrides": {
     "react": "^19",

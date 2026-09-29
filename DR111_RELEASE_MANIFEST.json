@@ -1,0 +1,38 @@
+{
+  "release": "DR111",
+  "date": "2026-09-29",
+  "baselineProductionSha": "aa5eeb53d24dd9c9da97286fe3dc1cd11fd4a738",
+  "purpose": "DR17 forensic-capable 10K rerun: separate correctness from capacity observation, durable phase snapshots, complete rediscovery, guaranteed certification Redis cleanup",
+  "runtimeChanges": [
+    "app/api/certification/dr17/run/route.ts",
+    "lib/dr17-shared-certification.mjs",
+    "lib/dr17-shared-certification.d.mts"
+  ],
+  "nonRuntimeChanges": [
+    "scripts/verify-dr111-dr17-forensic-rerun-harness.mjs",
+    "package.json",
+    "DR111_RELEASE_MANIFEST.json"
+  ],
+  "invariants": {
+    "recoveryRouteChanged": false,
+    "vercelJsonChanged": false,
+    "piTransportChanged": false,
+    "horizonTransportChanged": false,
+    "paymentSettlementRefundRuntimeChanged": false,
+    "durableOneShot": true,
+    "productionOnly": true,
+    "cliAckFailClosed": true,
+    "capacityReferenceBlocksCorrectness": false
+  },
+  "verification": [
+    "DR111 forensic rerun gate PASS",
+    "DR109B Neon/build/auth hardening PASS",
+    "DR110 historical verifier intentionally N/A because it pins RELEASE=DR110; DR111 re-verifies equivalent auth/trigger invariants",
+    "DR14 full crash matrix PASS: 26 windows, 10K synthetic, zero duplicate/overlap/lost",
+    "R101-15 full financial regression PASS",
+    "financial recovery build verifier PASS",
+    "DR28 clean artifact PASS: forbiddenArtifacts=0, suspiciousSecretLiterals=0",
+    "Node syntax checks PASS for changed .mjs files",
+    "Full local Next build not executed because clean ZIP has no node_modules"
+  ]
+}
