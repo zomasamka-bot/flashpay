@@ -7,8 +7,8 @@ export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 export const maxDuration = 300
 
-const RELEASE = "DR111"
-const EXECUTION_KEY = "dr17-shared-safe-10k-dr111"
+const RELEASE = "DR112"
+const EXECUTION_KEY = "dr17-shared-safe-10k-dr112"
 const RECOVERY_SECRET_ENV = "FLASHPAY_TRANSIENT_RECOVERY_SECRET"
 
 function constantTimeSecretEqual(expected: string | undefined, provided: string | null): boolean {
@@ -74,15 +74,15 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    console.log(JSON.stringify({ event: "dr17_dr111_started", release: RELEASE, executionKey: EXECUTION_KEY }))
+    console.log(JSON.stringify({ event: "dr17_dr112_started", release: RELEASE, executionKey: EXECUTION_KEY }))
     const report = await runDr17SharedResourceSafe10k({ trustedProductionExecution: true })
     await sql`UPDATE dr17_cert_execution SET status='passed',finished_at=now(),report=${JSON.stringify(report)}::jsonb WHERE execution_key=${EXECUTION_KEY}`
-    console.log(JSON.stringify({ event: "dr17_dr111_completed", ...report }))
+    console.log(JSON.stringify({ event: "dr17_dr112_completed", ...report }))
     return NextResponse.json(report, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
     const code = error instanceof Error ? error.message.slice(0, 180) : "unknown_error"
     await sql`UPDATE dr17_cert_execution SET status='failed',finished_at=now(),error_code=${code} WHERE execution_key=${EXECUTION_KEY}`
-    console.error(JSON.stringify({ event: "dr17_dr111_failed", errorCode: code }))
-    return NextResponse.json({ certification: "FAIL", gate: "DR17-DR111-EXECUTION-BRIDGE", errorCode: code }, { status: 500 })
+    console.error(JSON.stringify({ event: "dr17_dr112_failed", errorCode: code }))
+    return NextResponse.json({ certification: "FAIL", gate: "DR17-DR112-EXECUTION-BRIDGE", errorCode: code }, { status: 500 })
   }
 }

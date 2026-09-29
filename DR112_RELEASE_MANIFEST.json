@@ -1,0 +1,45 @@
+{
+  "release": "DR112",
+  "date": "2026-09-29",
+  "baselineProductionSha": "8ad5b53460b7dafc53a8e4ea1319af6b8182853e",
+  "purpose": "Atomic DR17 final-assertion identifier hotfix after DR111 live ReferenceError; new durable one-shot only.",
+  "runtimeChanges": [
+    "lib/dr17-shared-certification.mjs",
+    "app/api/certification/dr17/run/route.ts"
+  ],
+  "nonRuntimeChanges": [
+    "scripts/verify-dr112-dr17-identifier-hotfix.mjs",
+    "package.json",
+    "DR112_RELEASE_MANIFEST.json",
+    "DR28_RELEASE_MANIFEST.json"
+  ],
+  "invariants": {
+    "engineAlgorithmChanged": false,
+    "capacityParametersChanged": false,
+    "recoveryRouteChanged": false,
+    "vercelJsonChanged": false,
+    "piTransportChanged": false,
+    "horizonTransportChanged": false,
+    "paymentSettlementRefundRuntimeChanged": false,
+    "durableOneShot": true,
+    "productionOnly": true
+  },
+  "rootCauseFix": {
+    "from": "assert.equal(redisRecovered,N)",
+    "to": "assert.equal(recovered,N)",
+    "scope": "one identifier only"
+  },
+  "verification": [
+    "DR112 identifier hotfix gate PASS",
+    "Exact DR111\u2192DR112 engine algorithm diff: one line only, redisRecovered identifier replaced by recovered",
+    "DR109B Neon/build/auth hardening PASS",
+    "DR14 full financial crash matrix PASS: 26 windows, 10K synthetic, zero duplicate/overlap/lost",
+    "R101-15 full financial regression PASS",
+    "financial recovery build verifier PASS",
+    "Node syntax PASS for changed .mjs files",
+    "recovery route byte-identical to DR111",
+    "vercel.json byte-identical to DR111",
+    "declaration byte-identical to DR111",
+    "Full local Next build unavailable: clean ZIP has no node_modules and local pnpm executable is permission-blocked"
+  ]
+}

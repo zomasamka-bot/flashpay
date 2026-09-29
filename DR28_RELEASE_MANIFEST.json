@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 453,
-  "totalBytes": 2849324,
+  "fileCount": 455,
+  "totalBytes": 2854505,
   "files": [
     {
       "path": ".gitignore",
@@ -77,9 +77,14 @@
       "sha256": "2d235d5848b467fb4bdbdc76a5c65211de52c74e041fb9e870dbbaebde96f5aa"
     },
     {
+      "path": "DR112_RELEASE_MANIFEST.json",
+      "bytes": 1737,
+      "sha256": "a256316f43f039bf150c2048635b2e63ed210ec8fb42701f2f59376afaa9d90e"
+    },
+    {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 79264,
-      "sha256": "8fa313aa278bb8369416adc4563b5580cc6b9b19714af324361656b8e7d59ba4"
+      "bytes": 79434,
+      "sha256": "8aaabc9573e62d7f5474cb11b1c2f94856df924fa34b733880cae213b1f55f3d"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -89,7 +94,7 @@
     {
       "path": "app/api/certification/dr17/run/route.ts",
       "bytes": 4628,
-      "sha256": "8df676e4d078c9e003f6308b284e5738b58a3d0a86af9d7370a7766c22ff1e14"
+      "sha256": "484d51a6eb46f71b20c9ee7101efbd3420c796272acd70e20df3d4eed4d2d451"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -813,8 +818,8 @@
     },
     {
       "path": "lib/dr17-shared-certification.mjs",
-      "bytes": 11322,
-      "sha256": "d6de1442fc103fa00406cf6e7e62f180a09750d0ce48a68e590421dc8b105000"
+      "bytes": 11317,
+      "sha256": "56147c5f1a949e14e4cee2752c7e1cd4d324b2a7b9cc85378670e7ab0415ae4d"
     },
     {
       "path": "lib/financial-amount-stroops.ts",
@@ -1288,8 +1293,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 5753,
-      "sha256": "c1f81e0be16fdcd19e53ab8038226b3c3547d3a8426f734c3187e521f52efa7d"
+      "bytes": 5830,
+      "sha256": "e0348363adb52ab9b60fa64ddfe3f33568cb49b923d5bdd46bdda19321beac86"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1430,6 +1435,11 @@
       "path": "scripts/verify-dr111-dr17-forensic-rerun-harness.mjs",
       "bytes": 2929,
       "sha256": "c8c88d311e4678d7000331d44cd389e54d795d66f15abef8d20c60fdcadaf457"
+    },
+    {
+      "path": "scripts/verify-dr112-dr17-identifier-hotfix.mjs",
+      "bytes": 3202,
+      "sha256": "fc05d0ebcc2fbc6a2b6f588d6712492343d6643f226e112aa43fed32d4f7c93d"
     },
     {
       "path": "scripts/verify-dr12-approval-ownership-replay-edge.mjs",
