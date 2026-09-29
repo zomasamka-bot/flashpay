@@ -1,0 +1,56 @@
+{
+  "release": "DR113",
+  "date": "2026-09-29",
+  "baselineProductionSha": "f1d478c9a1b1f2b5cfdfcecaec488b6fc4e1ec3a",
+  "baselineLiveCertification": {
+    "release": "DR112",
+    "status": "PASS",
+    "runId": "dr17-shared-1790707506606-d8555620",
+    "total": 10000,
+    "badMovementCount": 0,
+    "settlementRefundOverlap": 0,
+    "lostRecovery": 0
+  },
+  "purpose": "Surgical post-certification cleanup: decouple completed DR17 automatic execution from the production recovery wake while preserving DR17 evidence and all financial/recovery behavior.",
+  "runtimeChanges": [
+    "app/api/recovery/transient/route.ts"
+  ],
+  "nonRuntimeChanges": [
+    "scripts/verify-dr113-dr17-post-cert-cleanup.mjs",
+    "package.json",
+    "DR113_RELEASE_MANIFEST.json",
+    "DR28_RELEASE_MANIFEST.json"
+  ],
+  "preserved": [
+    "app/api/certification/dr17/run/route.ts",
+    "lib/dr17-shared-certification.mjs",
+    "lib/dr17-shared-certification.d.mts",
+    "vercel.json",
+    "DR17 durable evidence tables",
+    "all Payment/Settlement/Refund financial runtime"
+  ],
+  "removed": [
+    "scheduleTrustedDr17CertificationRequest function",
+    "DR110 automatic DR17 scheduling call/comment from recovery POST"
+  ],
+  "invariants": {
+    "paymentSettlementRefundRuntimeChanged": false,
+    "dr17EngineChanged": false,
+    "dr17RouteChanged": false,
+    "vercelJsonChanged": false,
+    "recoveryFinancialLogicChanged": false,
+    "piTransportChanged": false,
+    "horizonTransportChanged": false
+  },
+  "verification": [
+    "DR113 post-cert cleanup gate PASS",
+    "Exact runtime diff: app/api/recovery/transient/route.ts only; 32 deleted lines; 0 added runtime lines",
+    "DR17 route, engine, declaration, and vercel.json byte-identical to DR112",
+    "DR109B build/auth hardening PASS",
+    "DR14 full financial crash matrix PASS: 26 windows, 10K synthetic, zero duplicate/overlap/lost",
+    "R101-15 full financial regression PASS",
+    "Financial recovery build verifier PASS",
+    "DR112 historical trigger verifier intentionally superseded: it requires the automatic trigger that DR113 deliberately removes",
+    "Full local Next build unavailable: clean artifact has no node_modules and local pnpm executable is permission-blocked"
+  ]
+}

@@ -46,7 +46,8 @@
     "certify:dr109b": "node scripts/verify-dr109b-dr17-build-auth-hardening.mjs",
     "certify:dr110": "node scripts/verify-dr110-dr17-trusted-auto-trigger.mjs",
     "certify:dr111": "node scripts/verify-dr111-dr17-forensic-rerun-harness.mjs",
-    "certify:dr112": "node scripts/verify-dr112-dr17-identifier-hotfix.mjs"
+    "certify:dr112": "node scripts/verify-dr112-dr17-identifier-hotfix.mjs",
+    "certify:dr113": "node scripts/verify-dr113-dr17-post-cert-cleanup.mjs"
   },
   "overrides": {
     "react": "^19",
