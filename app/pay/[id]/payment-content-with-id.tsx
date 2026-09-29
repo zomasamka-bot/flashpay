@@ -31,7 +31,6 @@ export default function PaymentContentWithId({
   urlNote?: string
   entry?: "pi" | "share"
 }) {
-  // Debug: Log props received from server route
 
   const { toast } = useToast()
   const { t, locale, setLocale } = useI18n()
@@ -40,7 +39,6 @@ export default function PaymentContentWithId({
   const [isPaying, setIsPaying] = useState(false)
   const [piSDKReady, setPiSDKReady] = useState(false)
   const [authStatus, setAuthStatus] = useState<"idle" | "authenticating" | "authenticated" | "failed">("idle")
-  const [diagnostics, setDiagnostics] = useState<string[]>([])
   const [entryMode, setEntryMode] = useState<"pi" | "share">(entry)
   const [authoritativeLoaded, setAuthoritativeLoaded] = useState(false)
   const [refundPresentation, setRefundPresentation] = useState<RefundPresentation | undefined>()
@@ -62,11 +60,6 @@ export default function PaymentContentWithId({
     } catch {
       // Presentation projection must never affect payment completion.
     }
-  }
-
-  const addDiagnostic = (message: string) => {
-    const timestamp = new Date().toLocaleTimeString()
-    setDiagnostics(prev => [...prev, `[${timestamp}] ${message}`])
   }
 
   // Check if we have a stored payment ID from before auth (in case of redirect)
@@ -104,7 +97,6 @@ export default function PaymentContentWithId({
     let abortController: AbortController | null = null
 
     async function fetchPayment() {
-      addDiagnostic(`Fetching payment: ${paymentId}`)
       
       try {
         // For entry=pi with URL amount, show provisionally and fetch authoritatively once
@@ -150,11 +142,9 @@ export default function PaymentContentWithId({
                   serverPayment.accessToken
                 )
               } else {
-                addDiagnostic("Server payment not available - using provisional data")
                 // Keep showing provisional payment, disable Pay button
               }
             } catch (fetchError) {
-              addDiagnostic(`Failed to fetch payment from server: ${fetchError}`)
               // Keep showing provisional payment, disable Pay button
             }
             return
@@ -220,12 +210,9 @@ export default function PaymentContentWithId({
       if (entryMode === "pi") {
         try {
           if (window.__PI_SDK_READY__) {
-            addDiagnostic("Awaiting Pi SDK readiness...")
             await window.__PI_SDK_READY__
-            addDiagnostic("Pi SDK readiness resolved")
           }
         } catch (error) {
-          addDiagnostic(`Pi SDK readiness rejected: ${error}`)
           setPiSDKReady(false)
           setAuthStatus("failed")
           return
@@ -233,17 +220,14 @@ export default function PaymentContentWithId({
       }
 
       const hasPiSDK = typeof window !== "undefined" && !!window.Pi && typeof window.Pi.init === "function"
-      addDiagnostic(`Checking initialized Pi SDK: ${hasPiSDK ? "FOUND" : "NOT FOUND"}`)
 
       if (hasPiSDK) {
         // PiSDKLoader owns Pi.init. A resolved __PI_SDK_READY__ is the initialization proof.
         setPiSDKReady(true)
         setAuthStatus("idle")
-        addDiagnostic("Pi SDK initialized by loader - you can now pay")
       } else {
         setPiSDKReady(false)
         setAuthStatus("failed")
-        addDiagnostic("ERROR: Initialized Pi SDK unavailable")
       }
     }
 
@@ -253,7 +237,6 @@ export default function PaymentContentWithId({
       initPiSDK()
     } else {
       // Shared link mode - no Pi SDK initialization
-      addDiagnostic("Shared link mode - Pi SDK initialization skipped")
       setPiSDKReady(false)
     }
 
@@ -420,21 +403,14 @@ export default function PaymentContentWithId({
   }
 
   const handlePay = async () => {
-    addDiagnostic("PAY BUTTON CLICKED")
-    addDiagnostic(`Payment ID: ${paymentId}`)
-    addDiagnostic(`Amount: ${payment?.amount} Pi`)
-    addDiagnostic(`Pi SDK Ready: ${piSDKReady}`)
-    addDiagnostic(`Auth Status: ${authStatus}`)
     
     if (!payment) {
-      addDiagnostic("ERROR: No payment object")
       return
     }
 
     if (authoritativeLoaded !== true || payment.status !== "pending") return
 
     if (isPaymentPaid(paymentId)) {
-      addDiagnostic("Payment already completed")
       toast({
         title: t("pay.toast.alreadyPaidTitle"),
         description: t("pay.toast.alreadyPaidDesc"),
@@ -445,13 +421,11 @@ export default function PaymentContentWithId({
 
     // Authenticate inline if not already authenticated
     if (authStatus !== "authenticated") {
-      addDiagnostic("Starting authentication...")
       setAuthStatus("authenticating")
       
       const authResult = await authenticateCustomer()
       
       if (!authResult.success) {
-        addDiagnostic(`AUTH FAILED: ${authResult.error}`)
         setAuthStatus("failed")
         toast({
           title: t("pay.toast.authRequiredTitle"),
@@ -465,11 +439,8 @@ export default function PaymentContentWithId({
         receiptIdentityRef.current = { accessToken: authResult.accessToken, uid: authResult.uid, username: authResult.username }
         setCustomerReceiptName(authResult.username)
       }
-      addDiagnostic("Authentication successful")
       setAuthStatus("authenticated")
     }
-
-    addDiagnostic("Acquiring durable payment start authority...")
     setIsPaying(true)
 
     let startLeaseToken = ""
@@ -486,7 +457,6 @@ export default function PaymentContentWithId({
         typeof startBody?.startLeaseToken !== "string" ||
         !startBody.startLeaseToken
       ) {
-        addDiagnostic(`Payment start authority unavailable: ${startResponse.status}`)
         setIsPaying(false)
         toast({
           title: t("pay.toast.failedTitle"),
@@ -498,9 +468,7 @@ export default function PaymentContentWithId({
         return
       }
       startLeaseToken = startBody.startLeaseToken
-      addDiagnostic("Durable payment start authority acquired")
     } catch (error) {
-      addDiagnostic(`Payment start authority request failed: ${error}`)
       setIsPaying(false)
       toast({
         title: t("pay.toast.failedTitle"),
@@ -509,8 +477,6 @@ export default function PaymentContentWithId({
       })
       return
     }
-
-    addDiagnostic("Calling Pi.createPayment()...")
 
     executePayment(
       paymentId,

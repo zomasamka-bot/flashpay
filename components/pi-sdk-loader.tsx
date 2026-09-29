@@ -39,7 +39,7 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null)
 
   // Routes that don't need Pi SDK initialization
-  const skipSDKRoutes = ["/operations", "/control-panel", "/diagnostics", "/reset"]
+  const skipSDKRoutes = ["/operations", "/control-panel", "/diagnostics"]
   const shouldSkipSDK = skipSDKRoutes.some((route) => pathname?.startsWith(route))
 
   // For /pay/[id] routes OR hash-based #/pay/[id] routes, render children immediately and expose readiness promise

@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 452,
-  "totalBytes": 2768484,
+  "fileCount": 448,
+  "totalBytes": 2736449,
   "files": [
     {
       "path": ".gitignore",
@@ -92,19 +92,19 @@
       "sha256": "62a8beebf0927fb1fbcf6a8738638a82aa864d8b8cc4a93b4f722157d59b29bb"
     },
     {
+      "path": "DR116_RELEASE_MANIFEST.json",
+      "bytes": 2532,
+      "sha256": "a20985ec6509a76348e59db9179e079aef19b631a353cba885a8e33de7d72ddc"
+    },
+    {
       "path": "DR28_RELEASE_MANIFEST.json",
       "bytes": 79314,
-      "sha256": "0771b2a82a0799a88264292d8b3b8d950e5309d77fe5a90e728c3f606a1f3ee9"
+      "sha256": "b3fc0ff79fe0ce82aa84112c694e377445947725dc64106d089564af450b06e2"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
       "bytes": 637,
       "sha256": "76c3c5810216e6100762f1825995f125add976edd3d69f9338b13b8212b4bb56"
-    },
-    {
-      "path": "app/api/certification/dr17/run/route.ts",
-      "bytes": 4628,
-      "sha256": "484d51a6eb46f71b20c9ee7101efbd3420c796272acd70e20df3d4eed4d2d451"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -348,13 +348,13 @@
     },
     {
       "path": "app/pay/[id]/page.tsx",
-      "bytes": 609,
-      "sha256": "970de218b2a633307ad398fe15b79a051a9a0c1874b2e119fd5fc94e0945be6a"
+      "bytes": 471,
+      "sha256": "b861d4da7410addab0e63377aca406b6144a5ba1d08c4b059221bb2be02316a2"
     },
     {
       "path": "app/pay/[id]/payment-content-with-id.tsx",
-      "bytes": 29755,
-      "sha256": "d1bea09a302713b1cf84cc5015fd3110950109710de0d35889b5bb22b3ee78e5"
+      "bytes": 27947,
+      "sha256": "924f94ccbdb028671f3a66f77f40e66e837474e640fee5f27b53fb6a692b34b8"
     },
     {
       "path": "app/payments/page.tsx",
@@ -427,11 +427,6 @@
       "sha256": "25611790679319dcf20f73ddfbfb8c70156ba79258c81731f28824b37e0ad6e9"
     },
     {
-      "path": "components/merchant-settlements-view.tsx",
-      "bytes": 8000,
-      "sha256": "9288a221295fb8451e3a5f116a453d037e613beedf89bed6d78ae2074ddab372"
-    },
-    {
       "path": "components/mobile-nav.tsx",
       "bytes": 1763,
       "sha256": "16361c05842d4801db22b762a5f661685ee8cde07c834bb5bbcbfb7f5947f6e3"
@@ -447,14 +442,9 @@
       "sha256": "1e1c3529500b1f4fff8bef7f6a6f5d2f41d775f8ff03bfc314f3df65a67d3273"
     },
     {
-      "path": "components/payment-reset-panel.tsx",
-      "bytes": 7642,
-      "sha256": "ad29fcbe21696e3b00e65cc07b8166c19faacdc5973f9a6673f238eecc84e8e5"
-    },
-    {
       "path": "components/pi-sdk-loader.tsx",
-      "bytes": 6282,
-      "sha256": "6721e0fa4d0dfc03e891d5d9d4f6213a2f14648d6f4ce91404ba36ccfd190799"
+      "bytes": 6272,
+      "sha256": "2cf082992d03ed5b33f65792447f2f15699d9cd5d3b3f21a0e7ef82d62927199"
     },
     {
       "path": "components/qr-code.tsx",
@@ -785,16 +775,6 @@
       "path": "lib/domains.ts",
       "bytes": 5845,
       "sha256": "c3c77cb2a177a90c106209a9dc55650f357418aebceffc253fb9b7ec2afd1504"
-    },
-    {
-      "path": "lib/dr17-shared-certification.d.mts",
-      "bytes": 1198,
-      "sha256": "4ac9b8283cde4cd6b0ada94312fdbfa2d17ca3901dc6b134c9d6f8898445444b"
-    },
-    {
-      "path": "lib/dr17-shared-certification.mjs",
-      "bytes": 11317,
-      "sha256": "56147c5f1a949e14e4cee2752c7e1cd4d324b2a7b9cc85378670e7ab0415ae4d"
     },
     {
       "path": "lib/financial-amount-stroops.ts",
@@ -1252,11 +1232,6 @@
       "sha256": "b44e201d6d119161054d8a0878f6739f4d5c4306dfa15979330007991e7e1d5c"
     },
     {
-      "path": "lib/use-settlements.ts",
-      "bytes": 3386,
-      "sha256": "dc5bcae6fb5ad53a1019e2d7ec73d8eb0e624f0212f91bf7a38241618ec3d50f"
-    },
-    {
       "path": "lib/utils.ts",
       "bytes": 166,
       "sha256": "e46429536f43f5910f5b2b0c50bb2769b510a4558bb4b5d20a3b0a9091dbf7c3"
@@ -1268,8 +1243,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 5980,
-      "sha256": "356d9fe4b086b739ce9774fab984b4d00f94cb84c15cf0c3fcda617e4684fa20"
+      "bytes": 6060,
+      "sha256": "9882fea7dc22f19a7b6bb05b57c8976fbba19c32f635c848d80e9cd7a1fd1aef"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1425,6 +1400,11 @@
       "path": "scripts/verify-dr115-pre-review-cleanup.mjs",
       "bytes": 3503,
       "sha256": "f7f79f89125408f1bf6a47d83d15c6318983be796eea2c09c621644f8dad1521"
+    },
+    {
+      "path": "scripts/verify-dr116-final-pi-review-readiness.mjs",
+      "bytes": 3480,
+      "sha256": "9e7866f5bba89216b76ea7a94c2d75d1eab76af0a8da6ece8f6326665f95e089"
     },
     {
       "path": "scripts/verify-dr12-approval-ownership-replay-edge.mjs",

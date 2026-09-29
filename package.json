@@ -48,7 +48,8 @@
     "certify:dr111": "node scripts/verify-dr111-dr17-forensic-rerun-harness.mjs",
     "certify:dr112": "node scripts/verify-dr112-dr17-identifier-hotfix.mjs",
     "certify:dr113": "node scripts/verify-dr113-dr17-post-cert-cleanup.mjs",
-    "certify:dr115": "node scripts/verify-dr115-pre-review-cleanup.mjs"
+    "certify:dr115": "node scripts/verify-dr115-pre-review-cleanup.mjs",
+    "certify:dr116": "node scripts/verify-dr116-final-pi-review-readiness.mjs"
   },
   "overrides": {
     "react": "^19",
