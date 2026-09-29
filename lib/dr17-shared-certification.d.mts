@@ -22,4 +22,8 @@ export interface Dr17SharedCertificationReport {
   horizonCalled: false
 }
 
-export function runDr17SharedResourceSafe10k(): Promise<Dr17SharedCertificationReport>
+export interface Dr17SharedCertificationOptions {
+  trustedProductionExecution?: boolean
+}
+
+export function runDr17SharedResourceSafe10k(options?: Dr17SharedCertificationOptions): Promise<Dr17SharedCertificationReport>

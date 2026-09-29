@@ -483,6 +483,34 @@ function hasValidSecret(request: NextRequest): boolean {
   return constantTimeSecretEqual(cronSecret, cronBearer)
 }
 
+function scheduleTrustedDr17CertificationRequest(): boolean {
+  const recoverySecret = runtimeEnv[RECOVERY_SECRET_ENV]
+  const productionHost = runtimeEnv.VERCEL_PROJECT_PRODUCTION_URL || runtimeEnv.VERCEL_URL
+  if (runtimeEnv.VERCEL_ENV !== "production" || !recoverySecret || !productionHost || !/^[A-Za-z0-9.-]+$/.test(productionHost)) return false
+  try {
+    after(async () => {
+      try {
+        const url = new URL("/api/certification/dr17/run", `https://${productionHost}`)
+        const response = await fetch(url.toString(), {
+          method: "POST",
+          headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
+          cache: "no-store",
+          redirect: "error",
+        })
+        if (response.status !== 200 && response.status !== 409) {
+          console.warn("[DR110 DR17] trusted one-shot request returned non-OK", { status: response.status })
+        }
+      } catch (error) {
+        console.warn("[DR110 DR17] trusted one-shot request failed", { error: error instanceof Error ? error.message : String(error) })
+      }
+    })
+    return true
+  } catch (error) {
+    console.warn("[DR110 DR17] scheduling failed", { error: error instanceof Error ? error.message : String(error) })
+    return false
+  }
+}
+
 function scheduleTrustedTransientRequest(target: "drain" | "continuation-kick"): boolean {
   const recoverySecret = runtimeEnv[RECOVERY_SECRET_ENV]
   const productionHost = runtimeEnv.VERCEL_PROJECT_PRODUCTION_URL || runtimeEnv.VERCEL_URL
@@ -911,6 +939,11 @@ export async function POST(request: NextRequest) {
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }
+
+  // DR110: a trusted recovery wake schedules the DR17 one-shot after this response.
+  // The certification route independently re-authenticates the internal POST and
+  // its durable PostgreSQL claim guarantees that only the first request executes 10K.
+  if (runtimeEnv.VERCEL_ENV === "production") scheduleTrustedDr17CertificationRequest()
 
   // DR-10 LIVE certification harness. This is deliberately impossible to trigger
   // accidentally: production only + existing recovery authentication + explicit

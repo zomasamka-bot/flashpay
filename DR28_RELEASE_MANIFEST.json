@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 449,
-  "totalBytes": 2833762,
+  "fileCount": 451,
+  "totalBytes": 2839730,
   "files": [
     {
       "path": ".gitignore",
@@ -67,9 +67,14 @@
       "sha256": "aea1c389f4d103d18e74775e9078ba4bab40411e714fc37c7a40667316f6ef53"
     },
     {
+      "path": "DR110_RELEASE_MANIFEST.json",
+      "bytes": 814,
+      "sha256": "8753d419e846319b1b96fc5bb25a5f8738e6c44e51ab372b91b0498b35ecf64b"
+    },
+    {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 78404,
-      "sha256": "e9f95d01f995eb0059382881d7aebd334d2f2dc1a3981214958cf772946385ae"
+      "bytes": 78913,
+      "sha256": "e639c942783416c9125f3f6f3473f3e7c566c8e0da2858a5eebfb7fe45bd61e4"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -78,8 +83,8 @@
     },
     {
       "path": "app/api/certification/dr17/run/route.ts",
-      "bytes": 4598,
-      "sha256": "88730346922ad03b231de362538f95852a67a087c23b15ab6768a8302e918284"
+      "bytes": 4628,
+      "sha256": "3e195c263930a45fce28fe9475cb886496e460ff33e628b68fb673d5105776b9"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -243,8 +248,8 @@
     },
     {
       "path": "app/api/recovery/transient/route.ts",
-      "bytes": 220132,
-      "sha256": "9577ac7870a13f142c50125dfc8d26720b9694f5da5131ec482e7d948e4e7770"
+      "bytes": 221725,
+      "sha256": "251dd8f82ba9d3b5df4ef49f2220a3f952cd7793071823963047e7eb8156fc12"
     },
     {
       "path": "app/api/refunds/customer-status/route.ts",
@@ -798,13 +803,13 @@
     },
     {
       "path": "lib/dr17-shared-certification.d.mts",
-      "bytes": 720,
-      "sha256": "c0ba7ef0b66a394bff928ec21bc3baadb4ae1039e9404d307eeb947c8522f40d"
+      "bytes": 852,
+      "sha256": "2f0003cf27e49b8c4f3c1a5c05691dfaaec88426e3a976ec11f1290fddae205e"
     },
     {
       "path": "lib/dr17-shared-certification.mjs",
-      "bytes": 7268,
-      "sha256": "f1342976305a5741e195ce131ed5a41f815b87aded541541c9e04bd68cb7772b"
+      "bytes": 7392,
+      "sha256": "a92efe487bb39453e1ea537fec9b0db0e51dd95302da358b8859182116805cc7"
     },
     {
       "path": "lib/financial-amount-stroops.ts",
@@ -1278,8 +1283,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 5591,
-      "sha256": "89e31c3e6cf0a1dc0f14f7c80516be78dae1cb613811671d709ca36e170c30fd"
+      "bytes": 5671,
+      "sha256": "a4efea6a5622d412ad54a1716aa8c040e6632e332ab87294699b4623142c84a5"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1410,6 +1415,11 @@
       "path": "scripts/verify-dr11-concurrent-refund-certification.mjs",
       "bytes": 4371,
       "sha256": "27f74dfb84b704e81eaecc3082432338c2448ca460b75fd197bfe65fe10b27c3"
+    },
+    {
+      "path": "scripts/verify-dr110-dr17-trusted-auto-trigger.mjs",
+      "bytes": 2686,
+      "sha256": "77125bb448d12589e85110b89cbf3da8c34e00b2e4aaba3c9b299163a84d07a7"
     },
     {
       "path": "scripts/verify-dr12-approval-ownership-replay-edge.mjs",
