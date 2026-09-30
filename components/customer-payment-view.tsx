@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ExternalLink, XCircle, Loader2 } from "lucide-react"
-import { initializePiSDK, authenticateCustomer } from "@/lib/pi-sdk"
+import { authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { executePayment, getPaymentFromServer } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
@@ -83,29 +83,22 @@ export function CustomerPaymentView({
       return
     }
     
-    async function init() {
-      console.log("[v0][CustomerView] Initializing Pi SDK...")
-      const sdkResult = await Promise.race([
-        initializePiSDK(),
-        new Promise<{ success: false; error: string }>((resolve) =>
-          setTimeout(() => resolve({ success: false, error: "Pi SDK initialization timed out. Close and reopen this payment in Pi Browser." }), 8000),
-        ),
-      ])
-      setPiSDKReady(sdkResult.success)
-      console.log("[v0][CustomerView] Pi SDK ready:", sdkResult.success)
-
-      if (!sdkResult.success) {
-        console.error("[v0][CustomerView] Pi SDK initialization failed:", sdkResult.error)
-        setAuthError(sdkResult.error || "Failed to initialize Pi SDK")
-        toast({
-          title: "Pi SDK Error",
-          description: sdkResult.error || "Failed to connect to Pi Network",
-          variant: "destructive",
-        })
+    async function observeSDKReadiness() {
+      try {
+        if (!window.__PI_SDK_READY__) throw new Error("Pi SDK readiness is unavailable")
+        await window.__PI_SDK_READY__
+        const ready = !!window.Pi && typeof window.Pi.authenticate === "function"
+        setPiSDKReady(ready)
+        if (!ready) throw new Error("Pi SDK is unavailable after initialization")
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to initialize Pi SDK"
+        setPiSDKReady(false)
+        setAuthError(message)
+        toast({ title: "Pi SDK Error", description: message, variant: "destructive" })
       }
     }
-    
-    init()
+
+    void observeSDKReadiness()
   }, [paymentId, toast, entryVerified])
 
   useEffect(() => {

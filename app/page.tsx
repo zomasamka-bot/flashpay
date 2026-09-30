@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast"
 import { createPayment } from "@/lib/operations"
 import { config } from "@/lib/config"
-import { initializePiSDK, authenticateMerchant } from "@/lib/pi-sdk"
+import { authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
 import { usePaymentById, usePaymentStats } from "@/lib/use-payments"
 import { useLoadPaymentHistory } from "@/lib/use-load-payment-history"
@@ -107,28 +107,21 @@ export default function HomePage() {
       return
     }
     
-    const init = async () => {
-      console.log("[v0] Initializing Pi SDK...")
-      const result = await initializePiSDK()
-
-      if (result.success) {
-        console.log("[v0] Pi SDK initialized - wallet session ready")
+    const observeSDKReadiness = async () => {
+      try {
+        if (!window.__PI_SDK_READY__) throw new Error("Pi SDK readiness is unavailable")
+        await window.__PI_SDK_READY__
         setSdkInitStatus("ready")
         setSdkError(null)
-      } else {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to initialize Pi SDK"
         setSdkInitStatus("error")
-        setSdkError(result.error || "Failed to initialize Pi SDK")
-        console.error("[v0] Pi SDK initialization failed:", result.error)
-
-        toast({
-          title: "SDK Initialization Failed",
-          description: result.error || "Failed to load Pi SDK",
-          variant: "destructive",
-        })
+        setSdkError(message)
+        toast({ title: "SDK Initialization Failed", description: message, variant: "destructive" })
       }
     }
 
-    init()
+    void observeSDKReadiness()
   }, [redirecting, toast, routeResolved, isCustomerView])
 
   // Manual authentication - user controls when to authenticate
@@ -332,7 +325,7 @@ export default function HomePage() {
 
   // Payment data is fetched from backend by ID, not from URL (authoritative source)
   const paymentLink = currentPaymentId && payment
-    ? `https://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=share&lang=${encodeURIComponent(locale)}${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
+    ? `pi://flashpay-two.vercel.app/pay/${encodeURIComponent(currentPaymentId)}?amount=${encodeURIComponent(String(payment.amount))}&entry=pi&lang=${encodeURIComponent(locale)}${payment.note ? `&note=${encodeURIComponent(payment.note)}` : ""}`
     : ""
   console.log("[v0][Home] Current payment ID:", currentPaymentId)
   console.log("[v0][Home] Payment object exists:", !!payment)
@@ -499,8 +492,8 @@ export default function HomePage() {
       console.log("[v0][HomePage-QR] Payment QR URL:", paymentLink)
       console.log("[v0][HomePage-QR]")
       console.log("[v0][HomePage-QR] When customer scans this QR:")
-      const qrOrigin = paymentLink ? new URL(paymentLink).hostname : undefined
-      console.log("[v0][HomePage-QR]   → Will redirect to:", `https://${qrOrigin}`)
+      const qrOrigin = paymentLink.match(/pi:\/\/([^\/\?]+)/)?.[1]
+      console.log("[v0][HomePage-QR]   → Will redirect to:", qrOrigin ? `https://${qrOrigin}` : "Pi Browser")
       console.log("[v0][HomePage-QR]   → Customer will authenticate under:", `${qrOrigin}`)
       console.log("[v0][HomePage-QR]   → Merchant authenticated under:", window.location.hostname)
       console.log("[v0][HomePage-QR]")

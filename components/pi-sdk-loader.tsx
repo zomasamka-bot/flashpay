@@ -5,6 +5,7 @@ import type React from "react"
 import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 import { CoreLogger } from "@/lib/core"
+import { unifiedStore } from "@/lib/unified-store"
 
 declare global {
   interface Window {
@@ -60,6 +61,15 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
       if (!window.Pi || typeof window.Pi.init !== "function") throw new Error("Pi SDK loaded but Pi.init not available")
       await window.Pi.init({ version: "2.0", sandbox: false })
       window.__PI_SDK_LOADED__ = true
+      // PiSDKLoader is the single Pi.init owner. Publish the same initialized
+      // state consumed by authenticateCustomer so fresh/customer/merchant
+      // sessions cannot disagree about SDK readiness after init succeeds.
+      unifiedStore.updateWalletStatus({
+        isPiSDKAvailable: true,
+        isInitialized: true,
+        isConnected: false,
+        lastChecked: new Date(),
+      })
       CoreLogger.info("[DR93 PI SDK] loaded and initialized", { pathname })
     }
 

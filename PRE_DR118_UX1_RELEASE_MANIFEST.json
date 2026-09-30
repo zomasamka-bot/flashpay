@@ -1,0 +1,23 @@
+{
+  "release": "PRE-DR118-UX1",
+  "purpose": "Restore direct QR Pi Browser entry and unify Pi SDK initialization/readiness without changing financial authority",
+  "baseline_zip_sha256": "867a78aafb7086477e98da4fa64bd13b7041083c442429e3a47cdac75a010f60",
+  "behavioral_reference_zip_sha256": "d17fe9e094aeedb040b3f106d0fd5db05ff051042fb724dfad960661c8376d9c",
+  "runtime_files_changed": [
+    "app/page.tsx",
+    "components/pi-sdk-loader.tsx",
+    "components/customer-payment-view.tsx"
+  ],
+  "financial_kernel_changed": false,
+  "new_verifier": "scripts/verify-dr117-payment-entry-sdk-regression-fix.mjs",
+  "validated_gates": [
+    "DR117-PAYMENT-ENTRY-SDK-REGRESSION-FIX",
+    "DR116-FINAL-PI-REVIEW-READINESS",
+    "R101-15-FULL-FINANCIAL-REGRESSION",
+    "R100-5-SETTLEMENT-ACCOUNTING-CRASH-MATRIX",
+    "R100-6-REFUND-ACCOUNTING-CRASH-MATRIX",
+    "DR-14-FULL-FINANCIAL-CRASH-MATRIX",
+    "DR-28-CLEAN-RELEASE-ARTIFACT"
+  ],
+  "local_build": "NOT_RUN_NO_NODE_MODULES_AND_REGISTRY_NETWORK_UNAVAILABLE; VERCEL_BUILD_REQUIRED"
+}
