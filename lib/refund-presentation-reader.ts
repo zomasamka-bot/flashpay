@@ -143,14 +143,15 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
     if (blockchain.outcome === "CONFIRMED" && persisted.confirmationRecordedAt === null) {
       return { outcome: "INDETERMINATE" }
     }
-    if (checkpoint.stage === "accounting_recorded" && persisted.accountingRecordedAt === null) {
+    // PRE-DR118 UX16B: terminal timestamp monotonicity. At this point the
+    // checkpoint is already narrowed to completed/audit_recorded, so validate
+    // the durable evidence chain itself rather than comparing an unreachable
+    // earlier stage. This preserves the accounting-before-audit-before-complete
+    // invariant and avoids weakening terminal receipt proof.
+    if (persisted.accountingRecordedAt === null || persisted.auditRecordedAt === null) {
       return { outcome: "INDETERMINATE" }
     }
-    if (
-      checkpoint.stage === "audit_recorded" &&
-      (persisted.accountingRecordedAt === null || persisted.auditRecordedAt === null)
-    ) return { outcome: "INDETERMINATE" }
-    if (checkpoint.status === "completed" && persisted.completedAt === null) {
+    if (persisted.completedAt === null) {
       return { outcome: "INDETERMINATE" }
     }
     if (persisted.finalizedAt !== null && persisted.completedAt === null) {
