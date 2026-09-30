@@ -151,9 +151,25 @@ export async function query(text: string, values?: unknown[]) {
  * reads from or writes to this table yet. Later N-FIN-10 stages will add a single
  * monotonic CAS writer before any recovery cutover.
  */
+let settlementCheckpointSchemaReady = false
+let settlementCheckpointSchemaInitPromise: Promise<boolean> | null = null
+
 export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
+  if (settlementCheckpointSchemaReady) return true
+  if (settlementCheckpointSchemaInitPromise) return settlementCheckpointSchemaInitPromise
 
+  settlementCheckpointSchemaInitPromise = ensureSettlementCheckpointTableUncached()
+  try {
+    const ready = await settlementCheckpointSchemaInitPromise
+    if (ready) settlementCheckpointSchemaReady = true
+    return ready
+  } finally {
+    settlementCheckpointSchemaInitPromise = null
+  }
+}
+
+async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
   const table = await query(`
     CREATE TABLE IF NOT EXISTS settlement_checkpoints (
       payment_id TEXT PRIMARY KEY,

@@ -22,7 +22,14 @@ export async function verifyMerchantFromPiToken(accessToken?: string): Promise<{
     })
 
     if (!response.ok) {
-      console.error("[Merchant Auth] Failed to verify merchant from Pi:", response.status)
+      if (response.status === 401 || response.status === 403) {
+        // An expired/revoked Pi token is an expected authentication rejection,
+        // not a server/runtime failure. Keep authorization fail-closed while
+        // avoiding false Runtime Error groups in production observability.
+        console.warn("[Merchant Auth] Pi token rejected:", response.status)
+      } else {
+        console.error("[Merchant Auth] Failed to verify merchant from Pi:", response.status)
+      }
       return null
     }
 

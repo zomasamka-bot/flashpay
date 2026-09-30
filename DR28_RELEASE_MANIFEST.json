@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 452,
-  "totalBytes": 2742345,
+  "fileCount": 453,
+  "totalBytes": 2745330,
   "files": [
     {
       "path": ".gitignore",
@@ -98,8 +98,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 79031,
-      "sha256": "46d470e00297c9c4e6afa7a2813c6b82bac1526e41d98be65b4b8006002d7582"
+      "bytes": 79201,
+      "sha256": "6346484ebab5ffc6f3542b3cf0f9bfc605e57533d246ff7047f2867d855231e0"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -773,8 +773,8 @@
     },
     {
       "path": "lib/db.ts",
-      "bytes": 149090,
-      "sha256": "457586325a511809802cdce10d2ea7ce317d7c7bb01d386d202e80f5e8f939b8"
+      "bytes": 149722,
+      "sha256": "dcc2f4437114cef8072fd1506d78b6370313cd1db395ac0ff5fd09b229e5665b"
     },
     {
       "path": "lib/domain-control.ts",
@@ -1023,8 +1023,8 @@
     },
     {
       "path": "lib/merchant-auth.ts",
-      "bytes": 1565,
-      "sha256": "f1aab109281371860adfb6864d5fddba15649c1688151bb8e7a0154b00ee8a3c"
+      "bytes": 1964,
+      "sha256": "4db5831622271074e9a62d6d9b1e7cb3e1d05df5a8c272375ec1bf86fef2ac8f"
     },
     {
       "path": "lib/operational-audit.ts",
@@ -2115,6 +2115,11 @@
       "path": "scripts/verify-pre-dr118-ux2-drift-profile-invariants.mjs",
       "bytes": 1688,
       "sha256": "e6de7c3df6ac99fa05e1228d8491b6729aae7d35b7775b01bc48b24f1a8d9646"
+    },
+    {
+      "path": "scripts/verify-pre-dr118-ux3-schema-history-hardening.mjs",
+      "bytes": 1784,
+      "sha256": "4b7f3db7de213e5fcf9b0d1536bb58a22afca97cb81d9c0f4b99c655f4d16ff2"
     },
     {
       "path": "scripts/verify-r10010-minimal-monitoring.mjs",
