@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 458,
-  "totalBytes": 2781227,
+  "fileCount": 451,
+  "totalBytes": 2743856,
   "files": [
     {
       "path": ".gitignore",
@@ -98,8 +98,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 79955,
-      "sha256": "fb0e00c2be565f44cb1de357156aa8c854d6d9a7ef4fbb2944d8c6f67a6b16a1"
+      "bytes": 79001,
+      "sha256": "c445d0f4a66777fe53e5fb807c70b54a8e9b1fd51dd4d45334e56099d0eabc7e"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -512,24 +512,9 @@
       "sha256": "7cb96ee534dedef7eb138952dc02fda0cb2caf2e02f2d3c08afab7f978d58dc3"
     },
     {
-      "path": "components/ui/calendar.tsx",
-      "bytes": 7679,
-      "sha256": "11b817aaa791d8ebd39a882f80827a7d4a99c6d451c8b836a81b186fcb2de87a"
-    },
-    {
       "path": "components/ui/card.tsx",
       "bytes": 1990,
       "sha256": "541ffffc9e6533063116770ae651e359b41de8546c52a29a3b560074878a37db"
-    },
-    {
-      "path": "components/ui/carousel.tsx",
-      "bytes": 5562,
-      "sha256": "67237a35be1473c2436d9438a17330e183bf720e84391dd8d0a00a73f289a371"
-    },
-    {
-      "path": "components/ui/chart.tsx",
-      "bytes": 9756,
-      "sha256": "188d2cd291ae53d8121361cd706e4c8ce4938132955de62842edc860cbc851f4"
     },
     {
       "path": "components/ui/checkbox.tsx",
@@ -542,11 +527,6 @@
       "sha256": "89d052508dd671fdc6c823cc299a53537edd00c7067ae9508a2af0a8eeb4348b"
     },
     {
-      "path": "components/ui/command.tsx",
-      "bytes": 4824,
-      "sha256": "803aa420db4170238043ca1b9f1fd88f285f1b83f3ff2c0c5abff217df316896"
-    },
-    {
       "path": "components/ui/context-menu.tsx",
       "bytes": 8282,
       "sha256": "ef3f8b668e7abee8ea18ea66317d067a5f3590a3bdfb7be937df5838e69602e8"
@@ -555,11 +535,6 @@
       "path": "components/ui/dialog.tsx",
       "bytes": 3985,
       "sha256": "2341f5d3379758c9659806e518299f9a3dc394128571e379ed83941deae83403"
-    },
-    {
-      "path": "components/ui/drawer.tsx",
-      "bytes": 4258,
-      "sha256": "e62592bd1cea50ad95ebeba32a165f9cfdf5a5c6431067ec74e024b83a866f01"
     },
     {
       "path": "components/ui/dropdown-menu.tsx",
@@ -590,11 +565,6 @@
       "path": "components/ui/input-group.tsx",
       "bytes": 5031,
       "sha256": "9214c077d8d253331da82bffdb36edb778abc73d27b34dff0eb544e6d7b9d386"
-    },
-    {
-      "path": "components/ui/input-otp.tsx",
-      "bytes": 2256,
-      "sha256": "6a046b50c82c554699c148a9f4922c785b200fb87f067772f166e80c59e813ca"
     },
     {
       "path": "components/ui/input.tsx",
@@ -645,11 +615,6 @@
       "path": "components/ui/radio-group.tsx",
       "bytes": 1467,
       "sha256": "9a91313aaed0e8358c69fad89d12a1f5d148bd7fa5ffbed925e6f8b368617ba9"
-    },
-    {
-      "path": "components/ui/resizable.tsx",
-      "bytes": 2030,
-      "sha256": "8f96f309d60fb87c09afbfba79c43326324379859e2bc27e1d26594a886ec908"
     },
     {
       "path": "components/ui/scroll-area.tsx",
@@ -1298,8 +1263,8 @@
     },
     {
       "path": "postcss.config.mjs",
-      "bytes": 144,
-      "sha256": "54b5708e687b8c9ecc8dbeebf29801dbec1213f890c5e018d7ca9c1541a6f7e3"
+      "bytes": 92,
+      "sha256": "6993a1b3cdf21cec2260d0d8ecaaf746f1e79893f0a5e622d3f1b9366469c973"
     },
     {
       "path": "public/.well-known/pi-validation.txt",
