@@ -13,13 +13,13 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 451,
-  "totalBytes": 2743856,
+  "fileCount": 452,
+  "totalBytes": 2742345,
   "files": [
     {
       "path": ".gitignore",
-      "bytes": 313,
-      "sha256": "b2cc815c63108dd2667ca97838e46b138886ddaa8564b3a143c7e60f48d8580a"
+      "bytes": 37,
+      "sha256": "2dbc66bba289edaf9c63330e16f186f00b0ed400dbd9146ea5901c6d8ac2c042"
     },
     {
       "path": "DR100_RELEASE_MANIFEST.json",
@@ -98,8 +98,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 79001,
-      "sha256": "c445d0f4a66777fe53e5fb807c70b54a8e9b1fd51dd4d45334e56099d0eabc7e"
+      "bytes": 79031,
+      "sha256": "46d470e00297c9c4e6afa7a2813c6b82bac1526e41d98be65b4b8006002d7582"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -110,6 +110,11 @@
       "path": "PRE_DR118_UX1_RELEASE_MANIFEST.json",
       "bytes": 1034,
       "sha256": "f626b0eae736bd8e6a9fea49216273822fb916010656c905621f41fa4c703f67"
+    },
+    {
+      "path": "PRE_DR118_UX2_RELEASE_MANIFEST.json",
+      "bytes": 1009,
+      "sha256": "5bb5b4ef29a6003327ca028ba9e4e1c14f294cc2c090761f3e0a378e27671d4e"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -712,11 +717,6 @@
       "sha256": "1b43441b273aa21c1e74fefa774d5a7cb50068e5d4c192a8f63b9c95c5580431"
     },
     {
-      "path": "components/ui/use-toast.ts",
-      "bytes": 3945,
-      "sha256": "3b5f8c9c5257f1cf36a94eeffed2588037e9cc7931d90b752604c2baed30cf81"
-    },
-    {
       "path": "components/upper-operations-arabic-layer.tsx",
       "bytes": 17274,
       "sha256": "0a97d84a8079b32ebee161f61bb436bd36cad333897a94a95b91b5e2835400b7"
@@ -1203,8 +1203,8 @@
     },
     {
       "path": "lib/system-control.ts",
-      "bytes": 7975,
-      "sha256": "458084f884c15c96e5d6f3f06c8c58504fbd48977562a24f1644bfdeeadea0ca"
+      "bytes": 7976,
+      "sha256": "5e4e1fff0bec6c45fc58ea84c668d757ddfc20a4cc28676b241187a98ed66403"
     },
     {
       "path": "lib/types.ts",
@@ -1253,8 +1253,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 6059,
-      "sha256": "6437291f6a4e6cde371dbf458ca9cf7a8e931cf413eebda764447ca83abfd4a4"
+      "bytes": 6060,
+      "sha256": "9882fea7dc22f19a7b6bb05b57c8976fbba19c32f635c848d80e9cd7a1fd1aef"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -1878,18 +1878,18 @@
     },
     {
       "path": "scripts/verify-f3-3-durable-public-status-authority.mjs",
-      "bytes": 1388,
-      "sha256": "1840ddfebd5c363166052e9d0ffc7d74a2a7046b110a8156d618324eff3b7026"
+      "bytes": 1387,
+      "sha256": "3c8b8c79c5b75dfd42689cfaa644e9537b3fa97ae3cdb69ce36fa19137f1b23f"
     },
     {
       "path": "scripts/verify-f3-4-projection-self-healing.mjs",
-      "bytes": 1543,
-      "sha256": "add7943e2b5d4af5a750bcc7c3ac88ad82951a9e35839504e99dd5aa33a34180"
+      "bytes": 1542,
+      "sha256": "8af6f249955ca91b1d9af0ab2e75c2561a016e249a8f6d04f0f0ef11dca4a14c"
     },
     {
       "path": "scripts/verify-f3-5-runtime-conflict-certification.mjs",
-      "bytes": 1767,
-      "sha256": "02adb73ddff191cfa891c33a73925256d9c0f670a8d5bdc681f1958eda64547b"
+      "bytes": 1766,
+      "sha256": "0e9a681f0ad088d61c70ca33866c186426d5e399a1fd0584f9aaf4d4b1e60c8c"
     },
     {
       "path": "scripts/verify-financial-lease-loss-adversarial-safety.mjs",
@@ -2008,18 +2008,18 @@
     },
     {
       "path": "scripts/verify-nfin10c-prepared-horizon-durability.mjs",
-      "bytes": 1119,
-      "sha256": "88d214aa5fb8486b3832fe6964b4d360f9ddac8891efc6f40397c675f71537d4"
+      "bytes": 1118,
+      "sha256": "2cf153b15aa70557f97b91137be811aa2bd9c4f240ec921d73657dd13f37d369"
     },
     {
       "path": "scripts/verify-nfin10d-build-fix.mjs",
-      "bytes": 827,
-      "sha256": "1219f2afef7e6bb5ccffc546cf0b9f4f55a08603a64c216d26c59205edb56a33"
+      "bytes": 826,
+      "sha256": "7345eb4aea087081f1173c9b5d89c9898d6b02d93bb073b5390dd23391d88d0c"
     },
     {
       "path": "scripts/verify-nfin10d-pi-db-finality.mjs",
-      "bytes": 1542,
-      "sha256": "d15753a473bf812adb5bce76d003f39d2f3a49558f5954dba920655228433312"
+      "bytes": 1541,
+      "sha256": "fa274a7fb86ade8146eb534d8e1544193dd75428744f28f786337add27944064"
     },
     {
       "path": "scripts/verify-nfin10e-redis-rebuild-recovery-cutover.mjs",
@@ -2028,33 +2028,33 @@
     },
     {
       "path": "scripts/verify-nfin10f-durable-repopulation-cross-authority.mjs",
-      "bytes": 1700,
-      "sha256": "ea1050b4fe7b62fb255737ee5acef35e71f1fe7d1b67c747ffad62ff79927cc2"
+      "bytes": 1699,
+      "sha256": "d9e7076b799d9d5edad83a71d5192fa727f8ca06e3e66595d8a7a84a46c02c34"
     },
     {
       "path": "scripts/verify-nfin10g-adversarial-10k-durability.mjs",
-      "bytes": 4154,
-      "sha256": "24004060b545897a97578f34e6faaa6b8ff7d876ecf27daf7cbe275da6e1657c"
+      "bytes": 4153,
+      "sha256": "36232f33bdc00c44c10922e3b62f7c18bb1f724bcdb0ab0b673e7eed4440f582"
     },
     {
       "path": "scripts/verify-nfin10h-final-production-readiness.mjs",
-      "bytes": 2438,
-      "sha256": "ab09b9186030a5644d609b47f667491633c0a2f62e87e72d932feef0a2cb75c0"
+      "bytes": 2437,
+      "sha256": "0a4049e8bf60bd40d9c30ac809d86dbed2d40f715391c762ea6814ee4e84d0f3"
     },
     {
       "path": "scripts/verify-nfin11-financial-kernel-matrix.mjs",
-      "bytes": 2641,
-      "sha256": "6fd9b54d6584dcffbc8707261f750e7870cc77b4dc3d68611bacd1bbafa64092"
+      "bytes": 2640,
+      "sha256": "e8300a669f0a47655563892bf5fbf1eb8cde366efe4c87a1662f22178b570aec"
     },
     {
       "path": "scripts/verify-nfin12-cross-system-finality.mjs",
-      "bytes": 3222,
-      "sha256": "d470d7b8312fc5c00b3ad637b0bcad4a717b233f9a063f723a3384493373dffc"
+      "bytes": 3221,
+      "sha256": "a506469282608869a4bfa8c9c8fbb6b9af8b671be2d65ae5d77eaeded0cc1e8a"
     },
     {
       "path": "scripts/verify-nfin13-final-financial-certification.mjs",
-      "bytes": 3661,
-      "sha256": "4172734a7dd05a6a05d5a0c0db423e81c31c40c4cbde2d55a4e9d132c389cd74"
+      "bytes": 3660,
+      "sha256": "1916aad1d2e41b825772a7f0e1780613c7d1d1ad956f755d8118cf0736714a5c"
     },
     {
       "path": "scripts/verify-nfin6-10k-capacity.mjs",
@@ -2078,38 +2078,43 @@
     },
     {
       "path": "scripts/verify-nfinx1-durable-drain-progression.mjs",
-      "bytes": 1847,
-      "sha256": "c89d2f2031e25c3141851caf72e5e286989cff7db28421a4fb307c0c96c268a0"
+      "bytes": 1846,
+      "sha256": "cbfd94b7755e1452f7ddd9d6f111f34a44856dac1c3ce3a563c9d09915be3cb6"
     },
     {
       "path": "scripts/verify-nfinx1-production-schema-repair.mjs",
-      "bytes": 1229,
-      "sha256": "8e466c6c40ec1fbf80e22330caa2b82d96cff3497e6603b9788f5b99996544d9"
+      "bytes": 1228,
+      "sha256": "d92c679a9529e9a59b1fdaba137d1d6e1a7bb368bd550573f393bc673d2580bd"
     },
     {
       "path": "scripts/verify-nfinx2-cross-authority-exclusion.mjs",
-      "bytes": 1953,
-      "sha256": "e581d2a2e8ee5724f059639d108fb2c4379b577ae28c172493cee799abd0b76f"
+      "bytes": 1952,
+      "sha256": "260a85b5e1d5d6c8b2e15810c6c019aeb7a1cbfe5e346d2ef96a511adcaa151c"
     },
     {
       "path": "scripts/verify-nfinx3-exact-stroops.mjs",
-      "bytes": 2023,
-      "sha256": "4b0f2e85bfa0d5dc8573d877ffa2e01844fa280e062b6708ab5c4e5c8090e3db"
+      "bytes": 2022,
+      "sha256": "7fd39afee14a36cc3267c266fbad7516181f91d5be68c103712d6c6f7e8e6d4b"
     },
     {
       "path": "scripts/verify-nfinx4-stellar-v17-operation-source.mjs",
-      "bytes": 1094,
-      "sha256": "7dbc3c0ffdd1d0381c0726cd67fe4863af41389b8ca2e3cda7281fefe1f8a223"
+      "bytes": 1093,
+      "sha256": "4f45767080116217eeddfccaae78a4bbd59486d865e9dc62a8b1c2ee367c8abd"
     },
     {
       "path": "scripts/verify-nfinx5-same-sha-adversarial-runtime-readiness.mjs",
-      "bytes": 4512,
-      "sha256": "5e0256258a47ee28c5b07f85610ea94df21c214b33fe47769bbcd8555855ce8d"
+      "bytes": 4511,
+      "sha256": "7ced444b85759f50793f0995f820698a014647feeded6adf60b757b36531f141"
     },
     {
       "path": "scripts/verify-nfinx6-final-residual-uncertainty-closure.mjs",
-      "bytes": 4203,
-      "sha256": "31edf73a0a14401728e917aa8e8aa9256b7753e360302cc36d2b4463bc1c18a3"
+      "bytes": 4202,
+      "sha256": "a186e818f4f3cb20b80a728156b819a96185ef3f380c07ceaafd8e0eb8d0d0cf"
+    },
+    {
+      "path": "scripts/verify-pre-dr118-ux2-drift-profile-invariants.mjs",
+      "bytes": 1688,
+      "sha256": "e6de7c3df6ac99fa05e1228d8491b6729aae7d35b7775b01bc48b24f1a8d9646"
     },
     {
       "path": "scripts/verify-r10010-minimal-monitoring.mjs",
