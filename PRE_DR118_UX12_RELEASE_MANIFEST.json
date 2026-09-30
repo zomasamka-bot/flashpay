@@ -1,0 +1,30 @@
+{
+  "release": "PRE_DR118_UX12_DIAGNOSTIC_CLEANUP_PRESENTATION_CLOSURE",
+  "date": "2026-09-30",
+  "baseline": "PRE_DR118_UX11_REFUND_PRESENTATION_SERIALIZED_DR61_FINAL",
+  "liveBaseline": {
+    "deployment": "dpl_GxqTa1spLLEMyw1yCuJPKKaGVUuw",
+    "productionSha": "5786ec0ae30a2615a470bb01168ff57660a65b34",
+    "historicalCustomerStatus": 200,
+    "historicalPresentationOutcome": "FOUND"
+  },
+  "runtimeChangedFiles": [
+    "lib/refund-presentation-reader.ts",
+    "lib/customer-refund-presentation-reader.ts"
+  ],
+  "change": "Remove remaining UX9 diagnostic console logging only; preserve all control flow, fail-closed outcomes, UX11 exact serialized DR61 matcher, profile completed-refund persistence and explicit dismissal semantics.",
+  "financialMovementLogicChanged": false,
+  "databaseWritesAdded": false,
+  "dependenciesAdded": false,
+  "productionNoticeReview": "PostgreSQL 42P07/42701 entries are NOTICE-level IF NOT EXISTS already-exists skips; observed queries succeeded and recovery returned HTTP 200.",
+  "certification": {
+    "UX12": "PASS",
+    "UX11": "PASS",
+    "UX8": "PASS",
+    "financialRecovery": "PASS",
+    "DR14": "PASS synthetic",
+    "DR13": "PASS synthetic",
+    "N-FIN13": "PASS CODE_AND_SYNTHETIC_READINESS_ONLY"
+  },
+  "localNextBuild": "NOT_EXECUTED_IN_ARTIFACT_ENVIRONMENT_PNPM_UNAVAILABLE; Vercel production build remains required after upload."
+}
