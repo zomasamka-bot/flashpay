@@ -27,18 +27,6 @@ function refundPresentationEvidenceIsExact(record: Record<string, unknown>): boo
   })
 }
 
-function logRefundPresentationEvidenceMismatch(record: Record<string, unknown>): void {
-  console.warn('REFUND_PRESENTATION_EVIDENCE_MISMATCH', {
-    requestedTotal: record.requested_total, requestedExact: record.requested_exact,
-    confirmedTotal: record.confirmed_total, confirmedExact: record.confirmed_exact,
-    accountingEventTotal: record.accounting_event_total, accountingEventExact: record.accounting_event_exact,
-    accountingTotal: record.accounting_total, accountingExact: record.accounting_exact,
-    auditTotal: record.audit_total, auditExact: record.audit_exact,
-    completedTotal: record.completed_total, completedExact: record.completed_exact,
-    finalizedTotal: record.finalized_total, finalizedExact: record.finalized_exact,
-  })
-}
-
 export async function readRefundPresentationPersistence(
   checkpoint: RefundCheckpoint,
 ): Promise<RefundPresentationPersistenceReadResult> {
@@ -56,7 +44,8 @@ export async function readRefundPresentationPersistence(
       WHERE a.refund_id=$1 AND a.payment_id=$2 AND a.idempotency_key=$3
         AND a.event_type='refund_requested' AND a.actor_type='system' AND a.event_id <> ''
         AND (a.details = jsonb_build_object('stage','intent_created')
-          OR a.details = jsonb_build_object('resumed',true))
+          OR a.details = jsonb_build_object('resumed',true)
+          OR (a.idempotency_key LIKE 'dr11-live:%' AND a.details = jsonb_build_object('stage','intent_created','source','dr61_durable_hold')))
     ), confirmed_total AS (
       SELECT count(*)::int AS total
       FROM refund_audit_events a
@@ -154,7 +143,6 @@ export async function readRefundPresentationPersistence(
   if (typeof row !== 'object' || row === null || Array.isArray(row)) return { outcome: 'INDETERMINATE' }
   const record = row as Record<string, unknown>
   if (!refundPresentationEvidenceIsExact(record)) {
-    logRefundPresentationEvidenceMismatch(record)
     return { outcome: 'INDETERMINATE' }
   }
 
@@ -207,7 +195,7 @@ export async function readRefundPresentationPersistences(
       x.finalized_total, x.finalized_exact, x.finalized_at
     FROM input i
     CROSS JOIN LATERAL (
-      WITH requested AS (SELECT count(*)::int total, count(*) FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('stage','intent_created') OR a.details=jsonb_build_object('resumed',true)))::int exact, max(a.created_at AT TIME ZONE 'UTC') FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('stage','intent_created') OR a.details=jsonb_build_object('resumed',true))) created_at FROM refund_audit_events a WHERE a.refund_id=i.refund_id AND a.event_type='refund_requested'),
+      WITH requested AS (SELECT count(*)::int total, count(*) FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('stage','intent_created') OR a.details=jsonb_build_object('resumed',true) OR (a.idempotency_key LIKE 'dr11-live:%' AND a.details=jsonb_build_object('stage','intent_created','source','dr61_durable_hold'))))::int exact, max(a.created_at AT TIME ZONE 'UTC') FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('stage','intent_created') OR a.details=jsonb_build_object('resumed',true) OR (a.idempotency_key LIKE 'dr11-live:%' AND a.details=jsonb_build_object('stage','intent_created','source','dr61_durable_hold')))) created_at FROM refund_audit_events a WHERE a.refund_id=i.refund_id AND a.event_type='refund_requested'),
       confirmed AS (SELECT count(*)::int total, count(*) FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid) OR a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'recovered',true)))::int exact, max(a.created_at AT TIME ZONE 'UTC') FILTER (WHERE a.payment_id=i.payment_id AND a.idempotency_key=i.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND (a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid) OR a.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'recovered',true))) created_at FROM refund_audit_events a WHERE a.refund_id=i.refund_id AND a.event_type='refund_submission_confirmed'),
       accounting AS (SELECT count(*) FILTER (WHERE r.refund_id=i.refund_id AND r.payment_id=i.payment_id AND r.refund_payment_id=i.refund_payment_id AND r.refund_txid=i.refund_txid AND r.payer_uid=i.payer_uid AND r.amount=i.amount AND r.currency=i.currency)::int exact, count(*) FILTER (WHERE r.refund_id=i.refund_id OR r.payment_id=i.payment_id OR r.refund_payment_id=i.refund_payment_id OR r.refund_txid=i.refund_txid)::int total, max(r.created_at AT TIME ZONE 'UTC') FILTER (WHERE r.refund_id=i.refund_id AND r.payment_id=i.payment_id AND r.refund_payment_id=i.refund_payment_id AND r.refund_txid=i.refund_txid AND r.payer_uid=i.payer_uid AND r.amount=i.amount AND r.currency=i.currency) created_at FROM refund_accounting_records r WHERE r.refund_id=i.refund_id OR r.payment_id=i.payment_id OR r.refund_payment_id=i.refund_payment_id OR r.refund_txid=i.refund_txid),
       events AS (SELECT e.event_type, count(*)::int total, count(*) FILTER (WHERE e.payment_id=i.payment_id AND e.idempotency_key=i.idempotency_key AND e.actor_type='system' AND e.event_id<>'' AND e.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'horizonFeeStroops',r.horizon_fee_stroops))::int exact, max(e.created_at AT TIME ZONE 'UTC') FILTER (WHERE e.payment_id=i.payment_id AND e.idempotency_key=i.idempotency_key AND e.actor_type='system' AND e.event_id<>'' AND e.details=jsonb_build_object('refundPaymentId',i.refund_payment_id,'refundTxid',i.refund_txid,'horizonFeeStroops',r.horizon_fee_stroops)) created_at FROM refund_audit_events e LEFT JOIN refund_accounting_records r ON r.refund_id=i.refund_id AND r.payment_id=i.payment_id AND r.refund_payment_id=i.refund_payment_id AND r.refund_txid=i.refund_txid AND r.payer_uid=i.payer_uid AND r.amount=i.amount AND r.currency=i.currency WHERE e.refund_id=i.refund_id AND e.event_type IN ('refund_accounting_recorded','refund_audit_recorded','refund_completed','refund_projection_finalized') GROUP BY e.event_type),
@@ -222,7 +210,6 @@ export async function readRefundPresentationPersistences(
     const row = rows[index]
     if (!isRecord(row) || row.ordinality !== index + 1 || row.refund_id !== valid[index].refundId || row.payment_id !== valid[index].paymentId || row.idempotency_key !== valid[index].idempotencyKey) return { state: 'uncertain' }
     if (!refundPresentationEvidenceIsExact(row)) {
-      logRefundPresentationEvidenceMismatch(row)
       persistences.set(valid[index].refundId, { outcome: 'INDETERMINATE' })
       continue
     }
