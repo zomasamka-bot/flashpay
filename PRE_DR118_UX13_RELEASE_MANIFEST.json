@@ -1,0 +1,47 @@
+{
+  "release": "PRE_DR118_UX13_REFUND_LIVE_PRESENTATION_FINALIZATION_COMPAT",
+  "date": "2026-09-30",
+  "baseline": "PRE_DR118_UX12",
+  "productionEvidence": {
+    "deployment": "dpl_6UyWVDKUuCrgdQwPFpvkMa71MuiW",
+    "sha": "1ee90b20acdb3b6b944ac690d0883a1c53651883",
+    "paymentId": "c9d2c7a9-e755-4384-ac1d-3b2805471710",
+    "refundId": "25fab0a5-5949-44fb-9df2-ccb67206103c",
+    "financialResult": "REFUND_COMPLETED",
+    "customerStatus": "503 INDETERMINATE repeated after completion"
+  },
+  "forensicComparison": {
+    "stableArchive": "flashpay-vb_COM2KibuKY3(2).zip",
+    "customerRefundStatusCardByteIdentical": true,
+    "customerRefundPresentationClientByteIdentical": true
+  },
+  "rootCause": "refund_projection_finalized details representation can be JSONB string on DR path while presentation/profile/terminal readers required JSONB object only",
+  "runtimeChangedFiles": [
+    "lib/refund-checkpoint-store.ts",
+    "lib/refund-presentation-persistence.ts"
+  ],
+  "fix": [
+    "Future projection_finalized writer JSON.stringify(details) before ::jsonb so PostgreSQL receives canonical JSON text",
+    "Single customer presentation accepts legacy JSONB string only when raw string exactly equals expected refundPaymentId/refundTxid JSON",
+    "Bulk profile presentation mirrors same exact compatibility",
+    "Terminal cleanup/list/finalizer replay mirror same exact compatibility"
+  ],
+  "safety": {
+    "broadStringAcceptance": false,
+    "historicalAuditMutationAdded": false,
+    "piOrHorizonLogicChanged": false,
+    "accountingLogicChanged": false,
+    "settlementLogicChanged": false,
+    "uiChanged": false,
+    "dependenciesAdded": false
+  },
+  "gates": {
+    "UX13": "PASS",
+    "UX12": "PASS",
+    "financialRecovery": "PASS",
+    "DR14": "PASS synthetic",
+    "DR13": "PASS synthetic",
+    "NFIN13": "PASS CODE_AND_SYNTHETIC_READINESS_ONLY",
+    "fullTypeScript": "not runnable cleanly without node_modules; global tsc failed on missing dependencies, not patch-specific"
+  }
+}

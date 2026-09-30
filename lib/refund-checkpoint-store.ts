@@ -77,7 +77,7 @@ export async function cleanupTerminalRefundRetryMetadata(limit: number): Promise
                  AND a.event_type='refund_projection_finalized'
                  AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key
                  AND a.actor_type='system'
-                 AND a.details=jsonb_build_object('refundPaymentId',c.refund_payment_id,'refundTxid',c.refund_txid))=1
+                 AND (a.details=jsonb_build_object('refundPaymentId',c.refund_payment_id,'refundTxid',c.refund_txid) OR (jsonb_typeof(a.details)='string' AND (a.details #>> '{}')=concat('{"refundPaymentId":',to_json(c.refund_payment_id)::text,',"refundTxid":',to_json(c.refund_txid)::text,'}'))))=1
         ORDER BY c.updated_at ASC, c.refund_id ASC
         LIMIT $1
       )
@@ -97,7 +97,7 @@ export async function listAutomaticRefundCheckpoints(limit: number): Promise<Aut
       SELECT * FROM refund_checkpoints
       WHERE (status='pending' OR (stage='audit_recorded' AND status='completed' AND NOT (
         (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized')=1
-        AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized' AND refund_checkpoints.refund_payment_id IS NOT NULL AND refund_checkpoints.refund_txid IS NOT NULL AND a.event_id='refund:'||refund_checkpoints.refund_id||':projection_finalized' AND a.payment_id=refund_checkpoints.payment_id AND a.idempotency_key=refund_checkpoints.idempotency_key AND a.actor_type='system' AND a.details=jsonb_build_object('refundPaymentId',refund_checkpoints.refund_payment_id,'refundTxid',refund_checkpoints.refund_txid))=1
+        AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized' AND refund_checkpoints.refund_payment_id IS NOT NULL AND refund_checkpoints.refund_txid IS NOT NULL AND a.event_id='refund:'||refund_checkpoints.refund_id||':projection_finalized' AND a.payment_id=refund_checkpoints.payment_id AND a.idempotency_key=refund_checkpoints.idempotency_key AND a.actor_type='system' AND (a.details=jsonb_build_object('refundPaymentId',refund_checkpoints.refund_payment_id,'refundTxid',refund_checkpoints.refund_txid) OR (jsonb_typeof(a.details)='string' AND (a.details #>> '{}')=concat('{"refundPaymentId":',to_json(refund_checkpoints.refund_payment_id)::text,',"refundTxid":',to_json(refund_checkpoints.refund_txid)::text,'}'))))=1
       )))
         AND (
           next_retry_at IS NULL
@@ -1193,7 +1193,7 @@ export async function completeRefundCheckpointWithAudit(
         AND r.payment_id=c.payment_id AND r.refund_payment_id=c.refund_payment_id AND r.refund_txid=c.refund_txid AND r.payer_uid=c.payer_uid AND r.amount=c.amount AND r.currency='π' AND r.horizon_fee_stroops>=0
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed')=1
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.actor_type='system' AND a.event_id<>'' AND a.details=jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'horizonFeeStroops',r.horizon_fee_stroops))=1
-        AND ((SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_projection_finalized')=0 OR ((SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_projection_finalized')=1 AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_id=$8 AND a.event_id<>'' AND a.event_type='refund_projection_finalized' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.actor_type='system' AND a.details=jsonb_build_object('refundPaymentId',$4,'refundTxid',$5))=1))
+        AND ((SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_projection_finalized')=0 OR ((SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_projection_finalized')=1 AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_id=$8 AND a.event_id<>'' AND a.event_type='refund_projection_finalized' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.actor_type='system' AND (a.details=jsonb_build_object('refundPaymentId',$4,'refundTxid',$5) OR (jsonb_typeof(a.details)='string' AND (a.details #>> '{}')=concat('{"refundPaymentId":',to_json($4::text)::text,',"refundTxid":',to_json($5::text)::text,'}'))))=1))
     ), inserted AS (
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $8, refund_id, payment_id, 'refund_projection_finalized', 'system', idempotency_key, NOW(), $9::jsonb FROM eligible
@@ -1210,13 +1210,13 @@ export async function completeRefundCheckpointWithAudit(
     ) SELECT (SELECT count(*) FROM eligible) AS eligible_count,
              (SELECT count(*) FROM inserted) AS inserted_count,
              (SELECT count(*) FROM cleaned) AS cleaned_count`,
-    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, eventId, details],
+    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, eventId, JSON.stringify(details)],
   )
   if (!Array.isArray(result) || result.length !== 1 || Number((result[0] as Record<string, unknown>).eligible_count) !== 1 || Number((result[0] as Record<string, unknown>).cleaned_count) !== 1) return null
   const insertedNow = Number((result[0] as Record<string, unknown>).inserted_count) === 1
   if (insertedNow) console.log('REFUND_COMPLETED', refundId)
   if (insertedNow) return { insertedNow }
-  const replay = await query(`SELECT event_id FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized' AND ((SELECT count(*) FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized')=1) AND event_id=$1 AND event_id<>'' AND payment_id=$3 AND actor_type='system' AND idempotency_key=$4 AND details=jsonb_build_object('refundPaymentId',$5::text,'refundTxid',$6::text) LIMIT 2`, [eventId, refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
+  const replay = await query(`SELECT event_id FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized' AND ((SELECT count(*) FROM refund_audit_events WHERE refund_id=$2 AND event_type='refund_projection_finalized')=1) AND event_id=$1 AND event_id<>'' AND payment_id=$3 AND actor_type='system' AND idempotency_key=$4 AND (details=jsonb_build_object('refundPaymentId',$5::text,'refundTxid',$6::text) OR (jsonb_typeof(details)='string' AND (details #>> '{}')=concat('{"refundPaymentId":',to_json($5::text)::text,',"refundTxid":',to_json($6::text)::text,'}'))) LIMIT 2`, [eventId, refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid])
   return Array.isArray(replay) && replay.length === 1 ? { insertedNow: false } : null
 }
 
