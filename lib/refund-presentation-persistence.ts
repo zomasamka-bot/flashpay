@@ -143,8 +143,10 @@ export async function readRefundPresentationPersistence(
   if (typeof row !== 'object' || row === null || Array.isArray(row)) return { outcome: 'INDETERMINATE' }
   const record = row as Record<string, unknown>
   if (!refundPresentationEvidenceIsExact(record)) {
+    console.warn('UX9_REFUND_PRESENTATION_DIAGNOSTIC', { boundary: 'PERSISTENCE_EVIDENCE', requested: [record.requested_total, record.requested_exact], confirmed: [record.confirmed_total, record.confirmed_exact], accountingEvent: [record.accounting_event_total, record.accounting_event_exact], accounting: [record.accounting_total, record.accounting_exact], audit: [record.audit_total, record.audit_exact], completed: [record.completed_total, record.completed_exact], finalized: [record.finalized_total, record.finalized_exact] })
     return { outcome: 'INDETERMINATE' }
   }
+  console.info('UX9_REFUND_PRESENTATION_DIAGNOSTIC', { boundary: 'PERSISTENCE_FOUND' })
 
   const normalized = normalizeRefundPersistenceTimestamps({
     requestedAt: record.requested_at,

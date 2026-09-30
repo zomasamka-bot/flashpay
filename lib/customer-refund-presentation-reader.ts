@@ -41,11 +41,12 @@ export async function readCustomerRefundPresentation(
     if (row.payer_uid !== verifiedCallerUid) return { outcome: "FORBIDDEN" }
 
     const result = await readRefundPresentation(row.refund_id)
-    if (result.outcome !== "FOUND" || result.presentation.paymentId !== paymentId) {
-      return { outcome: "INDETERMINATE" }
-    }
+    if (result.outcome !== "FOUND") { console.warn("UX9_CUSTOMER_REFUND_DIAGNOSTIC", { boundary: "INNER_NOT_FOUND", outcome: result.outcome }); return { outcome: "INDETERMINATE" } }
+    if (result.presentation.paymentId !== paymentId) { console.warn("UX9_CUSTOMER_REFUND_DIAGNOSTIC", { boundary: "PAYMENT_BINDING_MISMATCH" }); return { outcome: "INDETERMINATE" } }
+    console.info("UX9_CUSTOMER_REFUND_DIAGNOSTIC", { boundary: "CUSTOMER_PRESENTATION_FOUND" })
     return { outcome: "FOUND", presentation: result.presentation }
   } catch {
+    console.warn("UX9_CUSTOMER_REFUND_DIAGNOSTIC", { boundary: "CUSTOMER_READER_EXCEPTION" })
     return { outcome: "INDETERMINATE" }
   }
 }

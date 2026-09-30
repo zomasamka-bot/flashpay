@@ -29,12 +29,13 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
       ? { state: "present", checkpoint: suppliedCheckpoint }
       : await getRefundCheckpointReadOnly(refundId)
     if (checkpointResult.state === "absent") return { outcome: "NOT_FOUND" }
-    if (checkpointResult.state === "uncertain") return { outcome: "INDETERMINATE" }
+    if (checkpointResult.state === "uncertain") { console.warn("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "CHECKPOINT_UNCERTAIN" }); return { outcome: "INDETERMINATE" } }
 
     const checkpoint = checkpointResult.checkpoint
     if (suppliedPersistence && (suppliedPersistence.refundId !== checkpoint.refundId || suppliedPersistence.paymentId !== checkpoint.paymentId || suppliedPersistence.idempotencyKey !== checkpoint.idempotencyKey)) return { outcome: "INDETERMINATE" }
     const persistence = suppliedPersistence?.result ?? await readRefundPresentationPersistence(checkpoint)
-    if (persistence.outcome !== "FOUND") return { outcome: "INDETERMINATE" }
+    if (persistence.outcome !== "FOUND") { console.warn("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "PERSISTENCE_NOT_FOUND" }); return { outcome: "INDETERMINATE" } }
+    console.info("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "PERSISTENCE_ACCEPTED" })
 
     let blockchain: RefundPresentationBlockchainReadResult
     if (
@@ -44,7 +45,8 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
     ) {
       if (suppliedProof && (suppliedProof.refundId !== checkpoint.refundId || suppliedProof.paymentId !== checkpoint.paymentId || suppliedProof.idempotencyKey !== checkpoint.idempotencyKey)) return { outcome: "INDETERMINATE" }
       const proof = suppliedProof?.result ?? await readRefundPresentationProof(checkpoint)
-      if (proof.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
+      if (proof.outcome === "INDETERMINATE") { console.warn("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "PROOF_INDETERMINATE" }); return { outcome: "INDETERMINATE" } }
+      console.info("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: proof.outcome === "FOUND" ? "PROOF_FOUND" : "PROOF_ABSENT" })
       if (proof.outcome === "FOUND") {
         blockchain = {
           outcome: "CONFIRMED",
@@ -57,9 +59,11 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
       } else {
         const blockchainRead = await readRefundPresentationBlockchain(checkpoint)
         if (blockchainRead.outcome !== "CONFIRMED" || blockchainRead.piDeveloperCompleted !== true) {
+          console.warn("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "BLOCKCHAIN_NOT_CONFIRMED", outcome: blockchainRead.outcome, developerCompleted: blockchainRead.outcome === "CONFIRMED" ? blockchainRead.piDeveloperCompleted : null })
           return { outcome: "INDETERMINATE" }
         }
         if (!(await recordRefundPresentationProof(checkpoint, blockchainRead))) {
+          console.warn("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "PROOF_RECORD_FAILED" })
           return { outcome: "INDETERMINATE" }
         }
         blockchain = blockchainRead
@@ -123,8 +127,10 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
       blockchain: presentationBlockchain,
     })
 
+    console.info("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "PRESENTATION_FOUND" })
     return { outcome: "FOUND", presentation }
   } catch {
+    console.warn("UX9_REFUND_PRESENTATION_DIAGNOSTIC", { boundary: "PRESENTATION_EXCEPTION" })
     return { outcome: "INDETERMINATE" }
   }
 }

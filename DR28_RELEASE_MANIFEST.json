@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 462,
-  "totalBytes": 2760677,
+  "fileCount": 464,
+  "totalBytes": 2764377,
   "files": [
     {
       "path": "DR100_RELEASE_MANIFEST.json",
@@ -93,8 +93,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 80929,
-      "sha256": "551d61ec515a427b90e96cc5edd5e749cfbed810782d069c9de4d8bdcb978ab6"
+      "bytes": 81098,
+      "sha256": "116688e93181f0590995bb8d9f8c3c2928b1035f12d4ddf4598c4779cd927355"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -135,6 +135,11 @@
       "path": "PRE_DR118_UX8_RELEASE_MANIFEST.json",
       "bytes": 546,
       "sha256": "b95ddac1118374a42096e1109d3caa7a896cb02fb3e697a4971779ade48bbaf3"
+    },
+    {
+      "path": "PRE_DR118_UX9_DIAGNOSTIC_RELEASE_MANIFEST.json",
+      "bytes": 464,
+      "sha256": "6f5a97630ee53fdfe5e364cdd928fd40560aaf5559bdf69619d47da57f7d2db7"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -788,8 +793,8 @@
     },
     {
       "path": "lib/customer-refund-presentation-reader.ts",
-      "bytes": 1891,
-      "sha256": "d5c930ffc404d78b617ee89f25ee713aeda55a46b5aa850a4f483d6403278876"
+      "bytes": 2313,
+      "sha256": "41117e8ec1466d80bad97580839571e84f225169c6bdb102113c0d02fdf2716d"
     },
     {
       "path": "lib/db.ts",
@@ -1168,13 +1173,13 @@
     },
     {
       "path": "lib/refund-presentation-persistence.ts",
-      "bytes": 27922,
-      "sha256": "ac0a3ec3f92d1082a5ebd13735039896d559ff1c06e17b74d5bdcf16cd42ac27"
+      "bytes": 28541,
+      "sha256": "86c5d27d917c4b43e6b985846cb7b011fe99452aa1e41beaa93e14685575a7af"
     },
     {
       "path": "lib/refund-presentation-reader.ts",
-      "bytes": 6036,
-      "sha256": "358b53db17358dcdcfcc4cc3e8c810fc4e511eeb2684d2ef87b4316c50426962"
+      "bytes": 7067,
+      "sha256": "89dced11ba67c1e09ad13c3aca7cbbb5adbf2d384234ac11fd64ec832da5ff8c"
     },
     {
       "path": "lib/refund-presentation.ts",
@@ -2165,6 +2170,11 @@
       "path": "scripts/verify-pre-dr118-ux8-refund-requested-legacy-compat.mjs",
       "bytes": 1915,
       "sha256": "2c4770ad25f136e3ea6fd6976640bfb1d79d07bf49397a558b2c309aa80f016d"
+    },
+    {
+      "path": "scripts/verify-pre-dr118-ux9-boundary-diagnostic.mjs",
+      "bytes": 995,
+      "sha256": "198f8d6af7241c872c903f3049c53df12d1fff98a55a77f5b62c30127159dd2d"
     },
     {
       "path": "scripts/verify-r10010-minimal-monitoring.mjs",
