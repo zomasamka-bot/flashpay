@@ -13,8 +13,8 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 456,
-  "totalBytes": 2753496,
+  "fileCount": 458,
+  "totalBytes": 2755159,
   "files": [
     {
       "path": "DR100_RELEASE_MANIFEST.json",
@@ -93,8 +93,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 79615,
-      "sha256": "20ddbdf72ea2de6fb8902486b06730b50e4a168477eb842e24d40be94d91fd39"
+      "bytes": 80184,
+      "sha256": "2cf10d2063a49eb2f199796d3820fa366fe56272a742eacdc6aa3fd6c9608356"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -120,6 +120,11 @@
       "path": "PRE_DR118_UX5_RELEASE_MANIFEST.json",
       "bytes": 837,
       "sha256": "786f32f6d2ec3bd8b5ee681e321ff0dcd0671509261e92a95201717dfdacc48d"
+    },
+    {
+      "path": "PRE_DR118_UX6_RELEASE_MANIFEST.json",
+      "bytes": 484,
+      "sha256": "7dcba39a8b53660b7e350bf2fb39e7ee7afae5cc5cb7c8f4ee7ab04b5c92f0a8"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -1153,8 +1158,8 @@
     },
     {
       "path": "lib/refund-presentation-persistence.ts",
-      "bytes": 28628,
-      "sha256": "f87684dc56f1c9b23f10c50196fb2bfdbcd30b51f7a3f3f9148cb4766ea3a6cf"
+      "bytes": 27772,
+      "sha256": "0d24ddedc52646253856a5a506e3073bed3ec016becf0759063e75dbd44d90de"
     },
     {
       "path": "lib/refund-presentation-reader.ts",
@@ -2135,6 +2140,11 @@
       "path": "scripts/verify-pre-dr118-ux5-refund-presentation-compat.mjs",
       "bytes": 801,
       "sha256": "5795f9f4a6f71360b23fce9381beb4e049ea3f6241a4845ccc8f990c25e50ea1"
+    },
+    {
+      "path": "scripts/verify-pre-dr118-ux6-refund-presentation-idempotent-evidence.mjs",
+      "bytes": 1466,
+      "sha256": "b61255b3cd4ab9bec1e195a834c667445280536d46941c63fa1b8670bf748c7d"
     },
     {
       "path": "scripts/verify-r10010-minimal-monitoring.mjs",

@@ -1,0 +1,11 @@
+import fs from 'node:fs'; import assert from 'node:assert/strict';
+const p=fs.readFileSync('lib/refund-presentation-persistence.ts','utf8');
+assert(!p.includes('WITH candidate AS ('),'customer presentation read must not mutate legacy audit evidence');
+assert(!p.includes('UPDATE refund_audit_events a\n    SET details'),'GET-side audit mutation must be absent');
+assert(p.includes('(record[total] as number) >= 0 && record[total] === record[exact]'),'single reader must accept only all-exact semantic multiplicity');
+assert(p.includes('totalValue >= 0 && totalValue === exactValue'),'batch reader must use the same semantic multiplicity rule');
+const accepted=(total,exact)=>Number.isInteger(total)&&Number.isInteger(exact)&&total>=0&&total===exact;
+for(const n of [0,1,2,10,10000]) assert.equal(accepted(n,n),true);
+for(const [t,e] of [[1,0],[2,1],[10,9],[1,2],[2,0]]) assert.equal(accepted(t,e),false);
+for(const needle of ["a.payment_id=$2 AND a.idempotency_key=$3","a.details = jsonb_build_object('refundPaymentId',$4,'refundTxid',$5,'horizonFeeStroops',r.horizon_fee_stroops)","r.payer_uid=$6 AND r.amount=$7::numeric AND r.currency=$8","a.event_id='refund:'||$1||':projection_finalized'"]) assert(p.includes(needle),`missing fail-closed evidence predicate: ${needle}`);
+console.log(JSON.stringify({gate:'PRE_DR118_UX6_REFUND_PRESENTATION_IDEMPOTENT_EVIDENCE',status:'PASS',readOnly:true,identicalReplayAccepted:true,conflictingEvidenceRejected:true},null,2));

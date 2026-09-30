@@ -16,28 +16,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function readRefundPresentationPersistence(
   checkpoint: RefundCheckpoint,
 ): Promise<RefundPresentationPersistenceReadResult> {
-  // PRE-DR118 UX5: DR61 historically wrote a non-canonical refund_requested
-  // details object with an extra source field. The strict presentation evidence
-  // reader correctly rejected it. Normalize only that exact, unique producer
-  // shape; ambiguity remains fail-closed and this never authorizes money movement.
-  await query(
-    `WITH candidate AS (
-      SELECT ctid
-      FROM refund_audit_events
-      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3
-        AND event_type='refund_requested' AND actor_type='system' AND event_id<>''
-        AND details=jsonb_build_object('stage','intent_created','source','dr61_durable_hold')
-    ), eligible AS (
-      SELECT count(*)=1
-        AND (SELECT count(*) FROM refund_audit_events WHERE refund_id=$1 AND event_type='refund_requested')=1 AS ok
-      FROM candidate
-    )
-    UPDATE refund_audit_events a
-    SET details=jsonb_build_object('stage','intent_created')
-    FROM candidate c CROSS JOIN eligible e
-    WHERE e.ok AND a.ctid=c.ctid`,
-    [checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey],
-  )
+  // PRE-DR118 UX6: presentation reads are strictly read-only. Recovery may
+  // replay identical durable audit evidence; accept multiplicity only when every
+  // row is an exact semantic match. Any conflicting row remains fail-closed.
   const rows = await query(
     `WITH requested_total AS (
       SELECT count(*)::int AS total
@@ -151,7 +132,7 @@ export async function readRefundPresentationPersistence(
     ['accounting_event_total', 'accounting_event_exact'], ['accounting_total', 'accounting_exact'], ['audit_total', 'audit_exact'],
     ['completed_total', 'completed_exact'], ['finalized_total', 'finalized_exact'],
   ] as const
-  if (!sources.every(([total, exact]) => Number.isInteger(record[total]) && Number.isInteger(record[exact]) && (record[total] as number) <= 1 && record[total] === record[exact])) return { outcome: 'INDETERMINATE' }
+  if (!sources.every(([total, exact]) => Number.isInteger(record[total]) && Number.isInteger(record[exact]) && (record[total] as number) >= 0 && record[total] === record[exact])) return { outcome: 'INDETERMINATE' }
 
   const normalized = normalizeRefundPersistenceTimestamps({
     requestedAt: record.requested_at,
@@ -220,7 +201,7 @@ export async function readRefundPresentationPersistences(
     if (!sources.every(([total, exact]) => {
       const totalValue = row[total]
       const exactValue = row[exact]
-      return typeof totalValue === 'number' && Number.isInteger(totalValue) && typeof exactValue === 'number' && Number.isInteger(exactValue) && totalValue <= 1 && totalValue === exactValue
+      return typeof totalValue === 'number' && Number.isInteger(totalValue) && typeof exactValue === 'number' && Number.isInteger(exactValue) && totalValue >= 0 && totalValue === exactValue
     })) {
       persistences.set(valid[index].refundId, { outcome: 'INDETERMINATE' })
       continue
