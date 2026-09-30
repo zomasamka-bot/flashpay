@@ -16,6 +16,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function readRefundPresentationPersistence(
   checkpoint: RefundCheckpoint,
 ): Promise<RefundPresentationPersistenceReadResult> {
+  // PRE-DR118 UX5: DR61 historically wrote a non-canonical refund_requested
+  // details object with an extra source field. The strict presentation evidence
+  // reader correctly rejected it. Normalize only that exact, unique producer
+  // shape; ambiguity remains fail-closed and this never authorizes money movement.
+  await query(
+    `WITH candidate AS (
+      SELECT ctid
+      FROM refund_audit_events
+      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3
+        AND event_type='refund_requested' AND actor_type='system' AND event_id<>''
+        AND details=jsonb_build_object('stage','intent_created','source','dr61_durable_hold')
+    ), eligible AS (
+      SELECT count(*)=1
+        AND (SELECT count(*) FROM refund_audit_events WHERE refund_id=$1 AND event_type='refund_requested')=1 AS ok
+      FROM candidate
+    )
+    UPDATE refund_audit_events a
+    SET details=jsonb_build_object('stage','intent_created')
+    FROM candidate c CROSS JOIN eligible e
+    WHERE e.ok AND a.ctid=c.ctid`,
+    [checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey],
+  )
   const rows = await query(
     `WITH requested_total AS (
       SELECT count(*)::int AS total

@@ -417,7 +417,7 @@ export async function createDr11RefundAuthorityFromDurableHold(paymentId:string)
       RETURNING *`
     if(inserted.length!==1)return[]
     const audit=await tx`INSERT INTO refund_audit_events(event_id,refund_id,payment_id,event_type,actor_type,idempotency_key,created_at,details)
-      VALUES(${eventId},${refundId},${paymentId},'refund_requested','system',${idempotencyKey},${now},${JSON.stringify({stage:'intent_created',source:'dr61_durable_hold'})}::jsonb) RETURNING event_id`
+      VALUES(${eventId},${refundId},${paymentId},'refund_requested','system',${idempotencyKey},${now},${JSON.stringify({stage:'intent_created'})}::jsonb) RETURNING event_id`
     if(audit.length!==1)return[]
     const released=await tx`UPDATE settlement_checkpoints SET certification_hold=NULL,certification_hold_at=NULL,certification_hold_expires_at=NULL,updated_at=NOW()
       WHERE payment_id=${paymentId} AND certification_hold='dr11_refund' AND certification_hold_at IS NOT NULL RETURNING payment_id`
