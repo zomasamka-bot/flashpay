@@ -13,6 +13,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+const REFUND_PRESENTATION_EVIDENCE_SOURCES = [
+  ['requested_total', 'requested_exact'], ['confirmed_total', 'confirmed_exact'],
+  ['accounting_event_total', 'accounting_event_exact'], ['accounting_total', 'accounting_exact'], ['audit_total', 'audit_exact'],
+  ['completed_total', 'completed_exact'], ['finalized_total', 'finalized_exact'],
+] as const
+
+function refundPresentationEvidenceIsExact(record: Record<string, unknown>): boolean {
+  return REFUND_PRESENTATION_EVIDENCE_SOURCES.every(([total, exact]) => {
+    const totalValue = record[total]
+    const exactValue = record[exact]
+    return typeof totalValue === 'number' && Number.isInteger(totalValue) && typeof exactValue === 'number' && Number.isInteger(exactValue) && totalValue >= 0 && totalValue === exactValue
+  })
+}
+
+function logRefundPresentationEvidenceMismatch(record: Record<string, unknown>): void {
+  console.warn('REFUND_PRESENTATION_EVIDENCE_MISMATCH', {
+    requestedTotal: record.requested_total, requestedExact: record.requested_exact,
+    confirmedTotal: record.confirmed_total, confirmedExact: record.confirmed_exact,
+    accountingEventTotal: record.accounting_event_total, accountingEventExact: record.accounting_event_exact,
+    accountingTotal: record.accounting_total, accountingExact: record.accounting_exact,
+    auditTotal: record.audit_total, auditExact: record.audit_exact,
+    completedTotal: record.completed_total, completedExact: record.completed_exact,
+    finalizedTotal: record.finalized_total, finalizedExact: record.finalized_exact,
+  })
+}
+
 export async function readRefundPresentationPersistence(
   checkpoint: RefundCheckpoint,
 ): Promise<RefundPresentationPersistenceReadResult> {
@@ -127,12 +153,10 @@ export async function readRefundPresentationPersistence(
   const row = rows[0]
   if (typeof row !== 'object' || row === null || Array.isArray(row)) return { outcome: 'INDETERMINATE' }
   const record = row as Record<string, unknown>
-  const sources = [
-    ['requested_total', 'requested_exact'], ['confirmed_total', 'confirmed_exact'],
-    ['accounting_event_total', 'accounting_event_exact'], ['accounting_total', 'accounting_exact'], ['audit_total', 'audit_exact'],
-    ['completed_total', 'completed_exact'], ['finalized_total', 'finalized_exact'],
-  ] as const
-  if (!sources.every(([total, exact]) => Number.isInteger(record[total]) && Number.isInteger(record[exact]) && (record[total] as number) >= 0 && record[total] === record[exact])) return { outcome: 'INDETERMINATE' }
+  if (!refundPresentationEvidenceIsExact(record)) {
+    logRefundPresentationEvidenceMismatch(record)
+    return { outcome: 'INDETERMINATE' }
+  }
 
   const normalized = normalizeRefundPersistenceTimestamps({
     requestedAt: record.requested_at,
@@ -197,12 +221,8 @@ export async function readRefundPresentationPersistences(
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]
     if (!isRecord(row) || row.ordinality !== index + 1 || row.refund_id !== valid[index].refundId || row.payment_id !== valid[index].paymentId || row.idempotency_key !== valid[index].idempotencyKey) return { state: 'uncertain' }
-    const sources = [['requested_total', 'requested_exact'], ['confirmed_total', 'confirmed_exact'], ['accounting_event_total', 'accounting_event_exact'], ['accounting_total', 'accounting_exact'], ['audit_total', 'audit_exact'], ['completed_total', 'completed_exact'], ['finalized_total', 'finalized_exact']] as const
-    if (!sources.every(([total, exact]) => {
-      const totalValue = row[total]
-      const exactValue = row[exact]
-      return typeof totalValue === 'number' && Number.isInteger(totalValue) && typeof exactValue === 'number' && Number.isInteger(exactValue) && totalValue >= 0 && totalValue === exactValue
-    })) {
+    if (!refundPresentationEvidenceIsExact(row)) {
+      logRefundPresentationEvidenceMismatch(row)
       persistences.set(valid[index].refundId, { outcome: 'INDETERMINATE' })
       continue
     }

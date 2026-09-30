@@ -1,0 +1,12 @@
+{
+  "release": "PRE-DR118-UX7-REFUND-PRESENTATION-READONLY-DIAGNOSTIC",
+  "date": "2026-09-30",
+  "purpose": "Temporarily expose only total/exact counts for seven refund presentation evidence classes when persistence is INDETERMINATE.",
+  "runtimeFilesChanged": ["lib/refund-presentation-persistence.ts"],
+  "databaseWritesAdded": false,
+  "networkCallsAdded": false,
+  "dependenciesAdded": false,
+  "sensitiveIdentifiersLogged": false,
+  "financialMovementChanged": false,
+  "diagnosticMetrics": ["requested total/exact","confirmed total/exact","accounting-event total/exact","accounting total/exact","audit total/exact","completed total/exact","finalized total/exact"]
+}
