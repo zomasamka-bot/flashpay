@@ -156,8 +156,8 @@ export async function readRefundPresentationPersistence(
             count(*) FILTER (WHERE jsonb_typeof(a.details)='object')::int AS details_object,
             count(*) FILTER (WHERE a.details=jsonb_build_object('stage','intent_created'))::int AS details_canonical_intent,
             count(*) FILTER (WHERE a.details=jsonb_build_object('resumed',true))::int AS details_resumed,
-            count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'stage' AND a.details ? 'source' AND jsonb_object_length(a.details)=2)::int AS details_stage_source_two_keys,
-            max(CASE WHEN jsonb_typeof(a.details)='object' THEN jsonb_object_length(a.details) ELSE NULL END)::int AS details_key_count,
+            count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'stage' AND a.details ? 'source' AND (SELECT count(*) FROM jsonb_object_keys(a.details))=2)::int AS details_stage_source_two_keys,
+            max(CASE WHEN jsonb_typeof(a.details)='object' THEN (SELECT count(*) FROM jsonb_object_keys(a.details)) ELSE NULL END)::int AS details_key_count,
             count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'stage')::int AS has_stage_key,
             count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'source')::int AS has_source_key,
             count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'resumed')::int AS has_resumed_key
