@@ -392,7 +392,7 @@ export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoi
 export async function createDr11RefundAuthorityFromDurableHold(paymentId:string):Promise<RefundCheckpoint|null>{
   if(!process.env.DATABASE_URL||!paymentId||paymentId!==paymentId.trim())return null
   const idempotencyKey=`dr11-live:${paymentId}`
-  const refundId=randomUUID(),now=new Date().toISOString(),eventId=randomUUID(),retryAt=new Date(Date.now()+24*60*60_000).toISOString()
+  const refundId=randomUUID(),now=new Date().toISOString(),eventId=randomUUID(),retryAt=new Date(Date.now()-1000).toISOString()
   const result=await withPaymentAuthorityTransaction(paymentId,async(tx)=>{
     const row=await tx`SELECT stage,customer_amount,merchant_amount,app_commission,payer_uid,u2a_verified_at,u2a_completed_at,
       certification_hold,certification_hold_at,certification_hold_expires_at,a2u_payment_id,prepared_tx_hash,a2u_txid AS settlement_txid

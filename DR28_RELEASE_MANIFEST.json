@@ -13,14 +13,9 @@
     ],
     "secretsEmbedded": false
   },
-  "fileCount": 453,
-  "totalBytes": 2745330,
+  "fileCount": 454,
+  "totalBytes": 2750311,
   "files": [
-    {
-      "path": ".gitignore",
-      "bytes": 37,
-      "sha256": "2dbc66bba289edaf9c63330e16f186f00b0ed400dbd9146ea5901c6d8ac2c042"
-    },
     {
       "path": "DR100_RELEASE_MANIFEST.json",
       "bytes": 756,
@@ -98,8 +93,8 @@
     },
     {
       "path": "DR28_RELEASE_MANIFEST.json",
-      "bytes": 79201,
-      "sha256": "6346484ebab5ffc6f3542b3cf0f9bfc605e57533d246ff7047f2867d855231e0"
+      "bytes": 79615,
+      "sha256": "3b9d99e1897557e062d626be93933ab21bbd14fceb8b3b09fcde06eb383a9e15"
     },
     {
       "path": "DR99_RELEASE_MANIFEST.json",
@@ -115,6 +110,11 @@
       "path": "PRE_DR118_UX2_RELEASE_MANIFEST.json",
       "bytes": 1009,
       "sha256": "5bb5b4ef29a6003327ca028ba9e4e1c14f294cc2c090761f3e0a378e27671d4e"
+    },
+    {
+      "path": "PRE_DR118_UX4_RELEASE_MANIFEST.json",
+      "bytes": 1037,
+      "sha256": "047fed17175a8a4fcfacc22c60d8ab7d47ba591b6fd153260fc5fd92c04e82d0"
     },
     {
       "path": "app/api/control/availability/route.ts",
@@ -218,8 +218,8 @@
     },
     {
       "path": "app/api/pi/complete/route.ts",
-      "bytes": 38464,
-      "sha256": "8856935d78fd46578ce84376b81b616d56f2f28161f09b0b1f09efaceedc4406"
+      "bytes": 39437,
+      "sha256": "87c18fcc3dbcb4c191a4b32945b30042a698a33025472c3f910f797ba670ce79"
     },
     {
       "path": "app/api/pi/entry-token/route.ts",
@@ -238,8 +238,8 @@
     },
     {
       "path": "app/api/profile/route.ts",
-      "bytes": 16575,
-      "sha256": "4eb580cbe0ac7981a3867edebc6f81251031569cf9eda5a16aa37061ed97b3f2"
+      "bytes": 17087,
+      "sha256": "4730c8c08c5df2c6b81b29e55c03af0c9a1b2ecb2b9ec42ccee3453f8f9f4f09"
     },
     {
       "path": "app/api/receipt-files/[token]/route.ts",
@@ -1118,8 +1118,8 @@
     },
     {
       "path": "lib/refund-checkpoint-store.ts",
-      "bytes": 108190,
-      "sha256": "498211b7df6a6ca4026da7ae68044bab360a5dd20bf871e592b027120c6cd570"
+      "bytes": 108182,
+      "sha256": "437954973c06256dc1b014f6427b1b2f9d0efed0dd372ebfdbca1eeb2cb93d64"
     },
     {
       "path": "lib/refund-executor.ts",
@@ -2120,6 +2120,11 @@
       "path": "scripts/verify-pre-dr118-ux3-schema-history-hardening.mjs",
       "bytes": 1784,
       "sha256": "4b7f3db7de213e5fcf9b0d1536bb58a22afca97cb81d9c0f4b99c655f4d16ff2"
+    },
+    {
+      "path": "scripts/verify-pre-dr118-ux4-refund-persistence-auto-010.mjs",
+      "bytes": 2090,
+      "sha256": "39f6ad95fbb7480bc83f9c2791fb70c8a1243406a0614c908d872af54dedcd50"
     },
     {
       "path": "scripts/verify-r10010-minimal-monitoring.mjs",

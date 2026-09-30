@@ -1,0 +1,38 @@
+{
+  "release": "PRE-DR118-UX4",
+  "date": "2026-09-30",
+  "baselineProductionSha": "7c333a879762fd43a00963608776425a318d2728",
+  "purpose": [
+    "completed refund remains visible until explicit dismissal",
+    "merchant-agnostic exact 0.10 Pi Testnet automatic refund certification"
+  ],
+  "runtimeChangedFiles": [
+    "app/api/pi/complete/route.ts",
+    "app/api/profile/route.ts",
+    "lib/refund-checkpoint-store.ts"
+  ],
+  "dependenciesAdded": 0,
+  "mainnetAmountHook": false,
+  "certification": {
+    "ux4Verifier": "PASS",
+    "DR116": "PASS",
+    "R101-15": "PASS",
+    "DR14": "PASS",
+    "R100-5": "PASS",
+    "R100-6": "PASS",
+    "DR13": "PASS",
+    "N-FIN-X1": "PASS",
+    "N-FIN13": "PASS",
+    "DR28": "PASS"
+  },
+  "files": {
+    "app/api/pi/complete/route.ts": "87c18fcc3dbcb4c191a4b32945b30042a698a33025472c3f910f797ba670ce79",
+    "app/api/profile/route.ts": "4730c8c08c5df2c6b81b29e55c03af0c9a1b2ecb2b9ec42ccee3453f8f9f4f09",
+    "lib/refund-checkpoint-store.ts": "437954973c06256dc1b014f6427b1b2f9d0efed0dd372ebfdbca1eeb2cb93d64"
+  },
+  "notes": [
+    "No dependency additions; package.json and pnpm-lock.yaml byte-identical to UX3 baseline.",
+    "Legacy DR57/DR115 certifiers reference intentionally removed pre-review routes and are obsolete on this baseline.",
+    "DR117 byte-lock verifier intentionally cannot pass because UX4 deliberately changes app/api/pi/complete/route.ts; current financial invariants are covered by UX4, R101-15, DR14, R100-5/R100-6, DR13, N-FIN-X1 and N-FIN13."
+  ]
+}

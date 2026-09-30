@@ -2,7 +2,7 @@ import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, readDr11RefundCertificationHold } from "@/lib/db"
+import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 import { createDr11RefundAuthorityFromDurableHold, getRefundCheckpointByIdempotency } from "@/lib/refund-checkpoint-store"
@@ -300,7 +300,21 @@ export async function POST(request: NextRequest) {
     // DR60: PostgreSQL, not Redis, decides whether this exact payment is the
     // owner-armed DR11 refund certification flow. Refund authority is persisted
     // under the shared advisory lock before any Redis projection can enter Settlement.
-    const dr11ExactIdentity = process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1 && preMerchantId === "hazemaboria" && preMerchantUid === "ccc3bf32-25c2-4d9a-bdb3-a8ffb2beb8fa"
+    // PRE-DR118 UX4: Pi-review auto-refund certification is intentionally merchant-agnostic.
+    // Every authenticated merchant can exercise the exact 0.10 Pi Testnet path. Production
+    // Mainnet payments are never amount-routed. The durable PostgreSQL hold is acquired only
+    // after canonical Pi developer completion and before any Settlement authority exists.
+    const dr11ExactIdentity = process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1
+    if (dr11ExactIdentity) {
+      const autoRefundHold = await recordDr11RefundCertificationHold({
+        paymentId: preFlashPaymentId,
+        merchantId: preMerchantId,
+        merchantUid: preMerchantUid,
+        customerAmount: finalPiPayment.amount,
+      })
+      if (autoRefundHold.outcome === "CONFLICT") return NextResponse.json({ error: "Pi review auto-refund authority conflict" }, { status: 409 })
+      if (autoRefundHold.outcome === "INDETERMINATE") return NextResponse.json({ error: "Pi review auto-refund authority unavailable" }, { status: 503 })
+    }
     const dr11Hold = await readDr11RefundCertificationHold(preFlashPaymentId)
     if (dr11Hold.outcome === "INDETERMINATE") return NextResponse.json({ error: "DR11 durable hold authority unavailable" }, { status: 503 })
     if (dr11Hold.outcome === "HELD" && !dr11ExactIdentity) return NextResponse.json({ error: "DR11 durable hold identity conflict" }, { status: 409 })
@@ -463,7 +477,7 @@ export async function POST(request: NextRequest) {
       payment.payerRefundEligible = true
       payment.refundStatus = "pending"
       payment.a2uErrorCode = "dr11_live_concurrent_refund_certification"
-      payment.a2uErrorMessage = "DR11 owner-controlled Testnet refund certification"
+      payment.a2uErrorMessage = "Pi-review merchant-agnostic Testnet auto-refund certification"
       console.log("[DR60 DR11 REFUND AUTHORITY] durable refund source state selected")
     } else if (currentStatus === "pending" || !currentStatus) {
       payment.status = "paid_to_app"
@@ -495,7 +509,7 @@ export async function POST(request: NextRequest) {
       if current.status ~= nil and current.status ~= 'pending' and current.status ~= 'paid_to_app' and current.status ~= 'settlement_pending' and current.status ~= 'settled_to_merchant' and not dr11RefundReplay then return 0 end
       if dr11Refund and (current.status == nil or current.status == 'pending') then
         if current.a2uPaymentId ~= nil or current.a2uTxid ~= nil or current.a2uPreparedTxHash ~= nil or current.a2uPreparedSequence ~= nil or current.a2uPreparedEnvelopeXdr ~= nil or current.horizonSuccessFlag == true or current.refundPaymentId ~= nil or current.refundTxid ~= nil then return 0 end
-        current.status = 'settlement_failed'; current.settlementFailureState = 'refund_pending'; current.payerRefundEligible = true; current.refundStatus = 'pending'; current.a2uErrorCode = 'dr11_live_concurrent_refund_certification'; current.a2uErrorMessage = 'DR11 owner-controlled Testnet refund certification'
+        current.status = 'settlement_failed'; current.settlementFailureState = 'refund_pending'; current.payerRefundEligible = true; current.refundStatus = 'pending'; current.a2uErrorCode = 'dr11_live_concurrent_refund_certification'; current.a2uErrorMessage = 'Pi-review merchant-agnostic Testnet auto-refund certification'
         current.settlementDispatchRequestedAt = nil
         redis.call('DEL', KEYS[6])
         redis.call('SREM', KEYS[2], ARGV[2]); redis.call('ZREM', KEYS[3], ARGV[2])
@@ -554,7 +568,7 @@ export async function POST(request: NextRequest) {
       console.warn("[DR60 DR11 REFUND AUTHORITY] pristine intent held", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, amount: finalPiAmount, settlementQueued: false, authority: "postgres" })
     }
 
-    if (atomicU2AResultNumber === 2) {
+    if (atomicU2AResultNumber === 2 || (atomicU2AResultNumber === 3 && dr11RefundCertificationCandidate)) {
       const recoverySecret = process.env.FLASHPAY_TRANSIENT_RECOVERY_SECRET
       const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL
       const isProductionVercel = process.env.VERCEL_ENV === "production"

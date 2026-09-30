@@ -205,10 +205,17 @@ export async function GET(request: NextRequest) {
         .map((payment) => payment.piPaymentId)
         .filter((paymentId): paymentId is string => typeof paymentId === "string" && paymentId.length > 0),
     )
-    const authoritativeOperationalPayments = operationalPayments.filter(
-      (payment) =>
-        typeof payment.piPaymentId !== "string" || !settledPaymentIds.has(payment.piPaymentId),
-    )
+    const authoritativeOperationalPayments = operationalPayments.filter((payment) => {
+      // A durable completed refund remains visible presentation evidence until the merchant
+      // explicitly dismisses it. A historical settlement receipt may remain accounting truth,
+      // but must not erase the later refund presentation from Profile.
+      const presentation = payment.refundPresentation
+      const completedRefund =
+        isRecord(presentation) &&
+        presentation.merchantStatus === "refund_completed" &&
+        presentation.paymentId === payment.paymentId
+      return completedRefund || typeof payment.piPaymentId !== "string" || !settledPaymentIds.has(payment.piPaymentId)
+    })
 
     // Profile and Payment Dashboard intentionally keep the exact same raw accounting
     // projection from getMerchantPaymentDashboardSummary(). Completed-refund UI state
