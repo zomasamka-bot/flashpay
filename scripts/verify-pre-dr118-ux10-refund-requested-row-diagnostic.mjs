@@ -1,0 +1,16 @@
+import fs from 'node:fs'
+const p='lib/refund-presentation-persistence.ts'
+const s=fs.readFileSync(p,'utf8')
+if(!s.includes('UX10_REFUND_REQUESTED_ROW_DIAGNOSTIC')) throw new Error('UX10 diagnostic missing')
+if(!s.includes("record.requested_total > record.requested_exact")) throw new Error('diagnostic is not mismatch-scoped')
+const marker=s.indexOf("const requestedDiagnostics = await query(")
+if(marker<0) throw new Error('diagnostic query missing')
+const end=s.indexOf("[checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey]", marker)
+if(end<0) throw new Error('diagnostic query parameters missing')
+const q=s.slice(marker,end)
+if(/\b(?:INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|TRUNCATE)\b/i.test(q)) throw new Error('diagnostic query is not read-only')
+for(const token of ['payment_match','idempotency_match','actor_system','event_id_nonempty','details_object','details_canonical_intent','details_resumed','details_stage_source_two_keys','details_key_count','has_stage_key','has_source_key','has_resumed_key']) if(!q.includes(token)) throw new Error('missing predicate '+token)
+const log=s.slice(s.indexOf("console.warn('UX10_REFUND_REQUESTED_ROW_DIAGNOSTIC'", marker), s.indexOf("} catch {", marker))
+for(const sensitive of ['checkpoint.refundId','checkpoint.paymentId','checkpoint.idempotencyKey','refundPaymentId','refundTxid','payerUid','amount','transactionAt']) if(log.includes(sensitive)) throw new Error('sensitive diagnostic log '+sensitive)
+if(!s.includes("a.idempotency_key LIKE 'dr11-live:%' AND a.details = jsonb_build_object('stage','intent_created','source','dr61_durable_hold')")) throw new Error('UX8 matcher changed')
+console.log(JSON.stringify({gate:'PRE_DR118_UX10_REFUND_REQUESTED_ROW_DIAGNOSTIC',status:'PASS',readOnly:true,mismatchScoped:true,rawValuesLogged:false,matcherUnchanged:true},null,2))

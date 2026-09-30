@@ -1,0 +1,11 @@
+{
+  "gate": "PRE-DR118-UX10-REFUND-REQUESTED-ROW-DIAGNOSTIC",
+  "baseline": "PRE-DR118 UX9",
+  "runtimeChanged": ["lib/refund-presentation-persistence.ts"],
+  "diagnosticOnly": true,
+  "readOnly": true,
+  "matcherChanged": false,
+  "financialMovementChanged": false,
+  "dependenciesChanged": false,
+  "purpose": "Classify the five refund_requested exact-match predicates without logging raw identifiers or details values."
+}

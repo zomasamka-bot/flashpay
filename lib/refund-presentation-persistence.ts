@@ -144,6 +144,41 @@ export async function readRefundPresentationPersistence(
   const record = row as Record<string, unknown>
   if (!refundPresentationEvidenceIsExact(record)) {
     console.warn('UX9_REFUND_PRESENTATION_DIAGNOSTIC', { boundary: 'PERSISTENCE_EVIDENCE', requested: [record.requested_total, record.requested_exact], confirmed: [record.confirmed_total, record.confirmed_exact], accountingEvent: [record.accounting_event_total, record.accounting_event_exact], accounting: [record.accounting_total, record.accounting_exact], audit: [record.audit_total, record.audit_exact], completed: [record.completed_total, record.completed_exact], finalized: [record.finalized_total, record.finalized_exact] })
+    if (typeof record.requested_total === 'number' && typeof record.requested_exact === 'number' && record.requested_total > record.requested_exact) {
+      try {
+        const requestedDiagnostics = await query(
+          `SELECT
+            count(*)::int AS row_count,
+            count(*) FILTER (WHERE a.payment_id=$2)::int AS payment_match,
+            count(*) FILTER (WHERE a.idempotency_key=$3)::int AS idempotency_match,
+            count(*) FILTER (WHERE a.actor_type='system')::int AS actor_system,
+            count(*) FILTER (WHERE a.event_id <> '')::int AS event_id_nonempty,
+            count(*) FILTER (WHERE jsonb_typeof(a.details)='object')::int AS details_object,
+            count(*) FILTER (WHERE a.details=jsonb_build_object('stage','intent_created'))::int AS details_canonical_intent,
+            count(*) FILTER (WHERE a.details=jsonb_build_object('resumed',true))::int AS details_resumed,
+            count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'stage' AND a.details ? 'source' AND jsonb_object_length(a.details)=2)::int AS details_stage_source_two_keys,
+            max(CASE WHEN jsonb_typeof(a.details)='object' THEN jsonb_object_length(a.details) ELSE NULL END)::int AS details_key_count,
+            count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'stage')::int AS has_stage_key,
+            count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'source')::int AS has_source_key,
+            count(*) FILTER (WHERE jsonb_typeof(a.details)='object' AND a.details ? 'resumed')::int AS has_resumed_key
+          FROM refund_audit_events a
+          WHERE a.refund_id=$1 AND a.event_type='refund_requested'`,
+          [checkpoint.refundId, checkpoint.paymentId, checkpoint.idempotencyKey],
+        )
+        const diagnostic = Array.isArray(requestedDiagnostics) && requestedDiagnostics.length === 1 && isRecord(requestedDiagnostics[0])
+          ? requestedDiagnostics[0]
+          : null
+        console.warn('UX10_REFUND_REQUESTED_ROW_DIAGNOSTIC', diagnostic ? {
+          rowCount: diagnostic.row_count, paymentMatch: diagnostic.payment_match, idempotencyMatch: diagnostic.idempotency_match,
+          actorSystem: diagnostic.actor_system, eventIdNonEmpty: diagnostic.event_id_nonempty,
+          detailsObject: diagnostic.details_object, canonicalIntent: diagnostic.details_canonical_intent, resumed: diagnostic.details_resumed,
+          stageSourceTwoKeys: diagnostic.details_stage_source_two_keys, detailsKeyCount: diagnostic.details_key_count, hasStageKey: diagnostic.has_stage_key,
+          hasSourceKey: diagnostic.has_source_key, hasResumedKey: diagnostic.has_resumed_key,
+        } : { unavailable: true })
+      } catch {
+        console.warn('UX10_REFUND_REQUESTED_ROW_DIAGNOSTIC', { unavailable: true })
+      }
+    }
     return { outcome: 'INDETERMINATE' }
   }
   console.info('UX9_REFUND_PRESENTATION_DIAGNOSTIC', { boundary: 'PERSISTENCE_FOUND' })
