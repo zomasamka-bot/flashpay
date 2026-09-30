@@ -1,0 +1,10 @@
+{
+  "release": "PRE_DR118_UX16_REFUND_PROGRESSIVE_PRESENTATION_STATE_MACHINE",
+  "date": "2026-09-30",
+  "baseline": "PRE_DR118_UX15",
+  "runtimeFilesChanged": ["lib/refund-presentation-reader.ts"],
+  "financialMovementLogicChanged": false,
+  "dbWritesAdded": false,
+  "blindRetryAdded": false,
+  "purpose": "Restore progressive customer refund presentation for all durable pending checkpoint stages while retaining Pi+Horizon confirmation and strict completed finality proof."
+}
