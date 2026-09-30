@@ -32,6 +32,47 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
     if (checkpointResult.state === "uncertain") return { outcome: "INDETERMINATE" }
 
     const checkpoint = checkpointResult.checkpoint
+
+    // PRE-DR118 UX15: a durable pre-confirmation checkpoint is itself sufficient
+    // authority to present a non-final refund as pending. Do not require audit,
+    // accounting, completion, or projection-finalization evidence before those
+    // stages can exist. Contradictory identifiers/states remain fail-closed via
+    // the blockchain reader. Final/confirmed presentation still uses the strict
+    // persistence/proof path below.
+    if (
+      checkpoint.stage === "eligibility_verified" ||
+      checkpoint.stage === "intent_created" ||
+      checkpoint.stage === "wallet_submission_started"
+    ) {
+      if (checkpoint.status !== "pending") return { outcome: "INDETERMINATE" }
+      if (suppliedProof || suppliedPersistence) return { outcome: "INDETERMINATE" }
+      const blockchain = await readRefundPresentationBlockchain(checkpoint)
+      if (blockchain.outcome !== "PENDING") return { outcome: "INDETERMINATE" }
+      const presentation = buildRefundPresentationFromEvidence(checkpoint, {
+        requestedAt: checkpoint.createdAt,
+        finalization: {
+          accountingRecorded: false,
+          accountingRecordedAt: null,
+          auditRecorded: false,
+          auditRecordedAt: null,
+          completionAuditRecorded: false,
+          completedAt: null,
+          projectionFinalized: false,
+          finalizedAt: null,
+        },
+        blockchain: {
+          confirmed: false,
+          network: null,
+          confirmationRecordedAt: null,
+          transactionAt: null,
+          piTransactionVerified: null,
+          piDeveloperCompleted: null,
+          horizonSuccessful: null,
+        },
+      })
+      return { outcome: "FOUND", presentation }
+    }
+
     if (suppliedPersistence && (suppliedPersistence.refundId !== checkpoint.refundId || suppliedPersistence.paymentId !== checkpoint.paymentId || suppliedPersistence.idempotencyKey !== checkpoint.idempotencyKey)) return { outcome: "INDETERMINATE" }
     const persistence = suppliedPersistence?.result ?? await readRefundPresentationPersistence(checkpoint)
     if (persistence.outcome !== "FOUND") return { outcome: "INDETERMINATE" }
