@@ -1146,6 +1146,58 @@ export async function completeRefundCheckpointWithAudit(
   if (Object.keys(details).length !== 3 || details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.horizonFeeStroops !== horizonFeeStroops) return null
   const params = [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, payerUid, amount, horizonFeeStroops, event.eventId, event.eventType, event.actorType, event.createdAt, event.details]
   const auditIdentity = `(a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.actor_type='system' AND a.event_id <> '' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5)`
+  // PRE-DR118 UX18: completion is allowed only after the four prerequisite
+  // audit events are canonical JSONB objects. UX14 historically produced JSONB
+  // string scalars; UX17 repaired the first three while advancing audit, but an
+  // audit_recorded row can still be legacy-shaped at the completion boundary.
+  // Repair is identity-bound, multiplicity-bound and semantic-exact. It never
+  // creates financial authority and never calls Pi/Horizon.
+  const prerequisiteEvents = await query(`
+    SELECT event_type, payment_id, idempotency_key, actor_type, event_id, details
+    FROM refund_audit_events
+    WHERE refund_id=$1 AND event_type IN ('refund_submission_confirmed','refund_payment_checkpoint_updated','refund_accounting_recorded','refund_audit_recorded')
+    ORDER BY event_type`, [refundId])
+  if (!Array.isArray(prerequisiteEvents) || prerequisiteEvents.length !== 4) return null
+  const requiredTypes = new Set(['refund_submission_confirmed','refund_payment_checkpoint_updated','refund_accounting_recorded','refund_audit_recorded'])
+  const legacyTypes: string[] = []
+  for (const row of prerequisiteEvents) {
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) return null
+    const record = row as Record<string, unknown>
+    if (typeof record.event_type !== 'string' || !requiredTypes.delete(record.event_type) || record.payment_id !== paymentId || record.idempotency_key !== idempotencyKey || record.actor_type !== 'system' || typeof record.event_id !== 'string' || record.event_id.length === 0) return null
+    let parsed: unknown = record.details
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed) } catch { return null }
+      legacyTypes.push(record.event_type)
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const object = parsed as Record<string, unknown>
+    const feeEvent = record.event_type === 'refund_accounting_recorded' || record.event_type === 'refund_audit_recorded'
+    if (Object.keys(object).length !== (feeEvent ? 3 : 2) || object.refundPaymentId !== refundPaymentId || object.refundTxid !== refundTxid || (feeEvent && String(object.horizonFeeStroops) !== String(horizonFeeStroops))) return null
+  }
+  if (requiredTypes.size !== 0) return null
+  if (legacyTypes.length > 0) {
+    const repaired = await query(`
+      UPDATE refund_audit_events
+      SET details=(details #>> '{}')::jsonb
+      WHERE refund_id=$1 AND payment_id=$2 AND idempotency_key=$3 AND actor_type='system' AND event_id<>''
+        AND jsonb_typeof(details)='string' AND event_type = ANY($4::text[])
+      RETURNING event_type`, [refundId, paymentId, idempotencyKey, legacyTypes])
+    if (!Array.isArray(repaired) || repaired.length !== legacyTypes.length) return null
+  }
+  const canonical = await query(`
+    SELECT event_type,
+      payment_id=$2 AS payment_match,
+      idempotency_key=$3 AS idempotency_match,
+      actor_type='system' AS actor_system,
+      event_id<>'' AS event_id_non_empty,
+      jsonb_typeof(details)='object' AS details_object,
+      details->>'refundPaymentId'=$4 AS refund_payment_id_match,
+      details->>'refundTxid'=$5 AS refund_txid_match,
+      CASE WHEN event_type IN ('refund_accounting_recorded','refund_audit_recorded') THEN details->>'horizonFeeStroops'=$6::text ELSE TRUE END AS fee_match
+    FROM refund_audit_events
+    WHERE refund_id=$1 AND event_type IN ('refund_submission_confirmed','refund_payment_checkpoint_updated','refund_accounting_recorded','refund_audit_recorded')`,
+    [refundId, paymentId, idempotencyKey, refundPaymentId, refundTxid, horizonFeeStroops])
+  if (!Array.isArray(canonical) || canonical.length !== 4 || canonical.some((row) => row === null || typeof row !== 'object' || Array.isArray(row) || !(row as Record<string, unknown>).payment_match || !(row as Record<string, unknown>).idempotency_match || !(row as Record<string, unknown>).actor_system || !(row as Record<string, unknown>).event_id_non_empty || !(row as Record<string, unknown>).details_object || !(row as Record<string, unknown>).refund_payment_id_match || !(row as Record<string, unknown>).refund_txid_match || !(row as Record<string, unknown>).fee_match)) return null
   const result = await query(`
     WITH eligible AS (
       SELECT c.refund_id FROM refund_checkpoints c JOIN refund_accounting_records r ON r.refund_id=c.refund_id
