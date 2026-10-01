@@ -441,6 +441,12 @@ export default function PaymentContentWithId({
       }
       setAuthStatus("authenticated")
     }
+    const startAccessToken = receiptIdentityRef.current?.accessToken ?? ""
+    if (!startAccessToken) {
+      setAuthStatus("failed")
+      toast({ title: t("pay.toast.authRequiredTitle"), description: t("pay.toast.authRequiredDesc"), variant: "destructive" })
+      return
+    }
     setIsPaying(true)
 
     let startLeaseToken = ""
@@ -448,7 +454,7 @@ export default function PaymentContentWithId({
       const startResponse = await fetch("/api/pi/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paymentId }),
+        body: JSON.stringify({ paymentId, accessToken: startAccessToken }),
       })
       const startBody = await startResponse.json().catch(() => ({}))
       if (

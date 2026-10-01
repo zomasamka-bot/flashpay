@@ -179,10 +179,19 @@ export function CustomerPaymentView({
     setIsPaying(true)
     setProgressMessage("Securing payment start...")
 
+    const startAuth = await authenticateCustomer()
+    const startAccessToken = startAuth.success && typeof startAuth.accessToken === "string" ? startAuth.accessToken.trim() : ""
+    if (!startAccessToken) {
+      setIsPaying(false)
+      setProgressMessage("")
+      toast({ title: "Authentication required", description: "Pi authentication is required before starting payment.", variant: "destructive" })
+      return
+    }
+
     let startLeaseToken = ""
     try {
       const startResponse = await fetch("/api/pi/start", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paymentId: payment.id }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paymentId: payment.id, accessToken: startAccessToken }),
       })
       const startBody = await startResponse.json().catch(() => ({}))
       if (!startResponse.ok || startBody?.success !== true || typeof startBody?.startLeaseToken !== "string" || !startBody.startLeaseToken) {

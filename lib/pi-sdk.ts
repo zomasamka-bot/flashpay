@@ -213,22 +213,6 @@ export const createPiPayment = async (
 
         CoreLogger.info("Payment ready for completion", { piPaymentId, txid, paymentId, merchantId })
 
-        // PRE-DR118 D-2 LIVE CERTIFICATION HOOK (Testnet release boundary):
-        // For the exact 0.11 Pi certification payment, intentionally stop the browser
-        // after Pi approval/U2A success and before FlashPay calls /api/pi/complete.
-        // This simulates a refresh/crash at the approved -> pre-complete boundary.
-        // No server financial mutation, retry, Pi /complete, A2U or Horizon call is added here.
-        // Re-entry must recover through the existing incomplete-payment/recovery authority.
-        if (Math.abs(amount - 0.11) < 1e-9) {
-          CoreLogger.warn("[PRE-DR118 D-2] exact 0.11 Pi approved/pre-complete interruption armed", {
-            paymentId,
-            piPaymentId,
-            txid,
-          })
-          onProcessing?.("paid_to_app")
-          return
-        }
-
         // Complete on backend and ONLY call onSuccess when status is settled_to_merchant
         // SECURITY: Send ONLY piPaymentId + txid (verified by Pi Wallet signature)
         // Server derives paymentId from canonical payment metadata
