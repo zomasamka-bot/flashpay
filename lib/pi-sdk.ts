@@ -66,49 +66,6 @@ const waitForPiSDK = async (): Promise<boolean> => {
   })
 }
 
-export const initializePiSDK = async (): Promise<{
-  success: boolean
-  error?: string
-}> => {
-  if (typeof window === "undefined") {
-    return { success: false, error: "Not in browser environment" }
-  }
-
-  if (!window.Pi || typeof window.Pi.init !== "function") {
-    return { success: false, error: "Pi SDK not loaded. Please open in Pi Browser." }
-  }
-
-  try {
-    // sandbox: false is required — the testnet/mainnet environment is controlled
-    // by Pi Developer Portal settings, not by this parameter.
-    await window.Pi.init({ version: "2.0", sandbox: false })
-
-    unifiedStore.updateWalletStatus({
-      isPiSDKAvailable: true,
-      isInitialized: true,
-      isConnected: false,
-      lastChecked: new Date(),
-    })
-
-    CoreLogger.info("Pi SDK initialized successfully")
-    return { success: true }
-  } catch (error) {
-    CoreLogger.error("Failed to initialize Pi SDK", error)
-
-    unifiedStore.updateWalletStatus({
-      isPiSDKAvailable: true,
-      isInitialized: false,
-      isConnected: false,
-      lastChecked: new Date(),
-    })
-
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "SDK initialization failed",
-    }
-  }
-}
-
 export const createPiPayment = async (
   amount: number,
   memo: string,
