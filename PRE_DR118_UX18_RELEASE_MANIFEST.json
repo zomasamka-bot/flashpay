@@ -1,9 +1,0 @@
-{
-  "release":"PRE-DR118 UX18 REFUND COMPLETION CANONICAL AUDIT BARRIER",
-  "date":"2026-10-01",
-  "baseline":"UX17 production SHA 20a3adbba165c2640531f6a8fdb4bae8f81fc296",
-  "liveTarget":{"refundId":"0013f685-93d5-49ba-8b98-3c41c44b7306","observedStage":"audit_recorded","observedStatus":"pending","blocker":"completion_checkpoint_conflict"},
-  "runtimeChanges":["lib/refund-checkpoint-store.ts"],
-  "semantics":["completion requires exactly four prerequisite audit events","identity and semantic payload must match exactly","legacy JSONB string scalar is canonicalized to object only after exact proof","completion still requires canonical object predicates","no Pi/Horizon submit path changed","no amount/accounting authority changed","no blind retry added"],
-  "verification":{"ux18":"PASS","ux17":"PASS","ux16":"PASS","financialRecovery":"PASS","dr14":"PASS synthetic","dr13":"PASS synthetic","nfin13":"16/16 PASS CODE_AND_SYNTHETIC_READINESS_ONLY","fullNextBuild":"NOT RUN locally: ZIP has no node_modules; Vercel build required"}
-}
