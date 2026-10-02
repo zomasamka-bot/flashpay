@@ -21,10 +21,6 @@ export async function GET(request: NextRequest) {
 
   // P2.4E TEMPORARY OWNER-VERIFIED TOKEN DIAGNOSTIC — REMOVE AFTER CERTIFICATION.
   // This executes only after Pi /v2/me verification and exact owner UID matching.
-  const ownerAccessToken = authorizationHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? ""
-  if (ownerAccessToken) {
-    console.warn(`[P2.4E TEMP OWNER ACCESS TOKEN] ${ownerAccessToken}`)
-  }
 
   if (!process.env.DATABASE_URL) return NextResponse.json({ error: "PostgreSQL unavailable" }, { status: 503 })
 
