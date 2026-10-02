@@ -76,7 +76,11 @@ async function getPostgresClient() {
     }
 
     // Create client instance with connection URL
-    sqlClient = sql(process.env.DATABASE_URL)
+    sqlClient = sql(process.env.DATABASE_URL, {
+      max: 5,
+      idle_timeout: 5,
+      connect_timeout: 30,
+    })
     initializationAttempted = true
     console.log('[DB] Postgres client initialized successfully')
     return sqlClient
@@ -2682,7 +2686,11 @@ export async function recordA2UTransactionAtomic(params: {
       return { success: false, error: 'PostgreSQL client unavailable' }
     }
 
-    const client = sql(process.env.DATABASE_URL)
+    const client = sql(process.env.DATABASE_URL, {
+      max: 5,
+      idle_timeout: 5,
+      connect_timeout: 30,
+    })
     
     try {
       // Use postgres transaction callback API (no manual BEGIN/COMMIT/ROLLBACK)
