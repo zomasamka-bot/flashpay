@@ -1,0 +1,34 @@
+{
+  "schema": "flashpay.capacity-evidence.v1",
+  "date": "2026-10-03",
+  "release": {
+    "input_zip_sha256": "5165e6632818f700012d3290d5e53e21d334d50d05c5d925d4d81d4bfd07254a",
+    "production_git_sha_before_evidence_pack": "540c0861487609a071c30be6d01af18190909915",
+    "production_deployment": "dpl_8pQy65bt8gvEYG7Smz4dmPt5HvcM"
+  },
+  "structural": {
+    "sizes": [100, 1000, 10000],
+    "verdict": "PASS",
+    "ten_thousand": {"ready_windows": 13, "active_windows": 13, "mget_batches": 50, "duplicates": 0, "lost": 0},
+    "bounded_pipeline_concurrency": 2,
+    "same_wallet_financial_parallelism": 1
+  },
+  "financial_certifiers": {
+    "u2a_proof": "PASS",
+    "refund_completion_barrier": "PASS",
+    "financial_invariants": "PASS",
+    "payment_finality": {"verdict": "PASS", "adversarial_cases": 21},
+    "crash_policy": {"verdict": "PASS", "windows": 26}
+  },
+  "physical_latency_seconds": {
+    "postgres_neon_pooled": {"n": 100, "min": 0.870, "p50": 1.050, "p95": 1.180, "p99": 1.310, "max": 1.520, "observed_failures": 0, "boundary": "new_psql_process_connect_tls_select1"},
+    "upstash_redis_rest_ping": {"n": 100, "min": 0.434, "p50": 0.540, "p95": 0.747, "p99": 3.461, "max": 75.591, "observed_failures": 0, "classification": "OPERATIONAL_LATENCY_OUTLIER_OBSERVED"},
+    "pi_server_api_readonly": {"n": 30, "min": 0.470, "p50": 0.609, "p95": 2.163, "p99": 2.893, "max": 2.893, "http_failures": 0, "timeout_seconds": 5},
+    "stellar_horizon_testnet_root": {"n": 30, "min": 0.724, "p50": 0.935, "p95": 1.439, "p99": 1.502, "max": 1.502, "http_failures": 0, "timeout_seconds": 5}
+  },
+  "classification": {
+    "confirmed_financial_defects": 0,
+    "financial_patch_authorized": false,
+    "plan3": "CLOSED_PASS"
+  }
+}
