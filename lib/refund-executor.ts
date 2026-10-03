@@ -27,6 +27,7 @@ import { getDurableU2AIngressAuthoritative, query, readSettlementRefundAuthority
 import { recordRefundAccounting } from './refund-accounting'
 import { acquirePiWalletSubmitLock, acquirePiWalletIntentSubmitLock, claimPiWalletIntent, readPiWalletIntent, releasePiWalletIntent } from './pi-wallet-submit-lock'
 import { adoptUnparseableLegacyPaymentProjection, compareAndSwapPaymentProjection } from './payment-projection-cas'
+import { classifyDr11OrphanA2UPaymentDto, isDr11OrphanA2UProjectionCandidate } from './refund-dr11-orphan-a2u-recovery-rules'
 
 export type RefundExecutionResult =
   | { outcome: 'ready_for_submission' | 'found'; refundId: string; paymentId: string; amount: number; refundPaymentId?: string }
@@ -97,6 +98,33 @@ async function verifyOriginalU2AForRefundRecovery(checkpoint: RefundCheckpoint):
   return { ...d, completedAt }
 }
 
+async function neutralizeDr11OrphanA2UIdentifier(checkpoint: RefundCheckpoint, payment: Payment): Promise<boolean> {
+  if (!serverConfig.isPiApiKeyConfigured || !serverConfig.piApiKey || !isDr11OrphanA2UProjectionCandidate(checkpoint, payment) || typeof payment.a2uPaymentId !== 'string' || typeof payment.merchantUid !== 'string') return false
+  const expected = { paymentId: checkpoint.paymentId, a2uPaymentId: payment.a2uPaymentId, merchantUid: payment.merchantUid, amount: checkpoint.amount }
+  const readExact = async (): Promise<unknown | null> => {
+    try {
+      const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(expected.a2uPaymentId)}`, {
+        method: 'GET', headers: { Authorization: `Key ${serverConfig.piApiKey}`, Accept: 'application/json' }, cache: 'no-store', redirect: 'error',
+      })
+      if (!response.ok) return null
+      return await response.json().catch(() => null)
+    } catch { return null }
+  }
+  const before = await readExact()
+  const beforeState = classifyDr11OrphanA2UPaymentDto(before, expected)
+  if (beforeState === 'BLOCKED') return false
+  if (beforeState === 'CANCELLED_UNMOVED') return true
+  let cancelResponse: Response | null = null
+  try {
+    cancelResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(expected.a2uPaymentId)}/cancel`, {
+      method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, redirect: 'error',
+    })
+  } catch { return false }
+  if (!cancelResponse.ok) return false
+  const after = await readExact()
+  return classifyDr11OrphanA2UPaymentDto(after, expected) === 'CANCELLED_UNMOVED'
+}
+
 async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promise<RefundPaymentProjectionLoad> {
   const rawExisting = await redis.get(`payment:${checkpoint.paymentId}`)
   const existing = paymentFromRedis(rawExisting)
@@ -122,7 +150,8 @@ async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promis
     !existing.a2uPaymentId && !existing.a2uTxid && noPreparedA2UEvidence &&
     existing.horizonSuccessFlag !== true && !existing.refundPaymentId && !existing.refundTxid &&
     checkpoint.status === 'pending' && checkpoint.stage === 'intent_created' && !checkpoint.refundPaymentId && !checkpoint.refundTxid
-  if (existing && !stalePreRefundProjection) {
+  const dr11OrphanA2UProjection = existing !== null && isDr11OrphanA2UProjectionCandidate(checkpoint, existing)
+  if (existing && !stalePreRefundProjection && !dr11OrphanA2UProjection) {
     console.warn('[DR69 REFUND SOURCE PROJECTION CONFLICT]', {
       paymentId: checkpoint.paymentId,
       refundId: checkpoint.refundId,
@@ -143,6 +172,11 @@ async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promis
 
   const durable = await verifyOriginalU2AForRefundRecovery(checkpoint)
   if (!durable) return { outcome: 'BLOCKED', reason: 'durable_projection_unproven' }
+  if (dr11OrphanA2UProjection && existing) {
+    const neutralized = await neutralizeDr11OrphanA2UIdentifier(checkpoint, existing)
+    if (!neutralized) return { outcome: 'BLOCKED', reason: 'dr11_orphan_a2u_unproven' }
+    console.warn('[DR71 DR11 ORPHAN A2U CANCELLED]', { paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, financialMovementAccepted: false })
+  }
 
   let refundPaymentVerified = false
   if (checkpoint.refundTxid !== undefined) {
@@ -189,7 +223,7 @@ async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promis
     return { outcome: 'FOUND', payment: adoptedReadBack, rebuilt: true }
   }
 
-  if (stalePreRefundProjection && existing) {
+  if ((stalePreRefundProjection || dr11OrphanA2UProjection) && existing) {
     const repaired = await compareAndSwapPaymentProjection(checkpoint.paymentId, existing, projection)
     if (repaired.outcome !== 'UPDATED') return { outcome: 'BLOCKED', reason: repaired.outcome === 'CONFLICT' ? 'projection_conflict' : 'projection_uncertain' }
     const repairedReadBack = paymentFromRedis(await redis.get(`payment:${checkpoint.paymentId}`))

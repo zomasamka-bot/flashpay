@@ -1,0 +1,63 @@
+{
+  "certification_date": "2026-10-03",
+  "finding": "CONFIRMED_DEFECT_FIXED",
+  "scope": "Pi Testnet production-only exact 0.10 DR11 automatic refund certification flow",
+  "observed_failure_shape": {
+    "refund_authority_persisted": true,
+    "refund_checkpoint_status": "pending",
+    "refund_checkpoint_stage": "intent_created",
+    "redis_payment_status": "paid_to_app",
+    "a2u_payment_identifier_present": true,
+    "a2u_txid_present": false,
+    "prepared_a2u_evidence_present": false,
+    "horizon_success": false,
+    "refund_payment_identifier_present": false,
+    "refund_txid_present": false,
+    "automatic_refund_result": "projection_conflict"
+  },
+  "root_cause": "Settlement Stage-1 could create/persist an A2U Pi identifier in the narrow window before DR11 Refund authority became durable. Refund authority then correctly excluded Settlement, while DR69 correctly refused a projection carrying an A2U identifier, leaving the lifecycle safely but functionally deadlocked.",
+  "prevention_fix": {
+    "mandatory_order": ["recordDr11RefundCertificationHold", "recordSettlementU2ACompletedCheckpoint", "createDr11RefundAuthorityFromDurableHold"],
+    "build_gate": "DR11_REFUND_RACE_UI_BINDING=PASS"
+  },
+  "existing_orphan_recovery": {
+    "classification": "NARROW_FAIL_CLOSED_RECOVERY",
+    "candidate_requirements": [
+      "idempotencyKey is exactly dr11-live:<paymentId>",
+      "amount is exactly 0.10 Pi",
+      "checkpoint is pending/intent_created with refund authority source state",
+      "Redis source state is paid_to_app with only an A2U identifier",
+      "no A2U txid",
+      "no prepared A2U hash/sequence/XDR",
+      "no Horizon success",
+      "no Refund payment/tx evidence"
+    ],
+    "external_reproof": [
+      "durable completed U2A identity is re-proven",
+      "PostgreSQL authority must show Refund active and Settlement inactive",
+      "exact Pi A2U PaymentDTO must match paymentId, merchantUid, amount, network and direction",
+      "any transaction/verified/completed evidence blocks recovery",
+      "unmoved A2U identifier is cancelled through Pi /payments/{id}/cancel",
+      "exact A2U is re-read and must be CANCELLED_UNMOVED before Redis CAS repair"
+    ],
+    "redis_repair": "compareAndSwapPaymentProjection only after cancellation proof; repaired projection removes orphan A2U identifier and restores strict refund_pending source shape",
+    "uncertainty_policy": "BLOCK / retry later; no refund authorization from uncertainty",
+    "build_gate": "DR11_ORPHAN_A2U_RECOVERY=PASS candidate_cases=9 dto_cases=7 runtime_binding=7 fail_closed=true",
+    "mutation_sensitivity": {
+      "non_dr11_scope_widened": "EXPECTED_FAIL",
+      "a2u_txid_gate_removed": "EXPECTED_FAIL",
+      "pi_transaction_txid_gate_removed": "EXPECTED_FAIL",
+      "post_cancel_confirmation_weakened": "EXPECTED_FAIL",
+      "expected_failures": 4,
+      "unexpected_passes": 0
+    }
+  },
+  "customer_ui": {
+    "loading": "red warning",
+    "refund_in_progress": "red warning remains visible",
+    "terminal_success_condition": "customerStatus == refund_completed",
+    "terminal_success": "green warning plus final refund receipt fields",
+    "poll_interval_seconds": 10
+  },
+  "result": "PASS"
+}

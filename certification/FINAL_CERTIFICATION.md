@@ -3,6 +3,24 @@
 Certification date: 2026-10-03
 Scope: reviewer-visible, non-runtime evidence for the frozen release candidate.
 
+
+## Current release override — DR11 refund race / orphan recovery / customer UI / corrected PLAN D
+
+This artifact is a newer release than the historical PLAN 1→3 evidence sections below. Statements in those historical sections that say “runtime delta NONE” apply only to those earlier plans and **do not** describe this current DR11 repair release.
+
+Current runtime delta is intentionally narrow:
+- `/api/pi/complete`: exact production Pi Testnet `0.10` DR11 flow durably acquires Refund hold **before** publishing U2A completion eligibility, then converts that hold to Refund authority. This closes the observed Stage-1 race.
+- `refund-executor`: a legacy DR11 race artifact carrying only an orphan A2U Pi identifier may recover **only** after durable U2A + PostgreSQL Refund authority are re-proven, the exact Pi A2U is proven unmoved, it is cancelled via Pi Platform API, and a post-cancel re-read proves `CANCELLED_UNMOVED`. Any txid, prepared XDR/hash/sequence, Horizon success, Pi transaction evidence, identity mismatch, or uncertainty remains blocked. Redis repair is CAS-fenced and occurs only after this proof. General Refund behavior is unchanged.
+- Customer Refund UI: loading and all non-terminal Refund states show the requested red warning. Green success is shown only for `customerStatus=refund_completed`; the presentation continues polling until terminal status and exposes the final receipt fields.
+- PLAN D: the rejected imaginary dependency on `./financial-recovery-settlement-submit-replay` is removed. The mandatory gate now binds the real settlement read orchestration, replay pre-gate, replay gate, Refund dynamic blockchain-submit edge, and CAS callers.
+
+Current mandatory build-gate evidence:
+- `PRODUCTION_CALLGRAPH_BINDING=PASS assertions=37`
+- `DR11_REFUND_RACE_UI_BINDING=PASS order=hold_before_completed_before_refund_authority ui=red_until_terminal_green translations=7`
+- `DR11_ORPHAN_A2U_RECOVERY=PASS candidate_cases=9 dto_cases=7 runtime_binding=7 fail_closed=true`
+- DR11 orphan-recovery mutation suite: 4/4 expected failures, 0 unexpected passes.
+
+
 ## Release identity
 - Input clean ZIP: FlashPay_PLAN2_DEAD_STORE_REMOVED_CLEAN_2026-10-03.zip
 - Input ZIP SHA-256: 5165e6632818f700012d3290d5e53e21d334d50d05c5d925d4d81d4bfd07254a

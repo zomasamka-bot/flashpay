@@ -1,27 +1,27 @@
 {
   "certification_date": "2026-10-03",
   "baseline": "FlashPay_PLAN_C_REDIS_CAS_STALE_WRITER_CLEAN_2026-10-03.zip",
+  "baseline_sha256": "bc909807294235b558f38f440b63be0bae185d7ef57f19513945024fda8ffd17",
   "finding": "CONFIRMED_PROOF_GAP_FIXED",
   "financial_runtime_defect": false,
-  "runtime_financial_code_changed": false,
-  "reviewer_claim_disposition": {
-    "certificate_mixed_evidence_classes": "PARTIALLY_CONFIRMED",
-    "all_recovery_files_are_unused_spare_money_engine": "NOT_SUPPORTED_BY_PRODUCTION_CALL_GRAPH"
+  "prior_failed_plan_d": {
+    "classification": "CERTIFIER_FALSE_ASSERTION",
+    "failed_deployment_commit": "284377dcd44526e05a6535850edcbf64434e4f68",
+    "failed_claim": "settlement replay orchestration imported ./financial-recovery-settlement-submit-replay",
+    "actual_dependencies": [
+      "./financial-recovery-settlement-submit-read-orchestration",
+      "./financial-recovery-settlement-submit-replay-pre-gate",
+      "./financial-recovery-settlement-submit-replay-gate"
+    ]
   },
-  "evidence_classes": ["PRODUCTION_ENTRYPOINT","RUNTIME_ORCHESTRATOR","RUNTIME_EVIDENCE_DEPENDENCY","CERTIFIER_MODEL_ONLY"],
-  "critical_bindings": 12,
-  "import_modes": ["static","dynamic"],
-  "production_paths": [
-    "/api/pi/a2u -> executeA2ULocked -> executeA2U -> settlement submit/replay",
-    "/api/recovery/[id] -> executeA2URecovery -> executeA2ULocked -> executeA2U",
-    "/api/recovery/transient -> executeA2URecovery -> shared settlement executor",
-    "/api/recovery/transient -> runAutomaticRefundPass -> executeRefundNextStep -> dynamic refund-blockchain-submit -> submitTransaction"
-  ],
+  "binding_policy": "exact module path + named imported symbol + invocation where applicable; dynamic imports are explicitly recognized",
+  "evidence_classes": ["PRODUCTION_ENTRYPOINT", "RUNTIME_ORCHESTRATOR", "RUNTIME_EVIDENCE_DEPENDENCY", "CERTIFIER_MODEL_ONLY"],
+  "executed_gate_assertions": 37,
   "mutation_sensitivity": {
-    "route_to_locked_executor_cut": "EXPECTED_FAIL",
-    "executor_to_settlement_replay_cut": "EXPECTED_FAIL",
-    "refund_orchestrator_to_executor_cut": "EXPECTED_FAIL",
-    "refund_executor_dynamic_submit_edge_cut": "EXPECTED_FAIL",
+    "settlement_read_evidence_edge_cut": "EXPECTED_FAIL",
+    "settlement_pre_gate_edge_cut": "EXPECTED_FAIL",
+    "settlement_authorization_gate_edge_cut": "EXPECTED_FAIL",
+    "refund_all_dynamic_submit_edges_cut": "EXPECTED_FAIL",
     "expected_failures": 4,
     "unexpected_passes": 0
   },
