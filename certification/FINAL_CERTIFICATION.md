@@ -19,6 +19,7 @@ Scope: reviewer-visible, non-runtime evidence for the frozen release candidate.
 - Payment finality predicate: PASS (21 adversarial cases)
 - Crash policy formal/model matrix: PASS (26 modeled windows); this result is not by itself a live execution proof for all production crash boundaries
 - Settlement XOR Refund: production-source-bound certifier PASS (7 adversarial authority states); PostgreSQL transaction-scoped advisory lock + opposite-authority check are build-enforced
+- Pi wallet submit boundary: production-source-bound certifier PASS (5 production boundaries); token-safe lease acquisition/renew/release + wallet intent + pre-submit authorization + post-submit ambiguity reconciliation are build-enforced
 - Stored XDR: evidence only; Horizon movement: financial truth
 - Unknown/indeterminate authority: fail closed; no blind financial retry
 
@@ -32,6 +33,17 @@ Scope: reviewer-visible, non-runtime evidence for the frozen release candidate.
 - Adversarial authority states: 7/7 PASS, including dual durable authority => neither branch authorized and PostgreSQL uncertainty => neither branch authorized.
 - Mutation sensitivity: 5/5 intentional safety-boundary mutations caused the certifier/build verifier to fail (shared advisory lock removed; Refund opposite gate removed; Settlement opposite gate removed; dual-authority conflict removed; Refund executor authority gate weakened). Mutation copies were temporary and are not included in this artifact.
 - Runtime/financial behavior changed by this plan: NO. Only certification/build-verifier files changed.
+
+## Pi wallet single-owner / submit-boundary evidence
+- Certifier: `scripts/verify-wallet-submit-boundary-production-binding.ts`; integrated into the mandatory build verifier.
+- Redis submit lease: UUID token + `SET NX EX 600`; renewal and release mutate only on exact token match.
+- Important qualification: the lease object itself does not expose a post-renewal `isOwner()` predicate. This certification therefore does not treat Redis lease state as financial truth.
+- Fresh Refund ordering is build-enforced as durable prepared evidence -> durable blockchain-submit authorization -> exactly one Horizon `submitTransaction()`.
+- Exact Refund replay requires matching wallet intent + existing durable submit authorization before exactly one stored-XDR submit.
+- Refund submit ambiguity is build-enforced to reconcile exact prepared/Horizon evidence; the catch branch contains no blockchain submit.
+- Settlement Stage2 is build-enforced as wallet-intent submit lock -> prepare under held lock -> one low-level Horizon submit. Submit exceptions invoke exact recovery reconciliation; anything short of `MOVEMENT_VERIFIED` remains `settlement_pending`.
+- Mutation sensitivity: 3/3 targeted boundary mutations produced expected build-verifier failures: fresh Refund authorization removed; fresh Refund ambiguity reconciliation removed; Settlement ambiguity reconciliation removed. Unexpected mutation passes: 0.
+- Runtime/financial behavior changed by PLAN B: NO. Only certification/build-verifier files changed.
 
 ## Scale / recovery evidence
 - 100 / 1,000 / 10,000 structural bounded-capacity model: PASS

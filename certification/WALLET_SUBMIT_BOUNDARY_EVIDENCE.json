@@ -1,0 +1,28 @@
+{
+  "certification_date": "2026-10-03",
+  "scope": "Pi wallet single-owner / submit-boundary production binding",
+  "evidence_class": "PRODUCTION_SOURCE_BOUND_PLUS_MUTATION_SENSITIVE",
+  "runtime_financial_code_changed": false,
+  "boundaries": {
+    "lease_acquire": "Redis SET NX EX 600 with UUID token",
+    "lease_renew": "Lua GET token match then EXPIRE; mismatch stops renewal",
+    "lease_release": "Lua GET token match then DEL",
+    "wallet_intent": "submit lease coupled to canonical wallet intent claim/read",
+    "refund_fresh": "durable prepared -> durable authorization -> one Horizon submit",
+    "refund_replay": "exact wallet intent + durable authorization -> one stored-XDR submit",
+    "refund_ambiguity": "submit exception -> exact prepared/Horizon reconciliation; no submit in catch",
+    "settlement": "wallet intent submit lock -> prepare -> one low-level Horizon submit",
+    "settlement_ambiguity": "submit exception -> exact recovery reconciliation; unresolved => settlement_pending"
+  },
+  "certifier": "scripts/verify-wallet-submit-boundary-production-binding.ts",
+  "build_integrated": true,
+  "production_boundaries_checked": 5,
+  "mutation_sensitivity": {
+    "refund_pre_submit_authorization_removed": "EXPECTED_FAIL",
+    "refund_post_submit_reconciliation_removed": "EXPECTED_FAIL",
+    "settlement_post_submit_reconciliation_removed": "EXPECTED_FAIL",
+    "unexpected_passes": 0
+  },
+  "qualification": "The Redis lease object does not expose a synchronous isOwner() guard after renewal loss. Certification therefore does not claim the lease alone is financial truth; durable wallet intent, prepared/authorization evidence, and exact Horizon reconciliation remain required movement authorities.",
+  "result": "PASS"
+}
