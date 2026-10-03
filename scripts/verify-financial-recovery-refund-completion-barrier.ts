@@ -1,3 +1,4 @@
+{
 const assert = require("node:assert").strict
 const { evaluateSettlementRefundCheckpointBarrier } = require("../lib/financial-recovery-settlement-refund-checkpoint-barrier.ts")
 
@@ -28,3 +29,4 @@ assert.notEqual(absent.outcome, "DECISION")
 assert.notEqual(absent.authorizesFinancialAction, true)
 
 console.log("REFUND_COMPLETION_BARRIER_CERTIFIER=PASS")
+}

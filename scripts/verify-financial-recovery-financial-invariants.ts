@@ -1,3 +1,4 @@
+{
 const assert = require("node:assert").strict
 const fs = require("node:fs")
 const path = require("node:path")
@@ -53,3 +54,4 @@ for (const payment of adversarial) {
 }
 
 console.log("FINANCIAL_INVARIANTS_CERTIFIER=PASS")
+}
