@@ -100,3 +100,26 @@ Expected scaffold surfaces retained: calendar.tsx, carousel.tsx, chart.tsx, comm
 - Physical dependency evidence gate: PASS with Redis operational tail-latency observation retained
 - Confirmed financial defects: 0
 - Evidence-only packaging changes financial semantics: NO
+
+## PLAN C — Redis Projection CAS / stale-writer production binding
+
+- Result: **PASS**. No financial runtime patch was required.
+- Evidence class: production-source-bound + adversarial truth table + mutation-sensitive build enforcement.
+- Canonical Payment projection CAS atomically reads the latest Redis value, binds `paymentId`, validates a non-negative safe integer `redisProjectionVersion` (legacy missing version is 0), requires the current version to equal the caller's expected version, requires the next version to be exactly `expected + 1`, writes in the same Lua evaluation, and verifies readback. A stale snapshot returns `CONFLICT`; it is not allowed to overwrite a newer projection.
+- Settlement GET→merge writes use the canonical CAS. A conflict causes a bounded re-read/re-merge (`casAttempt < 4`); all non-`UPDATED` uncertainty fails closed.
+- Refund financial projection writes use the canonical CAS. A conflict is not financial success merely because another writer won: the current projection must itself carry the exact expected refund identity/transaction evidence; otherwise execution blocks.
+- Direct Payment reconstruction SETs outside CAS were classified and are create-only `NX`; they cannot overwrite an extant newer projection. Specialized Lua presentation/recovery mutations operate on the latest Redis value atomically and advance `redisProjectionVersion`.
+- Adversarial stale-writer/version truth table: **9/9 PASS**.
+- Mutation sensitivity: **4/4 expected verifier failures, 0 unexpected passes** (removed version fence; removed exact +1 rule; disabled Settlement conflict re-read/re-merge; weakened Refund exact conflict evidence).
+- Redis remains a projection/coordination layer, **not financial truth**. Durable PostgreSQL authority and exact Pi/Horizon evidence continue to govern financial finality/recovery.
+
+
+## Production Call-Graph / Certifier-to-Runtime Binding — 2026-10-03
+
+Result: **PASS — evidence-contract proof gap closed; no financial runtime defect and no runtime patch.**
+
+The certification suite now separates four evidence classes: `PRODUCTION_ENTRYPOINT`, `RUNTIME_ORCHESTRATOR`, `RUNTIME_EVIDENCE_DEPENDENCY`, and `CERTIFIER_MODEL_ONLY`. Model/evaluator tests remain useful for adversarial logic coverage but are not, by themselves, evidence of production reachability.
+
+A mandatory production call-graph binding gate verifies 12 critical static/dynamic source bindings, including the real Settlement ingress/recovery chain, Settlement submit/replay orchestration, the Refund transient worker through `refund-executor` and dynamic `refund-blockchain-submit`, and production CAS projection bindings. Four topology mutations that deliberately detached these paths all produced expected build-verifier failures (4/4; unexpected passes 0).
+
+Reviewer reconciliation: the concern that the earlier certificate could blur model evidence and production binding was a confirmed evidence-contract proof gap and is now fixed. The broader claim that the examined recovery implementation is an unused second money engine is not supported by the production source call graph: recovery orchestrators re-enter the shared financial executors, while pure evidence/decision modules are classified separately.

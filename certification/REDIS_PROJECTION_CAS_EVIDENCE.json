@@ -1,0 +1,68 @@
+{
+  "certification_date": "2026-10-03",
+  "plan": "PLAN C \u2014 Redis Projection CAS / Stale-Writer Certification",
+  "baseline_zip_sha256": "5898e0bb64a8d72b3b883598a8cd8eac4b0a661a6ce6c52abcdb85d909d3df5a",
+  "evidence_class": "PRODUCTION_SOURCE_BOUND_PLUS_ADVERSARIAL_TRUTH_TABLE_PLUS_MUTATION_SENSITIVITY",
+  "runtime_financial_code_changed": false,
+  "redis_is_financial_truth": false,
+  "canonical_cas": {
+    "file": "lib/payment-projection-cas.ts",
+    "legacy_missing_version": 0,
+    "next_version_rule": "expected+1",
+    "stale_writer_result": "CONFLICT",
+    "identity_mismatch": "INVALID",
+    "missing": "MISSING",
+    "uncertainty": "fail_closed",
+    "atomicity": "Lua GET + identity/version validation + SET in one eval",
+    "success_readback_verified": true
+  },
+  "writer_classification": {
+    "financial_get_merge": [
+      "lib/a2u-executor.ts",
+      "lib/refund-executor.ts",
+      "app/api/recovery/transient/route.ts"
+    ],
+    "create_only_nx": [
+      "lib/a2u-locked-executor.ts",
+      "lib/a2u-recovery-service.ts",
+      "app/api/recovery/transient/route.ts",
+      "lib/refund-executor.ts"
+    ],
+    "latest_value_lua": [
+      "app/api/pi/complete/route.ts",
+      "app/api/payments/[id]/route.ts",
+      "app/api/recovery/transient/route.ts"
+    ]
+  },
+  "adversarial_cases": {
+    "passed": 9,
+    "total": 9
+  },
+  "mutation_tests": [
+    {
+      "mutation": "remove stale-version equality fence",
+      "expected": "build verifier FAIL",
+      "result": "PASS"
+    },
+    {
+      "mutation": "remove exact +1 version rule",
+      "expected": "build verifier FAIL",
+      "result": "PASS"
+    },
+    {
+      "mutation": "disable Settlement bounded conflict retry/re-read",
+      "expected": "build verifier FAIL",
+      "result": "PASS"
+    },
+    {
+      "mutation": "weaken Refund conflict exact payment/tx identity acceptance",
+      "expected": "build verifier FAIL",
+      "result": "PASS"
+    }
+  ],
+  "mutation_expected_failures": 4,
+  "mutation_unexpected_passes": 0,
+  "confirmed_financial_defects": 0,
+  "financial_patch_required": false,
+  "result": "PASS"
+}
