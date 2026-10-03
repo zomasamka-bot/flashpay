@@ -1,0 +1,23 @@
+{
+  "certification_date": "2026-10-03",
+  "scope": "Settlement XOR Refund production-source binding",
+  "evidence_class": "PRODUCTION_SOURCE_BOUND_PLUS_ADVERSARIAL_TRUTH_TABLE",
+  "live_database_concurrency_claimed": false,
+  "runtime_financial_code_changed": false,
+  "production_bindings": {
+    "shared_authority_wrapper": "lib/db.ts::withPaymentAuthorityTransaction",
+    "settlement_authority_acquisition": "lib/db.ts::recordSettlementA2UCreatedCheckpoint",
+    "refund_authority_acquisition": "lib/refund-checkpoint-store.ts::createRefundCheckpointWithAudit",
+    "cross_authority_reader": "lib/db.ts::readSettlementRefundAuthority",
+    "refund_intent_recheck": "lib/refund-intent-service.ts",
+    "refund_executor_recheck": "lib/refund-executor.ts"
+  },
+  "durable_serialization": {
+    "authority": "PostgreSQL",
+    "lock": "pg_advisory_xact_lock(hashtextextended(paymentId,0))",
+    "redis_is_financial_truth": false
+  },
+  "adversarial_truth_table": {"cases": 7, "passed": 7, "failed": 0},
+  "mutation_sensitivity": {"mutations": 5, "expected_failures": 5, "unexpected_passes": 0},
+  "result": "PASS"
+}

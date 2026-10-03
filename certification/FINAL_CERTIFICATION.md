@@ -17,10 +17,21 @@ Scope: reviewer-visible, non-runtime evidence for the frozen release candidate.
 - Refund completion barrier: PASS
 - Financial invariants: PASS
 - Payment finality predicate: PASS (21 adversarial cases)
-- Crash policy: PASS (26 crash windows)
-- Settlement XOR Refund: enforced by durable authority/exclusion checks
+- Crash policy formal/model matrix: PASS (26 modeled windows); this result is not by itself a live execution proof for all production crash boundaries
+- Settlement XOR Refund: production-source-bound certifier PASS (7 adversarial authority states); PostgreSQL transaction-scoped advisory lock + opposite-authority check are build-enforced
 - Stored XDR: evidence only; Horizon movement: financial truth
 - Unknown/indeterminate authority: fail closed; no blind financial retry
+
+## Settlement XOR Refund — production binding evidence
+- Certifier: `scripts/verify-settlement-refund-xor-production-binding.ts`
+- Build integration: `scripts/run-financial-recovery-build-verifier.mjs`
+- Evidence class: PRODUCTION-SOURCE-BOUND + ADVERSARIAL TRUTH-TABLE. This is not represented as a live PostgreSQL concurrency benchmark.
+- Production Settlement acquisition: `recordSettlementA2UCreatedCheckpoint()` takes `pg_advisory_xact_lock(hashtextextended(paymentId,0))`, reads active Refund authority, fails closed on conflict/uncertainty, then may advance to `a2u_created`.
+- Production Refund acquisition: `createRefundCheckpointWithAudit()` uses `withPaymentAuthorityTransaction()`, which takes the same payment-scoped PostgreSQL transaction lock; inside that transaction it reads active Settlement authority before inserting the Refund checkpoint.
+- Runtime Refund acquisition/replay additionally rechecks `readSettlementRefundAuthority()` and rejects Settlement ownership or indeterminate authority.
+- Adversarial authority states: 7/7 PASS, including dual durable authority => neither branch authorized and PostgreSQL uncertainty => neither branch authorized.
+- Mutation sensitivity: 5/5 intentional safety-boundary mutations caused the certifier/build verifier to fail (shared advisory lock removed; Refund opposite gate removed; Settlement opposite gate removed; dual-authority conflict removed; Refund executor authority gate weakened). Mutation copies were temporary and are not included in this artifact.
+- Runtime/financial behavior changed by this plan: NO. Only certification/build-verifier files changed.
 
 ## Scale / recovery evidence
 - 100 / 1,000 / 10,000 structural bounded-capacity model: PASS
@@ -36,7 +47,7 @@ All samples were read-only/non-financial. No payment, settlement, refund, or fin
 | Dependency | N | p50 | p95 | p99 | max | failures | Measurement boundary |
 |---|---:|---:|---:|---:|---:|---:|---|
 | PostgreSQL / Neon pooled | 100 | 1.050s | 1.180s | 1.310s | 1.520s | 0 observed | New `psql` process/connection per sample; includes process + connect/TLS + `SELECT 1` |
-| Upstash Redis REST PING | 100 | 0.540s | 0.747s | 3.461s | 75.591s | 0 observed | End-to-end REST PING; one large tail-latency outlier retained in evidence |
+| Upstash Redis REST PING | 100 | 0.540s | 0.747s | 3.461s | 75.591s | not separately captured | End-to-end REST PING; loop completed; one large tail-latency outlier retained in evidence |
 | Pi Server API read-only endpoint | 30 | 0.609s | 2.163s | 2.893s | 2.893s | 0 HTTP failures | `incomplete_server_payments`, read-only GET, 5s timeout during sampling |
 | Stellar Horizon Testnet root | 30 | 0.935s | 1.439s | 1.502s | 1.502s | 0 HTTP failures | Read-only GET, 5s timeout during sampling |
 
