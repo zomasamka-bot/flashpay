@@ -114,12 +114,8 @@ Expected scaffold surfaces retained: calendar.tsx, carousel.tsx, chart.tsx, comm
 - Redis remains a projection/coordination layer, **not financial truth**. Durable PostgreSQL authority and exact Pi/Horizon evidence continue to govern financial finality/recovery.
 
 
-## Production Call-Graph / Certifier-to-Runtime Binding — 2026-10-03
-
-Result: **PASS — evidence-contract proof gap closed; no financial runtime defect and no runtime patch.**
-
-The certification suite now separates four evidence classes: `PRODUCTION_ENTRYPOINT`, `RUNTIME_ORCHESTRATOR`, `RUNTIME_EVIDENCE_DEPENDENCY`, and `CERTIFIER_MODEL_ONLY`. Model/evaluator tests remain useful for adversarial logic coverage but are not, by themselves, evidence of production reachability.
-
-A mandatory production call-graph binding gate verifies 12 critical static/dynamic source bindings, including the real Settlement ingress/recovery chain, Settlement submit/replay orchestration, the Refund transient worker through `refund-executor` and dynamic `refund-blockchain-submit`, and production CAS projection bindings. Four topology mutations that deliberately detached these paths all produced expected build-verifier failures (4/4; unexpected passes 0).
-
-Reviewer reconciliation: the concern that the earlier certificate could blur model evidence and production binding was a confirmed evidence-contract proof gap and is now fixed. The broader claim that the examined recovery implementation is an unused second money engine is not supported by the production source call graph: recovery orchestrators re-enter the shared financial executors, while pure evidence/decision modules are classified separately.
+## Production Call-Graph / Certifier-to-Runtime Binding — corrected 2026-10-03
+- Baseline: PLAN C SHA-256 `bc909807294235b558f38f440b63be0bae185d7ef57f19513945024fda8ffd17`.
+- Financial runtime delta: **zero**; this plan changes certification/evidence only.
+- The first PLAN D attempt contained a false assertion that the settlement replay orchestration imported `./financial-recovery-settlement-submit-replay`. Production actually binds to the read-orchestration, replay pre-gate, and replay authorization gate. The corrected mandatory gate binds import path + symbol + invocation for those actual edges and recognizes the Refund dynamic import explicitly.
+- Model/evaluator PASS remains distinct from production reachability; production reachability is claimed only where this binding gate proves the runtime edge.
