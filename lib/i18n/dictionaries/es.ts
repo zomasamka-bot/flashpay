@@ -106,6 +106,8 @@ const messages = {
   'receipt.status.cancelled': 'Cancelado',
   'receipt.status.needs_attention': 'Requiere atención',
   'refund.loading': 'Cargando estado del reembolso…',
+  'refund.warningProcessing': 'Tu reembolso sigue en proceso y aún no se ha completado. No lo consideres completado hasta que aparezca la confirmación final.',
+  'refund.warningCompleted': 'Tu reembolso se completó correctamente y su finalización está verificada. Puedes revisar el recibo final a continuación.',
   'refund.unverified': 'El estado del reembolso aún no puede verificarse.',
   'refund.tryLater': 'Inténtalo de nuevo más tarde.',
   'refund.completedMerchant': 'Reembolso completado — El reembolso se ha devuelto a la Pi Wallet del cliente.',

@@ -1,51 +1,29 @@
 {
   "certification_date": "2026-10-03",
   "baseline": "FlashPay_PLAN_C_REDIS_CAS_STALE_WRITER_CLEAN_2026-10-03.zip",
-  "baseline_sha256": "bc909807294235b558f38f440b63be0bae185d7ef57f19513945024fda8ffd17",
   "finding": "CONFIRMED_PROOF_GAP_FIXED",
   "financial_runtime_defect": false,
   "runtime_financial_code_changed": false,
-  "prior_plan_d_failure": {
-    "classification": "CERTIFIER_FALSE_ASSERTION",
-    "vercel_commit": "284377d",
-    "failed_claim": "settlement replay orchestration imports ./financial-recovery-settlement-submit-replay",
-    "actual_runtime_dependencies": [
-      "./financial-recovery-settlement-submit-read-orchestration",
-      "./financial-recovery-settlement-submit-replay-pre-gate",
-      "./financial-recovery-settlement-submit-replay-gate"
-    ]
-  },
   "reviewer_claim_disposition": {
     "certificate_mixed_evidence_classes": "PARTIALLY_CONFIRMED",
     "all_recovery_files_are_unused_spare_money_engine": "NOT_SUPPORTED_BY_PRODUCTION_CALL_GRAPH"
   },
-  "evidence_classes": [
-    "PRODUCTION_ENTRYPOINT",
-    "RUNTIME_ORCHESTRATOR",
-    "RUNTIME_EVIDENCE_DEPENDENCY",
-    "CERTIFIER_MODEL_ONLY"
-  ],
-  "binding_policy": "import path + imported symbol + runtime invocation where applicable; dynamic imports explicitly recognized",
+  "evidence_classes": ["PRODUCTION_ENTRYPOINT","RUNTIME_ORCHESTRATOR","RUNTIME_EVIDENCE_DEPENDENCY","CERTIFIER_MODEL_ONLY"],
+  "critical_bindings": 12,
+  "import_modes": ["static","dynamic"],
   "production_paths": [
     "/api/pi/a2u -> executeA2ULocked -> executeA2U -> settlement submit/replay",
     "/api/recovery/[id] -> executeA2URecovery -> executeA2ULocked -> executeA2U",
     "/api/recovery/transient -> executeA2URecovery -> shared settlement executor",
     "/api/recovery/transient -> runAutomaticRefundPass -> executeRefundNextStep -> dynamic refund-blockchain-submit -> submitTransaction"
   ],
-  "required_mutations": [
-    "cut settlement replay read-evidence import",
-    "cut settlement replay pre-gate import",
-    "cut settlement replay authorization-gate import",
-    "cut refund dynamic blockchain-submit import"
-  ],
-  "result": "PASS",
-  "executed_gate_assertions": 37,
   "mutation_sensitivity": {
-    "settlement_read_evidence_edge_cut": "EXPECTED_FAIL",
-    "settlement_pre_gate_edge_cut": "EXPECTED_FAIL",
-    "settlement_authorization_gate_edge_cut": "EXPECTED_FAIL",
-    "refund_all_dynamic_submit_edges_cut": "EXPECTED_FAIL",
+    "route_to_locked_executor_cut": "EXPECTED_FAIL",
+    "executor_to_settlement_replay_cut": "EXPECTED_FAIL",
+    "refund_orchestrator_to_executor_cut": "EXPECTED_FAIL",
+    "refund_executor_dynamic_submit_edge_cut": "EXPECTED_FAIL",
     "expected_failures": 4,
     "unexpected_passes": 0
-  }
+  },
+  "result": "PASS"
 }

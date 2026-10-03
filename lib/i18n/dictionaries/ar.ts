@@ -106,6 +106,8 @@ const messages = {
   'receipt.status.cancelled': 'ملغى',
   'receipt.status.needs_attention': 'يحتاج إلى متابعة',
   'refund.loading': 'جارٍ تحميل حالة الاسترداد…',
+  'refund.warningProcessing': 'الاسترداد قيد التنفيذ ولم يكتمل بعد. لا تعتبر العملية مكتملة حتى يظهر تأكيد الاسترداد النهائي.',
+  'refund.warningCompleted': 'تم الاسترداد بنجاح وإثبات اكتماله. يمكنك مراجعة إيصال الاسترداد النهائي أدناه.',
   'refund.unverified': 'لا يمكن التحقق من حالة الاسترداد حتى الآن.',
   'refund.tryLater': 'يرجى المحاولة مرة أخرى لاحقًا.',
   'refund.completedMerchant': 'اكتمل الاسترداد — أُعيد المبلغ إلى محفظة Pi الخاصة بالعميل.',

@@ -280,8 +280,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment completion authority mismatch" }, { status: 409 })
     }
 
+    // DR60/DR11 race barrier: for the exact 0.10 Pi Testnet auto-refund flow,
+    // acquire the durable PostgreSQL hold BEFORE publishing U2A completion to
+    // Settlement. This closes the window where Settlement Stage 1 could create
+    // an A2U payment identifier between Pi completion and Refund authority.
+    const dr11ExactIdentity = process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1
+    if (dr11ExactIdentity) {
+      const autoRefundHold = await recordDr11RefundCertificationHold({
+        paymentId: preFlashPaymentId,
+        merchantId: preMerchantId,
+        merchantUid: preMerchantUid,
+        customerAmount: finalPiPayment.amount,
+      })
+      if (autoRefundHold.outcome === "CONFLICT") return NextResponse.json({ error: "Pi review auto-refund authority conflict" }, { status: 409 })
+      if (autoRefundHold.outcome === "INDETERMINATE") return NextResponse.json({ error: "Pi review auto-refund authority unavailable" }, { status: 503 })
+    }
+
     // F2-2 second crash boundary: once Pi reports developer_completed=true, record
     // that fact durably before touching the Redis payment projection or ready queue.
+    // For DR11 the hold above is already authoritative, so Settlement remains excluded
+    // while this completion checkpoint is persisted.
     const durableU2ACompleted = await recordSettlementU2ACompletedCheckpoint({
       paymentId: preFlashPaymentId,
       merchantId: preMerchantId,
@@ -297,24 +315,6 @@ export async function POST(request: NextRequest) {
     }
     console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
 
-    // DR60: PostgreSQL, not Redis, decides whether this exact payment is the
-    // owner-armed DR11 refund certification flow. Refund authority is persisted
-    // under the shared advisory lock before any Redis projection can enter Settlement.
-    // PRE-DR118 UX4: Pi-review auto-refund certification is intentionally merchant-agnostic.
-    // Every authenticated merchant can exercise the exact 0.10 Pi Testnet path. Production
-    // Mainnet payments are never amount-routed. The durable PostgreSQL hold is acquired only
-    // after canonical Pi developer completion and before any Settlement authority exists.
-    const dr11ExactIdentity = process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1
-    if (dr11ExactIdentity) {
-      const autoRefundHold = await recordDr11RefundCertificationHold({
-        paymentId: preFlashPaymentId,
-        merchantId: preMerchantId,
-        merchantUid: preMerchantUid,
-        customerAmount: finalPiPayment.amount,
-      })
-      if (autoRefundHold.outcome === "CONFLICT") return NextResponse.json({ error: "Pi review auto-refund authority conflict" }, { status: 409 })
-      if (autoRefundHold.outcome === "INDETERMINATE") return NextResponse.json({ error: "Pi review auto-refund authority unavailable" }, { status: 503 })
-    }
     const dr11Hold = await readDr11RefundCertificationHold(preFlashPaymentId)
     if (dr11Hold.outcome === "INDETERMINATE") return NextResponse.json({ error: "DR11 durable hold authority unavailable" }, { status: 503 })
     if (dr11Hold.outcome === "HELD" && !dr11ExactIdentity) return NextResponse.json({ error: "DR11 durable hold identity conflict" }, { status: 409 })

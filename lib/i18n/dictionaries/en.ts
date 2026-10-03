@@ -106,6 +106,8 @@ const messages = {
   'receipt.status.cancelled': 'Cancelled',
   'receipt.status.needs_attention': 'Needs attention',
   'refund.loading': 'Loading refund status…',
+  'refund.warningProcessing': 'Your refund is still processing and is not complete yet. Do not treat it as complete until final refund confirmation appears.',
+  'refund.warningCompleted': 'Your refund has completed successfully and final completion is verified. You can review the final refund receipt below.',
   'refund.unverified': 'Refund status cannot be verified yet.',
   'refund.tryLater': 'Please try again later.',
   'refund.completedMerchant': "Refund completed — The refund has been returned to the customer's Pi Wallet.",

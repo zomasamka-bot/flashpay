@@ -106,6 +106,8 @@ const messages = {
   'receipt.status.cancelled': '已取消',
   'receipt.status.needs_attention': '需要关注',
   'refund.loading': '正在加载退款状态…',
+  'refund.warningProcessing': '退款仍在处理中，尚未完成。只有出现最终退款确认后，才应视为已完成。',
+  'refund.warningCompleted': '退款已成功完成并通过最终完成验证。您可以在下方查看最终退款收据。',
   'refund.unverified': '暂时无法验证退款状态。',
   'refund.tryLater': '请稍后重试。',
   'refund.completedMerchant': '退款已完成 — 退款已退回客户的 Pi Wallet。',

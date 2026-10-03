@@ -106,6 +106,8 @@ const messages = {
   'receipt.status.cancelled': 'रद्द',
   'receipt.status.needs_attention': 'ध्यान आवश्यक',
   'refund.loading': 'रिफंड स्थिति लोड हो रही है…',
+  'refund.warningProcessing': 'आपका रिफंड अभी प्रोसेस हो रहा है और पूरा नहीं हुआ है। अंतिम रिफंड पुष्टि दिखाई देने तक इसे पूरा न मानें।',
+  'refund.warningCompleted': 'आपका रिफंड सफलतापूर्वक पूरा हो गया है और अंतिम पूर्णता सत्यापित है। अंतिम रिफंड रसीद नीचे देख सकते हैं।',
   'refund.unverified': 'रिफंड स्थिति अभी सत्यापित नहीं की जा सकती।',
   'refund.tryLater': 'कृपया बाद में फिर प्रयास करें।',
   'refund.completedMerchant': 'रिफंड पूरा — रिफंड ग्राहक के Pi Wallet में वापस कर दिया गया है।',

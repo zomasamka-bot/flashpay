@@ -106,6 +106,8 @@ const messages = {
   'receipt.status.cancelled': 'Đã hủy',
   'receipt.status.needs_attention': 'Cần chú ý',
   'refund.loading': 'Đang tải trạng thái hoàn tiền…',
+  'refund.warningProcessing': 'Khoản hoàn tiền vẫn đang được xử lý và chưa hoàn tất. Chỉ xem là hoàn tất khi xuất hiện xác nhận hoàn tiền cuối cùng.',
+  'refund.warningCompleted': 'Khoản hoàn tiền đã hoàn tất thành công và được xác minh. Bạn có thể xem biên lai hoàn tiền cuối cùng bên dưới.',
   'refund.unverified': 'Chưa thể xác minh trạng thái hoàn tiền.',
   'refund.tryLater': 'Vui lòng thử lại sau.',
   'refund.completedMerchant': 'Hoàn tiền hoàn tất — tiền đã được trả lại Pi Wallet của khách hàng.',

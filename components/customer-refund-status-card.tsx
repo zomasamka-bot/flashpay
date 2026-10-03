@@ -102,8 +102,9 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
 
   if (status === "loading") {
     return (
-      <section aria-live="polite" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <p className="text-sm text-slate-600">{t("refund.loading")}</p>
+      <section aria-live="polite" className="rounded-2xl border border-red-300 bg-red-50 p-5 shadow-sm">
+        <p className="text-sm font-semibold text-red-800">{t("refund.loading")}</p>
+        <p className="mt-2 text-sm text-red-700">{t("refund.warningProcessing")}</p>
       </section>
     )
   }
@@ -149,6 +150,9 @@ export default function CustomerRefundStatusCard({ presentation, status, audienc
           {receiptCopied ? t("common.copied") : t("refund.copyStatus")}
         </button>
       </header>
+      <div className={`mt-4 rounded-xl border p-3 text-sm font-semibold ${presentation.customerStatus === "refund_completed" ? "border-green-300 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-800"}`}>
+        {t(presentation.customerStatus === "refund_completed" ? "refund.warningCompleted" : "refund.warningProcessing")}
+      </div>
       <dl className="mt-2">
         <Detail label={t("refund.amount")} value={`${presentation.amount} ${presentation.currency}`} />
         <Detail label={t("refund.flashpayId")} value={presentation.paymentId} copyable />
