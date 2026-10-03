@@ -28,6 +28,8 @@ try {
   require("./verify-financial-recovery-settlement-opposite-evidence.ts")
   require("./verify-financial-recovery-settlement-proof-orchestration.ts")
   require("./verify-financial-recovery-settlement-refund-checkpoint-barrier.ts")
+  require("./verify-financial-recovery-refund-completion-barrier.ts")
+require("./verify-financial-recovery-financial-invariants.ts")
   require("./verify-financial-recovery-settlement-refund-checkpoint-binding.ts")
   require("./verify-financial-recovery-settlement-refund-opposite-binding.ts")
   require("./verify-financial-recovery-settlement-create-pi-binding.ts")
