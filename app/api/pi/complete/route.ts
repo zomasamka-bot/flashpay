@@ -330,14 +330,20 @@ export async function POST(request: NextRequest) {
     const preA2UIngress = !prePayment.a2uPaymentId && !prePayment.a2uTxid && prePayment.horizonSuccessFlag !== true && !prePayment.refundPaymentId && !prePayment.refundTxid
     if (preA2UIngress) {
       const durableIngress = await getDurableU2AIngressAuthoritative(preFlashPaymentId)
-      if (durableIngress.outcome !== "FOUND" || durableIngress.checkpoint.completedAt === null ||
-          durableIngress.checkpoint.merchantId !== preMerchantId || durableIngress.checkpoint.merchantUid !== preMerchantUid ||
-          durableIngress.checkpoint.customerAmount !== prePayment.amount || durableIngress.checkpoint.u2aIdentifier !== piPaymentId ||
-          durableIngress.checkpoint.u2aTxid !== canonicalTxid || durableIngress.checkpoint.payerUid !== verifiedPayerUid) {
+      if (durableIngress.outcome !== "FOUND") {
         console.error("[F2-4 DURABLE TIMESTAMP HOTPATH] canonical durable timestamps unavailable", { paymentId: preFlashPaymentId, outcome: durableIngress.outcome })
         return NextResponse.json({ error: "Payment timestamp durability unavailable", code: "U2A_TIMESTAMP_DURABILITY_UNAVAILABLE" }, { status: 503 })
       }
-      durableCanonicalTimes = { verifiedAt: durableIngress.checkpoint.verifiedAt, completedAt: durableIngress.checkpoint.completedAt }
+      const ingress = durableIngress.checkpoint
+      const ingressCompletedAt = ingress.completedAt
+      if (ingressCompletedAt === null ||
+          ingress.merchantId !== preMerchantId || ingress.merchantUid !== preMerchantUid ||
+          ingress.customerAmount !== prePayment.amount || ingress.u2aIdentifier !== piPaymentId ||
+          ingress.u2aTxid !== canonicalTxid || ingress.payerUid !== verifiedPayerUid) {
+        console.error("[F2-4 DURABLE TIMESTAMP HOTPATH] canonical durable timestamps unavailable", { paymentId: preFlashPaymentId, outcome: durableIngress.outcome })
+        return NextResponse.json({ error: "Payment timestamp durability unavailable", code: "U2A_TIMESTAMP_DURABILITY_UNAVAILABLE" }, { status: 503 })
+      }
+      durableCanonicalTimes = { verifiedAt: ingress.verifiedAt, completedAt: ingressCompletedAt }
     }
 
     const dr11Hold = await readDr11RefundCertificationHold(preFlashPaymentId)

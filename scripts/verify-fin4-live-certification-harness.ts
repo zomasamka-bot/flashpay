@@ -48,6 +48,7 @@ for(const [src,role] of [[ra,'A'],[rb,'B']] as const){
 // Confirmed hot-path timestamp liveness defect closure: new /complete uses PostgreSQL times,
 // and existing pre-A2U drift can self-heal only after exact durable+Pi proof with no movement/refund evidence.
 need(c.includes('getDurableU2AIngressAuthoritative')&&c.includes('durableCanonicalTimes'),"/complete must read canonical durable U2A timestamps")
+need(c.includes('const ingressCompletedAt = ingress.completedAt')&&c.includes('if (ingressCompletedAt === null ||'),"/complete must explicitly narrow nullable durable completedAt before use")
 need(c.includes('payment.payerUidCapturedAt = durableCanonicalTimes?.verifiedAt')&&c.includes('payment.paidAt = durableCanonicalTimes.completedAt'),"/complete must seed Redis from durable verified/completed timestamps")
 need(l.includes('isF24PreA2UTimestampRepairSafe')&&l.includes('financialMovementExecuted: false'),"F2-4 repair must be explicitly pre-A2U/non-movement")
 need(l.includes('current.a2uPaymentId~=nil or current.a2uTxid~=nil')&&l.includes('current.refundPaymentId~=nil or current.refundTxid~=nil'),"F2-4 repair must reject advanced Settlement/Refund evidence")
@@ -55,7 +56,8 @@ need(l.includes('current.redisProjectionVersion~=version then return 0'),"F2-4 r
 need(l.includes('const repairArgs: [string, string, string, string, string, string, string, string, string, string]'),"F2-4 repair args must be an exact ten-string tuple")
 need(l.includes('redis.eval<[string, string, string, string, string, string, string, string, string, string], number>'),"F2-4 Redis eval generic must exactly match ten ARGV values")
 need(l.includes('typeof payment.merchantUid !== "string"')&&l.includes('typeof payment.piPaymentId !== "string"')&&l.includes('typeof payment.u2aTxid !== "string"')&&l.includes('typeof payment.payerUid !== "string"'),"F2-4 repair must narrow optional identity fields before Redis eval")
+need(l.includes('const completedAt = d.completedAt')&&l.includes('if (completedAt === null) return null'),"F2-4 authority must explicitly narrow nullable durable completedAt before repair")
 need(l.includes('exactPiAuthority')&&l.includes('transaction?.verified === true')&&l.includes('status?.developer_completed === true'),"F2-4 repair must require exact canonical Pi proof")
-need(l.includes('payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === d.completedAt && payment.settlementDispatchRequestedAt === d.completedAt'),"F2-4 authority must retain exact durable timestamp equality")
+need(l.includes('payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === completedAt && payment.settlementDispatchRequestedAt === completedAt')&&l.includes('canonicalizeF24DurableTimestamps(paymentId, payment, d.verifiedAt, completedAt)'),"F2-4 authority must retain exact durable timestamp equality after null narrowing")
 
 console.log("FIN4_LIVE_CERTIFICATION_HARNESS_R4=PASS split_functions=true one_shot_launch=true distinct_process_barrier=true financial_authority=false timestamp_hotpath_canonical=true timestamp_self_heal_pre_a2u_only=true telemetry_after_durable=true release_before_telemetry=true")

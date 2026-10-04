@@ -117,8 +117,10 @@ redis.call('SET',KEYS[1],cjson.encode(current)); return 1
 async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Payment): Promise<Payment | null> {
   if (!serverConfig.isPiApiKeyConfigured) return null
   const durable = await getDurableU2AIngressAuthoritative(paymentId)
-  if (durable.outcome !== "FOUND" || durable.checkpoint.completedAt === null) return null
+  if (durable.outcome !== "FOUND") return null
   const d = durable.checkpoint
+  const completedAt = d.completedAt
+  if (completedAt === null) return null
   if (
     payment.id !== d.paymentId ||
     payment.merchantId !== d.merchantId || payment.merchantUid !== d.merchantUid ||
@@ -150,8 +152,8 @@ async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Pay
     status?.cancelled !== true && status?.user_cancelled !== true
   if (!exactPiAuthority) return null
 
-  if (payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === d.completedAt && payment.settlementDispatchRequestedAt === d.completedAt) return payment
-  return canonicalizeF24DurableTimestamps(paymentId, payment, d.verifiedAt, d.completedAt)
+  if (payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === completedAt && payment.settlementDispatchRequestedAt === completedAt) return payment
+  return canonicalizeF24DurableTimestamps(paymentId, payment, d.verifiedAt, completedAt)
 }
 
 function isSettlementDispatchCandidate(payment: Payment, now: number): boolean {

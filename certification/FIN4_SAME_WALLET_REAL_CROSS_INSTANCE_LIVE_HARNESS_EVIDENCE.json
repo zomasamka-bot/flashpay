@@ -1,5 +1,5 @@
 {
-  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R4",
+  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R4C",
   "date": "2026-10-04",
   "baseline_r2_production": {
     "git_sha": "9aae277f6ef496dbcd2d7dd7318ec25df45eaf10",
@@ -7,7 +7,7 @@
     "state": "READY"
   },
   "classification": "CONFIRMED_PRE_A2U_LIVENESS_DEFECT_FIX_PLUS_CERTIFICATION_INSTRUMENTATION_HARDENED_NO_NEW_FINANCIAL_AUTHORITY",
-  "live_result": "R2_ATTEMPT_2_FAILED_CLOSED_PRE_HORIZON; R4_DEPLOY_BUILD_FAILED_TYPECHECK; R4B_BUILD_FIX_NOT_YET_DEPLOYED",
+  "live_result": "R2_ATTEMPT_2_FAILED_CLOSED_PRE_HORIZON; R4_DEPLOY_BUILD_FAILED_TYPECHECK; R4B_DEPLOY_BUILD_FAILED_SECOND_TYPECHECK; R4C_NOT_YET_DEPLOYED",
   "armed_payments": {
     "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
     "payment_b": "e3b83ecd-9f5e-4963-b75f-e3ef058cf095"
@@ -63,13 +63,15 @@
       "changed_typescript_files": 9
     },
     "source_manifest": "PASS",
-    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4B",
+    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4C",
     "fin4_r4_static_binding": "PASS",
     "fin4_r4_mutations": {
-      "expected_failures": 21,
+      "expected_failures": 23,
       "unexpected_passes": 0
     },
-    "clean_zip_hygiene": "PASS"
+    "clean_zip_hygiene": "PASS",
+    "targeted_typescript_contract": "PASS: ten-ARGV Redis tuple + explicit nullable completedAt narrowing in locked helper and /complete hot path",
+    "dependencyless_differential_tsc": "PASS_WITH_EXPECTED_ENV_NOISE: zero new semantic diagnostics in changed files vs R2 READY baseline; new diagnostics limited to missing next/server and Node Buffer types caused by absent local node_modules/@types"
   },
   "required_live_pass_predicates": {
     "two_distinct_payments": true,
@@ -102,6 +104,16 @@
     "root_cause": "lib/a2u-locked-executor.ts canonicalizeF24DurableTimestamps declared redis.eval<[string], number> while passing ten ARGV string values; TypeScript rejected the ten-element argument tuple",
     "dependency_warning_causal": false,
     "fix": "narrow all optional identity/amount fields fail-closed, construct an exact ten-string repairArgs tuple, and declare redis.eval with the matching ten-string generic tuple",
+    "financial_semantics_changed_by_build_fix": false
+  },
+  "r4b_build_failure_2026_10_04": {
+    "deployment_id": "dpl_FAoUbU2GaZZnJD3YBBipUSwgVBoq",
+    "git_sha": "10f2d26a2540be5ce473e229e87b348693264311",
+    "vercel_state": "ERROR",
+    "next_compile": "PASS",
+    "failure_phase": "Next.js lint/type validity check",
+    "root_cause": "lib/a2u-locked-executor.ts verifyF24DurableMerchantAuthority passed d.completedAt typed string|null into canonicalizeF24DurableTimestamps completedAt:string; TypeScript rejected nullable input at line 154",
+    "fix": "after FOUND discrimination, bind const completedAt=d.completedAt and fail closed when null before equality checks or canonicalize call; mirror the same explicit narrowing in /api/pi/complete durable hot-path so a second hidden nullable error cannot surface next",
     "financial_semantics_changed_by_build_fix": false
   }
 }

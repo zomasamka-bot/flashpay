@@ -22,7 +22,7 @@ dfcda756447c2e46836c8626906fc1c4ae88f6c4f95d710d9c116ee24481635d  ./app/api/paym
 92e4c8ef63e5d51679042b4221cebe3edabc025ddee98fb65665d310927cd1ba  ./app/api/payments/route.ts
 e99de26437974864413b276aa0ad3ee13b9348c8cded69966a90f0cd31fad1f1  ./app/api/pi/a2u/route.ts
 0414539870be0911cbab745657dfcb33a409eb0225a2baa28c1ccbefefb1cec4  ./app/api/pi/approve/route.ts
-f9e851a6f106425c1a1fe84423e8bc7c8d387bfdca85759359fd4107795117fd  ./app/api/pi/complete/route.ts
+affa79a0d79a754b7864a14d2f7fd53dc524883e8f9a8286ab833c17bb9eb5e5  ./app/api/pi/complete/route.ts
 9192593fa95e9279c75dcebc4b4dad4b8d71f1297fbb71354adb364323508826  ./app/api/pi/entry-token/route.ts
 1f6251c48e7f4630b385c32e7e62b9240643a2ba01df89f606312d53654ce33b  ./app/api/pi/start/route.ts
 e0547a81458dae8924feeca97b93d98f61bee07c86c877a6317cfee9f4e48e13  ./app/api/pi/verify-uid/route.ts
@@ -61,7 +61,7 @@ da94ab50e3675a1e47754a9738f9e929c18dbb9f7233f2bbd8522b329140be3a  ./app/transact
 44e766ae018617090ed51a5a7e76fd05ae86c52b44140d27d4912dc71349e61d  ./certification/CAPACITY_EVIDENCE.json
 db8e87569e33812fbd0c0a2cfd6124f21e11b1ecfeee8563ae638b41e9ddbffc  ./certification/DR11_REFUND_RACE_UI_RECOVERY_EVIDENCE.json
 9d3d20e5e790458a5c80628ad62d8813865e76ab62315f8e76cb392138f080ca  ./certification/EMERGENCY_STUCK_PAYMENT_RESCUE_AUDIT_EVIDENCE.json
-7cac3d7a14e27643d18f080e263dffa745c53ad3fb71bb508410e81fda9e5c4d  ./certification/FIN4_SAME_WALLET_REAL_CROSS_INSTANCE_LIVE_HARNESS_EVIDENCE.json
+748d9873cdc2da21970ede626cd3c06288405804e59aa537e7870e84612ec624  ./certification/FIN4_SAME_WALLET_REAL_CROSS_INSTANCE_LIVE_HARNESS_EVIDENCE.json
 88b6217a00ea0ee97124633a1643818d9389bc36bc9d2a7b4a704e6c98b8c6eb  ./certification/FINAL_CERTIFICATION.md
 0f845b5b144a8d3707cc6dd52968beeea3df229772429e8b2cbe839f694f6810  ./certification/PLAN_F_BUILDING_RISK_RECONCILE_EVIDENCE.json
 7fa3b8f97016420ec3c3c5f786f70312fb93bed0a1f6baaee4d466f81cb30331  ./certification/PLAN_G_CROSS_BOUNDARY_ABC_EVIDENCE.json
@@ -151,7 +151,7 @@ b620f27ccc82ec7748e2039143cd3c36c029e48b083025f88e621e6dda91222a  ./components/u
 1b43441b273aa21c1e74fefa774d5a7cb50068e5d4c192a8f63b9c95c5580431  ./hooks/use-mobile.ts
 3b5f8c9c5257f1cf36a94eeffed2588037e9cc7931d90b752604c2baed30cf81  ./hooks/use-toast.ts
 980587c7ed3e0d7c47727b3b5484729cfd4412912f9393cd5a00eb8bfa1a268a  ./lib/a2u-executor.ts
-2497939f59bf4343a65468b7508695590e73afa5bc607198f17052238c3fc41f  ./lib/a2u-locked-executor.ts
+07784bac3e2db7148228827613d3a192aa8e6912ae3cf716294dbc30c8dc7545  ./lib/a2u-locked-executor.ts
 00a1046eb224fada5b8d027b9a8c8c7d96888e8a9e63b8d87fb3cdb1e9e62ecc  ./lib/a2u-recovery-service.ts
 98b3cb26a7fa042c6cdf05af9660c66ee2b171bacf971b19a9f40aef14958acc  ./lib/a2u-response.ts
 6ddffa9d74527b9258b3a08f2af4af995dfba6f50fd1b75b373d8bdcb2d6aded  ./lib/config.ts
@@ -274,8 +274,8 @@ f2f4762d405ec0cce1182233fda114dfc460c582f0975a44b8561360256897b1  ./public/valid
 7affa59ab8c3577987b1eeda625e3752c2e7d37cbed3a3380d161b2eb5877985  ./scripts/verify-dr11-orphan-a2u-refund-recovery.ts
 15ca00678fc18d189d248e8cd005075e4f02a7d3e2335c330000fa26f2698c7d  ./scripts/verify-dr11-refund-race-ui-binding.ts
 d3ef77c4d5ce12f47d0973cbbf312bdc5e1a9a44b26df751dec8f11d3c568511  ./scripts/verify-emergency-stuck-payment-rescue-safety.ts
-83e7c01602d7a37f6d1cf88d94561e7d784fa758266991e0b20fb9e5883ada26  ./scripts/verify-fin4-live-certification-harness.ts
-49e25a27e7c580fc658854fc4c078b9e0fbd0262952c9df699920390aa8c336f  ./scripts/verify-fin4-live-certification-mutations.ts
+ee377a0d3aa2ed02785bc6f5675bac696774a8bcb130360102b646f842d74e86  ./scripts/verify-fin4-live-certification-harness.ts
+dabe88aa9f65eaf4c5d087864d93899b7064d2acab3c8f7a05c8d6038427244a  ./scripts/verify-fin4-live-certification-mutations.ts
 b7af22e089db7160088c7d5bc865ea4a160158cd414859a2d59d262fa508ff0d  ./scripts/verify-financial-recovery-a2u-proof.ts
 e7e5431465d66b0bac46dbaab05d5e482dc0ef39a4513dbcfee028d84ea41dab  ./scripts/verify-financial-recovery-crash-policy.ts
 44b0c1a50a9485d8651368e1bc5eeede398a7bf5dc255497c341896e2cdf04e9  ./scripts/verify-financial-recovery-financial-invariants.ts
