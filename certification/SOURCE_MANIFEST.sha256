@@ -1,7 +1,7 @@
 b2cc815c63108dd2667ca97838e46b138886ddaa8564b3a143c7e60f48d8580a  ./.gitignore
 fd6dd2954de234c794bf3abb7760aff33631930c7c8d67663059ed1a44a0dd8a  ./app/api/certification/fin4-trigger-a/route.ts
 cefc7060ac1cc470868b9a73baefc113fbbdc9d7db216e25279e80ac319deb98  ./app/api/certification/fin4-trigger-b/route.ts
-d4477641f093d7f367bef51fd40e7a581a4b99420eaae6c15e632d3fbb688f17  ./app/api/certification/fin4-trigger/route.ts
+227bc068b630faa70d318f91c30a300d086818b1913f1e5311c69eb9fbf225b5  ./app/api/certification/fin4-trigger/route.ts
 5e5d925f49b388b7e1c444cfc9acdd5599ac9cf3ef0570317e1ad04580f69412  ./app/api/control/availability/route.ts
 3ec0c6a1ccf8732e2274c443af71415a0f47b637152f20967c22bbadeae9bace  ./app/api/control/domain/route.ts
 0fc0b29eb2f45b23654320e8ba0403e5ecad190f476719a59e3ee328261100a8  ./app/api/control/system/route.ts
@@ -61,7 +61,7 @@ da94ab50e3675a1e47754a9738f9e929c18dbb9f7233f2bbd8522b329140be3a  ./app/transact
 44e766ae018617090ed51a5a7e76fd05ae86c52b44140d27d4912dc71349e61d  ./certification/CAPACITY_EVIDENCE.json
 db8e87569e33812fbd0c0a2cfd6124f21e11b1ecfeee8563ae638b41e9ddbffc  ./certification/DR11_REFUND_RACE_UI_RECOVERY_EVIDENCE.json
 9d3d20e5e790458a5c80628ad62d8813865e76ab62315f8e76cb392138f080ca  ./certification/EMERGENCY_STUCK_PAYMENT_RESCUE_AUDIT_EVIDENCE.json
-748d9873cdc2da21970ede626cd3c06288405804e59aa537e7870e84612ec624  ./certification/FIN4_SAME_WALLET_REAL_CROSS_INSTANCE_LIVE_HARNESS_EVIDENCE.json
+7ef4ba49321d459c235673b3ef19416984ba740fb927f1a1e2349919531f4bf6  ./certification/FIN4_SAME_WALLET_REAL_CROSS_INSTANCE_LIVE_HARNESS_EVIDENCE.json
 88b6217a00ea0ee97124633a1643818d9389bc36bc9d2a7b4a704e6c98b8c6eb  ./certification/FINAL_CERTIFICATION.md
 0f845b5b144a8d3707cc6dd52968beeea3df229772429e8b2cbe839f694f6810  ./certification/PLAN_F_BUILDING_RISK_RECONCILE_EVIDENCE.json
 7fa3b8f97016420ec3c3c5f786f70312fb93bed0a1f6baaee4d466f81cb30331  ./certification/PLAN_G_CROSS_BOUNDARY_ABC_EVIDENCE.json
@@ -161,7 +161,7 @@ b620f27ccc82ec7748e2039143cd3c36c029e48b083025f88e621e6dda91222a  ./components/u
 dcc2f4437114cef8072fd1506d78b6370313cd1db395ac0ff5fd09b229e5665b  ./lib/db.ts
 c31b32fc1129c71bca2c14cc54069fbb195d600a8c1e61fc1d7a355d72261429  ./lib/domain-control.ts
 c3c77cb2a177a90c106209a9dc55650f357418aebceffc253fb9b7ec2afd1504  ./lib/domains.ts
-c69c3c7722d2a6c848f6364d080e01dddcc7818fdb248aeafa95b1857ce452f2  ./lib/fin4-live-certification.ts
+ad1b67cdf60d68207792b4c14717a1e220b45aa4ca9ed740fd0e89861d3f9b10  ./lib/fin4-live-certification.ts
 3ec5580eca2f28e0e05fcf0947ba111c9fac755559153cb93f790268137f0e64  ./lib/financial-amount-stroops.ts
 86b702c952382700863e403c0e826e79adeb0adeb0840455e86a509cc714dbbc  ./lib/financial-recovery-a2u-proof.ts
 e302f96bcb491b748cb22c3ded302dbfbb8d5a9b5e6df03e65edda5056e8eb55  ./lib/financial-recovery-crash-policy.ts
@@ -274,8 +274,8 @@ f2f4762d405ec0cce1182233fda114dfc460c582f0975a44b8561360256897b1  ./public/valid
 7affa59ab8c3577987b1eeda625e3752c2e7d37cbed3a3380d161b2eb5877985  ./scripts/verify-dr11-orphan-a2u-refund-recovery.ts
 15ca00678fc18d189d248e8cd005075e4f02a7d3e2335c330000fa26f2698c7d  ./scripts/verify-dr11-refund-race-ui-binding.ts
 d3ef77c4d5ce12f47d0973cbbf312bdc5e1a9a44b26df751dec8f11d3c568511  ./scripts/verify-emergency-stuck-payment-rescue-safety.ts
-ee377a0d3aa2ed02785bc6f5675bac696774a8bcb130360102b646f842d74e86  ./scripts/verify-fin4-live-certification-harness.ts
-dabe88aa9f65eaf4c5d087864d93899b7064d2acab3c8f7a05c8d6038427244a  ./scripts/verify-fin4-live-certification-mutations.ts
+6d48c93bc83b2fd2978e03401efcad6629617c2889aeeb1e5b8f330d3d52995a  ./scripts/verify-fin4-live-certification-harness.ts
+6fc47eb77c5ca290df0d834bfdd9541ffa95164d121e808e7e138290ed46d82f  ./scripts/verify-fin4-live-certification-mutations.ts
 b7af22e089db7160088c7d5bc865ea4a160158cd414859a2d59d262fa508ff0d  ./scripts/verify-financial-recovery-a2u-proof.ts
 e7e5431465d66b0bac46dbaab05d5e482dc0ef39a4513dbcfee028d84ea41dab  ./scripts/verify-financial-recovery-crash-policy.ts
 44b0c1a50a9485d8651368e1bc5eeede398a7bf5dc255497c341896e2cdf04e9  ./scripts/verify-financial-recovery-financial-invariants.ts

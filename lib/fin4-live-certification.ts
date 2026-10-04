@@ -4,7 +4,7 @@ import crypto from "crypto"
 import { isRedisConfigured, redis } from "./redis"
 
 const PROCESS_ID = crypto.randomUUID()
-const PREFIX = "flashpay:cert:fin4:r4:v1:"
+const PREFIX = "flashpay:cert:fin4:r4d:v1:"
 const LAUNCH_TTL_SECONDS = 3600
 const BARRIER_TIMEOUT_MS = 20_000
 const POLL_MS = 100

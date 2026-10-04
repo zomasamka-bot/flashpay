@@ -7,7 +7,7 @@
     "state": "READY"
   },
   "classification": "CONFIRMED_PRE_A2U_LIVENESS_DEFECT_FIX_PLUS_CERTIFICATION_INSTRUMENTATION_HARDENED_NO_NEW_FINANCIAL_AUTHORITY",
-  "live_result": "R2_ATTEMPT_2_FAILED_CLOSED_PRE_HORIZON; R4_DEPLOY_BUILD_FAILED_TYPECHECK; R4B_DEPLOY_BUILD_FAILED_SECOND_TYPECHECK; R4C_NOT_YET_DEPLOYED",
+  "live_result": "R4C_LAUNCH_FAILED_PRE_BARRIER_DUE_TO_VERCEL_DEPLOYMENT_PROTECTION_401_R4D_NOT_YET_EXECUTED",
   "armed_payments": {
     "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
     "payment_b": "e3b83ecd-9f5e-4963-b75f-e3ef058cf095"
@@ -71,7 +71,12 @@
     },
     "clean_zip_hygiene": "PASS",
     "targeted_typescript_contract": "PASS: ten-ARGV Redis tuple + explicit nullable completedAt narrowing in locked helper and /complete hot path",
-    "dependencyless_differential_tsc": "PASS_WITH_EXPECTED_ENV_NOISE: zero new semantic diagnostics in changed files vs R2 READY baseline; new diagnostics limited to missing next/server and Node Buffer types caused by absent local node_modules/@types"
+    "dependencyless_differential_tsc": "PASS_WITH_EXPECTED_ENV_NOISE: zero new semantic diagnostics in changed files vs R2 READY baseline; new diagnostics limited to missing next/server and Node Buffer types caused by absent local node_modules/@types",
+    "fin4_static_binding": "PASS_R4D",
+    "fin4_mutations": {
+      "expected_failures": 25,
+      "unexpected_passes": 0
+    }
   },
   "required_live_pass_predicates": {
     "two_distinct_payments": true,
@@ -115,5 +120,25 @@
     "root_cause": "lib/a2u-locked-executor.ts verifyF24DurableMerchantAuthority passed d.completedAt typed string|null into canonicalizeF24DurableTimestamps completedAt:string; TypeScript rejected nullable input at line 154",
     "fix": "after FOUND discrimination, bind const completedAt=d.completedAt and fail closed when null before equality checks or canonicalize call; mirror the same explicit narrowing in /api/pi/complete durable hot-path so a second hidden nullable error cannot surface next",
     "financial_semantics_changed_by_build_fix": false
+  },
+  "revision": "R4D",
+  "r4c_failed_launch": {
+    "timestamp": "2026-10-04T19:38:24Z",
+    "a_status": 401,
+    "b_status": 401,
+    "barrier_arrived": false,
+    "submit_enter": false,
+    "horizon_submit_about_to_start": false,
+    "financial_movement_executed_by_failed_launch": false,
+    "classification": "CERTIFICATION_HARNESS_INVOCATION_DEFECT_NOT_FINANCIAL_KERNEL_DEFECT"
+  },
+  "r4d": {
+    "fresh_namespace": "flashpay:cert:fin4:r4d:v1:",
+    "deployment_protection": "requires VERCEL_AUTOMATION_BYPASS_SECRET and x-vercel-protection-bypass on internal role calls",
+    "secret_logged_or_stored_in_source": false,
+    "financial_kernel_delta": false,
+    "a_b_role_route_delta": false,
+    "new_one_shot_namespace": true,
+    "reason": "preserve failed R4C launch claim as evidence; do not delete/reset it"
   }
 }

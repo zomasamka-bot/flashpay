@@ -11,7 +11,7 @@ const rb=fs.readFileSync("app/api/certification/fin4-trigger-b/route.ts","utf8")
 // Arm/auth and certification namespace.
 need(h.includes('process.env.VERCEL_ENV !== "production" || process.env.FLASHPAY_FIN4_ARMED !== "1"'),"FIN4 must be production+explicit-arm gated")
 need(h.includes('paymentA === paymentB'),"FIN4 must reject identical payments")
-need(h.includes('flashpay:cert:fin4:r4:v1:'),"FIN4 R4 must use a fresh certification namespace")
+need(h.includes('flashpay:cert:fin4:r4d:v1:'),"FIN4 R4D must use a fresh certification namespace")
 need(h.includes('crypto.timingSafeEqual(a,b)'),"FIN4 run authorization must be timing-safe")
 need(h.includes('redis.set(launchKey(runId), "1", { nx: true, ex: LAUNCH_TTL_SECONDS })'),"FIN4 launch must be one-shot NX")
 need(h.includes('FIN4_FAIL_CLOSED_LAUNCH_ALREADY_CLAIMED'),"FIN4 duplicate launch must fail closed")
@@ -35,7 +35,10 @@ const released=a.indexOf('fin4BestEffortEvent(ctx.paymentId, ctx.payment.a2uFrom
 need(release>=0&&released>release,"FIN4 release telemetry must run only after the real wallet lock is released")
 
 // R3 uses two distinct Vercel route functions and one orchestrator that launches both concurrently.
-need(o.includes('Promise.all([invokeRole(origin, runId, "A"), invokeRole(origin, runId, "B")])'),"R3 launch must fan out concurrently to A and B")
+need(o.includes('process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()')&&o.includes('FIN4_FAIL_CLOSED_AUTOMATION_BYPASS_UNAVAILABLE'),"R4D must fail closed without Vercel automation bypass")
+need(o.includes('"x-vercel-protection-bypass": bypassSecret'),"R4D split-function calls must use the official Vercel automation bypass header")
+need(!o.includes('console.log(bypassSecret)')&&!o.includes('payload: bypassSecret'),"R4D must never log or return the bypass secret")
+need(o.includes('Promise.all([invokeRole(origin, runId, "A", bypassSecret), invokeRole(origin, runId, "B", bypassSecret)])'),"R3 launch must fan out concurrently to A and B")
 need(o.includes('process.env.VERCEL_URL')&&o.includes('/api/certification/fin4-trigger-${role.toLowerCase()}'),"R3 launch must target the exact deployment-specific origin and split routes")
 need(!o.includes('executeA2URecovery(')&&!o.includes('submitTransaction('),"R3 orchestrator must have no financial executor or submit authority")
 for(const [src,role] of [[ra,'A'],[rb,'B']] as const){
@@ -60,4 +63,4 @@ need(l.includes('const completedAt = d.completedAt')&&l.includes('if (completedA
 need(l.includes('exactPiAuthority')&&l.includes('transaction?.verified === true')&&l.includes('status?.developer_completed === true'),"F2-4 repair must require exact canonical Pi proof")
 need(l.includes('payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === completedAt && payment.settlementDispatchRequestedAt === completedAt')&&l.includes('canonicalizeF24DurableTimestamps(paymentId, payment, d.verifiedAt, completedAt)'),"F2-4 authority must retain exact durable timestamp equality after null narrowing")
 
-console.log("FIN4_LIVE_CERTIFICATION_HARNESS_R4=PASS split_functions=true one_shot_launch=true distinct_process_barrier=true financial_authority=false timestamp_hotpath_canonical=true timestamp_self_heal_pre_a2u_only=true telemetry_after_durable=true release_before_telemetry=true")
+console.log("FIN4_LIVE_CERTIFICATION_HARNESS_R4D=PASS split_functions=true one_shot_launch=true distinct_process_barrier=true financial_authority=false timestamp_hotpath_canonical=true timestamp_self_heal_pre_a2u_only=true telemetry_after_durable=true release_before_telemetry=true")
