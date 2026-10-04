@@ -1,0 +1,43 @@
+{
+  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness",
+  "date": "2026-10-04",
+  "baseline_zip": "flashpay-vb_TCFiAifi5Mq.zip",
+  "baseline_zip_sha256": "4bddde039c2a55ff7df77c473d6636519ed6a4c111ae8f24db805f67c6817aa2",
+  "classification": "CERTIFICATION_INSTRUMENTATION_ONLY_NO_FINANCIAL_AUTHORITY",
+  "live_result": "NOT_YET_EXECUTED_REQUIRES_DEPLOYMENT_AND_TWO_REAL_PAYMENTS",
+  "design": {
+    "arm_gate": ["VERCEL_ENV=production", "FLASHPAY_FIN4_ARMED=1", "FLASHPAY_FIN4_RUN_ID", "FLASHPAY_FIN4_PAYMENT_A", "FLASHPAY_FIN4_PAYMENT_B"],
+    "payment_ids_must_be_distinct": true,
+    "barrier_requires_distinct_process_ids": true,
+    "barrier_requires_same_source_wallet": true,
+    "barrier_position": "immediately before existing acquirePiWalletIntentSubmitLock",
+    "financial_lock_implementation_changed": false,
+    "horizon_submit_implementation_changed": false,
+    "financial_authority_added": false,
+    "timeout": "20s fail-closed",
+    "post_collision_reentry": "barrier released marker permits normal recovery/progress"
+  },
+  "telemetry_events": ["BARRIER_ARRIVED", "BARRIER_RELEASED", "BARRIER_REENTRY", "BARRIER_TIMEOUT", "LOCK_ATTEMPT", "LOCK_ACQUIRED", "LOCK_LOST", "SUBMIT_ENTER", "SUBMIT_VERIFIED", "LOCK_RELEASING", "LOCK_RELEASED"],
+  "required_live_pass_predicates": {
+    "two_distinct_payments": true,
+    "two_distinct_processes": true,
+    "same_source_wallet": true,
+    "max_simultaneous_submit_owner": 1,
+    "exactly_one_valid_sequence_owner_at_a_time": true,
+    "payment_a_horizon_movement_count": 1,
+    "payment_b_horizon_movement_count": 1,
+    "duplicate_movement_count": 0,
+    "lost_movement_count": 0,
+    "second_progresses_after_release_or_recovery": true
+  },
+  "verification": {
+    "full_financial_recovery_verifier": "PASS",
+    "p7_regression": "PASS",
+    "fin4_static_binding": "PASS",
+    "fin4_mutations": {"expected_failures": 6, "unexpected_passes": 0},
+    "typescript_transpile": "PASS",
+    "next_external_build": "NOT_RUN_LOCAL_ENV_NO_PNPM_AND_REGISTRY_DNS_UNAVAILABLE"
+  },
+  "changed_runtime_files": ["lib/a2u-executor.ts", "lib/fin4-live-certification.ts"],
+  "changed_certification_files": ["scripts/run-financial-recovery-build-verifier.mjs", "scripts/verify-fin4-live-certification-harness.ts", "scripts/verify-fin4-live-certification-mutations.ts", "certification/FIN4_SAME_WALLET_REAL_CROSS_INSTANCE_LIVE_HARNESS_EVIDENCE.json"]
+}

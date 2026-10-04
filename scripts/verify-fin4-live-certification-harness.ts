@@ -1,0 +1,17 @@
+import fs from "node:fs"
+const need=(v:unknown,m:string)=>{if(!v)throw new Error(m)}
+const h=fs.readFileSync("lib/fin4-live-certification.ts","utf8")
+const a=fs.readFileSync("lib/a2u-executor.ts","utf8")
+need(h.includes('process.env.VERCEL_ENV !== "production" || process.env.FLASHPAY_FIN4_ARMED !== "1"'),"FIN4 must be production+explicit-arm gated")
+need(h.includes('paymentA === paymentB'),"FIN4 must reject identical payments")
+need(h.includes('aProcess !== bProcess && aWallet === sourceWallet && bWallet === sourceWallet'),"FIN4 barrier must require distinct processes and same source wallet")
+need(h.includes('FIN4_FAIL_CLOSED_DISTINCT_PROCESS_BARRIER_TIMEOUT'),"FIN4 barrier must fail closed")
+need(h.includes('flashpay:cert:fin4:v1:'),"FIN4 telemetry must be namespaced away from financial truth")
+need(!h.includes('submitTransaction(') && !h.includes('claimPiWalletIntent(') && !h.includes('releasePiWalletIntent('),"FIN4 harness must have no financial authority")
+const barrier=a.indexOf('fin4BeforeWalletLock(ctx.paymentId, appPublicKey)')
+const lock=a.indexOf('acquirePiWalletIntentSubmitLock(appPublicKey',barrier)
+const submit=a.indexOf('moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)',lock)
+need(barrier>=0&&lock>barrier&&submit>lock,"FIN4 must observe real production lock then real submit")
+need(a.includes('fin4Event(ctx.paymentId, appPublicKey, fin4State, walletLock ? "LOCK_ACQUIRED"'),"FIN4 lock outcome telemetry missing")
+need(a.includes('fin4Event(ctx.paymentId, appPublicKey, fin4State, "SUBMIT_ENTER"')&&a.includes('fin4Event(ctx.paymentId, appPublicKey, fin4State, "SUBMIT_VERIFIED"'),"FIN4 submit telemetry missing")
+console.log("FIN4_LIVE_CERTIFICATION_HARNESS=PASS financial_authority=false distinct_process_barrier=true fail_closed=true")
