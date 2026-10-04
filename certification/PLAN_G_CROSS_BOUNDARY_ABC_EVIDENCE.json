@@ -1,0 +1,11 @@
+{
+  "plan": "PLAN G — Cross-Boundary A+B+C Certification",
+  "date": "2026-10-04",
+  "baseline_production_sha": "6f43f8e3908cc874da54a5879df1547531449c3c",
+  "classification": "NO_RUNTIME_DEFECT_CONFIRMED",
+  "runtime_financial_delta": "ZERO",
+  "scope": ["Settlement/Refund durable XOR authority", "Pi wallet owner/sequence authority", "Redis projection CAS"],
+  "invariant": "movement -> durable movement evidence -> wallet-intent release; Redis projection is not financial truth",
+  "result": "PASS",
+  "note": "Certification/build-enforcement only. No app/ or lib/ runtime source was modified by Plan G."
+}

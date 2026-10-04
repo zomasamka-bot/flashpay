@@ -160,3 +160,9 @@ Reviewer gap was audited against the complete operator/emergency surface. The le
 Narrow fix: queue prune now requires a terminal `failed/cancelled` projection with zero settlement/refund execution evidence (including prepared hash/sequence/XDR, addresses, dispatch, reconciliation and completion flags), Refund checkpoint `ABSENT`, and a fresh PostgreSQL proof of zero transaction and receipt rows. Any uncertainty blocks. `dismiss_reviewed` is disabled so unresolved financial cases cannot be hidden from the operator console. The UI only renders queue removal for a proven prune candidate.
 
 No settlement/refund submit, wallet lock, XOR, CAS or accounting kernel was modified. Mandatory gate: `EMERGENCY_RESCUE_SAFETY=PASS adversarial=21 runtime_bindings=8 fail_closed=true`. Mutation suite: 4/4 expected failures, 0 unexpected passes.
+
+## 2026-10-04 — PLAN G Cross-Boundary A+B+C Certification
+
+Production baseline: `6f43f8e3908cc874da54a5879df1547531449c3c` (PLAN F production build PASS).
+
+Result: **PASS — no new runtime financial defect confirmed; runtime delta ZERO.** The audit binds Settlement/Refund durable XOR authority, Pi wallet owner/sequence authority, and Redis projection CAS as one cross-boundary safety contract. The production ordering retained is movement -> durable movement evidence -> wallet-intent release; Redis remains projection-only and cannot establish financial absence/finality. Plan G adds certification/build enforcement only and does not modify `app/` or `lib/` runtime code.
