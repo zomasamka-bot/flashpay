@@ -2,7 +2,7 @@ import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold } from "@/lib/db"
+import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold, getDurableU2AIngressAuthoritative } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 import { createDr11RefundAuthorityFromDurableHold, getRefundCheckpointByIdempotency } from "@/lib/refund-checkpoint-store"
@@ -322,6 +322,24 @@ export async function POST(request: NextRequest) {
     }
     console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
 
+    // F2-4 hot-path canonicalization: when this payment is still pre-A2U, the
+    // Redis projection must use the exact PostgreSQL verified/completed timestamps.
+    // This prevents the immediate settlement path from depending on a later F2-3
+    // rediscovery pass to repair millisecond drift introduced by new Date().
+    let durableCanonicalTimes: { verifiedAt: string; completedAt: string } | null = null
+    const preA2UIngress = !prePayment.a2uPaymentId && !prePayment.a2uTxid && prePayment.horizonSuccessFlag !== true && !prePayment.refundPaymentId && !prePayment.refundTxid
+    if (preA2UIngress) {
+      const durableIngress = await getDurableU2AIngressAuthoritative(preFlashPaymentId)
+      if (durableIngress.outcome !== "FOUND" || durableIngress.checkpoint.completedAt === null ||
+          durableIngress.checkpoint.merchantId !== preMerchantId || durableIngress.checkpoint.merchantUid !== preMerchantUid ||
+          durableIngress.checkpoint.customerAmount !== prePayment.amount || durableIngress.checkpoint.u2aIdentifier !== piPaymentId ||
+          durableIngress.checkpoint.u2aTxid !== canonicalTxid || durableIngress.checkpoint.payerUid !== verifiedPayerUid) {
+        console.error("[F2-4 DURABLE TIMESTAMP HOTPATH] canonical durable timestamps unavailable", { paymentId: preFlashPaymentId, outcome: durableIngress.outcome })
+        return NextResponse.json({ error: "Payment timestamp durability unavailable", code: "U2A_TIMESTAMP_DURABILITY_UNAVAILABLE" }, { status: 503 })
+      }
+      durableCanonicalTimes = { verifiedAt: durableIngress.checkpoint.verifiedAt, completedAt: durableIngress.checkpoint.completedAt }
+    }
+
     const dr11Hold = await readDr11RefundCertificationHold(preFlashPaymentId)
     if (dr11Hold.outcome === "INDETERMINATE") return NextResponse.json({ error: "DR11 durable hold authority unavailable" }, { status: 503 })
     if (dr11Hold.outcome === "HELD" && !dr11ExactIdentity) return NextResponse.json({ error: "DR11 durable hold identity conflict" }, { status: 409 })
@@ -457,7 +475,7 @@ export async function POST(request: NextRequest) {
     }
     payment.payerUid = finalPayerUid
     payment.payerUidSource = "verified_u2a"
-    payment.payerUidCapturedAt = payment.payerUidCapturedAt || new Date().toISOString()
+    payment.payerUidCapturedAt = durableCanonicalTimes?.verifiedAt ?? payment.payerUidCapturedAt ?? new Date().toISOString()
 
     // Persist canonical piPaymentId from Pi identifier
     payment.piPaymentId = piPaymentIdCanonical
@@ -466,7 +484,10 @@ export async function POST(request: NextRequest) {
     payment.u2aTxid = finalCanonicalTxid
 
     // Preserve existing paidAt, or set once if absent
-    if (!payment.paidAt) {
+    if (durableCanonicalTimes) {
+      payment.paidAt = durableCanonicalTimes.completedAt
+      console.log("[F2-4 DURABLE TIMESTAMP HOTPATH] using durable completedAt:", payment.paidAt)
+    } else if (!payment.paidAt) {
       payment.paidAt = new Date().toISOString()
       console.log("[Pi Complete] Setting paidAt for first time:", payment.paidAt)
     } else {

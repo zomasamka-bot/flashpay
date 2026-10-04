@@ -1120,7 +1120,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return moved
     }
     const txidFromHorizon = moved.txidFromHorizon
-    await fin4BestEffortEvent(ctx.paymentId, appPublicKey, fin4State, "SUBMIT_VERIFIED", { txidFromHorizon, preparedHash, preparedSequence: transaction.sequence })
     console.log("[A2U Stage2] ✓ Horizon submission succeeded:", txidFromHorizon)
     
     // Fetch the typed transaction record from Horizon to read actual fee_charged
@@ -1152,6 +1151,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     })
     if(durableHorizon.outcome!=="RECORDED"&&durableHorizon.outcome!=="REPLAYED")
       return {ok:false,error:"Horizon durable checkpoint not proven",userFacingStatus:"settlement_pending"}
+    await fin4BestEffortEvent(ctx.paymentId, appPublicKey, fin4State, "SUBMIT_VERIFIED", { txidFromHorizon, preparedHash, preparedSequence: transaction.sequence })
     
     console.log("[A2U Stage2] ✓ Fee verified from Horizon:", horizonFeeCharged)
     // Return txid and fee for persisting in executeA2U
@@ -1189,7 +1189,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       } catch {
         // Keep the durable claim when cleanup reads, parsing, or release are uncertain.
       } finally {
-        await fin4BestEffortEvent(ctx.paymentId, ctx.payment.a2uFromAddress, fin4State, "LOCK_RELEASING")
         await walletLock.release()
         await fin4BestEffortEvent(ctx.paymentId, ctx.payment.a2uFromAddress, fin4State, "LOCK_RELEASED")
       }

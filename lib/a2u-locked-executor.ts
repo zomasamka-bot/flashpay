@@ -58,10 +58,57 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
 
-async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Payment): Promise<boolean> {
-  if (!serverConfig.isPiApiKeyConfigured) return false
+function isF24PreA2UTimestampRepairSafe(payment: Payment): boolean {
+  const version = payment.redisProjectionVersion
+  return payment.status === "paid_to_app" && Number.isSafeInteger(version) && Number(version) >= 0 &&
+    payment.a2uPaymentId === undefined && payment.a2uTxid === undefined && payment.a2uPreparedEnvelopeXdr === undefined &&
+    payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined && payment.a2uFromAddress === undefined &&
+    payment.a2uToAddress === undefined && payment.merchantAmount === undefined && payment.horizonFeeCharged === undefined &&
+    payment.appCommission === undefined && payment.appNetImpact === undefined && payment.horizonSuccessAt === undefined &&
+    payment.settledAt === undefined && payment.refundPaymentId === undefined && payment.refundTxid === undefined &&
+    payment.refundStatus === undefined && payment.refundFailureCode === undefined && payment.refundProof === undefined &&
+    payment.settlementFailureState === undefined && payment.retryCount === undefined && payment.lastAttemptAt === undefined &&
+    payment.nextRetryAt === undefined && payment.a2uErrorCode === undefined && payment.a2uErrorMessage === undefined &&
+    payment.a2uErrorBody === undefined && (payment.payerRefundEligible === undefined || payment.payerRefundEligible === false) &&
+    (payment.horizonSuccessFlag === undefined || payment.horizonSuccessFlag === false) &&
+    (payment.piCompletionPending === undefined || payment.piCompletionPending === false) &&
+    (payment.piCompleted === undefined || payment.piCompleted === false) &&
+    (payment.requiresDbReconciliation === undefined || payment.requiresDbReconciliation === false) &&
+    (payment.dbRecorded === undefined || payment.dbRecorded === false)
+}
+
+async function canonicalizeF24DurableTimestamps(paymentId: string, payment: Payment, verifiedAt: string, completedAt: string): Promise<Payment | null> {
+  if (!isF24PreA2UTimestampRepairSafe(payment)) return null
+  const expectedVersion = Number(payment.redisProjectionVersion)
+  const repaired = await redis.eval<[string], number>(`
+local raw=redis.call('GET',KEYS[1]); if not raw then return 0 end
+local ok,current=pcall(cjson.decode,raw); if not ok or type(current)~='table' then return -1 end
+local amount=tonumber(ARGV[4]); local version=tonumber(ARGV[8]); if not amount or not version then return -1 end
+if current.redisProjectionVersion~=version then return 0 end
+if current.id~=ARGV[1] or current.merchantId~=ARGV[2] or current.merchantUid~=ARGV[3] or current.amount~=amount or current.customerAmount~=amount then return -1 end
+if current.piPaymentId~=ARGV[5] or current.u2aTxid~=ARGV[6] or current.payerUid~=ARGV[7] or current.payerUidSource~='verified_u2a' or current.status~='paid_to_app' then return -1 end
+if current.a2uPaymentId~=nil or current.a2uTxid~=nil or current.a2uPreparedEnvelopeXdr~=nil or current.a2uPreparedTxHash~=nil or current.a2uPreparedSequence~=nil or current.a2uFromAddress~=nil or current.a2uToAddress~=nil then return -1 end
+if current.merchantAmount~=nil or current.horizonFeeCharged~=nil or current.appCommission~=nil or current.appNetImpact~=nil or current.horizonSuccessAt~=nil or current.settledAt~=nil then return -1 end
+if current.refundPaymentId~=nil or current.refundTxid~=nil or current.refundStatus~=nil or current.refundFailureCode~=nil or current.refundProof~=nil then return -1 end
+if current.settlementFailureState~=nil or current.retryCount~=nil or current.lastAttemptAt~=nil or current.nextRetryAt~=nil or current.a2uErrorCode~=nil or current.a2uErrorMessage~=nil or current.a2uErrorBody~=nil then return -1 end
+if current.payerRefundEligible==true or current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return -1 end
+current.payerUidCapturedAt=ARGV[9]; current.paidAt=ARGV[10]; current.settlementDispatchRequestedAt=ARGV[10]; current.redisProjectionVersion=version+1
+redis.call('SET',KEYS[1],cjson.encode(current)); return 1
+`, [`payment:${paymentId}`], [payment.id, payment.merchantId, payment.merchantUid, String(payment.customerAmount), payment.piPaymentId!, payment.u2aTxid!, payment.payerUid!, String(expectedVersion), verifiedAt, completedAt])
+  if (repaired !== 1) return null
+  const readbackRaw = await redis.get(`payment:${paymentId}`)
+  if (!readbackRaw) return null
+  let readback: Payment
+  try { readback = (typeof readbackRaw === "string" ? JSON.parse(readbackRaw) : readbackRaw) as Payment } catch { return null }
+  if (readback.id !== paymentId || readback.payerUidCapturedAt !== verifiedAt || readback.paidAt !== completedAt || readback.settlementDispatchRequestedAt !== completedAt) return null
+  console.warn("[F2-4 DURABLE TIMESTAMP HOTPATH REPAIR] canonicalized pre-A2U projection", { paymentId, financialAuthorityMutated: false, financialMovementExecuted: false })
+  return readback
+}
+
+async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Payment): Promise<Payment | null> {
+  if (!serverConfig.isPiApiKeyConfigured) return null
   const durable = await getDurableU2AIngressAuthoritative(paymentId)
-  if (durable.outcome !== "FOUND" || durable.checkpoint.completedAt === null) return false
+  if (durable.outcome !== "FOUND" || durable.checkpoint.completedAt === null) return null
   const d = durable.checkpoint
   if (
     payment.id !== d.paymentId ||
@@ -69,10 +116,8 @@ async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Pay
     payment.amount !== d.customerAmount || payment.customerAmount !== d.customerAmount ||
     payment.piPaymentId !== d.u2aIdentifier || payment.u2aTxid !== d.u2aTxid ||
     payment.payerUid !== d.payerUid || payment.payerUidSource !== "verified_u2a" ||
-    payment.payerUidCapturedAt !== d.verifiedAt || payment.paidAt !== d.completedAt ||
-    payment.settlementDispatchRequestedAt !== d.completedAt ||
     payment.status !== "paid_to_app"
-  ) return false
+  ) return null
 
   let response: Response
   try {
@@ -82,18 +127,22 @@ async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Pay
       cache: "no-store",
       redirect: "error",
     })
-  } catch { return false }
-  if (!response.ok) return false
+  } catch { return null }
+  if (!response.ok) return null
   const dto = asRecord(await response.json().catch(() => null))
   const metadata = dto ? asRecord(dto.metadata) : null
   const transaction = dto ? asRecord(dto.transaction) : null
   const status = dto ? asRecord(dto.status) : null
-  return dto !== null &&
+  const exactPiAuthority = dto !== null &&
     dto.identifier === d.u2aIdentifier && dto.direction === "user_to_app" &&
     dto.amount === d.customerAmount && dto.user_uid === d.payerUid &&
     metadata?.paymentId === paymentId && transaction?.txid === d.u2aTxid && transaction?.verified === true &&
     status?.developer_approved === true && status?.transaction_verified === true && status?.developer_completed === true &&
     status?.cancelled !== true && status?.user_cancelled !== true
+  if (!exactPiAuthority) return null
+
+  if (payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === d.completedAt && payment.settlementDispatchRequestedAt === d.completedAt) return payment
+  return canonicalizeF24DurableTimestamps(paymentId, payment, d.verifiedAt, d.completedAt)
 }
 
 function isSettlementDispatchCandidate(payment: Payment, now: number): boolean {
@@ -288,10 +337,10 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     // binding is the authority for fresh A2U creation in both normal drain and
     // recovery. Legacy Redis bearer values are tolerated but never consulted.
     let merchantAuthority: "durable_u2a" = "durable_u2a"
-    if (!latestPayment.a2uPaymentId && !(await verifyF24DurableMerchantAuthority(paymentId, latestPayment))) {
-      return { ok: false, status: 409, error: "Durable merchant authority could not be verified" }
-    }
     if (!latestPayment.a2uPaymentId) {
+      const verifiedPayment = await verifyF24DurableMerchantAuthority(paymentId, latestPayment)
+      if (!verifiedPayment) return { ok: false, status: 409, error: "Durable merchant authority could not be verified" }
+      latestPayment = verifiedPayment
       console.log("[R101-6 DURABLE MERCHANT AUTHORITY] verified", { paymentId, merchantId: latestPayment.merchantId, merchantUid: latestPayment.merchantUid, recoveryOperation: params.recoveryOperation ?? "normal" })
     }
 

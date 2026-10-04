@@ -4,7 +4,8 @@ import crypto from "crypto"
 import { isRedisConfigured, redis } from "./redis"
 
 const PROCESS_ID = crypto.randomUUID()
-const PREFIX = "flashpay:cert:fin4:v1:"
+const PREFIX = "flashpay:cert:fin4:r4:v1:"
+const LAUNCH_TTL_SECONDS = 3600
 const BARRIER_TIMEOUT_MS = 20_000
 const POLL_MS = 100
 
@@ -25,6 +26,34 @@ function safeWallet(sourceWallet: unknown): sourceWallet is string {
   return typeof sourceWallet === "string" && /^[A-Z0-9]{20,80}$/.test(sourceWallet)
 }
 
+function launchKey(runId: string): string {
+  return `${PREFIX}${runId}:launch-claimed`
+}
+
+export function fin4AuthorizeRunId(providedRaw: string | null): string | null {
+  const expected = process.env.FLASHPAY_FIN4_RUN_ID?.trim()
+  const provided = providedRaw?.trim()
+  if (process.env.VERCEL_ENV !== "production" || process.env.FLASHPAY_FIN4_ARMED !== "1" || !expected || !provided) return null
+  const a = Buffer.from(expected), b = Buffer.from(provided)
+  return a.length === b.length && crypto.timingSafeEqual(a,b) ? expected : null
+}
+
+export async function fin4ClaimLaunchForArmedRun(runId: string): Promise<{ paymentA: string; paymentB: string }> {
+  const paymentA = process.env.FLASHPAY_FIN4_PAYMENT_A?.trim() ?? ""
+  const paymentB = process.env.FLASHPAY_FIN4_PAYMENT_B?.trim() ?? ""
+  if (fin4AuthorizeRunId(runId) !== runId || !paymentA || !paymentB || paymentA === paymentB || !isRedisConfigured) {
+    throw new Error("FIN4_FAIL_CLOSED_LAUNCH_NOT_ARMED")
+  }
+  const claimed = await redis.set(launchKey(runId), "1", { nx: true, ex: LAUNCH_TTL_SECONDS })
+  if (claimed !== "OK") throw new Error("FIN4_FAIL_CLOSED_LAUNCH_ALREADY_CLAIMED")
+  console.log("[FIN-4 LIVE] controlled launch claimed", { runId, paymentA, paymentB, financialAuthorityMutated: false })
+  return { paymentA, paymentB }
+}
+
+export async function fin4RequireControlledLaunch(runId: string): Promise<void> {
+  if (!isRedisConfigured || await redis.get<string>(launchKey(runId)) !== "1") throw new Error("FIN4_FAIL_CLOSED_CONTROLLED_LAUNCH_REQUIRED")
+}
+
 async function emit(cfg: Fin4Config, event: Omit<Fin4Event,"ts"|"runId"|"processId">): Promise<void> {
   const record: Fin4Event = { ts: new Date().toISOString(), runId: cfg.runId, processId: PROCESS_ID, ...event }
   await redis.rpush(`${PREFIX}${cfg.runId}:events`, JSON.stringify(record))
@@ -36,6 +65,10 @@ export async function fin4BeforeWalletLock(paymentId: string, sourceWallet: unkn
   if (!cfg) return null
   if (!isRedisConfigured || !safeWallet(sourceWallet)) throw new Error("FIN4_FAIL_CLOSED_INVALID_RUNTIME")
   const invocationId = crypto.randomUUID()
+  if (await redis.get<string>(launchKey(cfg.runId)) !== "1") {
+    await emit(cfg,{ event:"CONTROLLED_LAUNCH_REQUIRED", paymentId, sourceWallet, invocationId })
+    throw new Error("FIN4_FAIL_CLOSED_CONTROLLED_LAUNCH_REQUIRED")
+  }
   const participantKey = `${PREFIX}${cfg.runId}:participant:${paymentId}`
   const releasedKey = `${PREFIX}${cfg.runId}:barrier-released`
   if (await redis.get<string>(releasedKey) === "1") {
@@ -82,22 +115,6 @@ export async function fin4BestEffortEvent(paymentId: string, sourceWallet: unkno
   } catch (error) {
     console.warn("[FIN-4 LIVE] best-effort telemetry unavailable", { paymentId, event, error: String(error) })
   }
-}
-
-export async function fin4ResetBarrierForArmedRun(runId: string): Promise<{ paymentA: string; paymentB: string }> {
-  const paymentA = process.env.FLASHPAY_FIN4_PAYMENT_A?.trim() ?? ""
-  const paymentB = process.env.FLASHPAY_FIN4_PAYMENT_B?.trim() ?? ""
-  if (process.env.VERCEL_ENV !== "production" || process.env.FLASHPAY_FIN4_ARMED !== "1" ||
-      runId !== process.env.FLASHPAY_FIN4_RUN_ID?.trim() || !paymentA || !paymentB || paymentA === paymentB || !isRedisConfigured) {
-    throw new Error("FIN4_TRIGGER_FAIL_CLOSED_NOT_ARMED")
-  }
-  await Promise.all([
-    redis.del(`${PREFIX}${runId}:participant:${paymentA}`),
-    redis.del(`${PREFIX}${runId}:participant:${paymentB}`),
-    redis.del(`${PREFIX}${runId}:barrier-released`),
-  ])
-  console.log("[FIN-4 LIVE] barrier reset", { runId, paymentA, paymentB, financialAuthorityMutated: false })
-  return { paymentA, paymentB }
 }
 
 export function fin4ArmedPaymentForRole(runId: string, role: unknown): string {

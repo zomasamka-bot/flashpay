@@ -1,35 +1,75 @@
 {
-  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R2",
+  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R4",
   "date": "2026-10-04",
-  "baseline_production_git_sha": "2e06c630fdb38a7bea2f6a325d9b7f0d301ddc4f",
-  "classification": "CERTIFICATION_INSTRUMENTATION_ONLY_NO_NEW_FINANCIAL_AUTHORITY",
-  "live_result": "ATTEMPT_1_FAILED_CLOSED_PRE_HORIZON; R2_NOT_YET_DEPLOYED",
+  "baseline_r2_production": {
+    "git_sha": "9aae277f6ef496dbcd2d7dd7318ec25df45eaf10",
+    "deployment_id": "dpl_7Rx3XWsWUEZon31CtkFEyoqGxCmc",
+    "state": "READY"
+  },
+  "classification": "CONFIRMED_PRE_A2U_LIVENESS_DEFECT_FIX_PLUS_CERTIFICATION_INSTRUMENTATION_HARDENED_NO_NEW_FINANCIAL_AUTHORITY",
+  "live_result": "R2_ATTEMPT_2_FAILED_CLOSED_PRE_HORIZON; R4_NOT_YET_DEPLOYED",
   "armed_payments": {
     "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
     "payment_b": "e3b83ecd-9f5e-4963-b75f-e3ef058cf095"
   },
-  "attempt_1": {
-    "result": "FAIL_CLOSED_DISTINCT_PROCESS_BARRIER_TIMEOUT",
-    "stage": "pre_prepared",
-    "horizon_submit_entered": false,
-    "financial_movement_from_attempt": false
+  "r2_attempt_2": {
+    "time_utc": "2026-10-04T18:12:47Z",
+    "payment_a": {
+      "result": "FAIL_CLOSED_DISTINCT_PROCESS_BARRIER_TIMEOUT",
+      "barrier_arrived": "2026-10-04T18:12:50.382Z",
+      "barrier_timeout": "2026-10-04T18:13:10.401Z",
+      "stage": "pre_prepared",
+      "submit_enter_seen": false
+    },
+    "payment_b": {
+      "result": "STOPPED_BEFORE_STAGE1_AND_BEFORE_FIN4_BARRIER",
+      "last_proven_runtime_boundary": "payment operation lock acquired; refund checkpoint lookup absent",
+      "source_next_boundary": "verifyF24DurableMerchantAuthority"
+    },
+    "horizon_submit_enter_seen": false,
+    "financial_movement_proven_from_attempt": false
   },
-  "r2_changes": {
-    "targeted_trigger": "POST /api/certification/fin4-trigger; action reset or run role A/B only; payment IDs derived only from armed env",
-    "trigger_auth": "exact FLASHPAY_FIN4_RUN_ID header match using timingSafeEqual",
-    "distinct_invocations": "A and B are separate HTTP requests; barrier still requires distinct process IDs and same source wallet",
-    "post_movement_telemetry": "best-effort/nonthrowing so it cannot block durable Horizon checkpoint",
-    "wallet_release_telemetry": "best-effort/nonthrowing so it cannot block walletLock.release",
+  "confirmed_root_cause": {
+    "class": "PRE_A2U_DURABLE_TIMESTAMP_HOTPATH_DRIFT",
+    "proof": [
+      "recordSettlementU2AVerifiedCheckpoint persists PostgreSQL u2a_verified_at before Pi /complete",
+      "the /complete hot path then generated payerUidCapturedAt with a later new Date()",
+      "recordSettlementU2ACompletedCheckpoint persists PostgreSQL u2a_completed_at before Redis projection",
+      "the /complete hot path then generated paidAt with another new Date()",
+      "verifyF24DurableMerchantAuthority requires exact payerUidCapturedAt==verifiedAt and paidAt/settlementDispatchRequestedAt==completedAt before Stage1",
+      "DR34 canonicalization existed in the durable rediscovery healer, but not in the direct /complete hot path"
+    ],
+    "impact": "fresh paid_to_app settlement dispatch can fail closed until a later durable rediscovery pass canonicalizes the Redis projection; no unsafe movement is authorized"
+  },
+  "r3_changes": {
+    "complete_hotpath": "pre-A2U /complete reads the exact durable U2A checkpoint and seeds Redis payerUidCapturedAt/paidAt from PostgreSQL verifiedAt/completedAt",
+    "existing_projection_repair": "inside the existing payment-operation lock, F2-4 may canonicalize only the three pre-A2U timestamps after exact PostgreSQL identity plus exact Pi GET proof; advanced Settlement/Refund/Horizon evidence blocks repair",
+    "projection_fence": "timestamp repair requires the exact Redis projection version and increments it atomically",
+    "split_instance_trigger": "A and B use separate Vercel route functions fin4-trigger-a and fin4-trigger-b",
+    "orchestrator": "one deployment-specific orchestrator launches the two split routes concurrently with Promise.all",
+    "one_shot": "launch is claimed with Redis SET NX and duplicate launch fails closed; no blind collision retry",
+    "pre_launch_hold": "armed A/B fail closed before wallet lock until the controlled launch is claimed",
     "financial_lock_implementation_changed": false,
     "horizon_submit_implementation_changed": false,
     "postgres_financial_authority_changed": false,
-    "payment_amount_or_recipient_mutation": false
+    "payment_amount_or_recipient_mutation": false,
+    "commission_semantics_changed": false
   },
   "verification": {
     "full_financial_recovery_build_verifier": "PASS",
-    "fin4_r2_static_binding": "PASS",
-    "fin4_r2_mutations": {"expected_failures": 11, "unexpected_passes": 0},
-    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R2"
+    "typescript_transpile": {
+      "status": "PASS",
+      "files": 275,
+      "changed_typescript_files": 9
+    },
+    "source_manifest": "PASS",
+    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4",
+    "fin4_r4_static_binding": "PASS",
+    "fin4_r4_mutations": {
+      "expected_failures": 19,
+      "unexpected_passes": 0
+    },
+    "clean_zip_hygiene": "PASS"
   },
   "required_live_pass_predicates": {
     "two_distinct_payments": true,
@@ -42,5 +82,15 @@
     "duplicate_movement_count": 0,
     "lost_movement_count": 0,
     "second_progresses_after_release_or_recovery": true
+  },
+  "r4_hardening": {
+    "cert_namespace": "flashpay:cert:fin4:r4:v1",
+    "submit_verified_order": "best-effort telemetry occurs only after PostgreSQL durable Horizon checkpoint is RECORDED/REPLAYED",
+    "wallet_release_order": "real walletLock.release executes before FIN4 LOCK_RELEASED telemetry; LOCK_RELEASING telemetry removed",
+    "telemetry_can_block_durable_horizon_checkpoint": false,
+    "telemetry_can_block_wallet_lock_release": false,
+    "financial_lock_implementation_changed": false,
+    "horizon_submit_implementation_changed": false,
+    "financial_authority_added": false
   }
 }
