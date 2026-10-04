@@ -141,3 +141,13 @@ The certification suite now separates four evidence classes: `PRODUCTION_ENTRYPO
 A mandatory production call-graph binding gate verifies 12 critical static/dynamic source bindings, including the real Settlement ingress/recovery chain, Settlement submit/replay orchestration, the Refund transient worker through `refund-executor` and dynamic `refund-blockchain-submit`, and production CAS projection bindings. Four topology mutations that deliberately detached these paths all produced expected build-verifier failures (4/4; unexpected passes 0).
 
 Reviewer reconciliation: the concern that the earlier certificate could blur model evidence and production binding was a confirmed evidence-contract proof gap and is now fixed. The broader claim that the examined recovery implementation is an unused second money engine is not supported by the production source call graph: recovery orchestrators re-enter the shared financial executors, while pure evidence/decision modules are classified separately.
+
+## 2026-10-04 — Emergency / stuck-payment rescue audit
+
+Production baseline: `a637bff53eebad3efb7fb4a2125c362fc45bed4d` / `dpl_2SjsB74r6GPbZ4YcBCRD7FcUNNbK` READY.
+
+Reviewer gap was audited against the complete operator/emergency surface. The legacy `/api/emergency/clear-stuck-payment` route is inert and fail-closed. One narrow operational proof defect was confirmed in the live Operations queue prune path: `prune_terminal` did not reject every prepared-settlement field and did not re-prove PostgreSQL transaction/receipt absence at POST time. This did not expose a direct money movement or delete financial evidence, but could suppress recovery indexing for an inconsistent case requiring reconciliation.
+
+Narrow fix: queue prune now requires a terminal `failed/cancelled` projection with zero settlement/refund execution evidence (including prepared hash/sequence/XDR, addresses, dispatch, reconciliation and completion flags), Refund checkpoint `ABSENT`, and a fresh PostgreSQL proof of zero transaction and receipt rows. Any uncertainty blocks. `dismiss_reviewed` is disabled so unresolved financial cases cannot be hidden from the operator console. The UI only renders queue removal for a proven prune candidate.
+
+No settlement/refund submit, wallet lock, XOR, CAS or accounting kernel was modified. Mandatory gate: `EMERGENCY_RESCUE_SAFETY=PASS adversarial=21 runtime_bindings=8 fail_closed=true`. Mutation suite: 4/4 expected failures, 0 unexpected passes.

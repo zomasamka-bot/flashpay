@@ -6,6 +6,7 @@ import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { isRedisConfigured, redis } from "@/lib/redis"
 import type { Payment } from "@/lib/types"
 import { appendOperationalQueueAuditEvent } from "@/lib/operational-audit"
+import { isTerminalNoMovementProjectionCandidate } from "@/lib/operational-terminal-prune-rules"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -64,6 +65,16 @@ async function readPayment(paymentId: string): Promise<Payment | null> {
   return payment && payment.id === paymentId ? payment : null
 }
 
+async function proveNoCommittedFinancialRows(paymentId: string): Promise<boolean> {
+  const rows = await query(`SELECT
+    (SELECT COUNT(*)::int FROM transactions WHERE payment_id=$1) AS transaction_count,
+    (SELECT COUNT(*)::int FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id=$1 OR r.u2a_identifier=$1) AS receipt_count`, [paymentId])
+  const row = Array.isArray(rows) && rows.length === 1 && rows[0] && typeof rows[0] === "object" ? rows[0] as Record<string, unknown> : null
+  if (!row) return false
+  const transactionCount = Number(row.transaction_count), receiptCount = Number(row.receipt_count)
+  return Number.isSafeInteger(transactionCount) && transactionCount === 0 && Number.isSafeInteger(receiptCount) && receiptCount === 0
+}
+
 async function buildReview(payment: Payment) {
   const paymentId = payment.id
   const refund = await findRefundCheckpointByPaymentId(paymentId)
@@ -97,7 +108,7 @@ async function buildReview(payment: Payment) {
     database: dbEvidence, refund: refund.state === "present" ? { state: "present", status: refund.checkpoint.status, stage: refund.checkpoint.stage, refundId: refund.checkpoint.refundId, refundPaymentId: refund.checkpoint.refundPaymentId ?? null, refundTxid: refund.checkpoint.refundTxid ?? null, amount: refund.checkpoint.amount, attemptCount: refund.checkpoint.attemptCount, lastErrorCode: refund.checkpoint.lastErrorCode ?? null, lastErrorMessage: refund.checkpoint.lastErrorMessage ?? null, updatedAt: refund.checkpoint.updatedAt } : { state: refund.state },
     action: {
       allowed: false,
-      canPruneFromQueue: (payment.status === "cancelled" || payment.status === "failed") && !payment.paidAt && !payment.u2aTxid && !payment.a2uPaymentId && !payment.a2uTxid && payment.horizonSuccessFlag !== true && payment.piCompleted !== true && payment.dbRecorded !== true && !payment.refundPaymentId && !payment.refundTxid && refund.state === "absent",
+      canPruneFromQueue: isTerminalNoMovementProjectionCandidate(payment) && refund.state === "absent" && dbEvidence.state === "absent",
       message: verdict === "Final" ? "No action required." : verdict === "Recovering" ? "Recovery is automatic. Manual execution is intentionally unavailable while the authoritative recovery path owns this payment." : "No financial action is exposed until the existing Plan 7 authority can prove a safe transition. Unknown/conflict always fails closed."
     } }
 }
@@ -181,15 +192,10 @@ export async function POST(request: NextRequest) {
     if (!payment) return NextResponse.json({ error: "Canonical payment not found" }, { status: 404 })
     const refund = await findRefundCheckpointByPaymentId(payment.id)
     if (body.action === "dismiss_reviewed") {
-      const requestId = request.headers.get("x-vercel-id") || crypto.randomUUID()
-      await redis.sadd(DISMISSED_KEY, payment.id)
-      await appendOperationalQueueAuditEvent({ actorUid: auth.uid, requestId, paymentId: payment.id, action: "queue.dismiss_reviewed", reason: "Owner dismissed a reviewed payment from the Operations console only; recovery indexes and financial evidence were not changed" })
-      return NextResponse.json({ success: true, paymentId: payment.id, dismissed: true, requestId }, { headers: { "Cache-Control": "no-store" } })
+      return NextResponse.json({ error: "Dismissal of active/reviewed financial cases is disabled; unresolved evidence must remain operator-visible" }, { status: 409 })
     }
-    const safeTerminal = (payment.status === "cancelled" || payment.status === "failed") &&
-      !payment.paidAt && !payment.u2aTxid && !payment.a2uPaymentId && !payment.a2uTxid && !payment.a2uPreparedTxHash &&
-      payment.horizonSuccessFlag !== true && payment.piCompleted !== true && payment.dbRecorded !== true &&
-      !payment.refundPaymentId && !payment.refundTxid && refund.state === "absent"
+    const dbNoFinancialRows = await proveNoCommittedFinancialRows(payment.id)
+    const safeTerminal = isTerminalNoMovementProjectionCandidate(payment) && refund.state === "absent" && dbNoFinancialRows
     if (!safeTerminal) {
       return NextResponse.json({ error: "Queue removal is blocked because terminal no-movement evidence is not proven" }, { status: 409 })
     }

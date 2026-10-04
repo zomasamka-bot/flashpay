@@ -10,7 +10,7 @@ b317e09a8ea19f25d4af58244dc7e003c447a203b5c261885147ced2c93687bd  ./app/api/merc
 82c7a05de53c013923f53612d0d172b4d06dc6d636fad13fded334ccac9cee47  ./app/api/operations/infrastructure-health/route.ts
 826a4c4f8ba0191295b68dd3ba85d3df23f47639c2f09fa0e4ada96983af1d07  ./app/api/operations/overview/route.ts
 437ab03ac540f4e7c5ec9619a2758035bf475db0bdfcd31b98acd639998dddad  ./app/api/operations/payment-diagnostic/route.ts
-2129900eff1ae36b74f1ce77267c3d259f4dfb25263763a4e709cdf1214ae2db  ./app/api/operations/payment-review/route.ts
+b1e6745074ffc589ddd1728972b7ca31ae4567a043e6e1d2d91ccd0dbc305d0d  ./app/api/operations/payment-review/route.ts
 380276df9075336a0a64d5b73e4c8ef7886a840e9e61455e5eb784b580a989de  ./app/api/operations/r1001-accounting-truth/route.ts
 1f2247b22708e9dc4f10855ebb5cde684c6aa1fcf6d24e4fd1b703004c7a7523  ./app/api/operations/r10015-financial-snapshot/route.ts
 f2f805207c74fbc1f65dce05eccd9b8d0a1e489640443295e51937a0ded44fad  ./app/api/owner/verify-uid/route.ts
@@ -38,7 +38,7 @@ ffd5522de3cc0930929f31c2eb38179c3a3c700977f274d50434bb66aefe5d97  ./app/api/tran
 08675bac072a2ee8f07d58f7e8e468c8ba2d092786381a8026cfd2b1f6f22a91  ./app/control-panel/page.tsx
 abba8e091c97cb99f6bcac6d66f0357befe89bf460240e3f7c40bd4bdc14a7e1  ./app/create/page.tsx
 fc02f57a76f30bc2a5b122fe41c23241df6724880382811d1bdaa07db86938f3  ./app/diagnostics/page.tsx
-e8f439f8c27cf2782feb47d61433c6633f8310a75d8df9fe9645fd2ed55ee948  ./app/emergency/page.tsx
+36319f1b4c4b4f06c4ba003662bac834685744bfa72bed5984bb426dbe5a3b92  ./app/emergency/page.tsx
 c936275f2ec768920a71c3923d1650e863749f6f26caad9dbb7f488955276895  ./app/globals.css
 7f006694d207e7c8d6ca3e2196a9b3a2591afacd521d057206e9328534f62c8b  ./app/layout.tsx
 1a2fb3917d5b4615927cfa27f97e3673f945f6140bcb100ed0f13afcdbcd0f82  ./app/merchant/payments/page.tsx
@@ -57,7 +57,8 @@ eaeccabb9cbc2773997915d499f1d87ea9f3b8c15c7b46539d966c2b2e3dced2  ./app/receipts
 da94ab50e3675a1e47754a9738f9e929c18dbb9f7233f2bbd8522b329140be3a  ./app/transactions/page.tsx
 44e766ae018617090ed51a5a7e76fd05ae86c52b44140d27d4912dc71349e61d  ./certification/CAPACITY_EVIDENCE.json
 db8e87569e33812fbd0c0a2cfd6124f21e11b1ecfeee8563ae638b41e9ddbffc  ./certification/DR11_REFUND_RACE_UI_RECOVERY_EVIDENCE.json
-de70e83f9fb43e2361b0c92a5cc63d030271a7ea7f0f50ce3c3ce57d64c67684  ./certification/FINAL_CERTIFICATION.md
+9d3d20e5e790458a5c80628ad62d8813865e76ab62315f8e76cb392138f080ca  ./certification/EMERGENCY_STUCK_PAYMENT_RESCUE_AUDIT_EVIDENCE.json
+05a81ef856bd8d67e86ddeccbf975179b63513b21b1b47058075701cdb09ff0d  ./certification/FINAL_CERTIFICATION.md
 8725583301a5fa92c9845d91a213e25162498160a1e41e04284fa64800ecb6f6  ./certification/PRODUCTION_CALLGRAPH_CERTIFIER_BINDING_EVIDENCE.json
 705c728a8ff3fac9396dca2aec14bcc56c0df33513c673c69cc33b35a5173954  ./certification/REDIS_PROJECTION_CAS_EVIDENCE.json
 634163c094a9287a0c7f4af4bb672bf679bfb616db2c3be626d8f7c958a66829  ./certification/SETTLEMENT_REFUND_XOR_EVIDENCE.json
@@ -197,6 +198,7 @@ e86a362dd8fee165e9221ada77396235128fb488b662585acbe5128fbd757d8d  ./lib/i18n/dic
 ee6f4040428b3302aec1f8b966c0ac59acb1e075d8a21729fda7f2bcbde212d7  ./lib/i18n/load-dictionary.ts
 4db5831622271074e9a62d6d9b1e7cb3e1d05df5a8c272375ec1bf86fef2ac8f  ./lib/merchant-auth.ts
 86ecd2646e157726446f4895e62af54e3d3d91b987e424b087cd91295abb83a6  ./lib/operational-audit.ts
+5216e15bac6bf830730b8bea4a3510ccda8d1bd6fbe235cc147a092ce8f0faca  ./lib/operational-terminal-prune-rules.ts
 155077fb08cdac77d0d45a234ee1b77c7d6094404172018ec36072fd05917c60  ./lib/operations.ts
 5b0a62836b9d01649fc4baaf38949c44768bcfca927c33cb2882590b22b42dc1  ./lib/owner-auth.ts
 38d8de50fcc1a4f7742440985e6388a835a44fb630de251c20230cc8fa965223  ./lib/owner-server-auth.ts
@@ -255,9 +257,10 @@ d7c39d978af643ba9525de6fb8171e0f834882db4110c82ecad0df3f4f69551a  ./public/place
 14be0c7aa11cca1e78f0966176b286a6d36d00ec64be027775dfeb33d8e2dfdf  ./public/placeholder.jpg
 456ca101af0b430ac7a4575f13f44b0c4544275ca8b9ae855e0fa1beaa0f540b  ./public/placeholder.svg
 f2f4762d405ec0cce1182233fda114dfc460c582f0975a44b8561360256897b1  ./public/validation-key.txt
-40406852945d5efcfad9668a8f7fce7e29dcd79b76adc9c2a86b812010719226  ./scripts/run-financial-recovery-build-verifier.mjs
+edd46cd945d850a4dbaca91356b57fefe696db12740e651039e0625ad354c2b0  ./scripts/run-financial-recovery-build-verifier.mjs
 7affa59ab8c3577987b1eeda625e3752c2e7d37cbed3a3380d161b2eb5877985  ./scripts/verify-dr11-orphan-a2u-refund-recovery.ts
 15ca00678fc18d189d248e8cd005075e4f02a7d3e2335c330000fa26f2698c7d  ./scripts/verify-dr11-refund-race-ui-binding.ts
+d3ef77c4d5ce12f47d0973cbbf312bdc5e1a9a44b26df751dec8f11d3c568511  ./scripts/verify-emergency-stuck-payment-rescue-safety.ts
 b7af22e089db7160088c7d5bc865ea4a160158cd414859a2d59d262fa508ff0d  ./scripts/verify-financial-recovery-a2u-proof.ts
 e7e5431465d66b0bac46dbaab05d5e482dc0ef39a4513dbcfee028d84ea41dab  ./scripts/verify-financial-recovery-crash-policy.ts
 44b0c1a50a9485d8651368e1bc5eeede398a7bf5dc255497c341896e2cdf04e9  ./scripts/verify-financial-recovery-financial-invariants.ts

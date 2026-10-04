@@ -1,0 +1,56 @@
+{
+  "certification_date": "2026-10-04",
+  "scope": "Emergency / stuck-payment rescue and operator recovery surfaces",
+  "production_baseline": {
+    "git_sha": "a637bff53eebad3efb7fb4a2125c362fc45bed4d",
+    "vercel_deployment": "dpl_2SjsB74r6GPbZ4YcBCRD7FcUNNbK",
+    "state": "READY",
+    "input_zip": "FlashPay_DR11_REFUND_RECOVERY_PLAN_D_FIXED_BYTE_READY_CLEAN_2026-10-03.zip",
+    "input_zip_sha256": "8945b4b4e2733bf311e6e71c139c45e1ea9885e18ed053340f6e3e4aebe0f27b"
+  },
+  "reviewer_gap": "Emergency/stuck-payment rescue path was not independently certified against financial truth, recovery ownership and prepared-submit evidence.",
+  "findings": [
+    {
+      "classification": "FALSE_POSITIVE",
+      "surface": "app/api/emergency/clear-stuck-payment/route.ts",
+      "evidence": "Legacy route is owner-authenticated and intentionally inert; GET/POST return fail-closed 409 and perform no payment delete/status rewrite/Pi/Horizon submission."
+    },
+    {
+      "classification": "CONFIRMED_OPERATIONAL_PROOF_DEFECT_FIXED",
+      "surface": "app/api/operations/payment-review/route.ts prune_terminal",
+      "defect": "Terminal queue-prune authorization did not reject every prepared-settlement evidence field and did not re-prove PostgreSQL transaction/receipt absence at action time.",
+      "impact": "Could remove an inconsistent failed/cancelled payment from recovery indexes even though evidence requiring reconciliation remained. No financial record deletion or direct money movement was exposed.",
+      "fix": "Fail closed unless terminal failed/cancelled projection has zero movement/prepared/reconciliation/refund evidence, Refund checkpoint is ABSENT, and PostgreSQL proves transaction_count=0 and receipt_count=0 in the POST authorization path."
+    },
+    {
+      "classification": "OPERATIONAL_VISIBILITY_DEFECT_FIXED",
+      "surface": "dismiss_reviewed",
+      "defect": "Owner could hide unresolved Recovering/Conflict/Unknown cases from the Operations view without changing recovery authority.",
+      "fix": "dismiss_reviewed now returns 409; unresolved financial cases remain operator-visible. UI exposes destructive removal only when canPruneFromQueue is proven."
+    }
+  ],
+  "financial_kernel_delta": false,
+  "changed_runtime_surfaces": [
+    "app/api/operations/payment-review/route.ts",
+    "app/emergency/page.tsx",
+    "lib/operational-terminal-prune-rules.ts"
+  ],
+  "unchanged_financial_submit_surfaces": [
+    "lib/a2u-executor.ts",
+    "lib/a2u-locked-executor.ts",
+    "lib/refund-executor.ts",
+    "lib/refund-blockchain-submit.ts",
+    "lib/pi-wallet-submit-lock.ts",
+    "lib/payment-projection-cas.ts"
+  ],
+  "mandatory_gate": "EMERGENCY_RESCUE_SAFETY=PASS adversarial=21 runtime_bindings=8 fail_closed=true",
+  "mutation_sensitivity": {
+    "prepared_sequence_guard_removed": "EXPECTED_FAIL",
+    "postgres_reproof_removed": "EXPECTED_FAIL",
+    "dismiss_failclosed_removed": "EXPECTED_FAIL",
+    "unresolved_ui_removal_exposed": "EXPECTED_FAIL",
+    "expected_failures": 4,
+    "unexpected_passes": 0
+  },
+  "result": "PASS_AFTER_NARROW_FIX"
+}
