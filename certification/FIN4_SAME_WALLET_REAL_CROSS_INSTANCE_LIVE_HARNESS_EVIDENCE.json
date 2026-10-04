@@ -1,5 +1,5 @@
 {
-  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R4C",
+  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R4E",
   "date": "2026-10-04",
   "baseline_r2_production": {
     "git_sha": "9aae277f6ef496dbcd2d7dd7318ec25df45eaf10",
@@ -7,7 +7,7 @@
     "state": "READY"
   },
   "classification": "CONFIRMED_PRE_A2U_LIVENESS_DEFECT_FIX_PLUS_CERTIFICATION_INSTRUMENTATION_HARDENED_NO_NEW_FINANCIAL_AUTHORITY",
-  "live_result": "R4C_LAUNCH_FAILED_PRE_BARRIER_DUE_TO_VERCEL_DEPLOYMENT_PROTECTION_401_R4D_NOT_YET_EXECUTED",
+  "live_result": "R4D1_LAUNCH_FAILED_PRE_BARRIER_ON_CROSS_FUNCTION_CLAIM_VISIBILITY_R4E_NOT_YET_EXECUTED",
   "armed_payments": {
     "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
     "payment_b": "e3b83ecd-9f5e-4963-b75f-e3ef058cf095"
@@ -59,11 +59,10 @@
     "full_financial_recovery_build_verifier": "PASS",
     "typescript_transpile": {
       "status": "PASS",
-      "files": 275,
-      "changed_typescript_files": 9
+      "files": 276
     },
-    "source_manifest": "PASS",
-    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4C",
+    "source_manifest": "PASS_315_PATHS",
+    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4E",
     "fin4_r4_static_binding": "PASS",
     "fin4_r4_mutations": {
       "expected_failures": 23,
@@ -72,10 +71,25 @@
     "clean_zip_hygiene": "PASS",
     "targeted_typescript_contract": "PASS: ten-ARGV Redis tuple + explicit nullable completedAt narrowing in locked helper and /complete hot path",
     "dependencyless_differential_tsc": "PASS_WITH_EXPECTED_ENV_NOISE: zero new semantic diagnostics in changed files vs R2 READY baseline; new diagnostics limited to missing next/server and Node Buffer types caused by absent local node_modules/@types",
-    "fin4_static_binding": "PASS_R4D",
+    "fin4_static_binding": "PASS_R4E",
     "fin4_mutations": {
-      "expected_failures": 25,
+      "expected_failures": 49,
       "unexpected_passes": 0
+    },
+    "fin4_r4e_capability_model": {
+      "status": "PASS",
+      "cases": 9,
+      "role_scope": true,
+      "payment_scope": true,
+      "deployment_scope": true,
+      "expiry": true,
+      "tamper_rejected": true,
+      "exact_shape": true
+    },
+    "targeted_semantic_typecheck": {
+      "status": "PASS",
+      "files": 4,
+      "scope": "R4E fin4-live-certification + orchestrator + A/B routes with exact minimal dependency stubs and Node types"
     }
   },
   "required_live_pass_predicates": {
@@ -121,7 +135,7 @@
     "fix": "after FOUND discrimination, bind const completedAt=d.completedAt and fail closed when null before equality checks or canonicalize call; mirror the same explicit narrowing in /api/pi/complete durable hot-path so a second hidden nullable error cannot surface next",
     "financial_semantics_changed_by_build_fix": false
   },
-  "revision": "R4D",
+  "revision": "R4E",
   "r4c_failed_launch": {
     "timestamp": "2026-10-04T19:38:24Z",
     "a_status": 401,
@@ -140,5 +154,58 @@
     "a_b_role_route_delta": false,
     "new_one_shot_namespace": true,
     "reason": "preserve failed R4C launch claim as evidence; do not delete/reset it"
+  },
+  "r4d1_deployment_and_attempt": {
+    "deployment_id": "dpl_EernAmJTf5jmCQnptZFbt2bAgMgu",
+    "git_sha": "cba011da00105052f6f5b8747368b46aa044756c",
+    "vercel_state": "READY",
+    "read_only_bypass_preflight": {
+      "timestamp_utc": "2026-10-04T19:57:50Z",
+      "http_status": 200,
+      "automation_bypass_present": true,
+      "financial_authority_mutated": false
+    },
+    "launch_attempt": {
+      "timestamp_utc": "2026-10-04T19:58:39Z",
+      "orchestrator_launch_claimed": true,
+      "split_a_status": 409,
+      "split_b_status": 409,
+      "split_a_error": "FIN4_FAIL_CLOSED_CONTROLLED_LAUNCH_REQUIRED",
+      "split_b_error": "FIN4_FAIL_CLOSED_CONTROLLED_LAUNCH_REQUIRED",
+      "barrier_arrived": false,
+      "submit_enter": false,
+      "submit_verified": false,
+      "financial_movement_executed_by_attempt": false
+    },
+    "classification": "CERTIFICATION_HARNESS_COORDINATION_DEFECT_NOT_FINANCIAL_KERNEL_DEFECT",
+    "proven_defect": "orchestrator SET NX launch claim succeeded, but both split functions failed closed on the immediate Redis launch-claim read before recovery entered the FIN4 barrier",
+    "not_claimed": "no assertion is made about the underlying Redis/provider consistency mechanism; only the observed cross-function claim-visibility failure is treated as proven"
+  },
+  "r4e": {
+    "fresh_namespace": "flashpay:cert:fin4:r4e:v1:",
+    "old_claim_handling": "R4D/R4D1 claims are preserved as evidence; no delete or reset path is introduced",
+    "orchestrator_capability": "after successful one-shot launch claim, orchestrator issues separate HMAC-SHA256 capabilities for A and B",
+    "capability_scope": [
+      "runId",
+      "role",
+      "paymentId",
+      "exact deployment host",
+      "issued-at",
+      "expiry",
+      "nonce",
+      "version"
+    ],
+    "capability_ttl_ms": 60000,
+    "signature_secret": "VERCEL_AUTOMATION_BYPASS_SECRET server-side only; secret and capability tokens are not logged or returned",
+    "role_validation": "A/B derive the armed payment from environment, validate exact role/payment/run/deployment/time/signature, consume capability once with atomic Redis SET NX, and bind it through AsyncLocalStorage to the recovery invocation",
+    "financial_boundary_gate": "fin4BeforeWalletLock requires the verified invocation capability from AsyncLocalStorage; it no longer reads the launch claim as authorization",
+    "redis_role": "launch claim, capability-use NX, barrier and telemetry are certification coordination/audit only; Redis remains non-financial authority",
+    "financial_kernel_delta": false,
+    "horizon_submit_implementation_changed": false,
+    "wallet_lock_implementation_changed": false,
+    "settlement_refund_authority_changed": false,
+    "payment_amount_recipient_commission_changed": false,
+    "live_status": "NOT_YET_EXECUTED_AT_FINANCIAL_BOUNDARY",
+    "baseline_zip_sha256": "51bc861a7e197d3eb42bb853e96834263bea07043e7e9b9d6d8fbdbb441ba5dd"
   }
 }
