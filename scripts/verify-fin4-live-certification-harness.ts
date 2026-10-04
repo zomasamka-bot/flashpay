@@ -71,6 +71,14 @@ const preflightEnd=o.indexOf('async function invokeRole(',preflightStart)
 const preflight=o.slice(preflightStart,preflightEnd)
 need(!preflight.includes('fin4ClaimLaunchForArmedRun')&&!preflight.includes('redis.')&&!preflight.includes('fetch(')&&!preflight.includes('executeA2URecovery')&&!preflight.includes('submitTransaction('),"R4E preflight must have zero launch, Redis, network, recovery, or financial side effects")
 
+// R4F read-only Pi evidence probe for armed B. It may read PostgreSQL/Pi only; it must never call recovery or any financial writer.
+need(o.includes('request.nextUrl.searchParams.get("evidence") === "B"'),"R4F must expose only the explicit B evidence query")
+need(o.includes('getDurableU2AIngressAuthoritative(paymentId)'),"R4F B probe must derive expected identity from durable PostgreSQL ingress")
+need(o.includes('readSettlementCreatePiEvidence(checkpoint.u2aIdentifier)'),"R4F B probe must use the existing read-only Pi evidence reader")
+need(o.includes('evaluateFinancialRecoveryPiCandidates({'),"R4F B probe must use the production candidate evaluator")
+need(o.includes('financialAuthorityMutated: false')&&o.includes('moneyMovementProven: false'),"R4F B probe must classify itself non-financial")
+need(!preflight.includes('executeA2URecovery')&&!preflight.includes('submitTransaction(')&&!preflight.includes('recordSettlementA2UCreatedCheckpoint')&&!preflight.includes('persistCheckpointMerged('),"R4F GET surface must contain no recovery, submit, or checkpoint writer")
+
 for(const [src,role] of [[ra,'A'],[rb,'B']] as const){
   need(src.includes(`fin4ArmedPaymentForRole(runId, "${role}")`),`split ${role} must derive its fixed armed payment`)
   need(src.includes(`fin4ValidateInvocationCapability(request.headers.get("x-flashpay-fin4-capability"), runId, "${role}", paymentId)`),`split ${role} must validate exact scoped capability`)
@@ -91,4 +99,4 @@ need(l.includes('current.redisProjectionVersion~=version then return 0'),"F2-4 r
 need(l.includes('const repairArgs: [string, string, string, string, string, string, string, string, string, string]'),"F2-4 repair args must remain exact ten-string tuple")
 need(l.includes('const completedAt = d.completedAt')&&l.includes('if (completedAt === null) return null'),"F2-4 authority must retain nullable durable completedAt narrowing")
 
-console.log("FIN4_LIVE_CERTIFICATION_HARNESS_R4E=PASS split_functions=true one_shot_launch=true scoped_hmac_capabilities=true async_context_boundary=true redis_launch_read_authority=false redis_coordination_only=true distinct_process_barrier=true financial_authority=false telemetry_after_durable=true release_before_telemetry=true")
+console.log("FIN4_LIVE_CERTIFICATION_HARNESS_R4F=PASS split_functions=true one_shot_launch=true scoped_hmac_capabilities=true async_context_boundary=true redis_launch_read_authority=false redis_coordination_only=true distinct_process_barrier=true financial_authority=false telemetry_after_durable=true release_before_telemetry=true")

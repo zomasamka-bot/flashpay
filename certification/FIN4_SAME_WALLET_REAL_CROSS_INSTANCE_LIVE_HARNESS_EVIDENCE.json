@@ -1,5 +1,5 @@
 {
-  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R4E",
+  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R4F",
   "date": "2026-10-04",
   "baseline_r2_production": {
     "git_sha": "9aae277f6ef496dbcd2d7dd7318ec25df45eaf10",
@@ -7,7 +7,7 @@
     "state": "READY"
   },
   "classification": "CONFIRMED_PRE_A2U_LIVENESS_DEFECT_FIX_PLUS_CERTIFICATION_INSTRUMENTATION_HARDENED_NO_NEW_FINANCIAL_AUTHORITY",
-  "live_result": "R4D1_LAUNCH_FAILED_PRE_BARRIER_ON_CROSS_FUNCTION_CLAIM_VISIBILITY_R4E_NOT_YET_EXECUTED",
+  "live_result": "R4E_LIVE_REACHED_STAGE1_BUT_B_HELD_AFTER_PI_ONGOING_PAYMENT_FOUND; R4F_ADDS_READ_ONLY_PI_EVIDENCE_PROBE_BEFORE_ANY_NEW_LIVE_ATTEMPT",
   "armed_payments": {
     "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
     "payment_b": "e3b83ecd-9f5e-4963-b75f-e3ef058cf095"
@@ -62,7 +62,7 @@
       "files": 276
     },
     "source_manifest": "PASS_315_PATHS",
-    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4E",
+    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4F",
     "fin4_r4_static_binding": "PASS",
     "fin4_r4_mutations": {
       "expected_failures": 23,
@@ -71,9 +71,9 @@
     "clean_zip_hygiene": "PASS",
     "targeted_typescript_contract": "PASS: ten-ARGV Redis tuple + explicit nullable completedAt narrowing in locked helper and /complete hot path",
     "dependencyless_differential_tsc": "PASS_WITH_EXPECTED_ENV_NOISE: zero new semantic diagnostics in changed files vs R2 READY baseline; new diagnostics limited to missing next/server and Node Buffer types caused by absent local node_modules/@types",
-    "fin4_static_binding": "PASS_R4E",
+    "fin4_static_binding": "PASS_R4F",
     "fin4_mutations": {
-      "expected_failures": 49,
+      "expected_failures": 51,
       "unexpected_passes": 0
     },
     "fin4_r4e_capability_model": {
@@ -90,6 +90,11 @@
       "status": "PASS",
       "files": 4,
       "scope": "R4E fin4-live-certification + orchestrator + A/B routes with exact minimal dependency stubs and Node types"
+    },
+    "financial_runtime_byte_comparison_vs_r4e": {
+      "status": "PASS",
+      "files_compared": 118,
+      "byte_drift": 0
     }
   },
   "required_live_pass_predicates": {
@@ -207,5 +212,28 @@
     "payment_amount_recipient_commission_changed": false,
     "live_status": "NOT_YET_EXECUTED_AT_FINANCIAL_BOUNDARY",
     "baseline_zip_sha256": "51bc861a7e197d3eb42bb853e96834263bea07043e7e9b9d6d8fbdbb441ba5dd"
+  },
+  "r4f_read_only_pi_evidence_probe": {
+    "purpose": "Prove whether armed payment B has an exact incomplete Pi A2U identity before any recovery mutation or new FIN-4 live attempt",
+    "surface": "GET /api/certification/fin4-trigger?evidence=B",
+    "authorization": "existing production arm + exact FIN4 run-id",
+    "expected_identity_source": "PostgreSQL getDurableU2AIngressAuthoritative(payment B)",
+    "pi_reader": "existing readSettlementCreatePiEvidence; GET-only Pi payment + incomplete_server_payments",
+    "candidate_classifier": "existing evaluateFinancialRecoveryPiCandidates production evaluator",
+    "possible_results": [
+      "FOUND",
+      "CONFIRMED_NONE",
+      "INDETERMINATE"
+    ],
+    "recovery_called": false,
+    "pi_post_called": false,
+    "horizon_submit_called": false,
+    "checkpoint_writer_called": false,
+    "financial_authority_mutated": false,
+    "decision_contract": {
+      "FOUND": "B may be naturally reconciled through the existing guarded path after separate authorization; this probe itself does not reconcile",
+      "CONFIRMED_NONE": "do not mutate B merely to prepare FIN-4; prefer a fresh controlled test pair/state",
+      "INDETERMINATE": "fail closed; no retry/financial action from this evidence alone"
+    }
   }
 }

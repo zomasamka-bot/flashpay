@@ -4,7 +4,11 @@ import {
   fin4AutomationBypassPresent,
   fin4ClaimLaunchForArmedRun,
   fin4IssueInvocationCapability,
+  fin4ArmedPaymentForRole,
 } from "@/lib/fin4-live-certification"
+import { getDurableU2AIngressAuthoritative } from "@/lib/db"
+import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
+import { evaluateFinancialRecoveryPiCandidates } from "@/lib/financial-recovery-pi-candidate-rules"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -27,6 +31,41 @@ function automationBypassSecret(): string {
 export async function GET(request: NextRequest) {
   const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
   if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+
+  if (request.nextUrl.searchParams.get("evidence") === "B") {
+    const paymentId = fin4ArmedPaymentForRole(runId, "B")
+    const durable = await getDurableU2AIngressAuthoritative(paymentId)
+    if (durable.outcome !== "FOUND") {
+      return NextResponse.json({ ok: false, action: "pi-evidence-b", durableOutcome: durable.outcome, financialAuthorityMutated: false }, { status: 409 })
+    }
+    const checkpoint = durable.checkpoint
+    const read = await readSettlementCreatePiEvidence(checkpoint.u2aIdentifier)
+    if (read.outcome !== "READ") {
+      return NextResponse.json({ ok: false, action: "pi-evidence-b", readOutcome: read.outcome, reason: read.reason, financialAuthorityMutated: false }, { status: 409 })
+    }
+    const evaluation = evaluateFinancialRecoveryPiCandidates({
+      source: read.pi.source,
+      candidates: read.pi.candidates,
+      expected: { branch: "SETTLEMENT", paymentId, amount: checkpoint.customerAmount, merchantUid: checkpoint.merchantUid },
+    })
+    const exactIdentifier = evaluation.outcome === "FOUND" && typeof evaluation.candidate.identifier === "string"
+      ? evaluation.candidate.identifier
+      : null
+    return NextResponse.json({
+      ok: evaluation.outcome !== "INDETERMINATE",
+      action: "pi-evidence-b",
+      paymentId,
+      durableIngress: "FOUND",
+      incompleteCandidateCount: read.pi.candidates.length,
+      reconciliationOutcome: evaluation.outcome,
+      ...(evaluation.outcome === "INDETERMINATE" ? { reason: evaluation.reason } : {}),
+      exactIdentifierPresent: exactIdentifier !== null,
+      exactIdentifier,
+      moneyMovementProven: false,
+      financialAuthorityMutated: false,
+    }, { status: evaluation.outcome === "INDETERMINATE" ? 409 : 200 })
+  }
+
   const present = fin4AutomationBypassPresent()
   return NextResponse.json({ ok: present, action: "preflight", automationBypassPresent: present, financialAuthorityMutated: false }, { status: present ? 200 : 409 })
 }

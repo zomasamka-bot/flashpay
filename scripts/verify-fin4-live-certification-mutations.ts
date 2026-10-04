@@ -53,6 +53,8 @@ const validRole=(s:string,role:string)=>s.includes(`fin4ArmedPaymentForRole(runI
 const validComplete=(s:string)=>s.includes('getDurableU2AIngressAuthoritative')&&s.includes('const ingressCompletedAt = ingress.completedAt')&&s.includes('if (ingressCompletedAt === null ||')&&s.includes('payment.payerUidCapturedAt = durableCanonicalTimes?.verifiedAt')&&s.includes('payment.paidAt = durableCanonicalTimes.completedAt')
 const validRepair=(s:string)=>s.includes('isF24PreA2UTimestampRepairSafe')&&s.includes("current.a2uPaymentId~=nil or current.a2uTxid~=nil")&&s.includes("current.refundPaymentId~=nil or current.refundTxid~=nil")&&s.includes('current.redisProjectionVersion~=version then return 0')&&s.includes('const repairArgs: [string, string, string, string, string, string, string, string, string, string]')&&s.includes('redis.eval<[string, string, string, string, string, string, string, string, string, string], number>')&&s.includes('typeof payment.merchantUid !== "string"')&&s.includes('typeof payment.piPaymentId !== "string"')&&s.includes('typeof payment.u2aTxid !== "string"')&&s.includes('typeof payment.payerUid !== "string"')&&s.includes('const completedAt = d.completedAt')&&s.includes('if (completedAt === null) return null')&&s.includes('exactPiAuthority')&&s.includes('status?.developer_completed === true')
 
+const validEvidence=(s:string)=>s.includes('request.nextUrl.searchParams.get("evidence") === "B"')&&s.includes('getDurableU2AIngressAuthoritative(paymentId)')&&s.includes('readSettlementCreatePiEvidence(checkpoint.u2aIdentifier)')&&s.includes('evaluateFinancialRecoveryPiCandidates({')&&s.includes('moneyMovementProven: false')&&!s.includes('executeA2URecovery(')&&!s.includes('submitTransaction(')&&!s.includes('recordSettlementA2UCreatedCheckpoint(')&&!s.includes('persistCheckpointMerged(')
+
 let expected=0
 function mutate(name:string,source:string,from:string,to:string,valid:(s:string)=>boolean){
   const m=source.split(from).join(to); if(m===source)throw new Error(`mutation not applied: ${name}`); if(valid(m))throw new Error(`unexpected mutation pass: ${name}`); expected++
@@ -97,6 +99,10 @@ mutate('issue_capability_before_claim',o,'const armed = await fin4ClaimLaunchFor
 mutate('log_capability',o,'const origin = exactDeploymentOrigin()','console.log(capabilityA)\n    const origin = exactDeploymentOrigin()',validLaunch)
 mutate('preflight_claims_launch',o,'const present = fin4AutomationBypassPresent()','const present = fin4AutomationBypassPresent()\n  await fin4ClaimLaunchForArmedRun(runId)',validPreflight)
 
+// R4F evidence-probe mutations.
+mutate('evidence_probe_skips_durable_identity',o,'getDurableU2AIngressAuthoritative(paymentId)','({ outcome: "FOUND", checkpoint: {} } as any)',validEvidence)
+mutate('evidence_probe_skips_production_evaluator',o,'evaluateFinancialRecoveryPiCandidates({','evaluateFinancialRecoveryPiCandidates_DISABLED({',validEvidence)
+
 // Role mutations.
 mutate('role_a_skips_capability_validation',ra,'const capability = fin4ValidateInvocationCapability(request.headers.get("x-flashpay-fin4-capability"), runId, "A", paymentId)','const capability = {} as any',s=>validRole(s,'A'))
 mutate('role_b_skips_capability_validation',rb,'const capability = fin4ValidateInvocationCapability(request.headers.get("x-flashpay-fin4-capability"), runId, "B", paymentId)','const capability = {} as any',s=>validRole(s,'B'))
@@ -117,5 +123,5 @@ mutate('repair_removes_optional_identity_narrowing',l,'typeof payment.merchantUi
 mutate('repair_removes_completed_at_narrowing',l,'if (completedAt === null) return null','if (false) return null',validRepair)
 mutate('repair_weakens_pi_completion',l,'status?.developer_completed === true','true',validRepair)
 
-if(!validHarness(h)||!validIntegration(a)||!validLaunch(o)||!validPreflight(o)||!validRole(ra,'A')||!validRole(rb,'B')||!validComplete(c)||!validRepair(l))throw new Error('original FIN4 R4E invalid')
-console.log(`FIN4_LIVE_R4E_MUTATIONS=PASS expected_failures=${expected} unexpected_passes=0`)
+if(!validHarness(h)||!validIntegration(a)||!validLaunch(o)||!validPreflight(o)||!validEvidence(o)||!validRole(ra,'A')||!validRole(rb,'B')||!validComplete(c)||!validRepair(l))throw new Error('original FIN4 R4E invalid')
+console.log(`FIN4_LIVE_R4F_MUTATIONS=PASS expected_failures=${expected} unexpected_passes=0`)
