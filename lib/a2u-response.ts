@@ -3,7 +3,7 @@ import { isPaymentFinal } from "@/lib/payment-status"
 
 /**
  * Unified payment response shape - used by ALL response paths (processing or final).
- * Re-reads Redis to ensure authoritative data, never trusts HTTP response fields.
+ * Re-reads the Redis projection to return the latest response view; Redis is not financial authority. Never trusts HTTP response fields.
  * 
  * Contains all critical fields for transparency. Status determines finality:
  * - status="settled_to_merchant" + success=true: Final success (all reconciliation complete)
@@ -44,7 +44,7 @@ export interface PaymentResponse {
 
 /**
  * Build unified payment response by re-reading Redis checkpoint.
- * CRITICAL: Always use latest Redis record as sole authority - never trust caller data.
+ * CRITICAL: Use the latest Redis projection for response construction only; durable PostgreSQL checkpoints and verified Pi/Horizon evidence remain financial authority. Never trust caller data.
  * 
  * Response contract (FINAL AND BINDING):
  * - FINAL SUCCESS (success=true, status="settled_to_merchant"):

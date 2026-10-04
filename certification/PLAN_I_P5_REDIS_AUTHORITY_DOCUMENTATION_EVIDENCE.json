@@ -1,0 +1,27 @@
+{
+  "plan": "PLAN I-FINAL P5 Redis authority documentation canonicalization",
+  "date": "2026-10-04",
+  "baseline_production_sha": "ca66891cb3598adbb6b44cf577ba1fbec58f0bb1",
+  "classification": "MAINTAINABILITY_WORDING_CLOSED_COMMENTS_ONLY",
+  "runtime_file": "lib/a2u-response.ts",
+  "behavior_change": false,
+  "financial_semantics_changed": false,
+  "contract": {
+    "redis": "response projection / coordination, not financial authority",
+    "financial_authority": "durable PostgreSQL checkpoints plus verified Pi/Horizon evidence"
+  },
+  "executable_equivalence": {
+    "method": "strip block/line comments and whitespace, then SHA-256 compare before vs after",
+    "before_sha256": "d5a19876a6db8b681e44d3364c3523e2b95ef94046c0beb3829970f769179b57",
+    "after_sha256": "d5a19876a6db8b681e44d3364c3523e2b95ef94046c0beb3829970f769179b57",
+    "equal": true
+  },
+  "mutation_sensitivity": {
+    "expected_failures": 3,
+    "unexpected_passes": 0,
+    "cases": ["restore_sole_authority_wording", "remove_pg_pi_horizon_authority_wording", "remove_response_projection_non_authority_guard"]
+  },
+  "full_financial_verifier": "PASS",
+  "byte_studio_dependencies_changed": false,
+  "result": "PASS_PENDING_EXTERNAL_BUILD"
+}
