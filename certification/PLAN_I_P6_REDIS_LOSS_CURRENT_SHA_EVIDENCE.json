@@ -1,0 +1,37 @@
+{
+  "plan": "PLAN I-FINAL P6 Redis-loss current-SHA reproof",
+  "date": "2026-10-04",
+  "baseline_production_sha": "958002c183e9416dc5eb4058efb6ce8b28cd4baa",
+  "baseline_deployment": "dpl_UjqXPj7Aa9747Jb8t5rQ93wCTdcW",
+  "classification": "CERTIFICATION_ONLY_NO_RUNTIME_PATCH",
+  "scope": "total Redis projection/index loss recovery binding",
+  "proof_level": "CURRENT_PRODUCTION_SHA_SOURCE_AND_PRODUCTION_PATH_BOUND_REPROOF; NOT A NEW DESTRUCTIVE WIPE OF PRODUCTION REDIS",
+  "durable_rediscovery": {
+    "source": "PostgreSQL settlement_checkpoints via listOutstandingSettlementCheckpointIds(200)",
+    "stages": ["a2u_created", "prepared", "horizon_confirmed", "pi_completed", "db_finalized"],
+    "runs_before_redis_active_index_scan": true
+  },
+  "projection_rebuild": {
+    "create_only_set_nx": true,
+    "readback_identity_proof": true,
+    "per_payment_durable_fallback": true,
+    "db_finalized_terminal_egress": true,
+    "bootstrap_financial_side_effects": false
+  },
+  "financial_invariants": {
+    "redis_is_financial_truth": false,
+    "rebuild_creates_pi_or_horizon_movement": false,
+    "non_final_stage_projected_as_final_success": false,
+    "durable_identity_required": true
+  },
+  "stage_model_cases": 5,
+  "mutation_sensitivity": {
+    "expected_failures": 5,
+    "unexpected_passes": 0,
+    "cases": ["remove_pg_rediscovery", "remove_set_nx", "remove_readback_identity", "remove_terminal_egress", "drop_horizon_confirmed_from_durable_scan"]
+  },
+  "historical_context": "DR17 previously certified 10,000 live settlement/refund cases with redisRecovered=10000 and unrecovered=0; P6 does not falsely claim that destructive live run was repeated on this SHA.",
+  "runtime_files_changed": [],
+  "full_financial_verifier": "PASS",
+  "result": "PASS_PENDING_EXTERNAL_BUILD_AND_PRODUCTION_EXACT_SHA"
+}
