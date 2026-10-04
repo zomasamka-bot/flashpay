@@ -285,10 +285,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment completion authority mismatch" }, { status: 409 })
     }
 
-    // DR60/DR11 race barrier: for the exact 0.10 Pi Testnet auto-refund flow,
-    // acquire the durable PostgreSQL hold BEFORE publishing U2A completion to
-    // Settlement. This closes the window where Settlement Stage 1 could create
-    // an A2U payment identifier between Pi completion and Refund authority.
+    // INTENTIONAL LIVE TESTNET CERTIFICATION HOOK — DO NOT REMOVE AS BUSINESS CLEANUP.
+    // DR60/DR11 uses the exact 0.10 Pi Testnet payment to exercise automatic Refund
+    // recovery in production. Acquire the durable PostgreSQL hold BEFORE publishing
+    // U2A completion to Settlement; the 0.10 amount is certification scope, not a
+    // general customer refund rule. Build evidence enforces hold -> completed ->
+    // Refund authority ordering and the exact production/Testnet/0.10 scope.
     const dr11ExactIdentity = process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1
     if (dr11ExactIdentity) {
       const autoRefundHold = await recordDr11RefundCertificationHold({

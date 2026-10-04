@@ -87,7 +87,7 @@ export default function MerchantPaymentsPage() {
   useEffect(() => {
     const controller = new AbortController()
 
-    const fetchPayments = async () => {
+    const fetchPayments = async (background = false) => {
       // Missing ID or token: clear and return
       if (!merchant?.merchantId || !merchant?.accessToken) {
         setPayments([])
@@ -105,11 +105,14 @@ export default function MerchantPaymentsPage() {
         return
       }
 
-      // Clear stale data and set loading
-      setPayments([])
-      setSummary(null)
+      // Initial load owns the loading state. Background freshness must not blank
+      // the dashboard or create visible polling flicker.
+      if (!background) {
+        setPayments([])
+        setSummary(null)
+        setLoading(true)
+      }
       setError(null)
-      setLoading(true)
 
       try {
         const params = new URLSearchParams({
@@ -130,8 +133,10 @@ export default function MerchantPaymentsPage() {
         if (controller.signal.aborted) return
 
         if (!response.ok) {
-          setPayments([])
-          setSummary(null)
+          if (!background) {
+            setPayments([])
+            setSummary(null)
+          }
           setError(`Failed to load payments: ${response.statusText}`)
           return
         }
@@ -193,18 +198,34 @@ export default function MerchantPaymentsPage() {
         if (controller.signal.aborted) return
 
         console.error("[Merchant Payments] Error fetching payments:", err)
-        setPayments([])
-        setSummary(null)
+        if (!background) {
+          setPayments([])
+          setSummary(null)
+        }
         setError(err instanceof Error ? err.message : "Failed to load payments")
       } finally {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && !background) {
           setLoading(false)
         }
       }
     }
 
     fetchPayments()
-    return () => controller.abort()
+
+    // Presentation freshness only: keep an already-open merchant dashboard aligned
+    // with the server while background settlement/refund work advances. This never
+    // mutates payment authority; /api/merchant/payments remains the read-only source.
+    const refreshWhileVisible = () => {
+      if (document.visibilityState === "visible") void fetchPayments(true)
+    }
+    const refreshInterval = window.setInterval(refreshWhileVisible, 20_000)
+    document.addEventListener("visibilitychange", refreshWhileVisible)
+
+    return () => {
+      window.clearInterval(refreshInterval)
+      document.removeEventListener("visibilitychange", refreshWhileVisible)
+      controller.abort()
+    }
   }, [merchant?.merchantId, merchant?.accessToken, filterDateFrom, filterDateTo])
 
   const flashPayIdQuery = searchQuery.trim()

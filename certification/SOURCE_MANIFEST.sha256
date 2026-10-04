@@ -19,7 +19,7 @@ dfcda756447c2e46836c8626906fc1c4ae88f6c4f95d710d9c116ee24481635d  ./app/api/paym
 92e4c8ef63e5d51679042b4221cebe3edabc025ddee98fb65665d310927cd1ba  ./app/api/payments/route.ts
 e99de26437974864413b276aa0ad3ee13b9348c8cded69966a90f0cd31fad1f1  ./app/api/pi/a2u/route.ts
 0414539870be0911cbab745657dfcb33a409eb0225a2baa28c1ccbefefb1cec4  ./app/api/pi/approve/route.ts
-727dcbdc5aab5a838f60b00198448030b0a7b4651be9ce81f29f8bd39e6dfb75  ./app/api/pi/complete/route.ts
+5c4bffb27f417f0d3c7e6413d7da40facaa9b087482adacd5d3c787a09f08d98  ./app/api/pi/complete/route.ts
 9192593fa95e9279c75dcebc4b4dad4b8d71f1297fbb71354adb364323508826  ./app/api/pi/entry-token/route.ts
 1f6251c48e7f4630b385c32e7e62b9240643a2ba01df89f606312d53654ce33b  ./app/api/pi/start/route.ts
 e0547a81458dae8924feeca97b93d98f61bee07c86c877a6317cfee9f4e48e13  ./app/api/pi/verify-uid/route.ts
@@ -41,7 +41,7 @@ fc02f57a76f30bc2a5b122fe41c23241df6724880382811d1bdaa07db86938f3  ./app/diagnost
 36319f1b4c4b4f06c4ba003662bac834685744bfa72bed5984bb426dbe5a3b92  ./app/emergency/page.tsx
 c936275f2ec768920a71c3923d1650e863749f6f26caad9dbb7f488955276895  ./app/globals.css
 7f006694d207e7c8d6ca3e2196a9b3a2591afacd521d057206e9328534f62c8b  ./app/layout.tsx
-1a2fb3917d5b4615927cfa27f97e3673f945f6140bcb100ed0f13afcdbcd0f82  ./app/merchant/payments/page.tsx
+720c1e2a39112c45add99a80a7bbed4907d20980fc4f818908ab224f25d176ad  ./app/merchant/payments/page.tsx
 4cb9adb22228660d922457cf139e018cc12f1945b3a00fe169f0a3be7ac01b70  ./app/not-found.tsx
 1a8e572dc1ead568b0928c0b8032f545a08b9236716accd2369da09cf6ec02d6  ./app/operations/domains/page.tsx
 cec2c75b753d85e8031d536d2a9f86a755cbab88351a7c8973d76f2fc2be33f4  ./app/operations/layout.tsx
@@ -63,6 +63,7 @@ db8e87569e33812fbd0c0a2cfd6124f21e11b1ecfeee8563ae638b41e9ddbffc  ./certificatio
 7fa3b8f97016420ec3c3c5f786f70312fb93bed0a1f6baaee4d466f81cb30331  ./certification/PLAN_G_CROSS_BOUNDARY_ABC_EVIDENCE.json
 a30b538d630a68067f783e8f911155aa2ad00f5eb9ccebb81a1b1ad934541bd4  ./certification/PLAN_H_CRASH_POLICY_PRODUCTION_BINDING_EVIDENCE.json
 cdb905e3bbfab516c5226ff3e8c39051ad1c0ab0a778a2d77b63112b42782385  ./certification/PLAN_I_P1_PI_APPROVAL_AMBIGUITY_EVIDENCE.json
+44b6f7ff40c4ab5bb5f947f248e8ace0605f89ae4193e5a74e5c9e77667336e5  ./certification/PLAN_I_P2_P4_REVIEW_CLOSURE_EVIDENCE.json
 8725583301a5fa92c9845d91a213e25162498160a1e41e04284fa64800ecb6f6  ./certification/PRODUCTION_CALLGRAPH_CERTIFIER_BINDING_EVIDENCE.json
 705c728a8ff3fac9396dca2aec14bcc56c0df33513c673c69cc33b35a5173954  ./certification/REDIS_PROJECTION_CAS_EVIDENCE.json
 634163c094a9287a0c7f4af4bb672bf679bfb616db2c3be626d8f7c958a66829  ./certification/SETTLEMENT_REFUND_XOR_EVIDENCE.json
@@ -261,7 +262,7 @@ d7c39d978af643ba9525de6fb8171e0f834882db4110c82ecad0df3f4f69551a  ./public/place
 14be0c7aa11cca1e78f0966176b286a6d36d00ec64be027775dfeb33d8e2dfdf  ./public/placeholder.jpg
 456ca101af0b430ac7a4575f13f44b0c4544275ca8b9ae855e0fa1beaa0f540b  ./public/placeholder.svg
 f2f4762d405ec0cce1182233fda114dfc460c582f0975a44b8561360256897b1  ./public/validation-key.txt
-c43a60ae5a256f241e21b1278b3fa1db5d40d411f3841f3baef143eae511de2f  ./scripts/run-financial-recovery-build-verifier.mjs
+759376554d3db0d52dfb7532f5fe06cbe6e2e0730ee5dd51acb32a5afbe184a1  ./scripts/run-financial-recovery-build-verifier.mjs
 7affa59ab8c3577987b1eeda625e3752c2e7d37cbed3a3380d161b2eb5877985  ./scripts/verify-dr11-orphan-a2u-refund-recovery.ts
 15ca00678fc18d189d248e8cd005075e4f02a7d3e2335c330000fa26f2698c7d  ./scripts/verify-dr11-refund-race-ui-binding.ts
 d3ef77c4d5ce12f47d0973cbbf312bdc5e1a9a44b26df751dec8f11d3c568511  ./scripts/verify-emergency-stuck-payment-rescue-safety.ts
@@ -290,6 +291,7 @@ a01395c1c04a5efc38e8fe1cd0fdbc2a08118b9820e77372686ec4998a04f489  ./scripts/veri
 0b6c56ae5df60d3f78cd76e351fe0a44ef9f26b617395e2c38f20ccd66cd4c71  ./scripts/verify-plan-g-cross-boundary-abc.ts
 730e1646ce6ff94381e8e88d83ca3306f00caf92f4b1262159201d7664bfbc83  ./scripts/verify-plan-h-crash-policy-production-binding.ts
 e6129e942113ef842250002f976019449e39d8831b1fefc96c07ea8fdf4b846f  ./scripts/verify-plan-i-p1-pi-approval-ambiguity.ts
+3ec6fb95e36550c835fdef4786f96cd8975df8d886a5429824324d01268a1929  ./scripts/verify-plan-i-p2-p4-review-closure.ts
 58dea705d31f42788da182f640076a534ba942010dad5b1bdd1eb5d78944a053  ./scripts/verify-production-callgraph-certifier-binding.ts
 5b0761b92c555442defc4530e80d06fa42505ee6b7cc4ffc7ef5f2c5ec2aef67  ./scripts/verify-redis-projection-cas-production-binding.ts
 92f8d97cd0016d768c44393a3ed2d7ac5358f9852857d77579ebf3f12a8b9a43  ./scripts/verify-settlement-refund-xor-production-binding.ts

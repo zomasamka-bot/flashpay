@@ -1,0 +1,49 @@
+{
+  "plan": "PLAN I-FINAL P2-P4 external-review closure",
+  "date": "2026-10-04",
+  "p2_dashboard": {
+    "classification": "CONFIRMED_NON_FINANCIAL_PRESENTATION_FRESHNESS_GAP_FIXED",
+    "fix": "20s visible-tab refresh plus immediate visibility-return refresh against the existing read-only merchant payments API",
+    "financial_semantics_changed": false
+  },
+  "p3_recovery_wake": {
+    "classification": "REVIEWER_CONFLATION_CLOSED_BY_SOURCE_BINDING",
+    "architecture": [
+      "completion immediate-drain kick",
+      "continuation-kick while work remains",
+      "60s short automatic-refund retry metadata",
+      "trusted external scheduler authority",
+      "daily Vercel cron independent safety net"
+    ],
+    "external_scheduler_note": "The endpoint supports trusted external scheduler wakes; an operator may invoke it every 1 or 10 minutes. That external cadence is not hard-coded financial truth and is intentionally not changed by this release.",
+    "schedule_changed": false
+  },
+  "p4_dr11_0_10": {
+    "classification": "INTENTIONAL_LIVE_TESTNET_CERTIFICATION_HOOK_PRESERVED",
+    "purpose": "exact 0.10 Pi production/Testnet DR11 automatic-refund certification",
+    "required_order": [
+      "recordDr11RefundCertificationHold",
+      "recordSettlementU2ACompletedCheckpoint",
+      "createDr11RefundAuthorityFromDurableHold"
+    ],
+    "behavior_changed": false
+  },
+  "mutation_sensitivity": {
+    "expected_failures": 6,
+    "unexpected_passes": 0,
+    "cases": [
+      "dashboard_polling_removed",
+      "visibility_refresh_removed",
+      "immediate_drain_binding_broken",
+      "continuation_binding_broken",
+      "short_refund_retry_changed",
+      "dr11_exact_0_10_scope_widened"
+    ]
+  },
+  "byte_studio_contract": {
+    "ui_scaffold": "byte-identical to P1 artifact",
+    "dependency_versions": "unchanged exact contract",
+    "new_dependencies": 0
+  },
+  "result": "PASS_PENDING_EXTERNAL_BUILD"
+}
