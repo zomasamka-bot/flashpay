@@ -1,0 +1,44 @@
+{
+  "plan": "PLAN I-FINAL P7 Same-wallet cross-instance concurrency proof",
+  "date": "2026-10-04",
+  "baseline_production_sha": "4e91dd9a4cae9373737d47b62c44330b9ea4b9b0",
+  "baseline_deployment": "dpl_HgimrBfDuxumUhQLwJBdbPkGDmJ8",
+  "classification": "CERTIFICATION_ONLY_NO_RUNTIME_PATCH",
+  "scope": "same source-wallet cross-instance Settlement/Refund Horizon submission serialization",
+  "source_wallet_lock": {
+    "key": "flashpay:wallet:submit:${sourceAddress}",
+    "acquire": "SET NX EX 600",
+    "renewal": "token-checked EXPIRE",
+    "release": "token-checked DEL",
+    "persistent_intent": true
+  },
+  "production_callgraph": {
+    "settlement": "source-wallet intent lock -> prepare -> Horizon submit -> durable Horizon checkpoint -> release",
+    "refund_fresh": "source-wallet intent lock -> blockchain claim -> submitRefundBlockchainOnce -> persistence -> release",
+    "refund_prepared_replay": "source-wallet submit lock -> exact checkpoint/Pi/prepared reread -> exact replay/reconciliation"
+  },
+  "barrier_model": {
+    "instances": 2,
+    "same_source_wallet": true,
+    "distinct_payment_ids": true,
+    "max_in_flight": 1,
+    "loser_reaches_submit": false,
+    "second_progresses_after_release": true,
+    "stale_token_can_release_successor": false
+  },
+  "mutation_sensitivity": {
+    "expected_failures": 6,
+    "unexpected_passes": 0,
+    "cases": [
+      "remove_nx",
+      "key_lock_by_payment_instead_of_source_wallet",
+      "remove_release_token_check",
+      "remove_renew_token_check",
+      "bypass_settlement_wallet_lock",
+      "bypass_refund_wallet_lock"
+    ]
+  },
+  "runtime_files_changed": [],
+  "full_financial_verifier": "PASS",
+  "result": "PASS_PENDING_EXTERNAL_BUILD_AND_PRODUCTION_EXACT_SHA"
+}
