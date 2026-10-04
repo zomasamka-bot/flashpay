@@ -1,0 +1,30 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const must=(ok:boolean,msg:string)=>{if(!ok)throw new Error(`PLAN_F_BUILDING_RISK=FAIL ${msg}`)}
+const source=readFileSync(resolve(__dirname,'../lib/a2u-locked-executor.ts'),'utf8')
+const branchStart=source.indexOf('if (params.recoveryOperation === "SETTLEMENT_RECONCILE")')
+const normalStart=source.indexOf('if (params.recoveryOperation === undefined)',branchStart)
+const executeStart=source.indexOf('const result = await executeA2U({',branchStart)
+must(branchStart>=0,'reconcile branch missing')
+must(normalStart>branchStart,'reconcile branch boundary missing')
+must(executeStart>normalStart,'reconcile branch must terminate before unified executor')
+const branch=source.slice(branchStart,normalStart)
+must(branch.includes('await reconcileIncompleteA2UPayment('),'Pi incomplete reconciliation missing')
+must(!branch.includes('fetch("https://api.minepi.com/v2/payments"'),'reconcile branch must not create Pi payment')
+must(!branch.includes('submitTransaction('),'reconcile branch must not submit Horizon')
+must(branch.includes('reconciliation.outcome !== "FOUND"'),'non-FOUND must fail closed')
+must(branch.includes('"CONFIRMED_NONE" ? "Settlement reconcile found no strongly proven A2U identity"'),'confirmed-none must not authorize create')
+for(const guard of ['typeof dto.txid !== "string"','typeof dto.transaction_id !== "string"','dto.completed !== true','dto.cancelled !== true','dto.rejected !== true','typeof transaction?.txid !== "string"','transaction?.verified !== true','status?.transaction_verified !== true','status?.developer_completed !== true','status?.cancelled !== true','status?.user_cancelled !== true']) must(branch.includes(guard),`movement/cancel guard missing: ${guard}`)
+for(const binding of ['dto.network === "Pi Testnet"','dto.direction === "app_to_user"','dto.amount === latestPayment.customerAmount','dto.user_uid === latestPayment.merchantUid','metadata?.type === "a2u_settlement"','metadata?.paymentId === paymentId']) must(branch.includes(binding),`identity binding missing: ${binding}`)
+const projectionAt=branch.indexOf('await persistCheckpointMerged(paymentId')
+const durableAt=branch.indexOf('await recordSettlementA2UCreatedCheckpoint(')
+const returnMarker='\n      return { ok: true, status: 202 }\n    }'
+const returnAt=branch.lastIndexOf(returnMarker)
+must(projectionAt>=0&&durableAt>projectionAt&&returnAt>durableAt,'checkpoint ordering must be projection -> durable Stage1 -> unconditional return')
+must(branch.includes('durableStage1.outcome !== "RECORDED" && durableStage1.outcome !== "REPLAYED"'),'durable Stage1 gate missing')
+const recovery=readFileSync(resolve(__dirname,'../lib/a2u-recovery-service.ts'),'utf8')
+must(recovery.includes('recoveryOperation: "SETTLEMENT_RECONCILE"'),'recovery service not bound to reconcile operation')
+const transient=readFileSync(resolve(__dirname,'../app/api/recovery/transient/route.ts'),'utf8')
+must(transient.includes('isStaleFreshReconcilingCandidate')&&transient.includes('settlementReconcilingExecutionIds'),'scheduler reconciling lane missing')
+console.log('PLAN_F_BUILDING_RISK=PASS assertions=31 reconcile_only=true no_fresh_create=true no_horizon_submit=true durable_stage1=true fail_closed=true')

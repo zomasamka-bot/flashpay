@@ -1,0 +1,20 @@
+{
+  "certification_date": "2026-10-04",
+  "baseline_production_sha": "62f7fcbd69ce87b1d3367c0b2b1b44a215dabac1",
+  "finding": "CONFIRMED_DEFECT_FIXED",
+  "scope": "Settlement Stage1 crash window after Pi A2U create may succeed before local/durable a2uPaymentId checkpoint",
+  "root_cause": "SETTLEMENT_RECONCILE was scheduler-separated from fresh dispatch, but the locked executor only validated the reconciling shape and then delegated to executeA2U. With no a2uPaymentId, executeA2U could enter Stage1 create again instead of remaining reconciliation-only.",
+  "risk": "A crash after Pi accepts A2U create but before its identifier is checkpointed could later reach a second Pi create attempt. Pi ongoing-payment behavior reduced practical duplication likelihood but was not accepted as FlashPay financial authority.",
+  "fix": {
+    "runtime_files_changed": ["lib/a2u-locked-executor.ts"],
+    "boundary": "SETTLEMENT_RECONCILE terminates inside the shared locked executor before executeA2U",
+    "read": "reconcileIncompleteA2UPayment only",
+    "found": "accept only exact Pi Testnet app_to_user identity with zero transfer/cancel/completion evidence; persist projection then require PostgreSQL recordSettlementA2UCreatedCheckpoint",
+    "confirmed_none": "blocked; never authorizes fresh create",
+    "indeterminate": "blocked",
+    "horizon_submit": "impossible from reconcile branch",
+    "refund_authority": "existing PostgreSQL/Refund absence and shared payment lock remain unchanged"
+  },
+  "financial_semantics_changed": "Only the unsafe recovery fallback is narrowed; normal fresh dispatch, prepared replay, Horizon submit, Refund, accounting and finality semantics are unchanged.",
+  "result": "PASS_AFTER_NARROW_FIX"
+}

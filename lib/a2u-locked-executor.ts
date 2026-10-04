@@ -3,7 +3,7 @@ import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
-import { getSettlementCheckpointAuthoritative, getDurableU2AIngressAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
+import { getSettlementCheckpointAuthoritative, getDurableU2AIngressAuthoritative, recordSettlementA2UCreatedCheckpoint, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
@@ -12,6 +12,7 @@ import { acquirePiWalletSubmitLock, claimPiWalletIntent, readPiWalletIntent, rep
 import * as StellarSDK from "@stellar/stellar-sdk"
 import crypto from "crypto"
 import { serverConfig } from "@/lib/server-config"
+import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 
 /**
  * SHARED CONCURRENCY LOCK FOR A2U EXECUTION
@@ -310,6 +311,57 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       if (params.isRecovery !== true || latestPayment.id !== paymentId || !isSettlementReconcileCandidate(latestPayment, Date.now())) {
         return { ok: false, status: 409, error: "Settlement reconcile proof could not be verified" }
       }
+
+      // PLAN F: this lane exists only to recover an A2U identity whose Pi create
+      // may have succeeded before the process could checkpoint the response. It
+      // must never issue another Pi create or reach Horizon. Absence from Pi's
+      // incomplete list is deliberately not strong enough to authorize a retry.
+      const reconciliation = await reconcileIncompleteA2UPayment(paymentId, latestPayment.customerAmount!, latestPayment.merchantUid!)
+      if (reconciliation.outcome !== "FOUND" || !reconciliation.dto) {
+        return { ok: false, status: 409, error: reconciliation.outcome === "CONFIRMED_NONE" ? "Settlement reconcile found no strongly proven A2U identity" : "Settlement reconcile evidence is indeterminate" }
+      }
+      const dto = reconciliation.dto
+      const metadata = asRecord(dto.metadata)
+      const transaction = asRecord(dto.transaction)
+      const status = asRecord(dto.status)
+      const identifier = dto.identifier
+      const fromAddress = dto.from_address
+      const toAddress = dto.to_address
+      const unmovedExactIdentity =
+        typeof identifier === "string" && identifier.trim() !== "" && identifier === identifier.trim() &&
+        typeof fromAddress === "string" && fromAddress.trim() !== "" && fromAddress === fromAddress.trim() &&
+        typeof toAddress === "string" && toAddress.trim() !== "" && toAddress === toAddress.trim() &&
+        dto.network === "Pi Testnet" && dto.direction === "app_to_user" && dto.amount === latestPayment.customerAmount &&
+        dto.user_uid === latestPayment.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === paymentId &&
+        typeof dto.txid !== "string" && typeof dto.transaction_id !== "string" && dto.completed !== true && dto.cancelled !== true && dto.rejected !== true &&
+        typeof transaction?.txid !== "string" && transaction?.verified !== true &&
+        status?.transaction_verified !== true && status?.developer_completed !== true && status?.cancelled !== true && status?.user_cancelled !== true
+      if (!unmovedExactIdentity) {
+        return { ok: false, status: 409, error: "Settlement reconcile found A2U evidence requiring manual movement review" }
+      }
+
+      let reconciledProjection: Payment
+      try {
+        reconciledProjection = await persistCheckpointMerged(paymentId, {
+          a2uPaymentId: identifier as string,
+          a2uFromAddress: fromAddress as string,
+          a2uToAddress: toAddress as string,
+          merchantAmount: latestPayment.customerAmount,
+          settlementFailureState: "none",
+        })
+      } catch {
+        return { ok: false, status: 500, error: "Settlement reconciled A2U projection persistence failed" }
+      }
+      const durableStage1 = await recordSettlementA2UCreatedCheckpoint({
+        paymentId, merchantId: reconciledProjection.merchantId, merchantUid: reconciledProjection.merchantUid!,
+        customerAmount: reconciledProjection.customerAmount!, merchantAmount: reconciledProjection.merchantAmount!,
+        u2aIdentifier: reconciledProjection.piPaymentId!, u2aTxid: reconciledProjection.u2aTxid!,
+        a2uPaymentId: identifier as string, a2uFromAddress: fromAddress as string, a2uToAddress: toAddress as string,
+      })
+      if (durableStage1.outcome !== "RECORDED" && durableStage1.outcome !== "REPLAYED") {
+        return { ok: false, status: 409, error: "Settlement reconciled A2U durable checkpoint not proven" }
+      }
+      return { ok: true, status: 202 }
     }
 
     if (params.recoveryOperation === undefined) {

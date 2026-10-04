@@ -1,3 +1,12 @@
+
+## PLAN F — Building-risk / ambiguous A2U create crash-window closure (2026-10-04)
+
+Finding: **CONFIRMED_DEFECT_FIXED**. A `SETTLEMENT_RECONCILE` recovery invocation was correctly separated by the scheduler from fresh dispatch, but the shared locked executor previously validated the reconciling shape and then delegated to `executeA2U`; with no `a2uPaymentId`, that could reach a fresh Pi A2U POST after an earlier process crash had already allowed Pi to accept the first create before its identifier was checkpointed.
+
+Narrow fix: `SETTLEMENT_RECONCILE` now terminates inside `a2u-locked-executor.ts`. It performs only `reconcileIncompleteA2UPayment`; it never reaches the unified executor, Pi create, or Horizon submit. `FOUND` is accepted only for the exact Pi Testnet `app_to_user` settlement identity with no transaction/completion/cancellation evidence, then the projection is checkpointed and the exact Stage1 identity must be proven durable by `recordSettlementA2UCreatedCheckpoint` before returning. `CONFIRMED_NONE`, `INDETERMINATE`, movement evidence, cancellation evidence, projection-write failure, or durable-authority failure all block. Normal fresh dispatch, prepared replay, Refund, accounting, and finality behavior are unchanged.
+
+Mandatory gate: `PLAN_F_BUILDING_RISK=PASS assertions=31 reconcile_only=true no_fresh_create=true no_horizon_submit=true durable_stage1=true fail_closed=true`. Mutation sensitivity: fall-through to unified executor, txid guard removal, CONFIRMED_NONE weakening, and durable Stage1 gate removal all produce expected gate failure (4/4, 0 unexpected passes).
+
 # FlashPay — Compact Final Certification Evidence
 
 Certification date: 2026-10-03
