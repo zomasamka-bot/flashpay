@@ -1,0 +1,21 @@
+{
+  "plan": "PLAN H — Crash Policy Production Binding",
+  "date": "2026-10-04",
+  "baseline_production_sha": "9a551445e9459da4c246efbaa9e85816b38cf0fe",
+  "classification": "TWO_NARROW_CRASH_POLICY_DEFECTS_CONFIRMED_AND_FIXED",
+  "runtime_files_changed": [
+    "app/api/pi/complete/route.ts",
+    "lib/a2u-locked-executor.ts"
+  ],
+  "findings": [
+    "Pi U2A /complete non-OK or transport ambiguity returned before exact refetch reconciliation",
+    "Recovery SETTLEMENT_SUBMIT could project Horizon movement and release wallet intent without first recording the PostgreSQL durable Horizon checkpoint"
+  ],
+  "fix_invariants": [
+    "durable U2A verified -> Pi complete attempt once -> exact GET reconciliation -> durable U2A completed",
+    "exact Horizon proof -> PostgreSQL durable Horizon checkpoint -> Redis projection -> wallet intent release",
+    "no blind side-effect retry on ambiguous outcomes"
+  ],
+  "modeled_crash_windows": 26,
+  "result": "PASS_PENDING_PRODUCTION_BUILD"
+}

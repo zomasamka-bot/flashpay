@@ -190,21 +190,26 @@ export async function POST(request: NextRequest) {
     if (piPayment.status?.developer_completed !== true) {
       console.log("[Pi Complete] Payment not developer_completed - calling Pi /complete endpoint")
       
-      const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Key ${serverConfig.piApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ txid }),
-      })
-
-      if (!completeResponse.ok) {
-        console.error("[Pi Complete] Pi /complete call failed - status:", completeResponse.status)
-        return NextResponse.json({ error: "Payment completion failed" }, { status: 400 })
+      // Crash/transport ambiguity rule: attempt Pi /complete exactly once, then always
+      // reconcile by exact GET. A non-2xx response or thrown transport error is not
+      // proof that Pi did not complete the payment, and must never trigger a blind POST retry.
+      try {
+        const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Key ${serverConfig.piApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ txid }),
+        })
+        if (!completeResponse.ok) {
+          console.error("[Pi Complete] Pi /complete returned non-OK; reconciling exact payment - status:", completeResponse.status)
+        }
+      } catch (completeError) {
+        console.error("[Pi Complete] Pi /complete transport outcome ambiguous; reconciling exact payment:", completeError instanceof Error ? completeError.message : "unknown")
       }
 
-      // Refetch payment to validate developer_completed=true
+      // Refetch payment to validate developer_completed=true after every POST outcome.
       const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
         method: "GET",
         headers: {

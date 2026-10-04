@@ -3,7 +3,7 @@ import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import type { Payment } from "@/lib/types"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
-import { getSettlementCheckpointAuthoritative, getDurableU2AIngressAuthoritative, recordSettlementA2UCreatedCheckpoint, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
+import { getSettlementCheckpointAuthoritative, getDurableU2AIngressAuthoritative, recordSettlementA2UCreatedCheckpoint, recordSettlementHorizonCheckpoint, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoverySettlementCreateReadBinding } from "@/lib/financial-recovery-settlement-create-read-binding"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
@@ -34,6 +34,13 @@ import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
  * - Source-wallet submission is separately serialized by flashpay:wallet:submit:${sourceAddress}
  * - If the payment-operation lock cannot be acquired: reread only; never execute a competing move
  */
+
+function horizonFeePiToExactStroops(value: number): number | null {
+  if (!Number.isFinite(value) || value < 0) return null
+  const stroops = Math.round(value * 10_000_000)
+  if (!Number.isSafeInteger(stroops) || stroops < 0) return null
+  return stroops / 10_000_000 === value ? stroops : null
+}
 
 interface LockedExecutorParams {
   paymentId: string
@@ -523,6 +530,17 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           ) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           }
+          const replayFeeStroops = horizonFeePiToExactStroops(replay.horizonFeeCharged)
+          if (replayFeeStroops === null) return { ok: false, status: 409, error: "Settlement Horizon fee proof could not be verified" }
+          const durableHorizon = await recordSettlementHorizonCheckpoint({
+            paymentId,
+            a2uPaymentId: replay.reference.a2uPaymentId,
+            preparedTxHash: replay.reference.preparedHash,
+            preparedSequence: replay.reference.preparedSequence,
+            a2uTxid: replay.reference.preparedHash,
+            horizonFeeStroops: replayFeeStroops,
+          })
+          if (durableHorizon.outcome !== "RECORDED" && durableHorizon.outcome !== "REPLAYED") return { ok: false, status: 409, error: "Settlement Horizon durable checkpoint unavailable" }
           try {
             await persistCheckpointMerged(paymentId, {
               a2uTxid: replay.reference.preparedHash,
@@ -577,7 +595,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         } catch (submitError) {
           console.error("[SETTLEMENT_SUBMIT_DIAGNOSTIC]", { paymentId, stage: "horizon_submit_exception", error: submitError instanceof Error ? submitError.message : "unknown", authorizesFinancialAction: false })
           await logSettlementSubmitRuntimeDiagnostic(latestPayment, "post_submit_exception")
-          return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+          // Submit outcome is ambiguous. Do not resubmit here: the exact read-only replay
+          // reconciliation below must prove movement before any durable/projection advance.
         }
         const verifiedReplay = await executeFinancialRecoverySettlementSubmitReplay({ payment: latestPayment, paymentId })
         if (verifiedReplay.outcome !== "MOVEMENT_VERIFIED") {
@@ -600,6 +619,17 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         ) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
+        const verifiedFeeStroops = horizonFeePiToExactStroops(verifiedReplay.horizonFeeCharged)
+        if (verifiedFeeStroops === null) return { ok: false, status: 409, error: "Settlement Horizon fee proof could not be verified" }
+        const durableHorizon = await recordSettlementHorizonCheckpoint({
+          paymentId,
+          a2uPaymentId: verifiedIntent.a2uPaymentId,
+          preparedTxHash: verifiedIntent.preparedHash,
+          preparedSequence: verifiedIntent.preparedSequence,
+          a2uTxid: verifiedIntent.preparedHash,
+          horizonFeeStroops: verifiedFeeStroops,
+        })
+        if (durableHorizon.outcome !== "RECORDED" && durableHorizon.outcome !== "REPLAYED") return { ok: false, status: 409, error: "Settlement Horizon durable checkpoint unavailable" }
         try {
           await persistCheckpointMerged(paymentId, {
             a2uTxid: verifiedIntent.preparedHash,
