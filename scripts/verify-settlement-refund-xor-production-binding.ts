@@ -81,4 +81,4 @@ for (const c of cases) {
   assert(refundAllowed === c.refundAllowed, `truth-table refund mismatch: ${c.name}`)
 }
 
-console.log(`SETTLEMENT_REFUND_XOR_PRODUCTION_BINDING=PASS cases=${cases.length} source=production`) 
+console.log(`SETTLEMENT_REFUND_XOR_PRODUCTION_BINDING=PASS cases=${cases.length} source=production`)

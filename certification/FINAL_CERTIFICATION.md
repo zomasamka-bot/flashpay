@@ -1,4 +1,3 @@
-
 ## PLAN F — Building-risk / ambiguous A2U create crash-window closure (2026-10-04)
 
 Finding: **CONFIRMED_DEFECT_FIXED**. A `SETTLEMENT_RECONCILE` recovery invocation was correctly separated by the scheduler from fresh dispatch, but the shared locked executor previously validated the reconciling shape and then delegated to `executeA2U`; with no `a2uPaymentId`, that could reach a fresh Pi A2U POST after an earlier process crash had already allowed Pi to accept the first create before its identifier was checkpointed.
