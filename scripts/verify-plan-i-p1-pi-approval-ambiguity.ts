@@ -1,0 +1,27 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
+
+const must=(ok:boolean,msg:string)=>{if(!ok)throw new Error(`PLAN_I_P1_PI_APPROVAL_AMBIGUITY=FAIL ${msg}`)}
+const src=readFileSync(resolve(__dirname,"../app/api/pi/approve/route.ts"),"utf8")
+const claim=src.indexOf("await recordSettlementU2AApprovalClaimFromStartLease({")
+const post=src.indexOf('fetch(\n        `https://api.minepi.com/v2/payments/${identifier}/approve`')
+const postEnd=src.indexOf("// Mandatory exact reconciliation for every POST outcome",post)
+const get=src.indexOf('fetch(\n      `https://api.minepi.com/v2/payments/${identifier}`',postEnd)
+const approved=src.indexOf('refetchedPayment.status?.developer_approved !== true',get)
+const cache=src.indexOf('await redis.set(approvalCacheKey, "approved"',approved)
+must(claim>=0&&post>claim,"durable approval claim must precede Pi /approve side effect")
+must(postEnd>post&&get>postEnd,"every Pi /approve outcome must converge on exact GET reconciliation")
+const ambiguous=src.slice(post,postEnd)
+must(ambiguous.includes("Pi /approve non-OK outcome is ambiguous; reconciling exact payment"),"non-OK ambiguity reconciliation marker missing")
+must(ambiguous.includes("Pi /approve transport outcome is ambiguous; reconciling exact payment"),"transport ambiguity reconciliation marker missing")
+must(!ambiguous.includes('return new Response(JSON.stringify({ error: "Approval failed"'),"non-OK must not return before exact GET")
+must((ambiguous.match(/\/approve`/g)||[]).length===1,"Pi /approve POST must appear exactly once in side-effect block")
+must(approved>get,"developer_approved=true must be required after exact GET")
+must(src.indexOf("refetchedPayment.identifier !== identifier",get)>get,"refetched identifier binding missing")
+must(src.indexOf('refetchedPayment.network !== "Pi Testnet"',get)>get,"refetched network binding missing")
+must(src.indexOf("refetchedPayment.metadata?.paymentId !== paymentId",get)>get,"refetched paymentId binding missing")
+must(src.indexOf("refetchedPayment.amount !== canonicalPayment.amount || refetchedPayment.amount !== redisPayment.amount",get)>get,"refetched amount binding missing")
+must(src.indexOf('refetchedPayment.direction !== "user_to_app"',get)>get,"refetched direction binding missing")
+must(src.indexOf("refetchedPayment.status?.cancelled === true || refetchedPayment.status?.user_cancelled === true",get)>get,"refetched cancellation binding missing")
+must(cache>approved,"approval cache must only follow exact approval proof")
+console.log("PLAN_I_P1_PI_APPROVAL_AMBIGUITY=PASS post_once=true reconcile_all_outcomes=true exact_identity=true blind_retry=false")

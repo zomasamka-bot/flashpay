@@ -1,0 +1,30 @@
+{
+  "plan": "PLAN I-FINAL / P1 — Pi U2A Approval Ambiguity Closure",
+  "date": "2026-10-04",
+  "input_zip_sha256": "7305c1613ed06d416fb9dfd60f147eb50b1f5f6321857a7432aa98a5d087908b",
+  "classification": "CONFIRMED_PROOF_RECOVERY_GAP_FIXED",
+  "runtime_files_changed": ["app/api/pi/approve/route.ts"],
+  "finding": "Pi /approve non-OK and transport-exception outcomes could return before exact Pi GET reconciliation even though the durable U2A approval claim had already been recorded.",
+  "fix_contract": [
+    "durable approval claim precedes Pi /approve",
+    "Pi /approve POST is attempted at most once per invocation",
+    "OK, already-approved, non-OK and transport-exception outcomes converge on exact Pi GET reconciliation",
+    "success requires exact identifier, paymentId, amount, Pi Testnet, user_to_app, non-cancelled and developer_approved=true evidence",
+    "unresolved reconciliation fails closed; no blind Pi /approve retry"
+  ],
+  "verifier": "scripts/verify-plan-i-p1-pi-approval-ambiguity.ts",
+  "mutation_sensitivity": {
+    "non_ok_early_return": "EXPECTED_FAIL",
+    "exception_without_reconciliation": "EXPECTED_FAIL",
+    "developer_approved_gate_removed": "EXPECTED_FAIL",
+    "identifier_gate_removed": "EXPECTED_FAIL",
+    "network_gate_removed": "EXPECTED_FAIL",
+    "amount_gate_removed": "EXPECTED_FAIL",
+    "second_approve_post_introduced": "EXPECTED_FAIL",
+    "expected_failures": 7,
+    "unexpected_passes": 0
+  },
+  "full_financial_verifier": "PASS",
+  "local_next_build": "NOT_EXECUTED_ENVIRONMENT_MISSING_PNPM_AND_NODE_MODULES",
+  "result": "PASS_PENDING_EXTERNAL_BUILD"
+}

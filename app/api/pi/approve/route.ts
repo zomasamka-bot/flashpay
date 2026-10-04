@@ -242,38 +242,41 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Call Pi /approve endpoint
-    const approvalResponse = await fetch(
-      `https://api.minepi.com/v2/payments/${identifier}/approve`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Key ${serverConfig.piApiKey}`,
-          "Content-Type": "application/json",
+    // PLAN I P1: Pi /approve is an externally visible side effect. A non-2xx or
+    // transport exception can be ambiguous (Pi may have applied the approval while
+    // the response was lost). Attempt POST at most once, then ALWAYS reconcile by
+    // exact GET before deciding success/failure. Never blindly retry /approve here.
+    let approvalPostOutcome: "ok" | "already_approved" | "non_ok" | "exception" = "non_ok"
+    try {
+      const approvalResponse = await fetch(
+        `https://api.minepi.com/v2/payments/${identifier}/approve`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Key ${serverConfig.piApiKey}`,
+            "Content-Type": "application/json",
+          },
         },
-      },
-    )
-
-    const approvalData = await approvalResponse.json().catch(() => ({}))
-
-    // Handle response — both new approval and already_approved are valid
-    if (!approvalResponse.ok) {
-      // Check if it's "already_approved" — this is valid, not an error
-      if (approvalResponse.status === 400 && approvalData.error?.message?.includes("already_approved")) {
+      )
+      const approvalData = await approvalResponse.json().catch(() => ({}))
+      if (approvalResponse.ok) {
+        approvalPostOutcome = "ok"
+        console.log("[Pi Webhook] ✓ Payment approved via Pi API")
+      } else if (approvalResponse.status === 400 && approvalData.error?.message?.includes("already_approved")) {
+        approvalPostOutcome = "already_approved"
         console.log("[Pi Webhook] ✓ Payment already approved on Pi side")
       } else {
-        console.error("[Pi Webhook] Pi API approval failed:", approvalResponse.status, approvalData)
-        return new Response(JSON.stringify({ error: "Approval failed" }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        })
+        approvalPostOutcome = "non_ok"
+        console.warn("[PLAN I P1] Pi /approve non-OK outcome is ambiguous; reconciling exact payment", { status: approvalResponse.status })
       }
-    } else {
-      console.log("[Pi Webhook] ✓ Payment approved via Pi API")
+    } catch (approvalError) {
+      approvalPostOutcome = "exception"
+      console.warn("[PLAN I P1] Pi /approve transport outcome is ambiguous; reconciling exact payment", approvalError)
     }
 
-    // SECURITY: After /approve (including already_approved), refetch Pi and revalidate before caching
-    console.log("[Pi Webhook] Refetching Pi payment to verify developer_approved...")
+    // Mandatory exact reconciliation for every POST outcome: OK, already-approved,
+    // non-OK, or transport exception. Success is derived only from canonical Pi state.
+    console.log("[Pi Webhook] Refetching Pi payment to verify developer_approved...", { approvalPostOutcome })
     const piRefetchResponse = await fetch(
       `https://api.minepi.com/v2/payments/${identifier}`,
       {
@@ -286,62 +289,50 @@ export async function POST(request: NextRequest) {
     )
 
     if (!piRefetchResponse.ok) {
-      console.error("[Pi Webhook] Failed to refetch Pi payment after approval:", piRefetchResponse.status)
-      return new Response(JSON.stringify({ error: "Payment verification failed" }), {
-        status: 500,
+      console.error("[PLAN I P1] Exact Pi approval reconciliation unavailable", { status: piRefetchResponse.status, approvalPostOutcome })
+      return new Response(JSON.stringify({ error: "Approval reconciliation unavailable", code: "PI_APPROVAL_RECONCILIATION_UNAVAILABLE" }), {
+        status: 503,
         headers: { "Content-Type": "application/json" },
       })
     }
 
-    const refetchedPayment = await piRefetchResponse.json()
+    const refetchedPayment: PiPaymentDTO = await piRefetchResponse.json()
 
-    // Revalidate paymentId, amount, direction, non-cancelled state, and developer_approved
+    // Revalidate the exact identity and immutable financial attributes before
+    // accepting developer_approved=true as proof of the side effect.
+    if (refetchedPayment.identifier !== identifier) {
+      console.error("[PLAN I P1] SECURITY: Refetched identifier mismatch")
+      return new Response(JSON.stringify({ error: "Payment validation failed" }), { status: 409, headers: { "Content-Type": "application/json" } })
+    }
     if (refetchedPayment.network !== "Pi Testnet") {
       console.error("[DR-24 NETWORK BOUNDARY] refetched Pi network mismatch", { paymentId, observedNetwork: typeof refetchedPayment.network === "string" ? refetchedPayment.network : "invalid" })
       return new Response(JSON.stringify({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }), { status: 409, headers: { "Content-Type": "application/json" } })
     }
-
     if (refetchedPayment.metadata?.paymentId !== paymentId) {
-      console.error("[Pi Webhook] SECURITY: Refetched paymentId mismatch")
-      return new Response(JSON.stringify({ error: "Payment validation failed" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      })
+      console.error("[PLAN I P1] SECURITY: Refetched paymentId mismatch")
+      return new Response(JSON.stringify({ error: "Payment validation failed" }), { status: 409, headers: { "Content-Type": "application/json" } })
     }
-
-    if (refetchedPayment.amount !== canonicalPayment.amount) {
-      console.error("[Pi Webhook] SECURITY: Amount changed after approval")
-      return new Response(JSON.stringify({ error: "Payment validation failed" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      })
+    if (refetchedPayment.amount !== canonicalPayment.amount || refetchedPayment.amount !== redisPayment.amount) {
+      console.error("[PLAN I P1] SECURITY: Amount changed after approval")
+      return new Response(JSON.stringify({ error: "Payment validation failed" }), { status: 409, headers: { "Content-Type": "application/json" } })
     }
-
     if (refetchedPayment.direction !== "user_to_app") {
-      console.error("[Pi Webhook] SECURITY: Direction changed after approval")
-      return new Response(JSON.stringify({ error: "Invalid payment direction" }), {
-        status: 400,
+      console.error("[PLAN I P1] SECURITY: Direction changed after approval")
+      return new Response(JSON.stringify({ error: "Invalid payment direction" }), { status: 409, headers: { "Content-Type": "application/json" } })
+    }
+    if (refetchedPayment.status?.cancelled === true || refetchedPayment.status?.user_cancelled === true) {
+      console.error("[PLAN I P1] SECURITY: Payment cancelled after approval")
+      return new Response(JSON.stringify({ error: "Payment is cancelled" }), { status: 409, headers: { "Content-Type": "application/json" } })
+    }
+    if (refetchedPayment.status?.developer_approved !== true) {
+      console.warn("[PLAN I P1] Approval not proven by exact reconciliation", { approvalPostOutcome })
+      return new Response(JSON.stringify({ error: "Approval not confirmed", code: "PI_APPROVAL_NOT_CONFIRMED" }), {
+        status: 503,
         headers: { "Content-Type": "application/json" },
       })
     }
 
-    if (refetchedPayment.status?.cancelled || refetchedPayment.status?.user_cancelled) {
-      console.error("[Pi Webhook] SECURITY: Payment cancelled after approval")
-      return new Response(JSON.stringify({ error: "Payment is cancelled" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      })
-    }
-
-    if (!refetchedPayment.status?.developer_approved) {
-      console.error("[Pi Webhook] SECURITY: developer_approved is false after approval call")
-      return new Response(JSON.stringify({ error: "Approval not confirmed" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      })
-    }
-
-    console.log("[Pi Webhook] ✓ Post-approval validation passed - developer_approved: true")
+    console.log("[Pi Webhook] ✓ Post-approval exact reconciliation passed - developer_approved: true")
 
     // Store context only from verified Pi response
     if (isRedisConfigured) {
