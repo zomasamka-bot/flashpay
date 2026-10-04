@@ -7,7 +7,7 @@
     "state": "READY"
   },
   "classification": "CONFIRMED_PRE_A2U_LIVENESS_DEFECT_FIX_PLUS_CERTIFICATION_INSTRUMENTATION_HARDENED_NO_NEW_FINANCIAL_AUTHORITY",
-  "live_result": "R2_ATTEMPT_2_FAILED_CLOSED_PRE_HORIZON; R4_NOT_YET_DEPLOYED",
+  "live_result": "R2_ATTEMPT_2_FAILED_CLOSED_PRE_HORIZON; R4_DEPLOY_BUILD_FAILED_TYPECHECK; R4B_BUILD_FIX_NOT_YET_DEPLOYED",
   "armed_payments": {
     "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
     "payment_b": "e3b83ecd-9f5e-4963-b75f-e3ef058cf095"
@@ -63,10 +63,10 @@
       "changed_typescript_files": 9
     },
     "source_manifest": "PASS",
-    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4",
+    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R4B",
     "fin4_r4_static_binding": "PASS",
     "fin4_r4_mutations": {
-      "expected_failures": 19,
+      "expected_failures": 21,
       "unexpected_passes": 0
     },
     "clean_zip_hygiene": "PASS"
@@ -92,5 +92,16 @@
     "financial_lock_implementation_changed": false,
     "horizon_submit_implementation_changed": false,
     "financial_authority_added": false
+  },
+  "r4_build_failure_2026_10_04": {
+    "deployment_id": "dpl_4ZdgtJqnEcagoFTBUsf9VAosxhSa",
+    "git_sha": "83b24b168f4a02a6f6474570a92619970d529bce",
+    "vercel_state": "ERROR",
+    "next_compile": "PASS",
+    "failure_phase": "Next.js lint/type validity check",
+    "root_cause": "lib/a2u-locked-executor.ts canonicalizeF24DurableTimestamps declared redis.eval<[string], number> while passing ten ARGV string values; TypeScript rejected the ten-element argument tuple",
+    "dependency_warning_causal": false,
+    "fix": "narrow all optional identity/amount fields fail-closed, construct an exact ten-string repairArgs tuple, and declare redis.eval with the matching ten-string generic tuple",
+    "financial_semantics_changed_by_build_fix": false
   }
 }

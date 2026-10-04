@@ -26,7 +26,7 @@ const validIntegration=(s:string)=>{
 const validLaunch=(s:string)=>s.includes('Promise.all([invokeRole(origin, runId, "A"), invokeRole(origin, runId, "B")])')&&s.includes('process.env.VERCEL_URL')&&!s.includes('executeA2URecovery(')&&!s.includes('submitTransaction(')
 const validRole=(s:string,role:string)=>s.includes(`fin4ArmedPaymentForRole(runId, "${role}")`)&&s.includes('fin4RequireControlledLaunch(runId)')&&s.includes('executeA2URecovery(paymentId)')&&!s.includes('body.paymentId')&&!s.includes('body.role')&&!s.includes('submitTransaction(')
 const validComplete=(s:string)=>s.includes('getDurableU2AIngressAuthoritative')&&s.includes('payment.payerUidCapturedAt = durableCanonicalTimes?.verifiedAt')&&s.includes('payment.paidAt = durableCanonicalTimes.completedAt')
-const validRepair=(s:string)=>s.includes('isF24PreA2UTimestampRepairSafe')&&s.includes("current.a2uPaymentId~=nil or current.a2uTxid~=nil")&&s.includes("current.refundPaymentId~=nil or current.refundTxid~=nil")&&s.includes('current.redisProjectionVersion~=version then return 0')&&s.includes('exactPiAuthority')&&s.includes('status?.developer_completed === true')
+const validRepair=(s:string)=>s.includes('isF24PreA2UTimestampRepairSafe')&&s.includes("current.a2uPaymentId~=nil or current.a2uTxid~=nil")&&s.includes("current.refundPaymentId~=nil or current.refundTxid~=nil")&&s.includes('current.redisProjectionVersion~=version then return 0')&&s.includes('const repairArgs: [string, string, string, string, string, string, string, string, string, string]')&&s.includes('redis.eval<[string, string, string, string, string, string, string, string, string, string], number>')&&s.includes('typeof payment.merchantUid !== "string"')&&s.includes('typeof payment.piPaymentId !== "string"')&&s.includes('typeof payment.u2aTxid !== "string"')&&s.includes('typeof payment.payerUid !== "string"')&&s.includes('exactPiAuthority')&&s.includes('status?.developer_completed === true')
 
 let expected=0
 function mutate(name:string,source:string,from:string,to:string,valid:(s:string)=>boolean){
@@ -50,6 +50,8 @@ mutate('complete_new_date_paid',c,'payment.paidAt = durableCanonicalTimes.comple
 mutate('repair_allows_advanced_settlement',l,'current.a2uPaymentId~=nil or current.a2uTxid~=nil','false',validRepair)
 mutate('repair_allows_refund',l,'current.refundPaymentId~=nil or current.refundTxid~=nil','false',validRepair)
 mutate('repair_removes_version_fence',l,'current.redisProjectionVersion~=version then return 0','false then return 0',validRepair)
+mutate('repair_argv_tuple_type_regression',l,'redis.eval<[string, string, string, string, string, string, string, string, string, string], number>','redis.eval<[string], number>',validRepair)
+mutate('repair_removes_optional_identity_narrowing',l,'typeof payment.merchantUid !== "string"','false',validRepair)
 mutate('repair_weakens_pi_completion',l,'status?.developer_completed === true','true',validRepair)
 
 if(!validHarness(h)||!validIntegration(a)||!validLaunch(o)||!validRole(ra,'A')||!validRole(rb,'B')||!validComplete(c)||!validRepair(l))throw new Error('original FIN4 R4 invalid')

@@ -79,8 +79,17 @@ function isF24PreA2UTimestampRepairSafe(payment: Payment): boolean {
 
 async function canonicalizeF24DurableTimestamps(paymentId: string, payment: Payment, verifiedAt: string, completedAt: string): Promise<Payment | null> {
   if (!isF24PreA2UTimestampRepairSafe(payment)) return null
+  if (typeof payment.merchantUid !== "string" || payment.merchantUid.trim() === "" || payment.merchantUid !== payment.merchantUid.trim() ||
+      typeof payment.customerAmount !== "number" || !Number.isFinite(payment.customerAmount) || payment.customerAmount <= 0 ||
+      typeof payment.piPaymentId !== "string" || payment.piPaymentId.trim() === "" || payment.piPaymentId !== payment.piPaymentId.trim() ||
+      typeof payment.u2aTxid !== "string" || !/^[0-9a-f]{64}$/.test(payment.u2aTxid) ||
+      typeof payment.payerUid !== "string" || payment.payerUid.trim() === "" || payment.payerUid !== payment.payerUid.trim()) return null
   const expectedVersion = Number(payment.redisProjectionVersion)
-  const repaired = await redis.eval<[string], number>(`
+  const repairArgs: [string, string, string, string, string, string, string, string, string, string] = [
+    payment.id, payment.merchantId, payment.merchantUid, String(payment.customerAmount), payment.piPaymentId, payment.u2aTxid, payment.payerUid,
+    String(expectedVersion), verifiedAt, completedAt,
+  ]
+  const repaired = await redis.eval<[string, string, string, string, string, string, string, string, string, string], number>(`
 local raw=redis.call('GET',KEYS[1]); if not raw then return 0 end
 local ok,current=pcall(cjson.decode,raw); if not ok or type(current)~='table' then return -1 end
 local amount=tonumber(ARGV[4]); local version=tonumber(ARGV[8]); if not amount or not version then return -1 end
@@ -94,7 +103,7 @@ if current.settlementFailureState~=nil or current.retryCount~=nil or current.las
 if current.payerRefundEligible==true or current.horizonSuccessFlag==true or current.piCompletionPending==true or current.piCompleted==true or current.requiresDbReconciliation==true or current.dbRecorded==true then return -1 end
 current.payerUidCapturedAt=ARGV[9]; current.paidAt=ARGV[10]; current.settlementDispatchRequestedAt=ARGV[10]; current.redisProjectionVersion=version+1
 redis.call('SET',KEYS[1],cjson.encode(current)); return 1
-`, [`payment:${paymentId}`], [payment.id, payment.merchantId, payment.merchantUid, String(payment.customerAmount), payment.piPaymentId!, payment.u2aTxid!, payment.payerUid!, String(expectedVersion), verifiedAt, completedAt])
+`, [`payment:${paymentId}`], repairArgs)
   if (repaired !== 1) return null
   const readbackRaw = await redis.get(`payment:${paymentId}`)
   if (!readbackRaw) return null

@@ -52,6 +52,9 @@ need(c.includes('payment.payerUidCapturedAt = durableCanonicalTimes?.verifiedAt'
 need(l.includes('isF24PreA2UTimestampRepairSafe')&&l.includes('financialMovementExecuted: false'),"F2-4 repair must be explicitly pre-A2U/non-movement")
 need(l.includes('current.a2uPaymentId~=nil or current.a2uTxid~=nil')&&l.includes('current.refundPaymentId~=nil or current.refundTxid~=nil'),"F2-4 repair must reject advanced Settlement/Refund evidence")
 need(l.includes('current.redisProjectionVersion~=version then return 0'),"F2-4 repair must fence the Redis projection version")
+need(l.includes('const repairArgs: [string, string, string, string, string, string, string, string, string, string]'),"F2-4 repair args must be an exact ten-string tuple")
+need(l.includes('redis.eval<[string, string, string, string, string, string, string, string, string, string], number>'),"F2-4 Redis eval generic must exactly match ten ARGV values")
+need(l.includes('typeof payment.merchantUid !== "string"')&&l.includes('typeof payment.piPaymentId !== "string"')&&l.includes('typeof payment.u2aTxid !== "string"')&&l.includes('typeof payment.payerUid !== "string"'),"F2-4 repair must narrow optional identity fields before Redis eval")
 need(l.includes('exactPiAuthority')&&l.includes('transaction?.verified === true')&&l.includes('status?.developer_completed === true'),"F2-4 repair must require exact canonical Pi proof")
 need(l.includes('payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === d.completedAt && payment.settlementDispatchRequestedAt === d.completedAt'),"F2-4 authority must retain exact durable timestamp equality")
 
