@@ -74,3 +74,40 @@ export async function fin4Event(paymentId: string, sourceWallet: unknown, state:
   if (!cfg || !isRedisConfigured || !safeWallet(sourceWallet)) throw new Error("FIN4_FAIL_CLOSED_TELEMETRY_UNAVAILABLE")
   await emit(cfg,{ event, paymentId, sourceWallet, invocationId:state.invocationId, data })
 }
+
+
+export async function fin4BestEffortEvent(paymentId: string, sourceWallet: unknown, state: { invocationId: string } | null, event: string, data?: Record<string, unknown>): Promise<void> {
+  try {
+    await fin4Event(paymentId, sourceWallet, state, event, data)
+  } catch (error) {
+    console.warn("[FIN-4 LIVE] best-effort telemetry unavailable", { paymentId, event, error: String(error) })
+  }
+}
+
+export async function fin4ResetBarrierForArmedRun(runId: string): Promise<{ paymentA: string; paymentB: string }> {
+  const paymentA = process.env.FLASHPAY_FIN4_PAYMENT_A?.trim() ?? ""
+  const paymentB = process.env.FLASHPAY_FIN4_PAYMENT_B?.trim() ?? ""
+  if (process.env.VERCEL_ENV !== "production" || process.env.FLASHPAY_FIN4_ARMED !== "1" ||
+      runId !== process.env.FLASHPAY_FIN4_RUN_ID?.trim() || !paymentA || !paymentB || paymentA === paymentB || !isRedisConfigured) {
+    throw new Error("FIN4_TRIGGER_FAIL_CLOSED_NOT_ARMED")
+  }
+  await Promise.all([
+    redis.del(`${PREFIX}${runId}:participant:${paymentA}`),
+    redis.del(`${PREFIX}${runId}:participant:${paymentB}`),
+    redis.del(`${PREFIX}${runId}:barrier-released`),
+  ])
+  console.log("[FIN-4 LIVE] barrier reset", { runId, paymentA, paymentB, financialAuthorityMutated: false })
+  return { paymentA, paymentB }
+}
+
+export function fin4ArmedPaymentForRole(runId: string, role: unknown): string {
+  const paymentA = process.env.FLASHPAY_FIN4_PAYMENT_A?.trim() ?? ""
+  const paymentB = process.env.FLASHPAY_FIN4_PAYMENT_B?.trim() ?? ""
+  if (process.env.VERCEL_ENV !== "production" || process.env.FLASHPAY_FIN4_ARMED !== "1" ||
+      runId !== process.env.FLASHPAY_FIN4_RUN_ID?.trim() || !paymentA || !paymentB || paymentA === paymentB) {
+    throw new Error("FIN4_TRIGGER_FAIL_CLOSED_NOT_ARMED")
+  }
+  if (role === "A") return paymentA
+  if (role === "B") return paymentB
+  throw new Error("FIN4_TRIGGER_FAIL_CLOSED_INVALID_ROLE")
+}

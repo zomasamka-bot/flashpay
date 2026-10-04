@@ -1,23 +1,36 @@
 {
-  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness",
+  "certification": "FIN-4 Same-Wallet Real Cross-Instance LIVE Certification Harness R2",
   "date": "2026-10-04",
-  "baseline_zip": "flashpay-vb_TCFiAifi5Mq.zip",
-  "baseline_zip_sha256": "4bddde039c2a55ff7df77c473d6636519ed6a4c111ae8f24db805f67c6817aa2",
-  "classification": "CERTIFICATION_INSTRUMENTATION_ONLY_NO_FINANCIAL_AUTHORITY",
-  "live_result": "NOT_YET_EXECUTED_REQUIRES_DEPLOYMENT_AND_TWO_REAL_PAYMENTS",
-  "design": {
-    "arm_gate": ["VERCEL_ENV=production", "FLASHPAY_FIN4_ARMED=1", "FLASHPAY_FIN4_RUN_ID", "FLASHPAY_FIN4_PAYMENT_A", "FLASHPAY_FIN4_PAYMENT_B"],
-    "payment_ids_must_be_distinct": true,
-    "barrier_requires_distinct_process_ids": true,
-    "barrier_requires_same_source_wallet": true,
-    "barrier_position": "immediately before existing acquirePiWalletIntentSubmitLock",
+  "baseline_production_git_sha": "2e06c630fdb38a7bea2f6a325d9b7f0d301ddc4f",
+  "classification": "CERTIFICATION_INSTRUMENTATION_ONLY_NO_NEW_FINANCIAL_AUTHORITY",
+  "live_result": "ATTEMPT_1_FAILED_CLOSED_PRE_HORIZON; R2_NOT_YET_DEPLOYED",
+  "armed_payments": {
+    "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
+    "payment_b": "e3b83ecd-9f5e-4963-b75f-e3ef058cf095"
+  },
+  "attempt_1": {
+    "result": "FAIL_CLOSED_DISTINCT_PROCESS_BARRIER_TIMEOUT",
+    "stage": "pre_prepared",
+    "horizon_submit_entered": false,
+    "financial_movement_from_attempt": false
+  },
+  "r2_changes": {
+    "targeted_trigger": "POST /api/certification/fin4-trigger; action reset or run role A/B only; payment IDs derived only from armed env",
+    "trigger_auth": "exact FLASHPAY_FIN4_RUN_ID header match using timingSafeEqual",
+    "distinct_invocations": "A and B are separate HTTP requests; barrier still requires distinct process IDs and same source wallet",
+    "post_movement_telemetry": "best-effort/nonthrowing so it cannot block durable Horizon checkpoint",
+    "wallet_release_telemetry": "best-effort/nonthrowing so it cannot block walletLock.release",
     "financial_lock_implementation_changed": false,
     "horizon_submit_implementation_changed": false,
-    "financial_authority_added": false,
-    "timeout": "20s fail-closed",
-    "post_collision_reentry": "barrier released marker permits normal recovery/progress"
+    "postgres_financial_authority_changed": false,
+    "payment_amount_or_recipient_mutation": false
   },
-  "telemetry_events": ["BARRIER_ARRIVED", "BARRIER_RELEASED", "BARRIER_REENTRY", "BARRIER_TIMEOUT", "LOCK_ATTEMPT", "LOCK_ACQUIRED", "LOCK_LOST", "SUBMIT_ENTER", "SUBMIT_VERIFIED", "LOCK_RELEASING", "LOCK_RELEASED"],
+  "verification": {
+    "full_financial_recovery_build_verifier": "PASS",
+    "fin4_r2_static_binding": "PASS",
+    "fin4_r2_mutations": {"expected_failures": 11, "unexpected_passes": 0},
+    "next_external_build": "REQUIRED_ON_VERCEL_AFTER_USER_PUBLISHES_R2"
+  },
   "required_live_pass_predicates": {
     "two_distinct_payments": true,
     "two_distinct_processes": true,
@@ -29,15 +42,5 @@
     "duplicate_movement_count": 0,
     "lost_movement_count": 0,
     "second_progresses_after_release_or_recovery": true
-  },
-  "verification": {
-    "full_financial_recovery_verifier": "PASS",
-    "p7_regression": "PASS",
-    "fin4_static_binding": "PASS",
-    "fin4_mutations": {"expected_failures": 6, "unexpected_passes": 0},
-    "typescript_transpile": "PASS",
-    "next_external_build": "NOT_RUN_LOCAL_ENV_NO_PNPM_AND_REGISTRY_DNS_UNAVAILABLE"
-  },
-  "changed_runtime_files": ["lib/a2u-executor.ts", "lib/fin4-live-certification.ts"],
-  "changed_certification_files": ["scripts/run-financial-recovery-build-verifier.mjs", "scripts/verify-fin4-live-certification-harness.ts", "scripts/verify-fin4-live-certification-mutations.ts", "certification/FIN4_SAME_WALLET_REAL_CROSS_INSTANCE_LIVE_HARNESS_EVIDENCE.json"]
+  }
 }
