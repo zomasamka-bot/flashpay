@@ -1,7 +1,7 @@
 b2cc815c63108dd2667ca97838e46b138886ddaa8564b3a143c7e60f48d8580a  ./.gitignore
 fd6dd2954de234c794bf3abb7760aff33631930c7c8d67663059ed1a44a0dd8a  ./app/api/certification/fin4-trigger-a/route.ts
 cefc7060ac1cc470868b9a73baefc113fbbdc9d7db216e25279e80ac319deb98  ./app/api/certification/fin4-trigger-b/route.ts
-227bc068b630faa70d318f91c30a300d086818b1913f1e5311c69eb9fbf225b5  ./app/api/certification/fin4-trigger/route.ts
+3c724fdfaf3530a526ac3a700372a9db269c84c7ea84e592c2d2276b56b65489  ./app/api/certification/fin4-trigger/route.ts
 5e5d925f49b388b7e1c444cfc9acdd5599ac9cf3ef0570317e1ad04580f69412  ./app/api/control/availability/route.ts
 3ec0c6a1ccf8732e2274c443af71415a0f47b637152f20967c22bbadeae9bace  ./app/api/control/domain/route.ts
 0fc0b29eb2f45b23654320e8ba0403e5ecad190f476719a59e3ee328261100a8  ./app/api/control/system/route.ts
@@ -274,8 +274,8 @@ f2f4762d405ec0cce1182233fda114dfc460c582f0975a44b8561360256897b1  ./public/valid
 7affa59ab8c3577987b1eeda625e3752c2e7d37cbed3a3380d161b2eb5877985  ./scripts/verify-dr11-orphan-a2u-refund-recovery.ts
 15ca00678fc18d189d248e8cd005075e4f02a7d3e2335c330000fa26f2698c7d  ./scripts/verify-dr11-refund-race-ui-binding.ts
 d3ef77c4d5ce12f47d0973cbbf312bdc5e1a9a44b26df751dec8f11d3c568511  ./scripts/verify-emergency-stuck-payment-rescue-safety.ts
-6d48c93bc83b2fd2978e03401efcad6629617c2889aeeb1e5b8f330d3d52995a  ./scripts/verify-fin4-live-certification-harness.ts
-6fc47eb77c5ca290df0d834bfdd9541ffa95164d121e808e7e138290ed46d82f  ./scripts/verify-fin4-live-certification-mutations.ts
+83c514b7079c35b7eb882679b520d5eb76408e4e3ab3f5fbc212852720b60a74  ./scripts/verify-fin4-live-certification-harness.ts
+b1570f191e5b9603d34a3ed479ae7f1831661247a0acf4003ba0d11b7c57d43d  ./scripts/verify-fin4-live-certification-mutations.ts
 b7af22e089db7160088c7d5bc865ea4a160158cd414859a2d59d262fa508ff0d  ./scripts/verify-financial-recovery-a2u-proof.ts
 e7e5431465d66b0bac46dbaab05d5e482dc0ef39a4513dbcfee028d84ea41dab  ./scripts/verify-financial-recovery-crash-policy.ts
 44b0c1a50a9485d8651368e1bc5eeede398a7bf5dc255497c341896e2cdf04e9  ./scripts/verify-financial-recovery-financial-invariants.ts

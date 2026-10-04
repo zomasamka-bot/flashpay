@@ -38,6 +38,11 @@ need(release>=0&&released>release,"FIN4 release telemetry must run only after th
 need(o.includes('process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()')&&o.includes('FIN4_FAIL_CLOSED_AUTOMATION_BYPASS_UNAVAILABLE'),"R4D must fail closed without Vercel automation bypass")
 need(o.includes('"x-vercel-protection-bypass": bypassSecret'),"R4D split-function calls must use the official Vercel automation bypass header")
 need(!o.includes('console.log(bypassSecret)')&&!o.includes('payload: bypassSecret'),"R4D must never log or return the bypass secret")
+need(o.includes('export async function GET(request: NextRequest)')&&o.includes('action: "preflight"')&&o.includes('automationBypassPresent: true')&&o.includes('financialAuthorityMutated: false'),"R4D.1 must expose an authorized read-only bypass preflight")
+const preflightStart=o.indexOf('export async function GET(request: NextRequest)')
+const preflightEnd=o.indexOf('async function invokeRole(',preflightStart)
+const preflight=o.slice(preflightStart,preflightEnd)
+need(!preflight.includes('fin4ClaimLaunchForArmedRun')&&!preflight.includes('redis.')&&!preflight.includes('fetch(')&&!preflight.includes('executeA2URecovery')&&!preflight.includes('submitTransaction('),"R4D.1 preflight must have zero launch, Redis, network, recovery, or financial side effects")
 need(o.includes('Promise.all([invokeRole(origin, runId, "A", bypassSecret), invokeRole(origin, runId, "B", bypassSecret)])'),"R3 launch must fan out concurrently to A and B")
 need(o.includes('process.env.VERCEL_URL')&&o.includes('/api/certification/fin4-trigger-${role.toLowerCase()}'),"R3 launch must target the exact deployment-specific origin and split routes")
 need(!o.includes('executeA2URecovery(')&&!o.includes('submitTransaction('),"R3 orchestrator must have no financial executor or submit authority")
@@ -63,4 +68,4 @@ need(l.includes('const completedAt = d.completedAt')&&l.includes('if (completedA
 need(l.includes('exactPiAuthority')&&l.includes('transaction?.verified === true')&&l.includes('status?.developer_completed === true'),"F2-4 repair must require exact canonical Pi proof")
 need(l.includes('payment.payerUidCapturedAt === d.verifiedAt && payment.paidAt === completedAt && payment.settlementDispatchRequestedAt === completedAt')&&l.includes('canonicalizeF24DurableTimestamps(paymentId, payment, d.verifiedAt, completedAt)'),"F2-4 authority must retain exact durable timestamp equality after null narrowing")
 
-console.log("FIN4_LIVE_CERTIFICATION_HARNESS_R4D=PASS split_functions=true one_shot_launch=true distinct_process_barrier=true financial_authority=false timestamp_hotpath_canonical=true timestamp_self_heal_pre_a2u_only=true telemetry_after_durable=true release_before_telemetry=true")
+console.log("FIN4_LIVE_CERTIFICATION_HARNESS_R4D1=PASS split_functions=true one_shot_launch=true distinct_process_barrier=true financial_authority=false timestamp_hotpath_canonical=true timestamp_self_heal_pre_a2u_only=true telemetry_after_durable=true release_before_telemetry=true")

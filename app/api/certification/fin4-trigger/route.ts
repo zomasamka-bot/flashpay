@@ -19,6 +19,17 @@ function automationBypassSecret(): string {
   return secret
 }
 
+export async function GET(request: NextRequest) {
+  const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
+  if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+  try {
+    automationBypassSecret()
+    return NextResponse.json({ ok: true, action: "preflight", automationBypassPresent: true, financialAuthorityMutated: false })
+  } catch {
+    return NextResponse.json({ ok: false, action: "preflight", automationBypassPresent: false, financialAuthorityMutated: false }, { status: 409 })
+  }
+}
+
 async function invokeRole(origin: string, runId: string, role: "A" | "B", bypassSecret: string) {
   const response = await fetch(`${origin}/api/certification/fin4-trigger-${role.toLowerCase()}`, {
     method: "POST",

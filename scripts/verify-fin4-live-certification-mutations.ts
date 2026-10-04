@@ -24,7 +24,14 @@ const validIntegration=(s:string)=>{
   const released=s.indexOf('fin4BestEffortEvent(ctx.paymentId, ctx.payment.a2uFromAddress, fin4State, "LOCK_RELEASED")')
   return durable>=0&&verified>durable&&release>=0&&released>release&&!s.includes('"LOCK_RELEASING"')
 }
-const validLaunch=(s:string)=>s.includes('Promise.all([invokeRole(origin, runId, "A", bypassSecret), invokeRole(origin, runId, "B", bypassSecret)])')&&s.includes('process.env.VERCEL_URL')&&s.includes('process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()')&&s.includes('FIN4_FAIL_CLOSED_AUTOMATION_BYPASS_UNAVAILABLE')&&s.includes('"x-vercel-protection-bypass": bypassSecret')&&!s.includes('executeA2URecovery(')&&!s.includes('submitTransaction(')
+const validLaunch=(s:string)=>s.includes('Promise.all([invokeRole(origin, runId, "A", bypassSecret), invokeRole(origin, runId, "B", bypassSecret)])')&&s.includes('process.env.VERCEL_URL')&&s.includes('process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()')&&s.includes('FIN4_FAIL_CLOSED_AUTOMATION_BYPASS_UNAVAILABLE')&&s.includes('\"x-vercel-protection-bypass\": bypassSecret')&&!s.includes('executeA2URecovery(')&&!s.includes('submitTransaction(')
+const validPreflight=(s:string)=>{
+  const start=s.indexOf('export async function GET(request: NextRequest)')
+  const end=s.indexOf('async function invokeRole(',start)
+  if(start<0||end<=start)return false
+  const g=s.slice(start,end)
+  return g.includes('automationBypassSecret()')&&g.includes('action: "preflight"')&&g.includes('automationBypassPresent: true')&&g.includes('financialAuthorityMutated: false')&&!g.includes('fin4ClaimLaunchForArmedRun')&&!g.includes('fetch(')&&!g.includes('executeA2URecovery')&&!g.includes('submitTransaction(')
+}
 const validRole=(s:string,role:string)=>s.includes(`fin4ArmedPaymentForRole(runId, "${role}")`)&&s.includes('fin4RequireControlledLaunch(runId)')&&s.includes('executeA2URecovery(paymentId)')&&!s.includes('body.paymentId')&&!s.includes('body.role')&&!s.includes('submitTransaction(')
 const validComplete=(s:string)=>s.includes('getDurableU2AIngressAuthoritative')&&s.includes('const ingressCompletedAt = ingress.completedAt')&&s.includes('if (ingressCompletedAt === null ||')&&s.includes('payment.payerUidCapturedAt = durableCanonicalTimes?.verifiedAt')&&s.includes('payment.paidAt = durableCanonicalTimes.completedAt')
 const validRepair=(s:string)=>s.includes('isF24PreA2UTimestampRepairSafe')&&s.includes("current.a2uPaymentId~=nil or current.a2uTxid~=nil")&&s.includes("current.refundPaymentId~=nil or current.refundTxid~=nil")&&s.includes('current.redisProjectionVersion~=version then return 0')&&s.includes('const repairArgs: [string, string, string, string, string, string, string, string, string, string]')&&s.includes('redis.eval<[string, string, string, string, string, string, string, string, string, string], number>')&&s.includes('typeof payment.merchantUid !== "string"')&&s.includes('typeof payment.piPaymentId !== "string"')&&s.includes('typeof payment.u2aTxid !== "string"')&&s.includes('typeof payment.payerUid !== "string"')&&s.includes('const completedAt = d.completedAt')&&s.includes('if (completedAt === null) return null')&&s.includes('exactPiAuthority')&&s.includes('status?.developer_completed === true')
@@ -46,6 +53,8 @@ mutate('sequential_split_launch',o,'Promise.all([invokeRole(origin, runId, "A", 
 mutate('remove_automation_bypass_header',o,'"x-vercel-protection-bypass": bypassSecret','"x-fin4-no-bypass": bypassSecret',validLaunch)
 mutate('remove_automation_bypass_env_gate',o,'process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()','process.env.FLASHPAY_FIN4_RUN_ID?.trim()',validLaunch)
 mutate('remove_exact_deployment_origin',o,'process.env.VERCEL_URL','process.env.NEXT_PUBLIC_APP_URL',validLaunch)
+mutate('preflight_removes_bypass_check',o,'    automationBypassSecret()','    void 0',validPreflight)
+mutate('preflight_claims_launch',o,'    automationBypassSecret()','    automationBypassSecret()\n    await fin4ClaimLaunchForArmedRun(runId)',validPreflight)
 mutate('allow_role_a_client_payment',ra,'fin4ArmedPaymentForRole(runId, "A")','(await request.json()).paymentId',s=>validRole(s,'A'))
 mutate('allow_role_b_client_payment',rb,'fin4ArmedPaymentForRole(runId, "B")','(await request.json()).paymentId',s=>validRole(s,'B'))
 mutate('complete_new_date_payer',c,'durableCanonicalTimes?.verifiedAt ?? payment.payerUidCapturedAt','payment.payerUidCapturedAt',validComplete)
@@ -59,5 +68,5 @@ mutate('repair_removes_optional_identity_narrowing',l,'typeof payment.merchantUi
 mutate('repair_removes_completed_at_narrowing',l,'if (completedAt === null) return null','if (false) return null',validRepair)
 mutate('repair_weakens_pi_completion',l,'status?.developer_completed === true','true',validRepair)
 
-if(!validHarness(h)||!validIntegration(a)||!validLaunch(o)||!validRole(ra,'A')||!validRole(rb,'B')||!validComplete(c)||!validRepair(l))throw new Error('original FIN4 R4 invalid')
-console.log(`FIN4_LIVE_R4D_MUTATIONS=PASS expected_failures=${expected} unexpected_passes=0`)
+if(!validHarness(h)||!validIntegration(a)||!validLaunch(o)||!validPreflight(o)||!validRole(ra,'A')||!validRole(rb,'B')||!validComplete(c)||!validRepair(l))throw new Error('original FIN4 R4 invalid')
+console.log(`FIN4_LIVE_R4D1_MUTATIONS=PASS expected_failures=${expected} unexpected_passes=0`)
