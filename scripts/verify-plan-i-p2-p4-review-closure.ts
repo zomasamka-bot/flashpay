@@ -5,7 +5,7 @@ const dashboard = fs.readFileSync(path.join(root,"app/merchant/payments/page.tsx
 const complete = fs.readFileSync(path.join(root,"app/api/pi/complete/route.ts"),"utf8")
 const recovery = fs.readFileSync(path.join(root,"app/api/recovery/transient/route.ts"),"utf8")
 const refund = fs.readFileSync(path.join(root,"lib/refund-auto-orchestrator.ts"),"utf8")
-const vercel = fs.readFileSync(path.join(root,"vercel.json"),"utf8")
+const vercel = JSON.parse(fs.readFileSync(path.join(root,"vercel.json"),"utf8")) as { crons?: Array<{ path?: unknown; schedule?: unknown }> }
 function need(ok:boolean,msg:string){if(!ok) throw new Error(msg)}
 // P2: presentation refresh only, no financial endpoint/write introduced.
 need(dashboard.includes('window.setInterval(refreshWhileVisible, 20_000)'),"P2 bounded dashboard refresh missing")
@@ -20,7 +20,7 @@ need(complete.includes('immediateDrainRequestUrl.searchParams.set("mode", IMMEDI
 need(recovery.includes('scheduleTrustedTransientRequest("continuation-kick")'),"P3 continuation binding missing")
 need(recovery.includes('x-flashpay-transient-recovery-secret'),"P3 trusted external scheduler authority missing")
 need(refund.includes('return 60_000'),"P3 one-minute short refund retry missing")
-need(vercel.includes('"schedule": "0 21 * * *"'),"P3 independent daily cron safety net changed unexpectedly")
+need(Array.isArray(vercel.crons) && vercel.crons.some((cron) => cron?.path === "/api/recovery/transient" && cron?.schedule === "0 21 * * *"),"P3 independent daily cron safety net changed unexpectedly")
 // P4: exact certification hook and durable ordering remain intentional and unchanged.
 need(complete.includes('INTENTIONAL LIVE TESTNET CERTIFICATION HOOK — DO NOT REMOVE AS BUSINESS CLEANUP.'),"P4 intent documentation missing")
 need(complete.includes('process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1'),"P4 exact 0.10 production Testnet scope missing")
