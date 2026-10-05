@@ -180,7 +180,7 @@ export async function retirePoisonedAutomaticRefundIntent(params: { refundId: st
           AND c.last_error_code='automatic_refund_blocked'
           AND c.last_error_message='refund_create_uncertain'
           AND NOT EXISTS (SELECT 1 FROM refund_accounting_records a WHERE a.refund_id=c.refund_id OR a.payment_id=c.payment_id)
-          AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s WHERE s.payment_id=c.payment_id AND (s.a2u_txid IS NOT NULL OR s.horizon_confirmed=TRUE))
+          AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s WHERE s.payment_id=c.payment_id AND (s.a2u_txid IS NOT NULL OR s.horizon_confirmed_at IS NOT NULL))
       ), inserted AS (
         INSERT INTO refund_automatic_retirements(refund_id,payment_id,reason,evidence_code)
         SELECT refund_id,payment_id,$3,$4 FROM candidate
