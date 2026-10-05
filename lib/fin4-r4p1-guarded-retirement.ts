@@ -13,7 +13,20 @@ type Row = Record<string, unknown>
 const exact=(v:unknown):string|null=>typeof v==="string"&&v.trim()!==""&&v===v.trim()?v:null
 const isRecord=(v:unknown):v is Row=>typeof v==="object"&&v!==null&&!Array.isArray(v)
 const num=(v:unknown):number|null=>{const n=typeof v==="number"?v:typeof v==="string"?Number(v):NaN;return Number.isFinite(n)?n:null}
-function parseProjection(v:unknown):Payment|null{try{const p=typeof v==="string"?JSON.parse(v):v;return isRecord(p)?p as Payment:null}catch{return null}}
+function parseProjection(v:unknown):Payment|null{
+  try{
+    const p:unknown=typeof v==="string"?JSON.parse(v):v
+    if(!isRecord(p))return null
+    if(typeof p.id!=="string"||p.id.trim()===""||p.id!==p.id.trim())return null
+    if(typeof p.merchantId!=="string"||p.merchantId.trim()===""||p.merchantId!==p.merchantId.trim())return null
+    if(typeof p.amount!=="number"||!Number.isFinite(p.amount)||p.amount<=0)return null
+    if(typeof p.note!=="string")return null
+    if(typeof p.createdAt!=="string"||!Number.isFinite(Date.parse(p.createdAt)))return null
+    const allowedStatus=new Set(["pending","paid_to_app","settlement_pending","settled_to_merchant","settlement_failed","failed","cancelled","refund_pending","refunded"])
+    if(typeof p.status!=="string"||!allowedStatus.has(p.status))return null
+    return { ...p, id:p.id, merchantId:p.merchantId, amount:p.amount, note:p.note, createdAt:p.createdAt, status:p.status as Payment["status"] }
+  }catch{return null}
+}
 
 export async function executeFin4R4P1GuardedRetirement(requestedPaymentId:string){
   if(requestedPaymentId!==TARGET_PAYMENT_ID)return{ok:false as const,outcome:"TARGET_NOT_ALLOWED" as const,financialAuthorityMutated:false,piMutationExecuted:false,horizonSubmitExecuted:false,redisMutated:false}
