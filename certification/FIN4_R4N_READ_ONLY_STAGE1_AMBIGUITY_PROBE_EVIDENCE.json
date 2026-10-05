@@ -1,0 +1,21 @@
+{
+  "station": "FIN4_R4N_READ_ONLY_STAGE1_AMBIGUITY_PROBE",
+  "date": "2026-10-05",
+  "purpose": "Resolve the R4M Stage1 creation ambiguity for the exact armed A without retrying or mutating financial state.",
+  "scope": {
+    "armedA": "FLASHPAY_FIN4_PAYMENT_A",
+    "armedB": "FLASHPAY_FIN4_PAYMENT_B",
+    "authorization": "exact FLASHPAY_FIN4_RUN_ID header",
+    "method": "GET only"
+  },
+  "evidence": [
+    "PostgreSQL exact A/B settlement checkpoint rows",
+    "Redis payment:A projection read as non-authoritative diagnostic evidence",
+    "Pi incomplete_server_payments read-only reconciliation bound to A paymentId/amount/merchantUid",
+    "Exact Pi Testnet app_to_user identity and B durable source-wallet anchor",
+    "Bounded Pi Testnet Horizon absence scan by exact A2U payment memo"
+  ],
+  "forbiddenMutations": ["Pi POST", "PostgreSQL write", "Redis write", "Horizon submit"],
+  "safeOutcome": "EXACT_UNMOVED_A2U_FOUND",
+  "failClosed": true
+}
