@@ -193,8 +193,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, action: "prepare-b-stage1", paymentA, paymentB, reason: "FIN4_R4K_IDENTITY_NOT_PROVEN", horizonSubmitExecuted: false }, { status: 409 })
       }
 
-      console.log("[FIN-4 R4K] exact B Stage1 preparation start", { runId, paymentA, paymentB, operation: "SETTLEMENT_CREATE", horizonSubmitAuthorized: false })
-      const prepared = await executeA2ULocked({ paymentId: paymentB, isRecovery: true, recoveryOperation: "SETTLEMENT_CREATE" })
+      console.log("[FIN-4 R4K] exact B Stage1 preparation start", { runId, paymentA, paymentB, operation: "FIN4_STAGE1_PREPARE", horizonSubmitAuthorized: false })
+      const prepared = await executeA2ULocked({ paymentId: paymentB, isRecovery: true, recoveryOperation: "FIN4_STAGE1_PREPARE" })
       const targetAfter = await getSettlementCheckpointAuthoritative(paymentB)
       const readiness = await readArmedReadiness(runId)
       const durableStage1Proven = targetAfter.outcome === "FOUND" && targetAfter.checkpoint.stage === "a2u_created" &&

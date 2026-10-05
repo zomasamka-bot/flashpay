@@ -1,16 +1,7 @@
-import fs from "node:fs"
-import path from "node:path"
-const root=process.cwd()
-const route=fs.readFileSync(path.join(root,"app/api/certification/fin4-trigger/route.ts"),"utf8")
-const executor=fs.readFileSync(path.join(root,"lib/a2u-executor.ts"),"utf8")
+import fs from "node:fs"; import path from "node:path"
+const root=process.cwd(), route=fs.readFileSync(path.join(root,"app/api/certification/fin4-trigger/route.ts"),"utf8"), locked=fs.readFileSync(path.join(root,"lib/a2u-locked-executor.ts"),"utf8"), executor=fs.readFileSync(path.join(root,"lib/a2u-executor.ts"),"utf8")
+const a=locked.indexOf('params.recoveryOperation === "FIN4_STAGE1_PREPARE"'), b=locked.indexOf('params.recoveryOperation === "SETTLEMENT_DISPATCH"'), stop=executor.indexOf('ctx.recoveryOperation === "FIN4_STAGE1_PREPARE"'), stage2=executor.indexOf('// STAGE 2: Sign')
 const checks:[string,boolean][]=[
- ["armed_b",route.includes('fin4ArmedPaymentForRole(runId, "B")')],
- ["durable_ingress",route.includes('getDurableU2AIngressAuthoritative(paymentB)')],
-  ["stage1_operation",route.includes('recoveryOperation: "SETTLEMENT_CREATE"')],
- ["durable_stage1",route.includes('targetAfter.checkpoint.stage === "a2u_created"')],
- ["same_wallet",route.includes('targetAfter.checkpoint.a2uFromAddress === anchor.checkpoint.a2uFromAddress')],
- ["no_txid",route.includes('!targetAfter.checkpoint.a2uTxid')],
- ["stop_before_stage2",executor.indexOf('recoveryOperation === "SETTLEMENT_CREATE"') < executor.indexOf('// STAGE 2: Sign')],
-]
-for(const [n,ok] of checks) if(!ok) throw new Error(`FIN4_R4K_MUTATION_FAIL:${n}`)
-console.log(`FIN4_R4K_MUTATIONS=PASS expected_failures=${checks.length} unexpected_passes=0`)
+["armed_b",route.includes('fin4ArmedPaymentForRole(runId, "B")')],["durable_ingress",route.includes('getDurableU2AIngressAuthoritative(paymentB)')],["cert_operation",route.includes('recoveryOperation: "FIN4_STAGE1_PREPARE"')],["fresh_predicate",a>=0&&b>a&&locked.slice(a,b).includes('isSettlementDispatchCandidate(latestPayment, now)')],["no_stage1_widening",a>=0&&b>a&&!locked.slice(a,b).includes('isStage1OnlySettlementDispatchCandidate')],["durable_stage1",route.includes('targetAfter.checkpoint.stage === "a2u_created"')],["same_wallet",route.includes('targetAfter.checkpoint.a2uFromAddress === anchor.checkpoint.a2uFromAddress')],["no_txid",route.includes('!targetAfter.checkpoint.a2uTxid')],["hard_stop",stop>=0&&stage2>stop&&executor.slice(stop,stage2).includes('return { ok: true, status: "settlement_pending" }')]]
+for(const [n,ok] of checks)if(!ok)throw new Error(`FIN4_R4K1_MUTATION_FAIL:${n}`)
+console.log(`FIN4_R4K1_MUTATIONS=PASS expected_failures=${checks.length} unexpected_passes=0`)

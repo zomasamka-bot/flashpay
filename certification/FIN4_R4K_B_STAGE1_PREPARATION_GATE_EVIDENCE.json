@@ -11,7 +11,18 @@
     "exact armed B durable U2A ingress exists"
   ],
   "permitted_progression": "paid_to_app -> Pi A2U create/reconcile -> durable settlement stage a2u_created",
-  "forbidden_progression": ["Stage2 signing", "Horizon submit", "Pi A2U completion", "accounting finalization"],
+  "forbidden_progression": [
+    "Stage2 signing",
+    "Horizon submit",
+    "Pi A2U completion",
+    "accounting finalization"
+  ],
   "postcondition": "PostgreSQL B stage=a2u_created, same source wallet as A, no a2uTxid; then armed-readiness reread",
-  "fail_closed": true
+  "fail_closed": true,
+  "revision": "R4K1",
+  "operation": "FIN4_STAGE1_PREPARE",
+  "fresh_contract": "isSettlementDispatchCandidate",
+  "r4k_failure_correction": "SETTLEMENT_CREATE is retry-only; R4K1 uses exact fresh-dispatch prerequisites and hard-stops before Stage2",
+  "production_scheduler_semantics_changed": false,
+  "horizon_authorized": false
 }

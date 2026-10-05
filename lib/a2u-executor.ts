@@ -138,7 +138,7 @@ export interface ExecutorContext {
   customerAmount: number // REQUIRED - validated amount
   piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
   isRecovery: boolean
-  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
+  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH" | "FIN4_STAGE1_PREPARE"
   schedulerWalletPaymentId?: string | null
 }
 
@@ -397,7 +397,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
   }
 
-  if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_CREATE") {
+  if (ctx.isRecovery && (ctx.recoveryOperation === "SETTLEMENT_CREATE" || ctx.recoveryOperation === "FIN4_STAGE1_PREPARE")) {
     return { ok: true, status: "settlement_pending" }
   }
 
