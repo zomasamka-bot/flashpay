@@ -1,0 +1,17 @@
+{
+  "gate": "FIN4_R4K_B_STAGE1_PREPARATION_GATE",
+  "scope": "certification-only exact armed B preparation",
+  "production_scheduler_changed": false,
+  "financial_kernel_semantics_changed": false,
+  "existing_operation_reused": "SETTLEMENT_CREATE",
+  "required_preconditions": [
+    "authorized FIN4 production run id",
+    "exact armed A settlement checkpoint exists",
+    "exact armed B settlement checkpoint does not yet exist",
+    "exact armed B durable U2A ingress exists"
+  ],
+  "permitted_progression": "paid_to_app -> Pi A2U create/reconcile -> durable settlement stage a2u_created",
+  "forbidden_progression": ["Stage2 signing", "Horizon submit", "Pi A2U completion", "accounting finalization"],
+  "postcondition": "PostgreSQL B stage=a2u_created, same source wallet as A, no a2uTxid; then armed-readiness reread",
+  "fail_closed": true
+}

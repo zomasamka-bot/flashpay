@@ -11,12 +11,13 @@ import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlem
 import { evaluateFinancialRecoveryPiCandidates } from "@/lib/financial-recovery-pi-candidate-rules"
 import { readFin4SameWalletSubmitCandidates } from "@/lib/fin4-submit-candidate-reader"
 import { readFin4PiPretransactionEvidence } from "@/lib/fin4-pi-pretransaction-reader"
+import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 export const maxDuration = 90
 
-type Body = { action: "launch" }
+type Body = { action: "launch" | "prepare-b-stage1" }
 
 function exactDeploymentOrigin(): string {
   const host = process.env.VERCEL_URL?.trim() ?? ""
@@ -171,7 +172,48 @@ export async function POST(request: NextRequest) {
     const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
     if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
     const body = await request.json().catch(() => null) as Body | null
-    if (!body || body.action !== "launch" || Object.keys(body).length !== 1) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
+    if (!body || (body.action !== "launch" && body.action !== "prepare-b-stage1") || Object.keys(body).length !== 1) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
+
+    if (body.action === "prepare-b-stage1") {
+      const paymentA = fin4ArmedPaymentForRole(runId, "A")
+      const paymentB = fin4ArmedPaymentForRole(runId, "B")
+      const [anchor, ingress] = await Promise.all([
+        getSettlementCheckpointAuthoritative(paymentA),
+        getDurableU2AIngressAuthoritative(paymentB),
+      ])
+      if (anchor.outcome !== "FOUND" || ingress.outcome !== "FOUND") {
+        return NextResponse.json({
+          ok: false, action: "prepare-b-stage1", paymentA, paymentB,
+          reason: "FIN4_R4K_PRECONDITION_NOT_PROVEN",
+          anchorOutcome: anchor.outcome, durableIngressOutcome: ingress.outcome,
+          horizonSubmitExecuted: false, financialAuthorityMutated: false,
+        }, { status: 409 })
+      }
+      if (anchor.checkpoint.a2uFromAddress.trim() === "" || ingress.checkpoint.paymentId !== paymentB) {
+        return NextResponse.json({ ok: false, action: "prepare-b-stage1", paymentA, paymentB, reason: "FIN4_R4K_IDENTITY_NOT_PROVEN", horizonSubmitExecuted: false }, { status: 409 })
+      }
+
+      console.log("[FIN-4 R4K] exact B Stage1 preparation start", { runId, paymentA, paymentB, operation: "SETTLEMENT_CREATE", horizonSubmitAuthorized: false })
+      const prepared = await executeA2ULocked({ paymentId: paymentB, isRecovery: true, recoveryOperation: "SETTLEMENT_CREATE" })
+      const targetAfter = await getSettlementCheckpointAuthoritative(paymentB)
+      const readiness = await readArmedReadiness(runId)
+      const durableStage1Proven = targetAfter.outcome === "FOUND" && targetAfter.checkpoint.stage === "a2u_created" &&
+        targetAfter.checkpoint.a2uFromAddress === anchor.checkpoint.a2uFromAddress && !targetAfter.checkpoint.a2uTxid
+      if (!prepared.ok || !durableStage1Proven) {
+        console.warn("[FIN-4 R4K] Stage1 preparation not proven", { runId, paymentB, executorOk: prepared.ok, targetOutcome: targetAfter.outcome, targetStage: targetAfter.outcome === "FOUND" ? targetAfter.checkpoint.stage : null })
+        return NextResponse.json({
+          ok: false, action: "prepare-b-stage1", paymentA, paymentB, executorOk: prepared.ok,
+          targetOutcome: targetAfter.outcome, targetStage: targetAfter.outcome === "FOUND" ? targetAfter.checkpoint.stage : null,
+          readiness, horizonSubmitExecuted: false, reason: "FIN4_R4K_DURABLE_STAGE1_NOT_PROVEN",
+        }, { status: 409 })
+      }
+      console.log("[FIN-4 R4K] exact B Stage1 preparation proven", { runId, paymentB, stage: targetAfter.checkpoint.stage, sourceWallet: targetAfter.checkpoint.a2uFromAddress, readiness: readiness.ready, horizonSubmitExecuted: false })
+      return NextResponse.json({
+        ok: true, action: "prepare-b-stage1", paymentA, paymentB,
+        targetStage: targetAfter.checkpoint.stage, sourceWallet: targetAfter.checkpoint.a2uFromAddress,
+        durableStage1Proven: true, readiness, horizonSubmitExecuted: false,
+      })
+    }
 
     const bypassSecret = automationBypassSecret()
     const readiness = await readArmedReadiness(runId)
