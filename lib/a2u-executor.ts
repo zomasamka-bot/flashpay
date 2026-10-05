@@ -769,12 +769,20 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       if (errorData.code === "ongoing_payment_found" || errorText.includes("ongoing_payment")) {
         const ongoingPaymentId = errorData.payment?.identifier || errorData.identifier || errorData.payment_id
         if (typeof ongoingPaymentId === "string" && ongoingPaymentId.trim() !== "" && ongoingPaymentId === ongoingPaymentId.trim()) {
-          const observation = await recordSettlementA2UOngoingObservation(ctx.paymentId, ongoingPaymentId)
-          if (observation !== "RECORDED" && observation !== "REPLAYED") return {ok:false,error:"Pi ongoing A2U identifier could not be durably captured",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_ongoing_identifier_capture_unproven"}
+          // R4R: Pi's ongoing identifier is global to the app/user and can belong to a
+          // different FlashPay payment. Never attribute it to ctx.paymentId before exact
+          // server-side identity binding has been proved.
           const fetchResult = await fetchA2UPayment(ongoingPaymentId)
           const metadata = fetchResult && isRecord(fetchResult.metadata) ? fetchResult.metadata : null
-          if (fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === ctx.customerAmount && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid && fetchResult.identifier === ongoingPaymentId && typeof fetchResult.txid !== "string" && typeof fetchResult.transaction_id !== "string" && fetchResult.completed !== true && fetchResult.cancelled !== true && fetchResult.rejected !== true && typeof fetchResult.transaction?.txid !== "string" && fetchResult.transaction?.verified !== true && fetchResult.status?.transaction_verified !== true && fetchResult.status?.developer_completed !== true && fetchResult.status?.cancelled !== true && fetchResult.status?.user_cancelled !== true) {
-            return { ok: true, data: { a2uPaymentId: fetchResult.identifier, a2uPayment: fetchResult } }
+          const exactOngoingIdentity = Boolean(fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === ctx.customerAmount && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid && fetchResult.identifier === ongoingPaymentId && typeof fetchResult.txid !== "string" && typeof fetchResult.transaction_id !== "string" && fetchResult.completed !== true && fetchResult.cancelled !== true && fetchResult.rejected !== true && typeof fetchResult.transaction?.txid !== "string" && fetchResult.transaction?.verified !== true && fetchResult.status?.transaction_verified !== true && fetchResult.status?.developer_completed !== true && fetchResult.status?.cancelled !== true && fetchResult.status?.user_cancelled !== true)
+          if (exactOngoingIdentity) {
+            const observation = await recordSettlementA2UOngoingObservation(ctx.paymentId, ongoingPaymentId)
+            if (observation !== "RECORDED" && observation !== "REPLAYED") return {ok:false,error:"Pi ongoing A2U identifier could not be durably captured",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_ongoing_identifier_capture_unproven"}
+            return { ok: true, data: { a2uPaymentId: fetchResult!.identifier, a2uPayment: fetchResult! } }
+          }
+          if (fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult)) {
+            console.warn("[R4R] FOREIGN_ONGOING_PAYMENT", { paymentId: ctx.paymentId, ongoingPaymentId, exactIdentity: false })
+            return {ok:false,error:"Pi ongoing A2U belongs to a different FlashPay payment",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_foreign_ongoing_payment"}
           }
         }
         return {ok:false,error:"Pi ongoing A2U requires reconciliation",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_precreate_found_requires_reconciliation"}

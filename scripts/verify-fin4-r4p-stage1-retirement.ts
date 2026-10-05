@@ -7,7 +7,7 @@ need(db.includes("CREATE TABLE IF NOT EXISTS settlement_a2u_ongoing_observations
 need(db.includes("pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))"),"pg_lock")
 need(db.includes("SELECT EXISTS(SELECT 1 FROM refund_checkpoints"),"refund_opposite")
 need(db.includes("stage='a2u_created'")&&db.includes("prepared_envelope_xdr IS NULL")&&db.includes("a2u_txid IS NULL")&&db.includes("stage='payment_identity'"),"retirement_cas")
-need(ex.includes("recordSettlementA2UOngoingObservation(ctx.paymentId, ongoingPaymentId)"),"capture_before_get")
+need(ex.indexOf("recordSettlementA2UOngoingObservation(ctx.paymentId, ongoingPaymentId)") > ex.indexOf("const exactOngoingIdentity = Boolean("),"capture_after_exact_bind")
 need(ex.includes('errorCode:"a2u_ongoing_identifier_capture_unproven"'),"capture_fail_closed")
 need(ex.includes("exactCancelledIdentity")&&ex.includes('metadata?.type === "a2u_settlement"')&&ex.includes('metadata?.paymentId === ctx.paymentId'),"exact_pi_identity")
 need(ex.includes("proveA2UStage1HorizonAbsence")&&ex.includes('horizon.outcome !== "ABSENT"'),"horizon_absence")
