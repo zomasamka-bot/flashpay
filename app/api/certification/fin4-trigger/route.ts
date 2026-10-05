@@ -18,11 +18,12 @@ import { readFin4R4NStage1Ambiguity } from "@/lib/fin4-r4n-stage1-ambiguity-prob
 import { readFin4R4OOngoingAndStaleEvidence } from "@/lib/fin4-r4o-ongoing-stale-evidence"
 import { readFin4R4QStage1FailureEvidence } from "@/lib/fin4-r4q-stage1-failure-evidence"
 import { executeFin4R4P1GuardedRetirement } from "@/lib/fin4-r4p1-guarded-retirement"
+import { retirePoisonedAutomaticRefundIntent } from "@/lib/refund-checkpoint-store"
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 export const maxDuration = 90
 
-type Body = { action: "launch" | "prepare-a-stage1" | "prepare-b-stage1" | "r4p1-retire-stale-a" }
+type Body = { action: "launch" | "prepare-a-stage1" | "prepare-b-stage1" | "r4p1-retire-stale-a" | "r4t-retire-poisoned-a" }
 
 function exactDeploymentOrigin(): string {
   const host = process.env.VERCEL_URL?.trim() ?? ""
@@ -210,7 +211,17 @@ export async function POST(request: NextRequest) {
     const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
     if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
     const body = await request.json().catch(() => null) as Body | null
-    if (!body || (body.action !== "launch" && body.action !== "prepare-a-stage1" && body.action !== "prepare-b-stage1" && body.action !== "r4p1-retire-stale-a") || Object.keys(body).length !== 1) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
+    if (!body || (body.action !== "launch" && body.action !== "prepare-a-stage1" && body.action !== "prepare-b-stage1" && body.action !== "r4p1-retire-stale-a" && body.action !== "r4t-retire-poisoned-a") || Object.keys(body).length !== 1) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
+
+    if (body.action === "r4t-retire-poisoned-a") {
+      const paymentA = fin4ArmedPaymentForRole(runId, "A")
+      const expectedPaymentA = "d50d0a46-a305-4008-9843-e50b8d3c265c"
+      const refundId = "22b0ab29-afd5-404b-a635-01e586d578ae"
+      if (paymentA !== expectedPaymentA) return NextResponse.json({ ok:false, action:body.action, reason:"FIN4_R4T_ARMED_A_MISMATCH", financialMovementAuthorized:false }, { status:409 })
+      const result = await retirePoisonedAutomaticRefundIntent({ refundId, paymentId: paymentA, reason:"foreign_ongoing_poisoned_intent", evidenceCode:"FIN4_R4R_FOREIGN_ONGOING_TO_REFUND_PRE_R4S" })
+      console.warn("[FIN-4 R4T] poisoned automatic refund containment", { runId, paymentA, refundId, outcome:result.outcome, checkpointDeleted:false, checkpointRewritten:false, horizonSubmitAuthorized:false, piMutationAuthorized:false })
+      return NextResponse.json({ ok: result.outcome === "RETIRED" || result.outcome === "ALREADY_RETIRED", action:body.action, paymentA, refundId, outcome:result.outcome, checkpointDeleted:false, checkpointRewritten:false, horizonSubmitExecuted:false, piMutationExecuted:false }, { status: result.outcome === "RETIRED" || result.outcome === "ALREADY_RETIRED" ? 200 : 409 })
+    }
 
     if (body.action === "r4p1-retire-stale-a") {
       const targetPaymentId = "7e95c0ef-bd41-4db7-9100-ece47ad703d7"

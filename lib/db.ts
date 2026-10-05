@@ -1730,6 +1730,20 @@ export async function ensureRefundCheckpointTables(): Promise<boolean> {
   `)
   if (checkpoints === null) return false
 
+  // FIN-4 R4T: append-only containment for refund intents proven poisoned before
+  // financial movement. The original checkpoint/audit history is never deleted
+  // or rewritten; automatic execution excludes an exact retirement record.
+  const retirements = await query(`
+    CREATE TABLE IF NOT EXISTS refund_automatic_retirements (
+      refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
+      payment_id TEXT NOT NULL UNIQUE,
+      reason TEXT NOT NULL,
+      evidence_code TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `)
+  if (retirements === null) return false
+
   if (!(await ensureRefundAccountingTable())) return false
 
   const audits = await query(`

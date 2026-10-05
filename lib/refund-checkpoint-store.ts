@@ -95,7 +95,11 @@ export async function listAutomaticRefundCheckpoints(limit: number): Promise<Aut
   try {
     const rows = await query(`
       SELECT * FROM refund_checkpoints
-      WHERE (status='pending' OR (stage='audit_recorded' AND status='completed' AND NOT (
+      WHERE NOT EXISTS (
+        SELECT 1 FROM refund_automatic_retirements r
+        WHERE r.refund_id=refund_checkpoints.refund_id AND r.payment_id=refund_checkpoints.payment_id
+      )
+        AND (status='pending' OR (stage='audit_recorded' AND status='completed' AND NOT (
         (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized')=1
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=refund_checkpoints.refund_id AND a.event_type='refund_projection_finalized' AND refund_checkpoints.refund_payment_id IS NOT NULL AND refund_checkpoints.refund_txid IS NOT NULL AND a.event_id='refund:'||refund_checkpoints.refund_id||':projection_finalized' AND a.payment_id=refund_checkpoints.payment_id AND a.idempotency_key=refund_checkpoints.idempotency_key AND a.actor_type='system' AND (a.details=jsonb_build_object('refundPaymentId',refund_checkpoints.refund_payment_id,'refundTxid',refund_checkpoints.refund_txid) OR (jsonb_typeof(a.details)='string' AND (a.details #>> '{}')=concat('{"refundPaymentId":',to_json(refund_checkpoints.refund_payment_id)::text,',"refundTxid":',to_json(refund_checkpoints.refund_txid)::text,'}'))))=1
       )))
@@ -158,6 +162,35 @@ export async function getRefundCheckpointReadOnly(refundId: string): Promise<Ref
     const checkpoint = normalizeCheckpoint(rows[0])
     return checkpoint ? { state: 'present', checkpoint } : { state: 'uncertain' }
   } catch { return { state: 'uncertain' } }
+}
+
+export async function retirePoisonedAutomaticRefundIntent(params: { refundId: string; paymentId: string; reason: string; evidenceCode: string }): Promise<{ outcome: 'RETIRED' | 'ALREADY_RETIRED' | 'BLOCKED' | 'INDETERMINATE' }> {
+  const { refundId, paymentId, reason, evidenceCode } = params
+  if (![refundId,paymentId,reason,evidenceCode].every((v) => typeof v === 'string' && v.length > 0 && v === v.trim())) return { outcome: 'BLOCKED' }
+  try {
+    const rows = await query(`
+      WITH candidate AS (
+        SELECT c.refund_id,c.payment_id
+        FROM refund_checkpoints c
+        WHERE c.refund_id=$1 AND c.payment_id=$2
+          AND c.status='pending' AND c.stage='wallet_submission_started'
+          AND c.refund_payment_id IS NULL AND c.refund_txid IS NULL
+          AND c.last_error_code='automatic_refund_blocked'
+          AND c.last_error_message='refund_create_uncertain'
+          AND NOT EXISTS (SELECT 1 FROM refund_accounting_records a WHERE a.refund_id=c.refund_id OR a.payment_id=c.payment_id)
+          AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s WHERE s.payment_id=c.payment_id AND (s.a2u_txid IS NOT NULL OR s.horizon_confirmed=TRUE))
+      ), inserted AS (
+        INSERT INTO refund_automatic_retirements(refund_id,payment_id,reason,evidence_code)
+        SELECT refund_id,payment_id,$3,$4 FROM candidate
+        ON CONFLICT (refund_id) DO NOTHING
+        RETURNING refund_id
+      ) SELECT refund_id FROM inserted`, [refundId,paymentId,reason,evidenceCode])
+    if (!Array.isArray(rows)) return { outcome: 'INDETERMINATE' }
+    if (rows.length === 1) return { outcome: 'RETIRED' }
+    const replay = await query(`SELECT 1 FROM refund_automatic_retirements WHERE refund_id=$1 AND payment_id=$2 AND reason=$3 AND evidence_code=$4 LIMIT 1`, [refundId,paymentId,reason,evidenceCode])
+    if (Array.isArray(replay) && replay.length === 1) return { outcome: 'ALREADY_RETIRED' }
+    return { outcome: 'BLOCKED' }
+  } catch { return { outcome: 'INDETERMINATE' } }
 }
 
 export async function deferAutomaticRefund(
