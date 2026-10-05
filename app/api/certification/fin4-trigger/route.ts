@@ -15,6 +15,7 @@ import { executeA2ULocked } from "@/lib/a2u-locked-executor"
 import { readFin4QualifiedExistingCandidates } from "@/lib/fin4-candidate-qualification"
 
 import { readFin4R4NStage1Ambiguity } from "@/lib/fin4-r4n-stage1-ambiguity-probe"
+import { readFin4R4OOngoingAndStaleEvidence } from "@/lib/fin4-r4o-ongoing-stale-evidence"
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 export const maxDuration = 90
@@ -58,6 +59,14 @@ async function readArmedReadiness(runId: string) {
 export async function GET(request: NextRequest) {
   const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
   if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+
+  if (request.nextUrl.searchParams.get("evidence") === "r4o-ongoing-stale") {
+    const paymentA = fin4ArmedPaymentForRole(runId, "A")
+    const paymentB = fin4ArmedPaymentForRole(runId, "B")
+    const evidence = await readFin4R4OOngoingAndStaleEvidence(paymentA, paymentB)
+    console.log("[FIN-4 R4O READ-ONLY ONGOING+STALE]", { runId, paymentA, paymentB, outcome: evidence.outcome, financialAuthorityMutated: false, piMutationExecuted: false, horizonSubmitExecuted: false, redisMutated: false })
+    return NextResponse.json({ action: "r4o-ongoing-stale", ...evidence }, { status: evidence.ok ? 200 : 409 })
+  }
 
   if (request.nextUrl.searchParams.get("evidence") === "r4n-stage1-ambiguity") {
     const paymentA = fin4ArmedPaymentForRole(runId, "A")
