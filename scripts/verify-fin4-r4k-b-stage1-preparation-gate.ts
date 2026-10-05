@@ -5,7 +5,7 @@ const route=fs.readFileSync(path.join(root,"app/api/certification/fin4-trigger/r
 const locked=fs.readFileSync(path.join(root,"lib/a2u-locked-executor.ts"),"utf8")
 const executor=fs.readFileSync(path.join(root,"lib/a2u-executor.ts"),"utf8")
 function must(c:boolean,l:string){if(!c) throw new Error(`FIN4_R4K1_FAIL:${l}`)}
-must(route.includes('action: "launch" | "prepare-b-stage1"'),"exact_action")
+must(route.includes('"prepare-b-stage1"'),"b_action_preserved")
 must(route.includes('fin4ArmedPaymentForRole(runId, "B")'),"armed_b_binding")
 must(route.includes('getDurableU2AIngressAuthoritative(paymentB)'),"durable_u2a_required")
 must(route.includes('recoveryOperation: "FIN4_STAGE1_PREPARE"'),"cert_operation")

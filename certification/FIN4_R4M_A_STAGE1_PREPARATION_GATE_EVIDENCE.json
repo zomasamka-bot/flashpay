@@ -1,0 +1,14 @@
+{
+  "station": "FIN4-R4M",
+  "purpose": "Certification-only exact armed A Stage1 preparation gate",
+  "action": "prepare-a-stage1",
+  "contract": {
+    "target": "FLASHPAY_FIN4_PAYMENT_A only",
+    "anchor": "FLASHPAY_FIN4_PAYMENT_B durable settlement checkpoint source wallet",
+    "operation": "FIN4_STAGE1_PREPARE",
+    "required_precondition": "fresh settlement dispatch candidate",
+    "required_postcondition": "durable a2u_created on exact A, same source wallet, no a2uTxid",
+    "hard_stop": "before Stage2 signing / wallet submit / Horizon submit",
+    "financial_semantics_changed": false
+  }
+}
