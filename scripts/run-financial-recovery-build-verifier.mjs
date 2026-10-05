@@ -105,3 +105,6 @@ await import('./verify-fin4-r4t5-lock-diagnostic-eval.mjs')
 await import('./verify-fin4-r4t5-lock-diagnostic-eval-mutations.mjs')
 await import('./verify-fin4-r4t51-read-only-lock-diagnostic-route.mjs')
 await import('./verify-fin4-r4t51-read-only-lock-diagnostic-route-mutations.mjs')
+
+await import('./verify-fin4-r4t52-durable-source-wallet-preflight.mjs')
+await import('./verify-fin4-r4t52-durable-source-wallet-preflight-mutations.mjs')
