@@ -29,9 +29,44 @@ function automationBypassSecret(): string {
   return secret
 }
 
+async function readArmedReadiness(runId: string) {
+  const paymentA = fin4ArmedPaymentForRole(runId, "A")
+  const paymentB = fin4ArmedPaymentForRole(runId, "B")
+  const durableA = await getSettlementCheckpointAuthoritative(paymentA)
+  if (durableA.outcome !== "FOUND") return { ready: false as const, paymentA, paymentB, reason: "ANCHOR_NOT_FOUND" }
+  const sourceWallet = durableA.checkpoint.a2uFromAddress
+  const scan = await readFin4SameWalletSubmitCandidates(sourceWallet)
+  if (!scan) return { ready: false as const, paymentA, paymentB, sourceWallet, reason: "READ_INDETERMINATE" }
+  const allowed = new Set(["SETTLEMENT_SUBMIT_ENTRY_CANDIDATE", "PREPARATION_REQUIRED_STAGE1"])
+  const a = scan.candidates.find((candidate) => candidate.paymentId === paymentA)
+  const b = scan.candidates.find((candidate) => candidate.paymentId === paymentB)
+  const ready = Boolean(a && b && allowed.has(a.classification) && allowed.has(b.classification) &&
+    a.sourceWallet === sourceWallet && b.sourceWallet === sourceWallet && !a.movementPresent && !b.movementPresent &&
+    !a.refundActive && !b.refundActive)
+  return {
+    ready, paymentA, paymentB, sourceWallet,
+    a: a ? { stage: a.stage, classification: a.classification, movementPresent: a.movementPresent, refundActive: a.refundActive } : null,
+    b: b ? { stage: b.stage, classification: b.classification, movementPresent: b.movementPresent, refundActive: b.refundActive } : null,
+    reason: ready ? null : "ARMED_PAIR_NOT_READY",
+  } as const
+}
+
 export async function GET(request: NextRequest) {
   const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
   if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+
+  if (request.nextUrl.searchParams.get("evidence") === "armed-readiness") {
+    const readiness = await readArmedReadiness(runId)
+    return NextResponse.json({
+      ok: readiness.ready,
+      action: "armed-readiness",
+      ...readiness,
+      financialAuthorityMutated: false,
+      piCreateExecuted: false,
+      horizonSubmitExecuted: false,
+      redisMutated: false,
+    }, { status: readiness.ready ? 200 : 409 })
+  }
 
   if (request.nextUrl.searchParams.get("evidence") === "submit-candidates") {
     const paymentA = fin4ArmedPaymentForRole(runId, "A")
@@ -131,6 +166,11 @@ export async function POST(request: NextRequest) {
     if (!body || body.action !== "launch" || Object.keys(body).length !== 1) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
 
     const bypassSecret = automationBypassSecret()
+    const readiness = await readArmedReadiness(runId)
+    if (!readiness.ready) {
+      console.warn("[FIN-4 LIVE] launch readiness fail-closed", { runId, reason: readiness.reason, paymentA: readiness.paymentA, paymentB: readiness.paymentB })
+      return NextResponse.json({ error: "FIN4 armed pair not ready", action: "launch", readiness, financialAuthorityMutated: false }, { status: 409 })
+    }
     const armed = await fin4ClaimLaunchForArmedRun(runId)
     const capabilityA = fin4IssueInvocationCapability(runId, "A")
     const capabilityB = fin4IssueInvocationCapability(runId, "B")

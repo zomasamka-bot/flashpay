@@ -6,7 +6,7 @@
     "deployment_id": "dpl_7Rx3XWsWUEZon31CtkFEyoqGxCmc",
     "state": "READY"
   },
-  "classification": "CONFIRMED_PRE_A2U_LIVENESS_DEFECT_FIX_PLUS_CERTIFICATION_INSTRUMENTATION_HARDENED_NO_NEW_FINANCIAL_AUTHORITY",
+  "classification": "fresh-pair armed-readiness gate before one-shot launch",
   "live_result": "R4E_LIVE_REACHED_STAGE1_BUT_B_HELD_AFTER_PI_ONGOING_PAYMENT_FOUND; R4F_ADDS_READ_ONLY_PI_EVIDENCE_PROBE_BEFORE_ANY_NEW_LIVE_ATTEMPT",
   "armed_payments": {
     "payment_a": "7e95c0ef-bd41-4db7-9100-ece47ad703d7",
@@ -140,7 +140,7 @@
     "fix": "after FOUND discrimination, bind const completedAt=d.completedAt and fail closed when null before equality checks or canonicalize call; mirror the same explicit narrowing in /api/pi/complete durable hot-path so a second hidden nullable error cannot surface next",
     "financial_semantics_changed_by_build_fix": false
   },
-  "revision": "R4E",
+  "revision": "R4H",
   "r4c_failed_launch": {
     "timestamp": "2026-10-04T19:38:24Z",
     "a_status": 401,
@@ -235,5 +235,20 @@
       "CONFIRMED_NONE": "do not mutate B merely to prepare FIN-4; prefer a fresh controlled test pair/state",
       "INDETERMINATE": "fail closed; no retry/financial action from this evidence alone"
     }
+  },
+  "r4h": {
+    "purpose": "Use existing A plus one fresh C without changing financial kernel; exact armed pair must be proven ready before one-shot claim.",
+    "launchGate": {
+      "readOnly": true,
+      "authority": "PostgreSQL durable settlement/refund evidence",
+      "requiresBothExactArmedPayments": true,
+      "requiresSameSourceWallet": true,
+      "requiresUnmoved": true,
+      "requiresNoRefundAuthority": true,
+      "runsBeforeOneShotClaim": true
+    },
+    "financialKernelChanged": false,
+    "freshPaymentPlan": "Create C pending first; arm C as PAYMENT_B under a fresh run before customer pays; existing wallet-boundary scoped-capability guard then fails closed for ordinary recovery before Horizon until controlled launch.",
+    "noBlindRetry": true
   }
 }
