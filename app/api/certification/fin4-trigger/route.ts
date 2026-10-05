@@ -61,7 +61,6 @@ export async function GET(request: NextRequest) {
       ok: true,
       action: "submit-candidates",
       anchorPaymentId: paymentA,
-      sourceWallet,
       ...scan,
       financialAuthorityMutated: false,
       piCreateExecuted: false,
