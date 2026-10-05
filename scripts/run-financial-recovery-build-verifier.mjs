@@ -111,3 +111,6 @@ await import('./verify-fin4-r4t52-durable-source-wallet-preflight-mutations.mjs'
 
 await import('./verify-fin4-r4t53-shared-durable-wallet-resolver.mjs')
 await import('./verify-fin4-r4t53-shared-durable-wallet-resolver-mutations.mjs')
+
+await import('./verify-fin4-r4t531-response-shape.mjs')
+await import('./verify-fin4-r4t531-response-shape-mutations.mjs')
