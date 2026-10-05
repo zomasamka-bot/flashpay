@@ -490,6 +490,7 @@ export function markRefundPendingAfterFailedSettlement(
   failure: { code: string; message?: string; occurredAt: string },
 ): Payment {
   if (
+    failure.code === "a2u_foreign_ongoing_payment" ||
     payment.status !== "settlement_failed" ||
     payment.payerUidSource !== "verified_u2a" ||
     !payment.payerUid ||

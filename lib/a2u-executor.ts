@@ -224,7 +224,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[P7B TIMING] executeA2U Stage1", { paymentId: ctx.paymentId, durationMs: Date.now() - stage1TimingStartedAt })
     if (!stageResult.ok) {
       const retryable = stageResult.retryable === true
-      const failClosedStage1=["a2u_precreate_found_requires_reconciliation","a2u_precreate_reconciliation_indeterminate","a2u_ambiguous_reconciliation_indeterminate","a2u_network_reconciliation_indeterminate","a2u_rate_limited_post_ambiguous","a2u_failed_post_reconciliation_confirmed_none","a2u_network_reconciliation_confirmed_none"].includes(stageResult.errorCode??"")||stageResult.errorCode?.startsWith("unparseable_")===true||stageResult.errorCode?.startsWith("invalid_dto_")===true
+      const failClosedStage1=["a2u_foreign_ongoing_payment","a2u_precreate_found_requires_reconciliation","a2u_precreate_reconciliation_indeterminate","a2u_ambiguous_reconciliation_indeterminate","a2u_network_reconciliation_indeterminate","a2u_rate_limited_post_ambiguous","a2u_failed_post_reconciliation_confirmed_none","a2u_network_reconciliation_confirmed_none"].includes(stageResult.errorCode??"")||stageResult.errorCode?.startsWith("unparseable_")===true||stageResult.errorCode?.startsWith("invalid_dto_")===true
       let failedPayment = ctx.payment
       let refundPendingFromConfirmedNone = false
       if (!failClosedStage1 && !retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
