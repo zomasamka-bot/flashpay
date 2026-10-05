@@ -94,3 +94,6 @@ await import('./verify-fin4-r4t1-refund-retirement-schema-order-mutations.mjs')
 
 await import('./verify-fin4-r4t2-canonical-horizon-evidence.mjs')
 await import('./verify-fin4-r4t2-canonical-horizon-evidence-mutations.mjs')
+
+await import('./verify-fin4-r4t3-lock-probe-diagnostics.mjs')
+await import('./verify-fin4-r4t3-lock-probe-diagnostics-mutations.mjs')
