@@ -1,7 +1,7 @@
 b2cc815c63108dd2667ca97838e46b138886ddaa8564b3a143c7e60f48d8580a  ./.gitignore
 392ea5fb6ab688f28564544ccf515f0d4d8b0917d1855eb8aa604fd12afbcaff  ./app/api/certification/fin4-trigger-a/route.ts
 2359189e8ef6f45548f157e94a4a8c5039b9afb75cf46f558920b0ad3d2f22ae  ./app/api/certification/fin4-trigger-b/route.ts
-97cdea564f9337adbe90d7ff6a079fcbb772920e9b130ee5925fcebfcd4f6f56  ./app/api/certification/fin4-trigger/route.ts
+9a873284c38a2b86fc8eb4e08eac67f8f28adf5801c9cc85d996bbe411fcd22d  ./app/api/certification/fin4-trigger/route.ts
 5e5d925f49b388b7e1c444cfc9acdd5599ac9cf3ef0570317e1ad04580f69412  ./app/api/control/availability/route.ts
 3ec0c6a1ccf8732e2274c443af71415a0f47b637152f20967c22bbadeae9bace  ./app/api/control/domain/route.ts
 0fc0b29eb2f45b23654320e8ba0403e5ecad190f476719a59e3ee328261100a8  ./app/api/control/system/route.ts
@@ -162,6 +162,7 @@ dcc2f4437114cef8072fd1506d78b6370313cd1db395ac0ff5fd09b229e5665b  ./lib/db.ts
 c31b32fc1129c71bca2c14cc54069fbb195d600a8c1e61fc1d7a355d72261429  ./lib/domain-control.ts
 c3c77cb2a177a90c106209a9dc55650f357418aebceffc253fb9b7ec2afd1504  ./lib/domains.ts
 21e9227e44936cefdb9053cd2fea55ecedc82eb212e2b77c111dbda06256ebc0  ./lib/fin4-live-certification.ts
+4c6e3517880aa2d5bf5039005302765d0783bb8f52591be6ea981473bad88adb  ./lib/fin4-submit-candidate-reader.ts
 3ec5580eca2f28e0e05fcf0947ba111c9fac755559153cb93f790268137f0e64  ./lib/financial-amount-stroops.ts
 86b702c952382700863e403c0e826e79adeb0adeb0840455e86a509cc714dbbc  ./lib/financial-recovery-a2u-proof.ts
 e302f96bcb491b748cb22c3ded302dbfbb8d5a9b5e6df03e65edda5056e8eb55  ./lib/financial-recovery-crash-policy.ts
@@ -270,13 +271,14 @@ d7c39d978af643ba9525de6fb8171e0f834882db4110c82ecad0df3f4f69551a  ./public/place
 14be0c7aa11cca1e78f0966176b286a6d36d00ec64be027775dfeb33d8e2dfdf  ./public/placeholder.jpg
 456ca101af0b430ac7a4575f13f44b0c4544275ca8b9ae855e0fa1beaa0f540b  ./public/placeholder.svg
 f2f4762d405ec0cce1182233fda114dfc460c582f0975a44b8561360256897b1  ./public/validation-key.txt
-a069e5b98e8ec869bba1d79de5a6cec2fe9811ec1e81802f840076b2bb60c373  ./scripts/run-financial-recovery-build-verifier.mjs
+cd95c50ea73ad6fbafdc7bbcc71edd61c3fbd4a6d915fcb15e26abc9da0a7fa3  ./scripts/run-financial-recovery-build-verifier.mjs
 7affa59ab8c3577987b1eeda625e3752c2e7d37cbed3a3380d161b2eb5877985  ./scripts/verify-dr11-orphan-a2u-refund-recovery.ts
 15ca00678fc18d189d248e8cd005075e4f02a7d3e2335c330000fa26f2698c7d  ./scripts/verify-dr11-refund-race-ui-binding.ts
 d3ef77c4d5ce12f47d0973cbbf312bdc5e1a9a44b26df751dec8f11d3c568511  ./scripts/verify-emergency-stuck-payment-rescue-safety.ts
 473022002ff7e1244685405eca7804dd4f8dbffc571023875eae66aca900e8c4  ./scripts/verify-fin4-live-certification-harness.ts
 9249fbe56ad3591d88d3c94bb239e8adc860703734c0c5f6f5880ac8b5fba15d  ./scripts/verify-fin4-live-certification-mutations.ts
 b42dc781cb0053ad8b08ca4ae0f0e4482f33fbf5e2f61b6c59427ce8267895c2  ./scripts/verify-fin4-r4e-capability-model.ts
+36b4997c4934dae1dbc80bd645900a991b4e83eb4b7eda4802e03c9277e1ed4c  ./scripts/verify-fin4-r4g-submit-candidate-probe.ts
 b7af22e089db7160088c7d5bc865ea4a160158cd414859a2d59d262fa508ff0d  ./scripts/verify-financial-recovery-a2u-proof.ts
 e7e5431465d66b0bac46dbaab05d5e482dc0ef39a4513dbcfee028d84ea41dab  ./scripts/verify-financial-recovery-crash-policy.ts
 44b0c1a50a9485d8651368e1bc5eeede398a7bf5dc255497c341896e2cdf04e9  ./scripts/verify-financial-recovery-financial-invariants.ts

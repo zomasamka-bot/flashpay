@@ -6,9 +6,10 @@ import {
   fin4IssueInvocationCapability,
   fin4ArmedPaymentForRole,
 } from "@/lib/fin4-live-certification"
-import { getDurableU2AIngressAuthoritative } from "@/lib/db"
+import { getDurableU2AIngressAuthoritative, getSettlementCheckpointAuthoritative } from "@/lib/db"
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoveryPiCandidates } from "@/lib/financial-recovery-pi-candidate-rules"
+import { readFin4SameWalletSubmitCandidates } from "@/lib/fin4-submit-candidate-reader"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -31,6 +32,43 @@ function automationBypassSecret(): string {
 export async function GET(request: NextRequest) {
   const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
   if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+
+  if (request.nextUrl.searchParams.get("evidence") === "submit-candidates") {
+    const paymentA = fin4ArmedPaymentForRole(runId, "A")
+    const durableA = await getSettlementCheckpointAuthoritative(paymentA)
+    if (durableA.outcome !== "FOUND") {
+      return NextResponse.json({ ok: false, action: "submit-candidates", anchorPaymentId: paymentA, durableAnchorOutcome: durableA.outcome, financialAuthorityMutated: false }, { status: 409 })
+    }
+    const sourceWallet = durableA.checkpoint.a2uFromAddress
+    const scan = await readFin4SameWalletSubmitCandidates(sourceWallet)
+    if (!scan) {
+      return NextResponse.json({ ok: false, action: "submit-candidates", anchorPaymentId: paymentA, financialAuthorityMutated: false, reason: "READ_INDETERMINATE" }, { status: 409 })
+    }
+    console.log("[FIN-4 R4G CANDIDATES]", {
+      runId,
+      anchorPaymentId: paymentA,
+      sourceWallet,
+      sameWalletRowCount: scan.sameWalletRowCount,
+      submitEntryCandidateCount: scan.submitEntryCandidateCount,
+      stage1PreparationCandidateCount: scan.stage1PreparationCandidateCount,
+      provesTwoSubmitEntryCandidates: scan.provesTwoSubmitEntryCandidates,
+      nearestTwo: scan.nearestTwo.map((candidate) => ({ paymentId: candidate.paymentId, stage: candidate.stage, classification: candidate.classification })),
+      financialAuthorityMutated: false,
+      piCreateExecuted: false,
+      horizonSubmitExecuted: false,
+    })
+    return NextResponse.json({
+      ok: true,
+      action: "submit-candidates",
+      anchorPaymentId: paymentA,
+      sourceWallet,
+      ...scan,
+      financialAuthorityMutated: false,
+      piCreateExecuted: false,
+      horizonSubmitExecuted: false,
+      redisMutated: false,
+    })
+  }
 
   if (request.nextUrl.searchParams.get("evidence") === "B") {
     const paymentId = fin4ArmedPaymentForRole(runId, "B")
