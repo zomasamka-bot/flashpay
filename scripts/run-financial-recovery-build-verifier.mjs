@@ -68,6 +68,7 @@ require("./verify-dr11-refund-race-ui-binding.ts")
   require("./verify-fin4-r4p-stage1-retirement.ts")
   require("./verify-fin4-r4p-stage1-retirement-mutations.ts")
   require("./verify-fin4-r4o-ongoing-stale-evidence.ts")
+  require("./verify-fin4-r4p1-guarded-retirement.ts")
   require("./verify-financial-recovery-settlement-create-pi-binding.ts")
   require("./verify-financial-recovery-settlement-create-pre-gate.ts")
   require("./verify-financial-recovery-settlement-create-gate-binding.ts")
@@ -81,3 +82,4 @@ require("./verify-dr11-refund-race-ui-binding.ts")
     delete require.extensions[".ts"]
   }
 }
+

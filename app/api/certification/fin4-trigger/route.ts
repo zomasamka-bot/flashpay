@@ -16,11 +16,12 @@ import { readFin4QualifiedExistingCandidates } from "@/lib/fin4-candidate-qualif
 
 import { readFin4R4NStage1Ambiguity } from "@/lib/fin4-r4n-stage1-ambiguity-probe"
 import { readFin4R4OOngoingAndStaleEvidence } from "@/lib/fin4-r4o-ongoing-stale-evidence"
+import { executeFin4R4P1GuardedRetirement } from "@/lib/fin4-r4p1-guarded-retirement"
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 export const maxDuration = 90
 
-type Body = { action: "launch" | "prepare-a-stage1" | "prepare-b-stage1" }
+type Body = { action: "launch" | "prepare-a-stage1" | "prepare-b-stage1" | "r4p1-retire-stale-a" }
 
 function exactDeploymentOrigin(): string {
   const host = process.env.VERCEL_URL?.trim() ?? ""
@@ -200,7 +201,15 @@ export async function POST(request: NextRequest) {
     const runId = fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
     if (!runId) return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
     const body = await request.json().catch(() => null) as Body | null
-    if (!body || (body.action !== "launch" && body.action !== "prepare-a-stage1" && body.action !== "prepare-b-stage1") || Object.keys(body).length !== 1) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
+    if (!body || (body.action !== "launch" && body.action !== "prepare-a-stage1" && body.action !== "prepare-b-stage1" && body.action !== "r4p1-retire-stale-a") || Object.keys(body).length !== 1) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
+
+    if (body.action === "r4p1-retire-stale-a") {
+      const targetPaymentId = "7e95c0ef-bd41-4db7-9100-ece47ad703d7"
+      console.warn("[FIN-4 R4P1] guarded stale Stage1 retirement start", { runId, targetPaymentId, piMutationAuthorized: false, horizonSubmitAuthorized: false })
+      const result = await executeFin4R4P1GuardedRetirement(targetPaymentId)
+      console.warn("[FIN-4 R4P1] guarded stale Stage1 retirement result", { runId, targetPaymentId, outcome: result.outcome, ok: result.ok, financialAuthorityMutated: result.financialAuthorityMutated, piMutationExecuted: result.piMutationExecuted, horizonSubmitExecuted: result.horizonSubmitExecuted, redisMutated: result.redisMutated })
+      return NextResponse.json({ action: "r4p1-retire-stale-a", ...result }, { status: result.ok ? 200 : 409 })
+    }
 
     if (body.action === "prepare-a-stage1") {
       const paymentA = fin4ArmedPaymentForRole(runId, "A")
