@@ -1,0 +1,35 @@
+{
+  "certification": "FIN4_R4I_PI_PRETRANSACTION_EVIDENCE",
+  "date": "2026-10-05",
+  "purpose": "Read-only classification of an armed FIN-4 Pi user-to-app payment after server approval but before a completion callback exists.",
+  "scope": {
+    "armedRole": "B",
+    "piRead": "GET /v2/payments/{piPaymentId}",
+    "exactBinding": "Pi metadata.paymentId must equal the currently armed FIN-4 B paymentId"
+  },
+  "sideEffects": {
+    "financialAuthorityMutated": false,
+    "piMutationExecuted": false,
+    "horizonSubmitExecuted": false,
+    "redisMutated": false,
+    "launchClaimed": false
+  },
+  "failClosed": [
+    "invalid Pi payment identifier",
+    "Pi API unavailable",
+    "Pi read transport indeterminate",
+    "Pi non-OK response",
+    "Pi metadata payment mismatch"
+  ],
+  "reportedEvidence": [
+    "network",
+    "direction",
+    "amount",
+    "developerApproved",
+    "transactionVerified",
+    "developerCompleted",
+    "cancelled",
+    "transactionPresent",
+    "transactionTxid"
+  ]
+}

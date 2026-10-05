@@ -10,6 +10,7 @@ import { getDurableU2AIngressAuthoritative, getSettlementCheckpointAuthoritative
 import { readSettlementCreatePiEvidence } from "@/lib/financial-recovery-settlement-create-pi-reader"
 import { evaluateFinancialRecoveryPiCandidates } from "@/lib/financial-recovery-pi-candidate-rules"
 import { readFin4SameWalletSubmitCandidates } from "@/lib/fin4-submit-candidate-reader"
+import { readFin4PiPretransactionEvidence } from "@/lib/fin4-pi-pretransaction-reader"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -102,6 +103,13 @@ export async function GET(request: NextRequest) {
       horizonSubmitExecuted: false,
       redisMutated: false,
     })
+  }
+
+  if (request.nextUrl.searchParams.get("evidence") === "pi-pretransaction") {
+    const paymentId = fin4ArmedPaymentForRole(runId, "B")
+    const piPaymentId = request.nextUrl.searchParams.get("piPaymentId")?.trim() ?? ""
+    const read = await readFin4PiPretransactionEvidence({ paymentId, piPaymentId })
+    return NextResponse.json(read.evidence, { status: read.status })
   }
 
   if (request.nextUrl.searchParams.get("evidence") === "B") {
