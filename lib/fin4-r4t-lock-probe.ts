@@ -10,19 +10,29 @@ const SUBMIT_KEY_PREFIX='flashpay:wallet:submit:'
 type SubmitLockDiagnostic =
   | {state:'free';ttlSeconds:-2}
   | {state:'busy';ttlSeconds:number}
-  | {state:'unavailable';ttlSeconds:null}
+  | {state:'unavailable';ttlSeconds:null;errorCode:'NOT_CONFIGURED'|'INVALID_SOURCE_WALLET'|'REDIS_EVAL_FAILED'|'MALFORMED_DIAGNOSTIC'}
+
+const SUBMIT_LOCK_DIAGNOSTIC_SCRIPT=`
+local exists = redis.call('EXISTS', KEYS[1])
+local ttl = redis.call('TTL', KEYS[1])
+return {exists, ttl}
+`
 
 function requestId(){return crypto.randomUUID()}
 function submitKey(sourceWallet:string){return `${SUBMIT_KEY_PREFIX}${sourceWallet}`}
 export function fin4R4TProbeProcessId(){return PROCESS_ID}
 
 export async function readFin4R4TSubmitLockDiagnostic(sourceWallet:string):Promise<SubmitLockDiagnostic>{
-  if(!isRedisConfigured||!sourceWallet||sourceWallet!==sourceWallet.trim()) return {state:'unavailable',ttlSeconds:null}
+  if(!isRedisConfigured) return {state:'unavailable',ttlSeconds:null,errorCode:'NOT_CONFIGURED'}
+  if(!sourceWallet||sourceWallet!==sourceWallet.trim()) return {state:'unavailable',ttlSeconds:null,errorCode:'INVALID_SOURCE_WALLET'}
   try{
-    const ttl=await redis.ttl(submitKey(sourceWallet))
-    if(ttl===-2) return {state:'free',ttlSeconds:-2}
-    return {state:'busy',ttlSeconds:ttl}
-  }catch{return {state:'unavailable',ttlSeconds:null}}
+    const result=await redis.eval<[], [number,number]>(SUBMIT_LOCK_DIAGNOSTIC_SCRIPT,[submitKey(sourceWallet)],[])
+    if(!Array.isArray(result)||result.length!==2||!Number.isInteger(result[0])||!Number.isInteger(result[1])) return {state:'unavailable',ttlSeconds:null,errorCode:'MALFORMED_DIAGNOSTIC'}
+    const [exists,ttl]=result
+    if(exists===0&&ttl===-2) return {state:'free',ttlSeconds:-2}
+    if(exists===1&&ttl>=-1) return {state:'busy',ttlSeconds:ttl}
+    return {state:'unavailable',ttlSeconds:null,errorCode:'MALFORMED_DIAGNOSTIC'}
+  }catch{return {state:'unavailable',ttlSeconds:null,errorCode:'REDIS_EVAL_FAILED'}}
 }
 
 export async function holdFin4R4TWalletProbe(runId:string,sourceWallet:string){

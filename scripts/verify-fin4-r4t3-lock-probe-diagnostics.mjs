@@ -3,8 +3,12 @@ const probe=fs.readFileSync('lib/fin4-r4t-lock-probe.ts','utf8')
 const holder=fs.readFileSync('app/api/certification/fin4-r4t-lock-holder/route.ts','utf8')
 const contender=fs.readFileSync('app/api/certification/fin4-r4t-lock-contender/route.ts','utf8')
 const lock=fs.readFileSync('lib/pi-wallet-submit-lock.ts','utf8')
+const diagnosticRead=(probe.includes('redis.ttl(submitKey(sourceWallet))')||(
+  probe.includes("redis.call('EXISTS', KEYS[1])")&&probe.includes("redis.call('TTL', KEYS[1])")&&probe.includes('redis.eval<[], [number,number]>')
+))
+const noTokenRead=!probe.includes('redis.get(submitKey(sourceWallet))')&&!probe.includes("redis.call('GET', KEYS[1])")
 const checks=[
- ['production_key_read_only_diagnostic',probe.includes("const SUBMIT_KEY_PREFIX='flashpay:wallet:submit:'")&&probe.includes('redis.ttl(submitKey(sourceWallet))')&&!probe.includes('redis.get<string>(submitKey(sourceWallet))')],
+ ['production_key_read_only_diagnostic',probe.includes("const SUBMIT_KEY_PREFIX='flashpay:wallet:submit:'")&&diagnosticRead&&noTokenRead],
  ['busy_preflight',probe.includes("reason:'BUSY_PRODUCTION_LOCK'")&&probe.indexOf("reason:'BUSY_PRODUCTION_LOCK'")<probe.indexOf('acquirePiWalletSubmitLock(sourceWallet)')],
  ['race_classified',probe.includes("reason:'LOCK_RACED_BUSY'")],
  ['request_identity',probe.includes('requestId:probeRequestId')&&probe.includes('processId:PROCESS_ID')],

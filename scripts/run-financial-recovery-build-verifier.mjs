@@ -100,3 +100,6 @@ await import('./verify-fin4-r4t3-lock-probe-diagnostics-mutations.mjs')
 
 await import('./verify-fin4-r4t4-automatic-refund-retirement-boundary.mjs')
 await import('./verify-fin4-r4t4-automatic-refund-retirement-boundary-mutations.mjs')
+
+await import('./verify-fin4-r4t5-lock-diagnostic-eval.mjs')
+await import('./verify-fin4-r4t5-lock-diagnostic-eval-mutations.mjs')
