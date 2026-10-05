@@ -55,6 +55,20 @@ export type AutomaticRefundCheckpointResult =
   | { state: 'ok'; checkpoints: RefundCheckpoint[] }
   | { state: 'uncertain' }
 
+export type AutomaticRefundRetirementState = 'active' | 'retired' | 'uncertain'
+
+export async function readAutomaticRefundRetirementState(paymentId: string, refundId: string): Promise<AutomaticRefundRetirementState> {
+  if (!process.env.DATABASE_URL || typeof paymentId !== 'string' || !paymentId.trim() || paymentId !== paymentId.trim() || typeof refundId !== 'string' || !refundId.trim() || refundId !== refundId.trim()) return 'uncertain'
+  try {
+    if (!(await ensureRefundCheckpointTables())) return 'uncertain'
+    const rows = await query(`SELECT 1 FROM refund_automatic_retirements WHERE payment_id=$1 AND refund_id=$2 LIMIT 1`, [paymentId, refundId])
+    if (!Array.isArray(rows)) return 'uncertain'
+    return rows.length === 1 ? 'retired' : rows.length === 0 ? 'active' : 'uncertain'
+  } catch {
+    return 'uncertain'
+  }
+}
+
 export async function cleanupTerminalRefundRetryMetadata(limit: number): Promise<number | null> {
   if (!Number.isInteger(limit) || limit <= 0) return null
   try {

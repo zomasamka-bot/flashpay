@@ -8,6 +8,7 @@ import {
   listAutomaticRefundCheckpoints,
   markAutomaticRefundManualReview,
   findRefundCheckpointByPaymentId,
+  readAutomaticRefundRetirementState,
 } from "@/lib/refund-checkpoint-store"
 import { createRefundIntentInternal } from "@/lib/refund-intent-service"
 import { executeRefundNextStep } from "@/lib/refund-executor"
@@ -78,6 +79,8 @@ export async function ensureAutomaticRefundIntent(paymentId: string): Promise<Au
   const first = await findRefundCheckpointByPaymentId(paymentId)
   if (first.state === "uncertain") return { outcome: "blocked", paymentId, reason: "checkpoint_uncertain" }
   if (first.state === "present") {
+    const retirement = await readAutomaticRefundRetirementState(first.checkpoint.paymentId, first.checkpoint.refundId)
+    if (retirement !== "active") return { outcome: "blocked", paymentId, refundId: first.checkpoint.refundId, reason: retirement === "retired" ? "automatic_refund_retired" : "automatic_refund_retirement_uncertain" }
     if (first.checkpoint.status === "manual_review_required") {
       const manualReview = await markAutomaticRefundManualReview(first.checkpoint.refundId, first.checkpoint.stage)
       if (
@@ -136,6 +139,10 @@ export async function readAutomaticRefundDrainHead(limit: number): Promise<Autom
 type AutomaticRefundStepResult = { refundId: string; paymentId: string; action: "intent" | "execute"; outcome: "success" | "deferred" | "blocked"; reason?: string }
 
 async function runAutomaticRefundCheckpointStep(checkpoint: RefundCheckpoint, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<AutomaticRefundStepResult> {
+  if (checkpoint.refundTxid === undefined) {
+    const retirement = await readAutomaticRefundRetirementState(checkpoint.paymentId, checkpoint.refundId)
+    if (retirement !== "active") return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action: checkpoint.stage === "eligibility_verified" ? "intent" : "execute", outcome: "blocked", reason: retirement === "retired" ? "automatic_refund_retired" : "automatic_refund_retirement_uncertain" }
+  }
   let successful = false
   let reason = "uncertain"
   let thrown = false
@@ -180,6 +187,8 @@ export async function runAutomaticRefundPreparationStep(paymentId: string, refun
   const current = await getRefundCheckpointReadOnly(refundId)
   if (current.state !== "present" || current.checkpoint.paymentId !== paymentId || current.checkpoint.refundId !== refundId) return { state: "blocked" }
   const checkpoint = current.checkpoint
+  const retirement = await readAutomaticRefundRetirementState(checkpoint.paymentId, checkpoint.refundId)
+  if (retirement !== "active") return { state: "blocked" }
   const preparationStage =
     (checkpoint.stage === "eligibility_verified" && checkpoint.status === "pending") ||
     (checkpoint.stage === "intent_created" && checkpoint.status === "pending" && checkpoint.refundPaymentId === undefined && checkpoint.refundTxid === undefined) ||
