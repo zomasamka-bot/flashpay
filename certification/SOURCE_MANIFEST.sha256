@@ -248,7 +248,7 @@ a915fd0715cb6741ddcb24747ef940a3b86457b9e682cb1b0ddeb0b11b1a1a86  ./lib/redis.ts
 36a1a9a77c683b133ab66cb72cff244b4dd22adf79cfec738d6aad01cd0236c5  ./lib/refund-auto-orchestrator.ts
 4d95b1d74c1ea54d8a983a4bbf5f0b8f3824955aa4abbe4e991d52a7dae9b462  ./lib/refund-blockchain-evidence.ts
 5c1d3fed956acceec98a2d0d4c522f991e44f7afb42e4af7baf66d5b96e80135  ./lib/refund-blockchain-submit.ts
-72674ed7f385fe6193ad98675d9f14edda47d6693487a91f9f227ca0bb09f9a8  ./lib/refund-checkpoint-store.ts
+4e045a8ca3b68d1643ada7628a6f4ac84caad2d25ad0402328fbf655caec305e  ./lib/refund-checkpoint-store.ts
 83fb64e2f6258f72a1ec82819385aa86bd73d5577635a241fa3fa75521659c20  ./lib/refund-dr11-orphan-a2u-recovery-rules.ts
 4f15294b61f783fc6326fd2c148afa94af75371547973d465f35aef21ad3ac9a  ./lib/refund-executor.ts
 e7c6a4d974ef9643476d68d908cf1625166f7b4e4d83e6c63608d2e53427dae1  ./lib/refund-fee-evidence.ts
@@ -289,7 +289,7 @@ d7c39d978af643ba9525de6fb8171e0f834882db4110c82ecad0df3f4f69551a  ./public/place
 14be0c7aa11cca1e78f0966176b286a6d36d00ec64be027775dfeb33d8e2dfdf  ./public/placeholder.jpg
 456ca101af0b430ac7a4575f13f44b0c4544275ca8b9ae855e0fa1beaa0f540b  ./public/placeholder.svg
 f2f4762d405ec0cce1182233fda114dfc460c582f0975a44b8561360256897b1  ./public/validation-key.txt
-0b435f09c0913cea034064ea738ac72a195e0252db72185f38d9f7a46ca1aa01  ./scripts/run-financial-recovery-build-verifier.mjs
+38e18f8f984c38cecda8b2e624fda884385d581d10ddefeb7a6cfd78c2ed1b7b  ./scripts/run-financial-recovery-build-verifier.mjs
 7affa59ab8c3577987b1eeda625e3752c2e7d37cbed3a3380d161b2eb5877985  ./scripts/verify-dr11-orphan-a2u-refund-recovery.ts
 15ca00678fc18d189d248e8cd005075e4f02a7d3e2335c330000fa26f2698c7d  ./scripts/verify-dr11-refund-race-ui-binding.ts
 d3ef77c4d5ce12f47d0973cbbf312bdc5e1a9a44b26df751dec8f11d3c568511  ./scripts/verify-emergency-stuck-payment-rescue-safety.ts
@@ -318,6 +318,8 @@ a39fb204eae129531b65d948de58d6fff96a22e210a6ebeb88f2e23dfeee318d  ./scripts/veri
 8f9189170b0b73543d63d0c8a30758043e333769107ddd159a56a8ec1cab87bd  ./scripts/verify-fin4-r4s-foreign-ongoing-refund-containment.ts
 8b372c8793f60ebbac497c4b6570c223fb0c77364d2114761e526c6036c9aef2  ./scripts/verify-fin4-r4t-fixture-redesign.mjs
 ae090a2e823612c80b03777fc201491b1b3187ba8436be4b5fe3210728f550d6  ./scripts/verify-fin4-r4t-poisoned-refund-retirement.mjs
+6593d2c3ccd561dc4ffe94a280f430c86d0fa337d02350fa6ef03db435ed9589  ./scripts/verify-fin4-r4t1-refund-retirement-schema-order-mutations.mjs
+faec88c579de55f3865c877aac4e758e2d054766b8fb566280ed37af9b820d3b  ./scripts/verify-fin4-r4t1-refund-retirement-schema-order.mjs
 b7af22e089db7160088c7d5bc865ea4a160158cd414859a2d59d262fa508ff0d  ./scripts/verify-financial-recovery-a2u-proof.ts
 e7e5431465d66b0bac46dbaab05d5e482dc0ef39a4513dbcfee028d84ea41dab  ./scripts/verify-financial-recovery-crash-policy.ts
 44b0c1a50a9485d8651368e1bc5eeede398a7bf5dc255497c341896e2cdf04e9  ./scripts/verify-financial-recovery-financial-invariants.ts

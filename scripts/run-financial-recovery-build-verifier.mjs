@@ -88,3 +88,6 @@ require("./verify-dr11-refund-race-ui-binding.ts")
   }
 }
 
+
+await import('./verify-fin4-r4t1-refund-retirement-schema-order.mjs')
+await import('./verify-fin4-r4t1-refund-retirement-schema-order-mutations.mjs')

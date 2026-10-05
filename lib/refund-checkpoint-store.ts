@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { redis, isRedisConfigured } from './redis'
-import { query, readSettlementRefundAuthority, withPaymentAuthorityTransaction } from './db'
+import { ensureRefundCheckpointTables, query, readSettlementRefundAuthority, withPaymentAuthorityTransaction } from './db'
 import type { Payment, RefundAuditEvent, RefundCheckpoint } from './types'
 
 const redisKey = (refundId: string) => `flashpay:refund:checkpoint:${refundId}`
@@ -93,6 +93,7 @@ export async function cleanupTerminalRefundRetryMetadata(limit: number): Promise
 export async function listAutomaticRefundCheckpoints(limit: number): Promise<AutomaticRefundCheckpointResult> {
   if (!Number.isInteger(limit) || limit <= 0) return { state: 'uncertain' }
   try {
+    if (!(await ensureRefundCheckpointTables())) return { state: 'uncertain' }
     const rows = await query(`
       SELECT * FROM refund_checkpoints
       WHERE NOT EXISTS (
@@ -168,6 +169,7 @@ export async function retirePoisonedAutomaticRefundIntent(params: { refundId: st
   const { refundId, paymentId, reason, evidenceCode } = params
   if (![refundId,paymentId,reason,evidenceCode].every((v) => typeof v === 'string' && v.length > 0 && v === v.trim())) return { outcome: 'BLOCKED' }
   try {
+    if (!(await ensureRefundCheckpointTables())) return { outcome: 'INDETERMINATE' }
     const rows = await query(`
       WITH candidate AS (
         SELECT c.refund_id,c.payment_id
