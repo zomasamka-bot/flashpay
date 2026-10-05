@@ -12,6 +12,7 @@ import { evaluateFinancialRecoveryPiCandidates } from "@/lib/financial-recovery-
 import { readFin4SameWalletSubmitCandidates } from "@/lib/fin4-submit-candidate-reader"
 import { readFin4PiPretransactionEvidence } from "@/lib/fin4-pi-pretransaction-reader"
 import { executeA2ULocked } from "@/lib/a2u-locked-executor"
+import { readFin4QualifiedExistingCandidates } from "@/lib/fin4-candidate-qualification"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -68,6 +69,15 @@ export async function GET(request: NextRequest) {
       horizonSubmitExecuted: false,
       redisMutated: false,
     }, { status: readiness.ready ? 200 : 409 })
+  }
+
+  if (request.nextUrl.searchParams.get("evidence") === "qualified-candidates") {
+    const paymentA = fin4ArmedPaymentForRole(runId, "A")
+    const durableA = await getSettlementCheckpointAuthoritative(paymentA)
+    if (durableA.outcome !== "FOUND") return NextResponse.json({ ok: false, action: "qualified-candidates", outcome: "READ_INDETERMINATE", reason: "ANCHOR_NOT_FOUND", financialAuthorityMutated: false, piMutationExecuted: false, horizonSubmitExecuted: false, redisMutated: false }, { status: 409 })
+    const evidence = await readFin4QualifiedExistingCandidates(durableA.checkpoint.a2uFromAddress)
+    console.log("[FIN-4 R4L QUALIFIED CANDIDATES]", { runId, outcome: evidence.outcome, sourceWallet: evidence.sourceWallet, durableEligibleCount: "durableEligibleCount" in evidence ? evidence.durableEligibleCount : null, qualifiedCount: "qualifiedCount" in evidence ? evidence.qualifiedCount : null, financialAuthorityMutated: false, piMutationExecuted: false, horizonSubmitExecuted: false, redisMutated: false })
+    return NextResponse.json({ action: "qualified-candidates", ...evidence }, { status: evidence.ok ? 200 : 409 })
   }
 
   if (request.nextUrl.searchParams.get("evidence") === "submit-candidates") {

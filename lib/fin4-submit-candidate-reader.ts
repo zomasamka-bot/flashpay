@@ -15,6 +15,9 @@ export type Fin4DurableCandidate = Readonly<{
   stage: string
   sourceWallet: string
   a2uPaymentIdPresent: boolean
+  a2uPaymentId: string | null
+  merchantUid: string | null
+  customerAmount: number | null
   preparedHashPresent: boolean
   preparedSequencePresent: boolean
   preparedEnvelopePresent: boolean
@@ -71,6 +74,8 @@ function classify(row: Record<string, unknown>, expectedSourceWallet: string): F
   const stage = typeof row.stage === "string" ? row.stage : "INVALID"
   const sourceWallet = nonEmptyExactString(row.a2u_from_address) ? row.a2u_from_address : "INVALID"
   const a2uPaymentIdPresent = nonEmptyExactString(row.a2u_payment_id)
+  const a2uPaymentId = a2uPaymentIdPresent ? String(row.a2u_payment_id) : null
+  const merchantUid = nonEmptyExactString(row.merchant_uid) ? String(row.merchant_uid) : null
   const preparedEnvelopePresent = nonEmptyExactString(row.prepared_envelope_xdr)
   const preparedHashPresent = typeof row.prepared_tx_hash === "string" && /^[0-9a-f]{64}$/.test(row.prepared_tx_hash)
   const preparedSequencePresent = /^[1-9][0-9]*$/.test(String(row.prepared_sequence ?? ""))
@@ -128,6 +133,9 @@ function classify(row: Record<string, unknown>, expectedSourceWallet: string): F
     stage,
     sourceWallet,
     a2uPaymentIdPresent,
+    a2uPaymentId,
+    merchantUid,
+    customerAmount,
     preparedHashPresent,
     preparedSequencePresent,
     preparedEnvelopePresent,

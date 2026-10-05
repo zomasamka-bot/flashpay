@@ -1,0 +1,10 @@
+{
+  "gate": "FIN4_R4L_QUALIFIED_EXISTING_CANDIDATE_READ_ONLY_PROBE",
+  "revision": "R4L",
+  "purpose": "Qualify existing same-wallet Stage1/prepared candidates using exact live Pi state plus independent bounded Horizon absence before selecting a replacement FIN4 role A.",
+  "authority": "read_only",
+  "mutations": {"postgresql": false, "pi": false, "horizon": false, "redis": false},
+  "acceptance": ["durable candidate", "exact Pi identifier/metadata/network/direction/amount/uid/source wallet", "not cancelled", "not verified/completed", "no Pi transaction", "independent Horizon memo movement absent"],
+  "uncertainty": "exclude candidate / fail closed",
+  "no_candidate_outcome": "NO_SAFE_EXISTING_CANDIDATE"
+}
