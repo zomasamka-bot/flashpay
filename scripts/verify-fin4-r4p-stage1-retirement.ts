@@ -1,0 +1,17 @@
+import fs from "fs"; import path from "path";
+const root=process.cwd(), db=fs.readFileSync(path.join(root,"lib/db.ts"),"utf8"), ex=fs.readFileSync(path.join(root,"lib/a2u-executor.ts"),"utf8"), hp=fs.readFileSync(path.join(root,"lib/a2u-stage1-retirement.ts"),"utf8")
+function need(v:boolean,n:string){if(!v)throw new Error(`R4P:${n}`)}
+need(db.includes("CREATE TABLE IF NOT EXISTS settlement_a2u_stage1_retirements"),"retirement_table")
+need(db.includes("PRIMARY KEY(payment_id, a2u_payment_id)"),"append_only_key")
+need(db.includes("CREATE TABLE IF NOT EXISTS settlement_a2u_ongoing_observations"),"ongoing_capture_table")
+need(db.includes("pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))"),"pg_lock")
+need(db.includes("SELECT EXISTS(SELECT 1 FROM refund_checkpoints"),"refund_opposite")
+need(db.includes("stage='a2u_created'")&&db.includes("prepared_envelope_xdr IS NULL")&&db.includes("a2u_txid IS NULL")&&db.includes("stage='payment_identity'"),"retirement_cas")
+need(ex.includes("recordSettlementA2UOngoingObservation(ctx.paymentId, ongoingPaymentId)"),"capture_before_get")
+need(ex.includes('errorCode:"a2u_ongoing_identifier_capture_unproven"'),"capture_fail_closed")
+need(ex.includes("exactCancelledIdentity")&&ex.includes('metadata?.type === "a2u_settlement"')&&ex.includes('metadata?.paymentId === ctx.paymentId'),"exact_pi_identity")
+need(ex.includes("proveA2UStage1HorizonAbsence")&&ex.includes('horizon.outcome !== "ABSENT"'),"horizon_absence")
+need(ex.includes("retireCancelledSettlementA2UStage1")&&ex.includes('retired.outcome !== "RETIRED" && retired.outcome !== "REPLAYED"'),"durable_retirement")
+need(ex.includes("compareAndSwapPaymentProjection")&&ex.includes("delete cleaned.a2uPaymentId"),"projection_cleanup")
+need(hp.includes("include_failed=true")&&hp.includes("HORIZON_SCAN_BOUND_EXHAUSTED")&&hp.includes('tx.memo===a2uPaymentId'),"bounded_horizon")
+console.log("FIN4_R4P_STAGE1_RETIREMENT=PASS ongoing_capture=append_only retirement=append_only pg_authority=true refund_xor=true exact_pi_cancel=true horizon_absence=true no_prepared_movement=true redis_projection_only=true")

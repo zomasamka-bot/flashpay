@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative } from "@/lib/db"
+import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1 } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -8,6 +8,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
 import { numberToExactPositiveStroops } from "@/lib/financial-amount-stroops"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
 import { fin4BeforeWalletLock, fin4Event, fin4BestEffortEvent } from "@/lib/fin4-live-certification"
+import { proveA2UStage1HorizonAbsence } from "@/lib/a2u-stage1-retirement"
 
 /**
  * UNIFIED A2U EXECUTOR - Single source of truth for ALL A2U execution paths
@@ -49,6 +50,7 @@ interface PiA2UPayment {
   direction?: "app_to_user" | "user_to_app"
   metadata?: Record<string, unknown>
   user_uid?: string
+  created_at?: string
   status?: {
     developer_approved?: boolean
     transaction_verified?: boolean
@@ -325,7 +327,22 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     
     // Check if payment is cancelled
     if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true || fetchedPayment.cancelled === true || fetchedPayment.rejected === true) {
-      return { ok: false, status: "error", error: "A2U payment was cancelled" }
+      const metadata = isRecord(fetchedPayment.metadata) ? fetchedPayment.metadata : null
+      const exactCancelledIdentity = fetchedPayment.identifier === a2uPaymentId && fetchedPayment.network === "Pi Testnet" && fetchedPayment.direction === "app_to_user" && fetchedPayment.amount === ctx.customerAmount && fetchedPayment.user_uid === ctx.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === ctx.paymentId && typeof fetchedPayment.txid !== "string" && typeof fetchedPayment.transaction_id !== "string" && typeof fetchedPayment.transaction?.txid !== "string" && fetchedPayment.transaction?.verified !== true && fetchedPayment.status?.transaction_verified !== true && fetchedPayment.status?.developer_completed !== true
+      if (!exactCancelledIdentity) return { ok:false,status:"settlement_pending",error:"Cancelled A2U identity/progression is not safe to retire" }
+      const horizon = await proveA2UStage1HorizonAbsence(fetchedPayment as unknown as Record<string,unknown>, a2uPaymentId)
+      if (horizon.outcome !== "ABSENT") return { ok:false,status:"settlement_pending",error:"Cancelled A2U Horizon absence not proven" }
+      const now = new Date().toISOString()
+      const retired = await retireCancelledSettlementA2UStage1({paymentId:ctx.paymentId,a2uPaymentId,piCancelledAt:now,horizonAbsenceProvenAt:now})
+      if (retired.outcome !== "RETIRED" && retired.outcome !== "REPLAYED") return { ok:false,status:"settlement_pending",error:"Cancelled A2U durable retirement not proven" }
+      const latest = ctx.payment
+      const cleaned: Payment = { ...latest }
+      delete cleaned.a2uPaymentId; delete cleaned.a2uFromAddress; delete cleaned.a2uToAddress; delete cleaned.a2uPreparedEnvelopeXdr; delete cleaned.a2uPreparedTxHash; delete cleaned.a2uPreparedSequence; delete cleaned.a2uTxid; delete cleaned.horizonFeeCharged; delete cleaned.horizonSuccessAt; delete cleaned.settledAt
+      cleaned.status = "paid_to_app"; cleaned.settlementFailureState = "retryable"; cleaned.refundStatus = "not_started"; cleaned.a2uErrorCode = "a2u_stage1_retired_cancelled"; cleaned.a2uErrorMessage = "Cancelled A2U retired after exact Pi and Horizon absence proof"
+      const projection = await compareAndSwapPaymentProjection(ctx.paymentId, latest, cleaned)
+      if (projection.outcome === "UPDATED") ctx.payment = projection.payment
+      console.warn("[R4P] Cancelled A2U Stage1 retired", { paymentId:ctx.paymentId, a2uPaymentId, durableOutcome:retired.outcome, redisProjectionOutcome:projection.outcome })
+      return { ok:false,status:"settlement_pending",error:"Cancelled A2U Stage1 retired; fresh Stage1 required" }
     }
 
     const metadata = isRecord(fetchedPayment.metadata) ? fetchedPayment.metadata : null
@@ -752,6 +769,8 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       if (errorData.code === "ongoing_payment_found" || errorText.includes("ongoing_payment")) {
         const ongoingPaymentId = errorData.payment?.identifier || errorData.identifier || errorData.payment_id
         if (typeof ongoingPaymentId === "string" && ongoingPaymentId.trim() !== "" && ongoingPaymentId === ongoingPaymentId.trim()) {
+          const observation = await recordSettlementA2UOngoingObservation(ctx.paymentId, ongoingPaymentId)
+          if (observation !== "RECORDED" && observation !== "REPLAYED") return {ok:false,error:"Pi ongoing A2U identifier could not be durably captured",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_ongoing_identifier_capture_unproven"}
           const fetchResult = await fetchA2UPayment(ongoingPaymentId)
           const metadata = fetchResult && isRecord(fetchResult.metadata) ? fetchResult.metadata : null
           if (fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === ctx.customerAmount && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid && fetchResult.identifier === ongoingPaymentId && typeof fetchResult.txid !== "string" && typeof fetchResult.transaction_id !== "string" && fetchResult.completed !== true && fetchResult.cancelled !== true && fetchResult.rejected !== true && typeof fetchResult.transaction?.txid !== "string" && fetchResult.transaction?.verified !== true && fetchResult.status?.transaction_verified !== true && fetchResult.status?.developer_completed !== true && fetchResult.status?.cancelled !== true && fetchResult.status?.user_cancelled !== true) {

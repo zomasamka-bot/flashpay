@@ -277,6 +277,35 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
   `)
   if (u2aApprovalRetirements === null) return false
 
+  // R4P: append-only evidence for an A2U Stage1 identity that Pi has canonically
+  // cancelled before transaction creation and whose Horizon movement absence was
+  // independently proven. The row is preserved before the active Stage1 pointer
+  // can be retired back to payment_identity.
+  const a2uStage1Retirements = await query(`
+    CREATE TABLE IF NOT EXISTS settlement_a2u_stage1_retirements (
+      payment_id TEXT NOT NULL,
+      a2u_payment_id TEXT NOT NULL,
+      reason TEXT NOT NULL CHECK (reason = 'pi_cancelled_before_transaction'),
+      pi_cancelled_at TIMESTAMP NOT NULL,
+      horizon_absence_proven_at TIMESTAMP NOT NULL,
+      retired_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      PRIMARY KEY(payment_id, a2u_payment_id)
+    )
+  `)
+  if (a2uStage1Retirements === null) return false
+
+  // R4P: append-only capture of a Pi ongoing_payment_found identifier before any
+  // caller can lose the only server-side evidence returned by the failed create.
+  const a2uOngoingObservations = await query(`
+    CREATE TABLE IF NOT EXISTS settlement_a2u_ongoing_observations (
+      payment_id TEXT NOT NULL,
+      a2u_payment_id TEXT NOT NULL,
+      observed_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      PRIMARY KEY(payment_id, a2u_payment_id)
+    )
+  `)
+  if (a2uOngoingObservations === null) return false
+
   // DR60: durable certification hold lives on the existing payment identity row.
   // It is coordination metadata only: it never represents Settlement or Refund movement.
   const certificationHoldColumns = await query(`
@@ -1365,6 +1394,57 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
       ...(moved?{a2uTxid:r.a2u_txid as string,horizonFeeStroops:fee}:{}),
     }}
   }catch(e){console.error('[DB] Settlement durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement durable read uncertain'}}
+}
+
+export async function recordSettlementA2UOngoingObservation(paymentId:string,a2uPaymentId:string):Promise<'RECORDED'|'REPLAYED'|'CONFLICT'|'INDETERMINATE'>{
+  const exact=(v:string)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+  if(!exact(paymentId)||!exact(a2uPaymentId))return'CONFLICT'
+  try{
+    const ready=await ensureSettlementCheckpointTable();if(!ready)return'INDETERMINATE'
+    const client=await getPostgresClient();if(!client)return'INDETERMINATE'
+    return await client.begin(async(tx:any)=>{
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${paymentId},0))`
+      const owner=await tx`SELECT payment_id FROM settlement_checkpoints WHERE payment_id=${paymentId} FOR UPDATE`
+      if(owner.length!==1)return'CONFLICT'
+      const inserted=await tx`INSERT INTO settlement_a2u_ongoing_observations(payment_id,a2u_payment_id) VALUES(${paymentId},${a2uPaymentId}) ON CONFLICT DO NOTHING RETURNING payment_id`
+      if(inserted.length===1)return'RECORDED'
+      const replay=await tx`SELECT 1 FROM settlement_a2u_ongoing_observations WHERE payment_id=${paymentId} AND a2u_payment_id=${a2uPaymentId}`
+      return replay.length===1?'REPLAYED':'INDETERMINATE'
+    })
+  }catch{return'INDETERMINATE'}
+}
+
+export type SettlementA2UStage1RetirementResult =
+  | { outcome:'RETIRED'|'REPLAYED'; version:number }
+  | { outcome:'CONFLICT'|'INDETERMINATE'; error:string }
+
+/** R4P: retire only an exact cancelled, unprepared, unmoved Stage1 under the same durable payment authority lock. */
+export async function retireCancelledSettlementA2UStage1(params:{paymentId:string;a2uPaymentId:string;piCancelledAt:string;horizonAbsenceProvenAt:string}):Promise<SettlementA2UStage1RetirementResult>{
+  const exact=(v:string)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+  if(!exact(params.paymentId)||!exact(params.a2uPaymentId)||!Number.isFinite(Date.parse(params.piCancelledAt))||!Number.isFinite(Date.parse(params.horizonAbsenceProvenAt)))return{outcome:'CONFLICT',error:'R4P retirement input invalid'}
+  try{
+    const ready=await ensureSettlementCheckpointTable(); if(!ready)return{outcome:'INDETERMINATE',error:'Settlement schema unavailable'}
+    const client=await getPostgresClient(); if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const result=await client.begin(async(tx:any)=>{
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))`
+      const opposite=await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active`
+      if(opposite.length!==1||typeof opposite[0]?.active!=='boolean')return{kind:'INDETERMINATE'}
+      if(opposite[0].active===true)return{kind:'CONFLICT'}
+      const row=await tx`SELECT version,stage,a2u_payment_id,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid,horizon_fee_stroops,horizon_confirmed_at,pi_completed_at,db_finalized_at FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+      if(row.length!==1)return{kind:'INDETERMINATE'}
+      const r=row[0]
+      const replay=await tx`SELECT 1 FROM settlement_a2u_stage1_retirements WHERE payment_id=${params.paymentId} AND a2u_payment_id=${params.a2uPaymentId}`
+      if(r.stage==='payment_identity'&&r.a2u_payment_id==null&&replay.length===1)return{kind:'REPLAYED',version:Number(r.version)}
+      if(r.stage!=='a2u_created'||r.a2u_payment_id!==params.a2uPaymentId||r.prepared_envelope_xdr!=null||r.prepared_tx_hash!=null||r.prepared_sequence!=null||r.a2u_txid!=null||r.horizon_fee_stroops!=null||r.horizon_confirmed_at!=null||r.pi_completed_at!=null||r.db_finalized_at!=null)return{kind:'CONFLICT'}
+      const ins=await tx`INSERT INTO settlement_a2u_stage1_retirements(payment_id,a2u_payment_id,reason,pi_cancelled_at,horizon_absence_proven_at) VALUES(${params.paymentId},${params.a2uPaymentId},'pi_cancelled_before_transaction',${params.piCancelledAt},${params.horizonAbsenceProvenAt}) ON CONFLICT DO NOTHING RETURNING payment_id`
+      if(ins.length!==1&&replay.length!==1)return{kind:'INDETERMINATE'}
+      const up=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='payment_identity',a2u_payment_id=NULL,a2u_from_address=NULL,a2u_to_address=NULL,updated_at=NOW() WHERE payment_id=${params.paymentId} AND stage='a2u_created' AND a2u_payment_id=${params.a2uPaymentId} AND prepared_envelope_xdr IS NULL AND prepared_tx_hash IS NULL AND prepared_sequence IS NULL AND a2u_txid IS NULL AND horizon_fee_stroops IS NULL AND horizon_confirmed_at IS NULL AND pi_completed_at IS NULL AND db_finalized_at IS NULL RETURNING version`
+      if(up.length!==1)throw new Error('R4P retirement CAS failed after evidence insert')
+      return{kind:'RETIRED',version:Number(up[0].version)}
+    })
+    if(result.kind==='RETIRED'||result.kind==='REPLAYED')return{outcome:result.kind,version:result.version}
+    return result.kind==='CONFLICT'?{outcome:'CONFLICT',error:'R4P retirement durable authority conflict'}:{outcome:'INDETERMINATE',error:'R4P retirement durable authority indeterminate'}
+  }catch(e){console.error('[R4P] Stage1 retirement uncertain',e);return{outcome:'INDETERMINATE',error:'R4P retirement outcome uncertain'}}
 }
 
 export type SettlementOutstandingPage =

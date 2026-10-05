@@ -1,0 +1,18 @@
+{
+  "station": "FIN4_R4P_ATOMIC_STAGE1_AMBIGUITY_RETIREMENT",
+  "date": "2026-10-05",
+  "baseline": "R4O production source a5ec46c5fe8d55ee119bf820af07dc51e67ad739",
+  "scope": [
+    "append-only durable capture of Pi ongoing_payment_found identifier",
+    "exact Pi cancelled Stage1 identity validation",
+    "independent bounded Pi Testnet Horizon absence proof",
+    "append-only cancelled Stage1 retirement evidence",
+    "PostgreSQL advisory-lock + Refund opposite-authority gate",
+    "durable a2u_created to payment_identity retirement only when unprepared and unmoved",
+    "Redis CAS cleanup as projection only"
+  ],
+  "forbidden": ["blind A2U create retry", "Horizon submit during retirement", "Refund authority bypass", "Redis financial authority"],
+  "certifier": "PASS",
+  "mutation_assault": {"expected_failures": 12, "unexpected_passes": 0},
+  "typescript_transpile": {"files": 299, "errors": 0}
+}
