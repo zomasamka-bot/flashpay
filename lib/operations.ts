@@ -266,6 +266,7 @@ export function executePayment(
   onProcessing?: (status: "paid_to_app" | "settlement_pending") => void,
   onApproved?: () => void,
   startLeaseToken?: string,
+  recoveryAccessToken?: string,
 ): void {
   const operation = "executePayment"
   CoreLogger.operation(operation, { paymentId })
@@ -416,6 +417,7 @@ export function executePayment(
       onProcessing,
       onApproved,
       startLeaseToken,
+      recoveryAccessToken,
     )
 }
 

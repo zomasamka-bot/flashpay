@@ -78,6 +78,7 @@ export const createPiPayment = async (
   onProcessing?: (status: "paid_to_app" | "settlement_pending") => void,
   onApproved?: () => void,
   startLeaseToken?: string,
+  recoveryAccessToken?: string,
 ) => {
   if (typeof window === "undefined") {
     onError("Cannot create payment - not in browser", false)
@@ -214,13 +215,44 @@ export const createPiPayment = async (
           })
       },
 
-      onCancel: (piPaymentId: string) => {
+      onCancel: async (piPaymentId: string) => {
         CoreLogger.warn("Payment cancelled by user", { piPaymentId, paymentId })
+        // R4J: a Pi cancellation before transaction must also retire the durable
+        // approval owner, otherwise the same FlashPay payment is permanently
+        // blocked by DR88 even though no money moved. The server independently
+        // authenticates and reconciles canonical Pi state before any retirement.
+        if (piPaymentId && recoveryAccessToken) {
+          try {
+            await fetch(`${config.appUrl}/api/pi/recover-pretransaction`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ paymentId, piPaymentId, accessToken: recoveryAccessToken }),
+            })
+          } catch (recoveryError) {
+            CoreLogger.warn("Cancelled payment approval retirement remained fail-closed", { paymentId, piPaymentId, recoveryError })
+          }
+        }
         onError("Payment was cancelled", true)
       },
 
-      onError: (error: Error) => {
-        CoreLogger.error("Payment error from Pi SDK", { error: error.message, paymentId })
+      onError: async (error: Error, piPayment?: any) => {
+        CoreLogger.error("Payment error from Pi SDK", { error: error.message, paymentId, piPaymentId: typeof piPayment?.identifier === "string" ? piPayment.identifier : undefined })
+        const piPaymentId = typeof piPayment?.identifier === "string" ? piPayment.identifier.trim() : ""
+        const metadataPaymentId = typeof piPayment?.metadata?.paymentId === "string" ? piPayment.metadata.paymentId.trim() : ""
+        if (piPaymentId && metadataPaymentId === paymentId && recoveryAccessToken) {
+          try {
+            const recovery = await fetch(`${config.appUrl}/api/pi/recover-pretransaction`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ paymentId, piPaymentId, accessToken: recoveryAccessToken }),
+            })
+            const recoveryBody = await recovery.json().catch(() => ({}))
+            if (recovery.ok && recoveryBody?.success === true && recoveryBody?.retryAllowed === true) {
+              onError("Pi Wallet did not create a blockchain transaction. The incomplete attempt was safely retired; you can try this payment again.", false)
+              return
+            }
+          } catch (recoveryError) {
+            CoreLogger.warn("Pre-transaction recovery remained fail-closed", { paymentId, piPaymentId, recoveryError })
+          }
+        }
         onError(error.message || "Payment failed", false)
       },
     })

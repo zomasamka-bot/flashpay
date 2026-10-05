@@ -275,6 +275,7 @@ export function CustomerPaymentView({
         setProgressMessage("Payment initiated. Complete it in Pi Wallet...")
       },
       startLeaseToken,
+      startAccessToken,
     )
   }
 

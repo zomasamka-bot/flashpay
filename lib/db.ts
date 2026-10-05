@@ -261,6 +261,22 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
   `)
   if (u2aIdentityColumns === null) return false
 
+  // R4J: append-only evidence for a Pi U2A approval that was canonically
+  // cancelled before any blockchain transaction existed. This never records
+  // movement; it preserves the retired owner before the active owner slot is
+  // released for a fresh Pi payment.
+  const u2aApprovalRetirements = await query(`
+    CREATE TABLE IF NOT EXISTS settlement_u2a_approval_retirements (
+      payment_id TEXT NOT NULL,
+      pi_payment_id TEXT NOT NULL,
+      reason TEXT NOT NULL CHECK (reason = 'pi_pretransaction_cancelled'),
+      pi_cancelled_at TIMESTAMP NOT NULL,
+      retired_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      PRIMARY KEY(payment_id, pi_payment_id)
+    )
+  `)
+  if (u2aApprovalRetirements === null) return false
+
   // DR60: durable certification hold lives on the existing payment identity row.
   // It is coordination metadata only: it never represents Settlement or Refund movement.
   const certificationHoldColumns = await query(`
@@ -478,6 +494,85 @@ export async function readDr11RefundCertificationHold(paymentId:string):Promise<
     if(r.certification_hold==='dr11_refund'&&r.certification_hold_at!=null&&r.certification_hold_expires_at!=null){const expires=new Date(r.certification_hold_expires_at as any).getTime();if(Number.isFinite(expires)&&expires>Date.now())return{outcome:'HELD'};if(Number.isFinite(expires)&&expires<=Date.now())return{outcome:'ABSENT'}}
     return{outcome:'INDETERMINATE',error:'DR11 hold state contradictory'}
   }catch(e){return{outcome:'INDETERMINATE',error:'DR11 hold read uncertain'}}
+}
+
+export type SettlementU2APretransactionRecoveryCandidate =
+  | { outcome: 'CANDIDATE'; customerAmount: number; approvalIdentifier: string }
+  | { outcome: 'NOT_CANDIDATE' | 'INDETERMINATE'; error: string }
+
+/** R4J: read-only proof that the exact Pi identifier is still only the durable
+ * approval owner. No U2A blockchain identity or settlement execution may exist. */
+export async function readSettlementU2APretransactionRecoveryCandidate(paymentId: string, piPaymentId: string): Promise<SettlementU2APretransactionRecoveryCandidate> {
+  if (!paymentId || paymentId !== paymentId.trim() || !piPaymentId || piPaymentId !== piPaymentId.trim())
+    return { outcome: 'NOT_CANDIDATE', error: 'Invalid recovery identity' }
+  try {
+    const client = await getPostgresClient(); if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    const rows = await client`
+      SELECT stage,customer_amount,u2a_approval_identifier,u2a_approval_claimed_at,u2a_identifier,u2a_txid,
+             payer_uid,u2a_verified_at,u2a_completed_at,a2u_payment_id,prepared_tx_hash,a2u_txid,horizon_confirmed_at
+      FROM settlement_checkpoints WHERE payment_id=${paymentId}`
+    if (rows.length !== 1) return { outcome: 'NOT_CANDIDATE', error: 'Payment authority absent or ambiguous' }
+    const r = rows[0] as Record<string,unknown>
+    if (r.stage !== 'payment_identity' || r.u2a_approval_identifier !== piPaymentId || r.u2a_approval_claimed_at == null || r.u2a_identifier != null || r.u2a_txid != null ||
+        r.payer_uid != null || r.u2a_verified_at != null || r.u2a_completed_at != null || r.a2u_payment_id != null ||
+        r.prepared_tx_hash != null || r.a2u_txid != null || r.horizon_confirmed_at != null)
+      return { outcome: 'NOT_CANDIDATE', error: 'Payment has progressed beyond pre-transaction approval ownership' }
+    const customerAmount = normalizePostgresNumeric(r.customer_amount, 'settlement.customer_amount')
+    return { outcome: 'CANDIDATE', customerAmount, approvalIdentifier: piPaymentId }
+  } catch (error) {
+    console.error('[R4J U2A PRETRANSACTION READ] uncertain:', error)
+    return { outcome: 'INDETERMINATE', error: 'Pre-transaction recovery read uncertain' }
+  }
+}
+
+export type SettlementU2AApprovalRetirementResult =
+  | { outcome: 'RETIRED' | 'REPLAYED'; version: number }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/** R4J: retire the exact approval owner only after the caller has proven by
+ * canonical Pi GET that Pi cancelled it with no transaction. The advisory lock
+ * serializes this transition with all other payment authority changes. */
+export async function retireSettlementU2AApprovalAfterCanonicalCancellation(params: {
+  paymentId: string; piPaymentId: string; piCancelledAt: string
+}): Promise<SettlementU2AApprovalRetirementResult> {
+  if (!params.paymentId || params.paymentId !== params.paymentId.trim() || !params.piPaymentId || params.piPaymentId !== params.piPaymentId.trim())
+    return { outcome: 'CONFLICT', error: 'Invalid retirement identity' }
+  const cancelledAt = new Date(params.piCancelledAt)
+  if (!Number.isFinite(cancelledAt.getTime())) return { outcome: 'CONFLICT', error: 'Invalid canonical cancellation timestamp' }
+  try {
+    const client = await getPostgresClient(); if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    return await client.begin(async (tx:any) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
+      const rows = await tx`
+        SELECT version,stage,u2a_approval_identifier,u2a_approval_claimed_at,u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at,
+               a2u_payment_id,prepared_tx_hash,a2u_txid,horizon_confirmed_at
+        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+      if (rows.length !== 1) return { outcome:'CONFLICT' as const, error:'Payment authority absent or ambiguous' }
+      const r=rows[0] as Record<string,unknown>
+      const retired = await tx`SELECT 1 FROM settlement_u2a_approval_retirements WHERE payment_id=${params.paymentId} AND pi_payment_id=${params.piPaymentId}`
+      if (r.u2a_approval_identifier == null && retired.length === 1) return { outcome:'REPLAYED' as const, version:Number(r.version) }
+      if (r.stage !== 'payment_identity' || r.u2a_approval_identifier !== params.piPaymentId || r.u2a_approval_claimed_at == null || r.u2a_identifier != null || r.u2a_txid != null ||
+          r.payer_uid != null || r.u2a_verified_at != null || r.u2a_completed_at != null || r.a2u_payment_id != null ||
+          r.prepared_tx_hash != null || r.a2u_txid != null || r.horizon_confirmed_at != null)
+        return { outcome:'CONFLICT' as const, error:'Payment progressed or approval owner changed' }
+      await tx`
+        INSERT INTO settlement_u2a_approval_retirements(payment_id,pi_payment_id,reason,pi_cancelled_at)
+        VALUES(${params.paymentId},${params.piPaymentId},'pi_pretransaction_cancelled',${cancelledAt.toISOString()})
+        ON CONFLICT(payment_id,pi_payment_id) DO NOTHING`
+      const updated = await tx`
+        UPDATE settlement_checkpoints SET version=version+1,u2a_approval_identifier=NULL,u2a_approval_claimed_at=NULL,
+          u2a_start_lease_token=NULL,u2a_start_lease_expires_at=NULL,updated_at=NOW()
+        WHERE payment_id=${params.paymentId} AND stage='payment_identity' AND u2a_approval_identifier=${params.piPaymentId}
+          AND u2a_identifier IS NULL AND u2a_txid IS NULL AND payer_uid IS NULL AND u2a_verified_at IS NULL AND u2a_completed_at IS NULL
+          AND a2u_payment_id IS NULL AND prepared_tx_hash IS NULL AND a2u_txid IS NULL AND horizon_confirmed_at IS NULL
+        RETURNING version`
+      if (updated.length !== 1) return { outcome:'CONFLICT' as const, error:'Approval retirement compare-and-swap failed' }
+      return { outcome:'RETIRED' as const, version:Number(updated[0].version) }
+    })
+  } catch(error) {
+    console.error('[R4J U2A APPROVAL RETIREMENT] uncertain:', error)
+    return { outcome:'INDETERMINATE', error:'Approval retirement uncertain' }
+  }
 }
 
 export type SettlementU2AApprovalOwnershipRead =

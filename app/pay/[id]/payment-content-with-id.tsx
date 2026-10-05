@@ -527,6 +527,7 @@ export default function PaymentContentWithId({
       },
       undefined,
       startLeaseToken,
+      startAccessToken,
     )
   }
 
