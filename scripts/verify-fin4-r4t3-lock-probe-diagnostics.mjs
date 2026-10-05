@@ -13,7 +13,7 @@ const checks=[
  ['race_classified',probe.includes("reason:'LOCK_RACED_BUSY'")],
  ['request_identity',probe.includes('requestId:probeRequestId')&&probe.includes('processId:PROCESS_ID')],
  ['held_owner_observable',probe.includes('heldOwner:held')&&probe.includes('readFin4R4THeld(runId)')],
- ['contender_run_bound',contender.includes('contendFin4R4TWalletProbe(runId,wallet)')],
+ ['contender_run_bound',contender.includes('contendFin4R4TWalletProbe(runId,resolved.sourceWallet)') && contender.includes("fin4AuthorizeRunId(request.headers.get('x-flashpay-fin4-run-id'))")],
  ['no_financial_surface',!probe.includes('/v2/payments')&&!probe.includes('submitTransaction')&&!probe.includes('executeA2U')&&!probe.includes('refund_checkpoint')],
  ['production_lock_unchanged',lock.includes('const SUBMIT_LOCK_TTL_SECONDS = 600')&&lock.includes('const SUBMIT_LOCK_RENEW_INTERVAL_MS = 180_000')],
  ['routes_node_dynamic',holder.includes("runtime='nodejs'")&&contender.includes("runtime='nodejs'")&&holder.includes("dynamic='force-dynamic'")&&contender.includes("dynamic='force-dynamic'")],

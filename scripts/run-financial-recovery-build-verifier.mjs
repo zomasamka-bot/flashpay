@@ -108,3 +108,6 @@ await import('./verify-fin4-r4t51-read-only-lock-diagnostic-route-mutations.mjs'
 
 await import('./verify-fin4-r4t52-durable-source-wallet-preflight.mjs')
 await import('./verify-fin4-r4t52-durable-source-wallet-preflight-mutations.mjs')
+
+await import('./verify-fin4-r4t53-shared-durable-wallet-resolver.mjs')
+await import('./verify-fin4-r4t53-shared-durable-wallet-resolver-mutations.mjs')

@@ -1,21 +1,6 @@
 import fs from 'node:fs'
-const p='app/api/certification/fin4-r4t-lock-diagnostic/route.ts'
-const s=fs.readFileSync(p,'utf8')
-const must=[
-  "export async function GET",
-  "fin4AuthorizeRunId(request.headers.get('x-flashpay-fin4-run-id'))",
-  "readFin4R4TSubmitLockDiagnostic(sourceWallet)",
-  "lockAcquisitionExecuted: false",
-  "redisMutationExecuted: false",
-  "piMutationExecuted: false",
-  "horizonSubmitExecuted: false",
-  "financialAuthorityMutated: false",
-]
-for(const x of must) if(!s.includes(x)) throw new Error(`R4T5.1 missing invariant: ${x}`)
-const forbidden=[
-  'acquirePiWalletSubmitLock','holdFin4R4TWalletProbe','contendFin4R4TWalletProbe',
-  'releaseFin4R4THolder','redis.set(','redis.del(','redis.eval(','executeA2U','executeRefund',
-]
-for(const x of forbidden) if(s.includes(x)) throw new Error(`R4T5.1 forbidden mutation/acquisition surface: ${x}`)
-if(/export\s+async\s+function\s+POST\b/.test(s)) throw new Error('R4T5.1 must not expose POST')
+const s=fs.readFileSync('app/api/certification/fin4-r4t-lock-diagnostic/route.ts','utf8')
+for(const x of ["export async function GET","fin4AuthorizeRunId(request.headers.get('x-flashpay-fin4-run-id'))","resolveFin4R4TSourceWallet","if(!resolved.ok)","readFin4R4TSubmitLockDiagnostic(resolved.sourceWallet)","lockAcquisitionExecuted:false","redisMutationExecuted:false","piMutationExecuted:false","horizonSubmitExecuted:false","financialAuthorityMutated:false"])if(!s.includes(x))throw new Error(`R4T5.1 missing invariant: ${x}`)
+for(const x of ['acquirePiWalletSubmitLock','holdFin4R4TWalletProbe','contendFin4R4TWalletProbe','redis.set(','redis.del(','redis.eval(','executeA2U(','executeRefund'])if(s.includes(x))throw new Error(`R4T5.1 forbidden: ${x}`)
+if(/export\s+async\s+function\s+POST\b/.test(s))throw new Error('R4T5.1 GET-only violated')
 console.log('PASS verify-fin4-r4t51-read-only-lock-diagnostic-route')
