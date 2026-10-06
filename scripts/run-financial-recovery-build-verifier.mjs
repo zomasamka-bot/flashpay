@@ -80,6 +80,8 @@ require("./verify-dr11-refund-race-ui-binding.ts")
   require("./verify-financial-recovery-settlement-create-read-binding.ts")
   require("./verify-financial-recovery-settlement-exactly-once-gate.ts")
   require("./verify-financial-recovery-settlement-submit-replay.ts")
+  require("./verify-fin4-step6-current-sha-certification-matrix.ts")
+  require("./verify-fin4-step6-current-sha-certification-matrix-mutations.ts")
 } finally {
   if (priorTsHandler) {
     require.extensions[".ts"] = priorTsHandler
