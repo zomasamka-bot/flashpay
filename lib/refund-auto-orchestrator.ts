@@ -74,13 +74,28 @@ async function deferAfterFailure(checkpoint: RefundCheckpoint, reason: string, t
 export type AutomaticRefundIntentResult =
   | { outcome: "created" | "existing" | "blocked"; paymentId: string; refundId?: string; reason?: string }
 
+export type AutomaticRefundRetirementBoundaryDecision =
+  | { allow: true }
+  | { allow: false; reason: "automatic_refund_retired" | "automatic_refund_retirement_uncertain" }
+
+// FIN-4 Step 5: one pure decision function is shared by every pre-movement
+// automatic-refund entry point. `active` is the only state allowed to proceed;
+// both `retired` and `uncertain` fail closed before refund financial execution.
+export function classifyAutomaticRefundRetirementBoundary(
+  retirement: "active" | "retired" | "uncertain",
+): AutomaticRefundRetirementBoundaryDecision {
+  if (retirement === "active") return { allow: true }
+  return { allow: false, reason: retirement === "retired" ? "automatic_refund_retired" : "automatic_refund_retirement_uncertain" }
+}
+
 export async function ensureAutomaticRefundIntent(paymentId: string): Promise<AutomaticRefundIntentResult> {
   if (typeof paymentId !== "string" || paymentId.trim().length === 0) return { outcome: "blocked", paymentId, reason: "invalid_payment_id" }
   const first = await findRefundCheckpointByPaymentId(paymentId)
   if (first.state === "uncertain") return { outcome: "blocked", paymentId, reason: "checkpoint_uncertain" }
   if (first.state === "present") {
     const retirement = await readAutomaticRefundRetirementState(first.checkpoint.paymentId, first.checkpoint.refundId)
-    if (retirement !== "active") return { outcome: "blocked", paymentId, refundId: first.checkpoint.refundId, reason: retirement === "retired" ? "automatic_refund_retired" : "automatic_refund_retirement_uncertain" }
+    const boundary = classifyAutomaticRefundRetirementBoundary(retirement)
+    if (!boundary.allow) return { outcome: "blocked", paymentId, refundId: first.checkpoint.refundId, reason: boundary.reason }
     if (first.checkpoint.status === "manual_review_required") {
       const manualReview = await markAutomaticRefundManualReview(first.checkpoint.refundId, first.checkpoint.stage)
       if (
@@ -141,7 +156,8 @@ type AutomaticRefundStepResult = { refundId: string; paymentId: string; action: 
 async function runAutomaticRefundCheckpointStep(checkpoint: RefundCheckpoint, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<AutomaticRefundStepResult> {
   if (checkpoint.refundTxid === undefined) {
     const retirement = await readAutomaticRefundRetirementState(checkpoint.paymentId, checkpoint.refundId)
-    if (retirement !== "active") return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action: checkpoint.stage === "eligibility_verified" ? "intent" : "execute", outcome: "blocked", reason: retirement === "retired" ? "automatic_refund_retired" : "automatic_refund_retirement_uncertain" }
+    const boundary = classifyAutomaticRefundRetirementBoundary(retirement)
+    if (!boundary.allow) return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action: checkpoint.stage === "eligibility_verified" ? "intent" : "execute", outcome: "blocked", reason: boundary.reason }
   }
   let successful = false
   let reason = "uncertain"
@@ -188,7 +204,8 @@ export async function runAutomaticRefundPreparationStep(paymentId: string, refun
   if (current.state !== "present" || current.checkpoint.paymentId !== paymentId || current.checkpoint.refundId !== refundId) return { state: "blocked" }
   const checkpoint = current.checkpoint
   const retirement = await readAutomaticRefundRetirementState(checkpoint.paymentId, checkpoint.refundId)
-  if (retirement !== "active") return { state: "blocked" }
+  const boundary = classifyAutomaticRefundRetirementBoundary(retirement)
+  if (!boundary.allow) return { state: "blocked" }
   const preparationStage =
     (checkpoint.stage === "eligibility_verified" && checkpoint.status === "pending") ||
     (checkpoint.stage === "intent_created" && checkpoint.status === "pending" && checkpoint.refundPaymentId === undefined && checkpoint.refundTxid === undefined) ||
