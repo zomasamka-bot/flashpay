@@ -117,3 +117,6 @@ await import('./verify-fin4-r4t531-response-shape-mutations.mjs')
 
 await import('./verify-fin4-r4t54-cross-instance-orchestrator.mjs')
 await import('./verify-fin4-r4t54-cross-instance-orchestrator-mutations.mjs')
+
+await import('./verify-fin4-r4t6-final-state-read-only-audit.mjs')
+await import('./verify-fin4-r4t6-final-state-read-only-audit-mutations.mjs')
