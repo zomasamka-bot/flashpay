@@ -7,17 +7,24 @@ export const runtime = "nodejs"
 const RUN_ID = "FIN4-20261005-1643-D50D"
 const R4E_PREFIX = "flashpay:cert:fin4:r4e:v1:"
 const R4T_PREFIX = "flashpay:cert:fin4:r4t:lock-probe:"
-const EVENTS_KEY = `${R4E_PREFIX}${RUN_ID}:events`
 
-async function countPrefix(prefix: string): Promise<number> {
+type KeyMeta = { key: string; type: string; ttlSeconds: number }
+
+async function inventoryPrefix(prefix: string): Promise<KeyMeta[]> {
   let cursor = 0
-  let count = 0
+  const keys = new Set<string>()
   do {
     const page = await redis.scan(cursor, { match: `${prefix}*`, count: 200 })
     cursor = Number(page[0])
-    count += page[1].length
+    for (const key of page[1]) keys.add(String(key))
   } while (cursor !== 0)
-  return count
+
+  const sorted = [...keys].sort()
+  return Promise.all(sorted.map(async (key) => ({
+    key,
+    type: await redis.type(key),
+    ttlSeconds: await redis.ttl(key),
+  })))
 }
 
 export async function GET() {
@@ -25,23 +32,22 @@ export async function GET() {
     return NextResponse.json({ ok: false, reason: "PRODUCTION_REDIS_UNAVAILABLE", mutationExecuted: false }, { status: 503 })
   }
   try {
-    const [r4eCount, r4tCount, eventsExists, eventsType, eventsTtl] = await Promise.all([
-      countPrefix(R4E_PREFIX),
-      countPrefix(R4T_PREFIX),
-      redis.exists(EVENTS_KEY),
-      redis.type(EVENTS_KEY),
-      redis.ttl(EVENTS_KEY),
+    const [r4e, r4t] = await Promise.all([
+      inventoryPrefix(R4E_PREFIX),
+      inventoryPrefix(R4T_PREFIX),
     ])
     return NextResponse.json({
       ok: true,
       action: "step8-redis-certification-inventory",
       runId: RUN_ID,
       inventory: {
-        r4ePrefixCount: r4eCount,
-        r4tPrefixCount: r4tCount,
-        eventsKey: { exists: eventsExists === 1, type: eventsType, ttlSeconds: eventsTtl },
+        r4ePrefixCount: r4e.length,
+        r4tPrefixCount: r4t.length,
+        r4e,
+        r4t,
       },
-      reads: ["SCAN", "EXISTS", "TYPE", "TTL"],
+      reads: ["SCAN", "TYPE", "TTL"],
+      valuesRead: false,
       mutationExecuted: false,
       financialAuthorityMutated: false,
     })
