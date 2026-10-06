@@ -94,3 +94,5 @@ await import('./verify-fin4-r4t4-automatic-refund-retirement-boundary-mutations.
 
 await import('./verify-fin4-step5-r4t4-regression.mjs')
 await import('./verify-fin4-step5-r4t4-regression-mutations.mjs')
+
+await import('./verify-fin4-step8c-redis-exact-cleanup.mjs')
