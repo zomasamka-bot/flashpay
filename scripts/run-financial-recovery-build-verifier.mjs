@@ -123,3 +123,6 @@ await import('./verify-fin4-r4t6-final-state-read-only-audit-mutations.mjs')
 
 await import('./verify-fin4-r4t61-reverse-horizon-read-only-scan.mjs')
 await import('./verify-fin4-r4t61-reverse-horizon-read-only-scan-mutations.mjs')
+
+await import('./verify-fin4-r4t62-leftovers-read-only-audit.mjs')
+await import('./verify-fin4-r4t62-leftovers-read-only-audit-mutations.mjs')
