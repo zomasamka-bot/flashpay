@@ -65,6 +65,7 @@ require("./verify-dr11-refund-race-ui-binding.ts")
   require("./verify-financial-recovery-settlement-submit-replay.ts")
   require("./verify-fin4-step7-scaffold-removal-hygiene.mjs")
   require("./verify-fin4-step8-final-surface-hygiene.mjs")
+  require("./verify-fin4-step10-release-hygiene.mjs")
 } finally {
   if (priorTsHandler) {
     require.extensions[".ts"] = priorTsHandler

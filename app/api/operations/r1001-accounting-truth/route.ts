@@ -19,8 +19,8 @@ export async function GET(request: NextRequest) {
   const auth = await verifyOwnerAuthorizationHeader(authorizationHeader)
   if (!auth.ok) return NextResponse.json({ error: "Unauthorized" }, { status: auth.status })
 
-  // P2.4E TEMPORARY OWNER-VERIFIED TOKEN DIAGNOSTIC — REMOVE AFTER CERTIFICATION.
-  // This executes only after Pi /v2/me verification and exact owner UID matching.
+  // Permanent owner-only operational accounting truth. Read-only and fail-closed.
+  // Executes only after Pi /v2/me verification and exact owner UID matching.
 
   if (!process.env.DATABASE_URL) return NextResponse.json({ error: "PostgreSQL unavailable" }, { status: 503 })
 
