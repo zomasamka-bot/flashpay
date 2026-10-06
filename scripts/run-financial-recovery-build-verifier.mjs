@@ -64,7 +64,7 @@ require("./verify-dr11-refund-race-ui-binding.ts")
   require("./verify-financial-recovery-settlement-exactly-once-gate.ts")
   require("./verify-financial-recovery-settlement-submit-replay.ts")
   require("./verify-fin4-step7-scaffold-removal-hygiene.mjs")
-  require("./verify-fin4-step8-redis-read-only-inventory.mjs")
+  require("./verify-fin4-step8-final-surface-hygiene.mjs")
 } finally {
   if (priorTsHandler) {
     require.extensions[".ts"] = priorTsHandler
@@ -95,4 +95,3 @@ await import('./verify-fin4-r4t4-automatic-refund-retirement-boundary-mutations.
 await import('./verify-fin4-step5-r4t4-regression.mjs')
 await import('./verify-fin4-step5-r4t4-regression-mutations.mjs')
 
-await import('./verify-fin4-step8c-redis-exact-cleanup.mjs')
