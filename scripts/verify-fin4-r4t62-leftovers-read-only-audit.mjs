@@ -9,6 +9,7 @@ const required=[
 ]
 for(const x of required)if(!lib.includes(x))throw new Error("R4T6.2 missing "+x)
 if(!route.includes("export async function GET")||!route.includes("fin4AuthorizeRunId"))throw new Error("R4T6.2 GET/auth binding missing")
+if(!route.includes("const runId=fin4AuthorizeRunId")||!route.includes("if(!runId)")||!route.includes("runId}"))throw new Error("R4T6.2 nullable run-id auth contract missing")
 if(/export async function (POST|PUT|PATCH|DELETE)/.test(route))throw new Error("R4T6.2 mutation HTTP method present")
 const sql=[...lib.matchAll(/query\(`([\s\S]*?)`/g)].map(m=>m[1].trim())
 if(sql.length!==7||sql.some(q=>!/^SELECT\b/i.test(q)))throw new Error("R4T6.2 SQL is not exactly seven SELECT-only reads")

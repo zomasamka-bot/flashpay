@@ -4,7 +4,7 @@
 0f146c08729284c865805e568848dec64900f0a12d9c1ddf0b99e23da9b242fc  app/api/certification/fin4-r4t-lock-holder/route.ts
 d67571d8a777b3a5926fa8e58d0768220db90b2053c77ea71bc8cced5d55ea2d  app/api/certification/fin4-r4t6-final-state-audit/route.ts
 4d4b88f50e951d680c7166eab7e75d0253260c9aa73dde2baa2b411032204361  app/api/certification/fin4-r4t61-reverse-horizon-scan/route.ts
-e82f76ebe33b2d26748850407b8e620d77692d768939450a5b51d1247a4622b7  app/api/certification/fin4-r4t62-leftovers-audit/route.ts
+a64a2052ab6120964b291ca7ac36cc0918a50340f3d297f2f611b8ececf9593e  app/api/certification/fin4-r4t62-leftovers-audit/route.ts
 392ea5fb6ab688f28564544ccf515f0d4d8b0917d1855eb8aa604fd12afbcaff  app/api/certification/fin4-trigger-a/route.ts
 2359189e8ef6f45548f157e94a4a8c5039b9afb75cf46f558920b0ad3d2f22ae  app/api/certification/fin4-trigger-b/route.ts
 39fca00c72b32bfeb25cac886f7967d5ef07ee86bfec58979fbeeae9322f48c0  app/api/certification/fin4-trigger/route.ts
@@ -350,8 +350,8 @@ c251c40fdcb9ec34c8e1a834e1edc883ba6d85051c2d15bbbc32f00bbc0f7bbb  scripts/verify
 bd655cbccd56572368ddc294c16ad4f614d9e13ec24c6d580095dd9f71ca82c1  scripts/verify-fin4-r4t6-final-state-read-only-audit.mjs
 40ff1b623ea29aae66f30ca247c4f5b82a76084da52b54c578b5f03f93261b64  scripts/verify-fin4-r4t61-reverse-horizon-read-only-scan-mutations.mjs
 d2a36780fa2be2b0bd430285c195381d87d42efb9f1bd4793066d7bf1d571f86  scripts/verify-fin4-r4t61-reverse-horizon-read-only-scan.mjs
-7e6f4b8aa8e56d4073091d20f0d9fb65de4971142f63ca93b2975cb188f3e006  scripts/verify-fin4-r4t62-leftovers-read-only-audit-mutations.mjs
-c76336d6c2ee626234706b0ebde8fdedee803d383ae96557298e78935bb6ec80  scripts/verify-fin4-r4t62-leftovers-read-only-audit.mjs
+fd3967c90b92976539034ae3163496c0cbd1ab05b92bf04df916130e5a883394  scripts/verify-fin4-r4t62-leftovers-read-only-audit-mutations.mjs
+126681d3bde19b20fcf435951ed30bd26d7adf100d0bfb5e4fbcb9bab5b73df4  scripts/verify-fin4-r4t62-leftovers-read-only-audit.mjs
 b7af22e089db7160088c7d5bc865ea4a160158cd414859a2d59d262fa508ff0d  scripts/verify-financial-recovery-a2u-proof.ts
 e7e5431465d66b0bac46dbaab05d5e482dc0ef39a4513dbcfee028d84ea41dab  scripts/verify-financial-recovery-crash-policy.ts
 44b0c1a50a9485d8651368e1bc5eeede398a7bf5dc255497c341896e2cdf04e9  scripts/verify-financial-recovery-financial-invariants.ts

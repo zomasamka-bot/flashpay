@@ -13,11 +13,12 @@ const muts=[
 ["drop-observation",a.replace("settlement_a2u_ongoing_observations","settlement_x"),b],
 ["drop-pi-reader",a.replace("readSettlementCreatePiEvidence","readX"),b],
 ["mutation-marker",a.replaceAll("financialAuthorityMutated:false","financialAuthorityMutated:true"),b],
-["post-route",a,b.replace("export async function GET","export async function POST")]
+["post-route",a,b.replace("export async function GET","export async function POST")],
+["drop-null-auth",a,b.replace("if(!runId)","if(false)")]
 ]
 function survives([name,x,y]){
  const req=["d50d0a46-a305-4008-9843-e50b8d3c265c","870a49eb-f0ce-42b8-8682-e334ded12b84","a0553edf-8784-4758-a246-2da36847a3b8","settlement_u2a_approval_retirements","settlement_a2u_stage1_retirements","settlement_a2u_ongoing_observations","refund_automatic_retirements","refund_accounting_records","readSettlementCreatePiEvidence","financialAuthorityMutated:false"]
- const ok=req.every(z=>x.includes(z))&&y.includes("export async function GET")&&!/export async function (POST|PUT|PATCH|DELETE)/.test(y)&&!/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE)\b/i.test(x)
+ const ok=req.every(z=>x.includes(z))&&y.includes("export async function GET")&&y.includes("const runId=fin4AuthorizeRunId")&&y.includes("if(!runId)")&&!/export async function (POST|PUT|PATCH|DELETE)/.test(y)&&!/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE)\b/i.test(x)
  return ok?name:null
 }
 const alive=muts.map(survives).filter(Boolean)

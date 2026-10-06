@@ -6,8 +6,8 @@ export const dynamic="force-dynamic"
 export const runtime="nodejs"
 
 export async function GET(request:NextRequest){
-  const auth=fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
-  if(!auth.ok)return NextResponse.json({error:"Unauthorized"},{status:403})
+  const runId=fin4AuthorizeRunId(request.headers.get("x-flashpay-fin4-run-id"))
+  if(!runId)return NextResponse.json({error:"Unauthorized"},{status:403})
   const audit=await readFin4R4T62LeftoversAudit()
-  return NextResponse.json({...audit,runId:auth.runId},{status:audit.ok?200:503})
+  return NextResponse.json({...audit,runId},{status:audit.ok?200:503})
 }
