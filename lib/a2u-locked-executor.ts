@@ -45,7 +45,7 @@ function horizonFeePiToExactStroops(value: number): number | null {
 interface LockedExecutorParams {
   paymentId: string
   isRecovery: boolean
-  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH" | "FIN4_STAGE1_PREPARE"
+  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
   schedulerWalletPaymentId?: string | null
 }
 
@@ -353,16 +353,6 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       if (!verifiedPayment) return { ok: false, status: 409, error: "Durable merchant authority could not be verified" }
       latestPayment = verifiedPayment
       console.log("[R101-6 DURABLE MERCHANT AUTHORITY] verified", { paymentId, merchantId: latestPayment.merchantId, merchantUid: latestPayment.merchantUid, recoveryOperation: params.recoveryOperation ?? "normal" })
-    }
-
-    if (params.recoveryOperation === "FIN4_STAGE1_PREPARE") {
-      const now = Date.now()
-      // FIN4 certification-only lane: accept exactly the same pristine Fresh
-      // candidate as production SETTLEMENT_DISPATCH, but the unified executor
-      // has a hard return immediately after durable Stage1 and before Stage2.
-      if (!(params.isRecovery === true && latestPayment.id === paymentId && isSettlementDispatchCandidate(latestPayment, now))) {
-        return { ok: false, status: 409, error: "FIN4 Stage1 preparation proof could not be verified" }
-      }
     }
 
     if (params.recoveryOperation === "SETTLEMENT_DISPATCH") {

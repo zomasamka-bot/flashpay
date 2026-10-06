@@ -7,7 +7,6 @@ import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalle
 import * as StellarSDK from "@stellar/stellar-sdk"
 import { numberToExactPositiveStroops } from "@/lib/financial-amount-stroops"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
-import { fin4BeforeWalletLock, fin4Event, fin4BestEffortEvent } from "@/lib/fin4-live-certification"
 import { proveA2UStage1HorizonAbsence } from "@/lib/a2u-stage1-retirement"
 
 /**
@@ -140,7 +139,7 @@ export interface ExecutorContext {
   customerAmount: number // REQUIRED - validated amount
   piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
   isRecovery: boolean
-  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH" | "FIN4_STAGE1_PREPARE"
+  recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
   schedulerWalletPaymentId?: string | null
 }
 
@@ -414,7 +413,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
   }
 
-  if (ctx.isRecovery && (ctx.recoveryOperation === "SETTLEMENT_CREATE" || ctx.recoveryOperation === "FIN4_STAGE1_PREPARE")) {
+  if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_CREATE") {
     return { ok: true, status: "settlement_pending" }
   }
 
@@ -1039,7 +1038,6 @@ async function finalizeStage2AfterMove(ctx: ExecutorContext, txidFromHorizon: st
  */
 async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> {
   let walletLock: { release: () => Promise<void> } | null = null
-  let fin4State: { invocationId: string } | null = null
   try {
     // CRITICAL: Use ONLY Payment fields (never undefined a2uPayment object parameter)
     const toAddress = ctx.payment.a2uToAddress
@@ -1076,12 +1074,9 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Private seed does not match app wallet address", userFacingStatus: "error" }
     }
 
-    fin4State = await fin4BeforeWalletLock(ctx.paymentId, appPublicKey)
-    await fin4Event(ctx.paymentId, appPublicKey, fin4State, "LOCK_ATTEMPT")
     console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_lock_request", { paymentId: ctx.paymentId, status: ctx.payment.status, isRecovery: ctx.isRecovery, recoveryOperation: ctx.recoveryOperation ?? null, hasPreparedEvidence: ctx.payment.a2uPreparedTxHash !== undefined || ctx.payment.a2uPreparedSequence !== undefined || ctx.payment.a2uPreparedEnvelopeXdr !== undefined })
     walletLock = await acquirePiWalletIntentSubmitLock(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId })
     console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_lock_result", { paymentId: ctx.paymentId, acquired: walletLock !== null })
-    await fin4Event(ctx.paymentId, appPublicKey, fin4State, walletLock ? "LOCK_ACQUIRED" : "LOCK_LOST")
     if (!walletLock) return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
 
     console.log("[A2U Stage2] Connecting to Horizon")
@@ -1094,7 +1089,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_succeeded", { paymentId: ctx.paymentId, preparedHash: prepared.preparedHash, preparedSequence: prepared.preparedSequence })
     const { transaction, preparedHash } = prepared
 
-    await fin4Event(ctx.paymentId, appPublicKey, fin4State, "SUBMIT_ENTER", { preparedHash, preparedSequence: transaction.sequence })
     console.log("[DR41 STAGE2 DIAGNOSTIC] horizon_submit_about_to_start", { paymentId: ctx.paymentId, preparedHash, preparedSequence: transaction.sequence })
     console.log("[A2U Stage2] Submitting to Horizon")
     let moved: Stage2MoveResult
@@ -1178,7 +1172,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     })
     if(durableHorizon.outcome!=="RECORDED"&&durableHorizon.outcome!=="REPLAYED")
       return {ok:false,error:"Horizon durable checkpoint not proven",userFacingStatus:"settlement_pending"}
-    await fin4BestEffortEvent(ctx.paymentId, appPublicKey, fin4State, "SUBMIT_VERIFIED", { txidFromHorizon, preparedHash, preparedSequence: transaction.sequence })
     
     console.log("[A2U Stage2] ✓ Fee verified from Horizon:", horizonFeeCharged)
     // Return txid and fee for persisting in executeA2U
@@ -1217,7 +1210,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
         // Keep the durable claim when cleanup reads, parsing, or release are uncertain.
       } finally {
         await walletLock.release()
-        await fin4BestEffortEvent(ctx.paymentId, ctx.payment.a2uFromAddress, fin4State, "LOCK_RELEASED")
       }
     }
   }
