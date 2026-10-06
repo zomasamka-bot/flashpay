@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1 } from "@/lib/db"
+import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1, claimSettlementA2UCreateAttempt } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -731,6 +731,22 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       return { ok: false, error: "Durable merchant authority required", userFacingStatus: "error" }
     }
     console.log("[R101-6 A2U Stage1] ✓ Durable merchant/U2A authority verified upstream")
+
+    // FIN-5: PostgreSQL must prove this payment was born under the guarded
+    // create generation and atomically claim its one allowed Pi create attempt.
+    // Legacy/replayed/uncertain claims fail closed before any network POST.
+    const createAttempt = await claimSettlementA2UCreateAttempt({
+      paymentId: ctx.paymentId,
+      merchantUid: ctx.merchantUid,
+      customerAmount: ctx.customerAmount,
+      u2aIdentifier: ctx.payment.piPaymentId ?? "",
+      u2aTxid: ctx.payment.u2aTxid ?? "",
+      payerUid: ctx.payment.payerUid ?? "",
+    })
+    if (createAttempt.outcome !== "RECORDED") {
+      return { ok:false, error:"Durable A2U create attempt authority unavailable", userFacingStatus:"manual_review_required", retryable:false, errorCode:"a2u_create_attempt_authority_unavailable" }
+    }
+    console.log("[FIN-5 A2U CREATE ATTEMPT] durable one-shot claim recorded", { paymentId: ctx.paymentId, attemptedAt: createAttempt.attemptedAt })
 
     // Create A2U payment
     const requestBody = {

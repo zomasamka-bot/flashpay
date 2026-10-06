@@ -196,6 +196,8 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
       payer_uid TEXT,
       u2a_verified_at TIMESTAMP,
       u2a_completed_at TIMESTAMP,
+      a2u_create_guard_version TEXT,
+      a2u_create_attempted_at TIMESTAMP,
       a2u_payment_id TEXT,
       a2u_from_address TEXT,
       a2u_to_address TEXT,
@@ -257,7 +259,9 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
       ADD COLUMN IF NOT EXISTS u2a_txid TEXT,
       ADD COLUMN IF NOT EXISTS payer_uid TEXT,
       ADD COLUMN IF NOT EXISTS u2a_verified_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS u2a_completed_at TIMESTAMP
+      ADD COLUMN IF NOT EXISTS u2a_completed_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS a2u_create_guard_version TEXT,
+      ADD COLUMN IF NOT EXISTS a2u_create_attempted_at TIMESTAMP
   `)
   if (u2aIdentityColumns === null) return false
 
@@ -420,11 +424,11 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
       const inserted = await tx`
         INSERT INTO settlement_checkpoints (
           payment_id, version, stage, merchant_id, merchant_uid,
-          customer_amount, merchant_amount, app_commission
+          customer_amount, merchant_amount, app_commission, a2u_create_guard_version
         )
         VALUES (
           ${params.paymentId}, 1, 'payment_identity', ${params.merchantId}, ${params.merchantUid},
-          ${params.customerAmount}, ${params.customerAmount}, 0
+          ${params.customerAmount}, ${params.customerAmount}, 0, 'fin5_v1'
         )
         ON CONFLICT DO NOTHING
         RETURNING version
@@ -1139,6 +1143,82 @@ export async function listRecoverableU2AIngressCheckpointIds(limit:number):Promi
     }
     return{outcome:'FOUND',paymentIds:ids,nextCursor:result.nextCursor,wrapped:result.wrapped===true}
   }catch(error){console.error('[DB] U2A ingress durable rotation uncertain:',error);return{outcome:'INDETERMINATE',error:'U2A ingress durable rotation uncertain'}}
+}
+
+export type SettlementA2UCreateAttemptClaimResult =
+  | { outcome: 'RECORDED'; attemptedAt: string }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/**
+ * FIN-5: durable one-shot boundary immediately before the first Pi A2U create.
+ *
+ * Only payment identities born under the FIN-5 guard may claim this boundary.
+ * Legacy rows deliberately remain unversioned and therefore fail closed: NULL
+ * cannot prove that an older runtime never attempted Pi create. The claim is
+ * monotonic and never replay-authorizes another POST; a crash after RECORDED
+ * must reconcile/manual-review rather than create again.
+ */
+export async function claimSettlementA2UCreateAttempt(params: {
+  paymentId: string
+  merchantUid: string
+  customerAmount: number
+  u2aIdentifier: string
+  u2aTxid: string
+  payerUid: string
+}): Promise<SettlementA2UCreateAttemptClaimResult> {
+  const text = (value: string) => typeof value === 'string' && value.trim() !== '' && value === value.trim()
+  if (!text(params.paymentId) || !text(params.merchantUid) || !text(params.u2aIdentifier) ||
+      !/^[0-9a-f]{64}$/.test(params.u2aTxid) || !text(params.payerUid) ||
+      typeof params.customerAmount !== 'number' || !Number.isFinite(params.customerAmount) || params.customerAmount <= 0) {
+    return { outcome: 'CONFLICT', error: 'Settlement A2U create attempt input is invalid' }
+  }
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    const rows = await client.begin(async (tx: any) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
+      const opposite = await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active`
+      if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean') return [{ indeterminate: true }]
+      if (opposite[0].active === true) return [{ conflict: true }]
+      const claimed = await tx`
+        UPDATE settlement_checkpoints
+        SET a2u_create_attempted_at=NOW(), updated_at=NOW()
+        WHERE payment_id=${params.paymentId}
+          AND stage='payment_identity'
+          AND a2u_create_guard_version='fin5_v1'
+          AND a2u_create_attempted_at IS NULL
+          AND merchant_uid=${params.merchantUid}
+          AND customer_amount=${params.customerAmount}
+          AND merchant_amount=${params.customerAmount}
+          AND app_commission=0
+          AND u2a_identifier=${params.u2aIdentifier}
+          AND u2a_txid=${params.u2aTxid}
+          AND payer_uid=${params.payerUid}
+          AND u2a_verified_at IS NOT NULL
+          AND u2a_completed_at IS NOT NULL
+          AND a2u_payment_id IS NULL AND a2u_from_address IS NULL AND a2u_to_address IS NULL
+          AND prepared_envelope_xdr IS NULL AND prepared_tx_hash IS NULL AND prepared_sequence IS NULL
+          AND a2u_txid IS NULL AND horizon_fee_stroops IS NULL AND horizon_confirmed_at IS NULL
+          AND pi_completed_at IS NULL AND db_finalized_at IS NULL
+        RETURNING a2u_create_attempted_at
+      `
+      if (claimed.length === 1) return [{ ...claimed[0], claimed: true }]
+      return await tx`SELECT a2u_create_guard_version,a2u_create_attempted_at,stage,a2u_payment_id,prepared_tx_hash,a2u_txid FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+    })
+    if (!Array.isArray(rows) || rows.length !== 1 || !rows[0]) return { outcome:'CONFLICT', error:'Settlement A2U create attempt authority is absent or ambiguous' }
+    const row=rows[0] as Record<string,unknown>
+    if (row.indeterminate===true) return { outcome:'INDETERMINATE', error:'Settlement/Refund exclusion is indeterminate' }
+    if (row.conflict===true) return { outcome:'CONFLICT', error:'Refund authority conflicts with Settlement create' }
+    if (row.claimed===true) {
+      const attemptedAt=row.a2u_create_attempted_at instanceof Date ? row.a2u_create_attempted_at.toISOString() : typeof row.a2u_create_attempted_at==='string' && Number.isFinite(Date.parse(row.a2u_create_attempted_at)) ? new Date(row.a2u_create_attempted_at).toISOString() : null
+      if (attemptedAt===null) return { outcome:'INDETERMINATE', error:'Settlement A2U create attempt timestamp is invalid' }
+      return { outcome:'RECORDED', attemptedAt }
+    }
+    return { outcome:'CONFLICT', error:'Settlement A2U create is legacy, already attempted, or no longer pristine' }
+  } catch (error) {
+    console.error('[DB] Settlement A2U create attempt claim uncertain:', error)
+    return { outcome:'INDETERMINATE', error:'Settlement A2U create attempt claim uncertain' }
+  }
 }
 
 export type SettlementStage1CheckpointResult =
