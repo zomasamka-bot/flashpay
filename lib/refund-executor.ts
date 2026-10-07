@@ -18,6 +18,7 @@ import {
   completeRefundCheckpointWithAudit,
   finalizeRefundProjectionWithAudit,
   claimRefundPiMutationAttempt,
+  claimRefundCreateAttempt,
 } from './refund-checkpoint-store'
 import { isRefundEligible, type Payment, type RefundAuditEvent, type RefundCheckpoint } from './types'
 import { reconcileRefundWithPi } from './refund-pi-reconciliation'
@@ -324,6 +325,8 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
     if (!attempt || !attempt.startedNow) return { outcome: 'blocked', reason: 'attempt_conflict' }
     checkpoint = attempt.checkpoint
   }
+  const createAttempt = await claimRefundCreateAttempt({ refundId, paymentId: checkpoint.paymentId, idempotencyKey: checkpoint.idempotencyKey })
+  if (createAttempt.outcome !== 'RECORDED') return { outcome: 'blocked', reason: createAttempt.outcome === 'INDETERMINATE' ? 'refund_create_attempt_uncertain' : 'refund_create_reconcile_only' }
   const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
   console.warn('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false, body: await response?.clone().json().catch(() => null) })
   const reconcileAfterUncertainty = async (): Promise<RefundExecutionResult> => {

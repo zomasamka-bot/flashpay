@@ -1938,6 +1938,17 @@ export async function ensureRefundCheckpointTables(): Promise<boolean> {
       attempted_at TIMESTAMP NOT NULL DEFAULT NOW(), PRIMARY KEY (mutation_kind,payment_id,external_payment_id)
     )`)
   if (refundPiMutationAttempts === null) return false
+  // FIN7-S4: Refund creation has no external Pi identifier before POST, so it
+  // needs its own append-only authority keyed by the durable Refund identity.
+  // A crash after this row is recorded can never authorize a second create.
+  const refundCreateAttempts = await query(`
+    CREATE TABLE IF NOT EXISTS refund_pi_create_attempts (
+      refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
+      payment_id TEXT NOT NULL UNIQUE,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      attempted_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )`)
+  if (refundCreateAttempts === null) return false
 
   // FIN-4 R4T: append-only containment for refund intents proven poisoned before
   // financial movement. The original checkpoint/audit history is never deleted

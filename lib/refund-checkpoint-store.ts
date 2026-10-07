@@ -546,6 +546,33 @@ export type RefundPiMutationAttemptResult =
   | { outcome: 'RECORDED'; attemptedAt: string }
   | { outcome: 'REPLAYED' | 'CONFLICT' | 'INDETERMINATE'; error: string }
 
+/** FIN7-S4: one-shot authority for POST /v2/payments Refund creation. */
+export async function claimRefundCreateAttempt(params: { refundId: string; paymentId: string; idempotencyKey: string }): Promise<RefundPiMutationAttemptResult> {
+  const text=(v:string)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+  if(!text(params.refundId)||!text(params.paymentId)||!text(params.idempotencyKey))return{outcome:'CONFLICT',error:'Refund create attempt input invalid'}
+  try{
+    if(!(await ensureRefundCheckpointTables()))return{outcome:'INDETERMINATE',error:'Refund durable schema unavailable'}
+    const result=await withPaymentAuthorityTransaction(params.paymentId,async(tx)=>{
+      const rows=await tx`SELECT refund_id,payment_id,idempotency_key,status,stage,refund_payment_id,refund_txid,pi_mutation_guard_version
+        FROM refund_checkpoints WHERE refund_id=${params.refundId} AND payment_id=${params.paymentId} FOR UPDATE`
+      if(rows.length!==1)return[{conflict:true}]
+      const r=rows[0] as Record<string,unknown>
+      if(r.refund_id!==params.refundId||r.payment_id!==params.paymentId||r.idempotency_key!==params.idempotencyKey||r.pi_mutation_guard_version!=='fin7_v2'||
+        r.status!=='pending'||r.stage!=='wallet_submission_started'||r.refund_payment_id!=null||r.refund_txid!=null)return[{conflict:true}]
+      const inserted=await tx`INSERT INTO refund_pi_create_attempts(refund_id,payment_id,idempotency_key)
+        VALUES(${params.refundId},${params.paymentId},${params.idempotencyKey}) ON CONFLICT DO NOTHING RETURNING attempted_at`
+      if(inserted.length===1)return[{recorded:true,attempted_at:inserted[0].attempted_at}]
+      return await tx`SELECT refund_id,payment_id,idempotency_key FROM refund_pi_create_attempts WHERE refund_id=${params.refundId}`
+    })
+    if(!Array.isArray(result)||result.length!==1)return{outcome:'CONFLICT',error:'Refund create authority absent or ambiguous'}
+    const r=result[0] as Record<string,unknown>
+    if(r.conflict===true)return{outcome:'CONFLICT',error:'Refund create lifecycle is legacy or mismatched'}
+    if(r.recorded===true){const at=r.attempted_at;return{outcome:'RECORDED',attemptedAt:at instanceof Date?at.toISOString():String(at)}}
+    if(r.refund_id===params.refundId&&r.payment_id===params.paymentId&&r.idempotency_key===params.idempotencyKey)return{outcome:'REPLAYED',error:'Refund create attempt already recorded'}
+    return{outcome:'CONFLICT',error:'Refund create attempt conflict'}
+  }catch{return{outcome:'INDETERMINATE',error:'Refund create attempt uncertain'}}
+}
+
 /** FIN7-S3: one-shot Pi mutation authority for Refund-owned external payments. */
 export async function claimRefundPiMutationAttempt(params: {
   kind: 'dr11_a2u_cancel' | 'refund_complete'; refundId: string; paymentId: string; externalPaymentId: string; txid?: string
