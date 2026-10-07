@@ -189,6 +189,8 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
       app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0),
       u2a_approval_identifier TEXT,
       u2a_approval_claimed_at TIMESTAMP,
+      u2a_approval_guard_version TEXT,
+      u2a_approval_attempted_at TIMESTAMP,
       u2a_start_lease_token TEXT,
       u2a_start_lease_expires_at TIMESTAMP,
       u2a_identifier TEXT,
@@ -253,6 +255,8 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
     ALTER TABLE settlement_checkpoints
       ADD COLUMN IF NOT EXISTS u2a_approval_identifier TEXT,
       ADD COLUMN IF NOT EXISTS u2a_approval_claimed_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS u2a_approval_guard_version TEXT,
+      ADD COLUMN IF NOT EXISTS u2a_approval_attempted_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS u2a_start_lease_token TEXT,
       ADD COLUMN IF NOT EXISTS u2a_start_lease_expires_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS u2a_identifier TEXT,
@@ -594,7 +598,7 @@ export async function retireSettlementU2AApprovalAfterCanonicalCancellation(para
         ON CONFLICT(payment_id,pi_payment_id) DO NOTHING`
       const updated = await tx`
         UPDATE settlement_checkpoints SET version=version+1,u2a_approval_identifier=NULL,u2a_approval_claimed_at=NULL,
-          u2a_start_lease_token=NULL,u2a_start_lease_expires_at=NULL,updated_at=NOW()
+          u2a_approval_guard_version=NULL,u2a_approval_attempted_at=NULL,u2a_start_lease_token=NULL,u2a_start_lease_expires_at=NULL,updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND stage='payment_identity' AND u2a_approval_identifier=${params.piPaymentId}
           AND u2a_identifier IS NULL AND u2a_txid IS NULL AND payer_uid IS NULL AND u2a_verified_at IS NULL AND u2a_completed_at IS NULL
           AND a2u_payment_id IS NULL AND prepared_tx_hash IS NULL AND a2u_txid IS NULL AND horizon_confirmed_at IS NULL
@@ -685,6 +689,7 @@ export async function recordSettlementU2AApprovalClaimFromStartLease(params: {
       const rows=await tx`
         UPDATE settlement_checkpoints SET
           version=version+1,u2a_approval_identifier=${params.u2aIdentifier},u2a_approval_claimed_at=NOW(),
+          u2a_approval_guard_version='fin7_v1',u2a_approval_attempted_at=NULL,
           u2a_start_lease_token=NULL,u2a_start_lease_expires_at=NULL,updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
           AND customer_amount=${params.customerAmount} AND app_commission=0 AND stage='payment_identity'
@@ -697,6 +702,59 @@ export async function recordSettlementU2AApprovalClaimFromStartLease(params: {
       return{outcome:'CONFLICT' as const,error:'U2A start lease or approval ownership conflict'}
     })
   } catch(error){console.error('[DR88 U2A START->APPROVAL] uncertain:',error);return{outcome:'INDETERMINATE',error:'U2A start approval durability uncertain'}}
+}
+
+export type SettlementU2AApprovalAttemptResult =
+  | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/** FIN7-S2: durable one-shot authorization for the externally visible Pi /approve POST.
+ * Ownership and attempt are deliberately separate: a crash after ownership but before
+ * this marker may still perform the first attempt; once this marker exists, recovery
+ * must reconcile canonical Pi state and must never issue a second /approve POST. */
+export async function claimSettlementU2AApprovalAttempt(params: {
+  paymentId: string; merchantId: string; merchantUid: string; customerAmount: number; u2aIdentifier: string
+}): Promise<SettlementU2AApprovalAttemptResult> {
+  const canonical = (v: string) => typeof v === 'string' && v.trim() !== '' && v === v.trim()
+  if (!canonical(params.paymentId) || !canonical(params.merchantId) || !canonical(params.merchantUid) || !canonical(params.u2aIdentifier) || !Number.isFinite(params.customerAmount) || params.customerAmount <= 0)
+    return { outcome: 'CONFLICT', error: 'Invalid U2A approval attempt input' }
+  try {
+    const client = await getPostgresClient(); if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    return await client.begin(async (tx: any) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
+      const recorded = await tx`
+        UPDATE settlement_checkpoints SET
+          version=version+1,u2a_approval_attempted_at=NOW(),updated_at=NOW()
+        WHERE payment_id=${params.paymentId} AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
+          AND customer_amount=${params.customerAmount} AND merchant_amount=${params.customerAmount} AND app_commission=0
+          AND stage='payment_identity' AND u2a_approval_identifier=${params.u2aIdentifier}
+          AND u2a_approval_claimed_at IS NOT NULL AND u2a_approval_guard_version='fin7_v1' AND u2a_approval_attempted_at IS NULL
+          AND u2a_identifier IS NULL AND u2a_txid IS NULL AND payer_uid IS NULL
+          AND u2a_verified_at IS NULL AND u2a_completed_at IS NULL
+          AND a2u_payment_id IS NULL AND prepared_tx_hash IS NULL AND a2u_txid IS NULL
+        RETURNING version`
+      if (recorded.length === 1) return { outcome: 'RECORDED' as const, version: Number(recorded[0].version) }
+      const existing = await tx`
+        SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+               u2a_approval_identifier,u2a_approval_claimed_at,u2a_approval_guard_version,u2a_approval_attempted_at,u2a_identifier
+        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+      if (existing.length !== 1) return { outcome: 'CONFLICT' as const, error: 'U2A approval attempt authority absent or ambiguous' }
+      const row = existing[0] as Record<string, unknown>
+      let ca: number, ma: number, ac: number
+      try {
+        ca = normalizePostgresNumeric(row.customer_amount, 'settlement.customer_amount')
+        ma = normalizePostgresNumeric(row.merchant_amount, 'settlement.merchant_amount')
+        ac = normalizePostgresNumeric(row.app_commission, 'settlement.app_commission')
+      } catch { return { outcome: 'CONFLICT' as const, error: 'U2A approval attempt accounting invalid' } }
+      const version = Number(row.version)
+      if (!Number.isSafeInteger(version) || version < 1 || row.stage !== 'payment_identity' || row.merchant_id !== params.merchantId || row.merchant_uid !== params.merchantUid || ca !== params.customerAmount || ma !== params.customerAmount || ac !== 0 || row.u2a_approval_identifier !== params.u2aIdentifier || row.u2a_approval_claimed_at == null || row.u2a_approval_guard_version !== 'fin7_v1' || row.u2a_approval_attempted_at == null || row.u2a_identifier != null)
+        return { outcome: 'CONFLICT' as const, error: 'U2A approval attempt durable authority conflict' }
+      return { outcome: 'REPLAYED' as const, version }
+    })
+  } catch (error) {
+    console.error('[FIN7-S2 U2A APPROVAL ATTEMPT] uncertain:', error)
+    return { outcome: 'INDETERMINATE', error: 'U2A approval attempt durability uncertain' }
+  }
 }
 
 export type SettlementU2AApprovalClaimResult =

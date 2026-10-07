@@ -103,3 +103,5 @@ await import('./verify-fin5-fresh-dispatch-precreate-guard.mjs')
 await import('./verify-fin6-accounting-finality-matrix.mjs')
 
 await import('./verify-fin7-settlement-submit-durable-prepared-authority.mjs')
+
+await import('./verify-fin7-u2a-approval-one-shot-attempt.mjs')

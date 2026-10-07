@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordSettlementU2AApprovalClaimFromStartLease } from "@/lib/db"
+import { claimSettlementU2AApprovalAttempt, recordSettlementU2AApprovalClaimFromStartLease } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 export const dynamic = "force-dynamic"
@@ -240,6 +240,42 @@ export async function POST(request: NextRequest) {
         status: approvalClaim.outcome === "CONFLICT" ? 409 : 503,
         headers: { "Content-Type": "application/json" },
       })
+    }
+
+    // FIN7-S2: a replayed ownership claim means a prior invocation may already
+    // have attempted Pi /approve and crashed before observing the result. Reconcile
+    // canonical Pi state BEFORE considering any new external side effect.
+    if (approvalClaim.outcome === "REPLAYED") {
+      const replayReconcile = await fetch(
+        `https://api.minepi.com/v2/payments/${identifier}`,
+        { headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" } },
+      ).catch(() => null)
+      if (replayReconcile === null || !replayReconcile.ok) {
+        return new Response(JSON.stringify({ error: "Approval reconciliation unavailable", code: "PI_APPROVAL_RECONCILIATION_UNAVAILABLE" }), { status: 503, headers: { "Content-Type": "application/json" } })
+      }
+      const replayedPayment: PiPaymentDTO = await replayReconcile.json()
+      const replayIdentityExact = replayedPayment.identifier === identifier && replayedPayment.network === "Pi Testnet" && replayedPayment.metadata?.paymentId === paymentId && replayedPayment.amount === canonicalPayment.amount && replayedPayment.amount === redisPayment.amount && replayedPayment.direction === "user_to_app" && replayedPayment.status?.cancelled !== true && replayedPayment.status?.user_cancelled !== true
+      if (!replayIdentityExact) {
+        return new Response(JSON.stringify({ error: "Payment validation failed", code: "PI_APPROVAL_REPLAY_CONFLICT" }), { status: 409, headers: { "Content-Type": "application/json" } })
+      }
+      if (replayedPayment.status?.developer_approved === true) {
+        if (isRedisConfigured) {
+          try { await redis.set(`pi:approval:${identifier}`, "approved", { ex: 86400 }) } catch (cacheError) { console.warn("[FIN7-S2] approval cache write failed after replay reconciliation", cacheError) }
+        }
+        return new Response(null, { status: 200 })
+      }
+    }
+
+    // FIN7-S2: authorize exactly one Pi /approve attempt durably. RECORDED means
+    // this invocation owns the first external attempt. REPLAYED means an earlier
+    // invocation crossed the attempt boundary; after the exact GET above failed to
+    // prove approval, a second POST is forbidden and the payment fails closed.
+    const approvalAttempt = await claimSettlementU2AApprovalAttempt({
+      paymentId, merchantId, merchantUid, customerAmount: redisPayment.amount, u2aIdentifier: identifier,
+    })
+    if (approvalAttempt.outcome !== "RECORDED") {
+      const code = approvalAttempt.outcome === "REPLAYED" ? "PI_APPROVAL_ATTEMPT_ALREADY_RECORDED" : approvalAttempt.outcome === "CONFLICT" ? "PI_APPROVAL_ATTEMPT_CONFLICT" : "PI_APPROVAL_ATTEMPT_DURABILITY_UNAVAILABLE"
+      return new Response(JSON.stringify({ error: "Approval attempt unavailable", code }), { status: approvalAttempt.outcome === "INDETERMINATE" ? 503 : 409, headers: { "Content-Type": "application/json" } })
     }
 
     // PLAN I P1: Pi /approve is an externally visible side effect. A non-2xx or
