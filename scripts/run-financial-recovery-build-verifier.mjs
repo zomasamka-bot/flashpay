@@ -101,3 +101,5 @@ await import('./verify-fin4-step5-r4t4-regression-mutations.mjs')
 await import('./verify-fin5-fresh-dispatch-precreate-guard.mjs')
 
 await import('./verify-fin6-accounting-finality-matrix.mjs')
+
+await import('./verify-fin7-settlement-submit-durable-prepared-authority.mjs')

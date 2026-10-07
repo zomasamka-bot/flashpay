@@ -221,6 +221,20 @@ async function verifyStage1OnlyDurableAuthority(paymentId: string, payment: Paym
     payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundStatus !== "completed"
 }
 
+async function verifySettlementSubmitDurablePreparedAuthority(paymentId: string, payment: Payment): Promise<boolean> {
+  const durable = await getSettlementCheckpointAuthoritative(paymentId)
+  if (durable.outcome !== "FOUND" || durable.checkpoint.stage !== "prepared") return false
+  const d = durable.checkpoint
+  return payment.id === d.paymentId &&
+    payment.merchantId === d.merchantId && payment.merchantUid === d.merchantUid &&
+    payment.customerAmount === d.customerAmount && payment.merchantAmount === d.merchantAmount &&
+    payment.piPaymentId === d.u2aIdentifier && payment.u2aTxid === d.u2aTxid &&
+    payment.a2uPaymentId === d.a2uPaymentId && payment.a2uFromAddress === d.a2uFromAddress && payment.a2uToAddress === d.a2uToAddress &&
+    payment.a2uPreparedEnvelopeXdr === d.preparedEnvelopeXdr && payment.a2uPreparedTxHash === d.preparedTxHash && payment.a2uPreparedSequence === d.preparedSequence &&
+    payment.a2uTxid === undefined && payment.horizonSuccessFlag !== true && payment.piCompleted !== true && payment.dbRecorded !== true &&
+    payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundStatus !== "completed"
+}
+
 /**
  * Execute A2U under ONE shared concurrency lock.
  * If lock acquisition fails, reread payment and return its current state.
@@ -540,6 +554,11 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     if (params.recoveryOperation === "SETTLEMENT_SUBMIT") {
       if (params.isRecovery !== true || latestPayment.id !== paymentId) {
         return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
+      }
+      // FIN7: Redis may contain a prepared XDR before the PostgreSQL prepared checkpoint is durable.
+      // Recovery must never promote wallet intent or authorize Horizon from that projection alone.
+      if (!await verifySettlementSubmitDurablePreparedAuthority(paymentId, latestPayment)) {
+        return { ok: false, status: 409, error: "Settlement durable prepared authority could not be verified" }
       }
       const walletLock = await acquirePiWalletSubmitLock(latestPayment.a2uFromAddress)
       if (!walletLock) {
