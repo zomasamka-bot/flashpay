@@ -6,9 +6,9 @@ const complete=readFileSync(resolve(__dirname,"../app/api/pi/complete/route.ts")
 const locked=readFileSync(resolve(__dirname,"../lib/a2u-locked-executor.ts"),"utf8")
 const refund=readFileSync(resolve(__dirname,"../lib/refund-blockchain-submit.ts"),"utf8")
 const crashSource=readFileSync(resolve(__dirname,"../lib/financial-recovery-crash-window.ts"),"utf8")
-const crashUnion=crashSource.slice(crashSource.indexOf("export type FinancialRecoveryCrashWindow"),crashSource.indexOf("export type FinancialRecoveryCrashEffect"))
-const modeledWindows=(crashUnion.match(/\| "/g)||[]).length
-must(modeledWindows===26,"modeled crash-window set must remain exactly 26")
+const crashList=crashSource.slice(crashSource.indexOf("export const FINANCIAL_RECOVERY_CRASH_WINDOWS"),crashSource.indexOf("] as const"))
+const modeledWindows=(crashList.match(/^\s*"[a-z0-9_]+",$/gm)||[]).length
+must(modeledWindows===41,"FIN-7 canonical crash-window set must remain exactly 41")
 const verifiedAt=complete.indexOf("await recordSettlementU2AVerifiedCheckpoint(")
 const completePostAt=complete.indexOf('fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`')
 const postCatchAt=complete.indexOf("Pi /complete transport outcome ambiguous; reconciling exact payment")
@@ -51,4 +51,4 @@ const refundReconcile=refund.indexOf("readRefundPreparedRecoveryEvidence",refund
 must(refundSubmit>=0&&refundCatch>refundSubmit,"refund blockchain submit/catch boundary missing")
 must(refundReconcile>refundCatch,"refund ambiguous submit must retain reconciliation path")
 
-console.log("PLAN_H_CRASH_POLICY_BINDING=PASS modeled_windows=26 u2a_complete_reconcile=true settlement_submit_durable=true refund_ambiguity_bound=true blind_retry=false")
+console.log("PLAN_H_CRASH_POLICY_BINDING=PASS modeled_windows=41 u2a_complete_reconcile=true settlement_submit_durable=true refund_ambiguity_bound=true blind_retry=false")
