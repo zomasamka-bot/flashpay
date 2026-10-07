@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { serverConfig } from "@/lib/server-config"
-import { ensureSettlementCheckpointTable, readSettlementU2APretransactionRecoveryCandidate, retireSettlementU2AApprovalAfterCanonicalCancellation } from "@/lib/db"
+import { ensureSettlementCheckpointTable, readSettlementU2APretransactionRecoveryCandidate, retireSettlementU2AApprovalAfterCanonicalCancellation, claimSettlementPiMutationAttempt } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -69,6 +69,8 @@ export async function POST(request:NextRequest) {
     // skip the mutation and finish the durable retirement idempotently.
     const alreadyCancelled=before.pi.status?.cancelled===true || before.pi.status?.user_cancelled===true
     if(!alreadyCancelled) {
+      const attempt=await claimSettlementPiMutationAttempt({kind:'u2a_cancel',paymentId,externalPaymentId:piPaymentId})
+      if(attempt.outcome!=='RECORDED')return NextResponse.json({error:'Cancellation attempt unavailable',code:attempt.outcome==='INDETERMINATE'?'U2A_PRETX_CANCEL_ATTEMPT_INDETERMINATE':'U2A_PRETX_CANCEL_ATTEMPT_RECONCILE_ONLY'},{status:attempt.outcome==='INDETERMINATE'?503:409})
       try { await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(piPaymentId)}/cancel`,{method:'POST',headers:{Authorization:`Key ${serverConfig.piApiKey}`,'Content-Type':'application/json'}}) } catch { /* outcome is intentionally reconciled below */ }
     }
 

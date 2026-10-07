@@ -421,8 +421,8 @@ export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoi
         INSERT INTO refund_checkpoints
           (refund_id, payment_id, idempotency_key, status, stage, payer_uid,
            payer_uid_verified_at, amount, currency, source_payment_status,
-           source_settlement_state, created_at, updated_at, attempt_count)
-        VALUES (${checkpoint.refundId},${checkpoint.paymentId},${checkpoint.idempotencyKey},${checkpoint.status},${checkpoint.stage},${checkpoint.payerUid},${checkpoint.payerUidVerifiedAt},${checkpoint.amount},${checkpoint.currency},${checkpoint.sourcePaymentStatus},${checkpoint.sourceSettlementState},${checkpoint.createdAt},${checkpoint.updatedAt},${checkpoint.attemptCount})
+           source_settlement_state, created_at, updated_at, attempt_count, pi_mutation_guard_version)
+        VALUES (${checkpoint.refundId},${checkpoint.paymentId},${checkpoint.idempotencyKey},${checkpoint.status},${checkpoint.stage},${checkpoint.payerUid},${checkpoint.payerUidVerifiedAt},${checkpoint.amount},${checkpoint.currency},${checkpoint.sourcePaymentStatus},${checkpoint.sourceSettlementState},${checkpoint.createdAt},${checkpoint.updatedAt},${checkpoint.attemptCount},'fin7_v2')
         ON CONFLICT (payment_id) DO NOTHING
         RETURNING *
       ), audited AS (
@@ -461,8 +461,8 @@ export async function createDr11RefundAuthorityFromDurableHold(paymentId:string)
     const amount=Number(r.customer_amount),merchantAmount=Number(r.merchant_amount),commission=Number(r.app_commission)
     if(amount!==0.1||merchantAmount!==amount||commission!==0)return[]
     const inserted=await tx`INSERT INTO refund_checkpoints
-      (refund_id,payment_id,idempotency_key,status,stage,payer_uid,payer_uid_verified_at,amount,currency,source_payment_status,source_settlement_state,created_at,updated_at,attempt_count,last_error_code,last_error_message,next_retry_at)
-      VALUES(${refundId},${paymentId},${idempotencyKey},'pending','intent_created',${String(r.payer_uid)},${r.u2a_verified_at},${amount},'π','settlement_failed','refund_pending',${now},${now},0,'dr11_live_hold','awaiting_owner_concurrent_harness',${retryAt})
+      (refund_id,payment_id,idempotency_key,status,stage,payer_uid,payer_uid_verified_at,amount,currency,source_payment_status,source_settlement_state,created_at,updated_at,attempt_count,last_error_code,last_error_message,next_retry_at,pi_mutation_guard_version)
+      VALUES(${refundId},${paymentId},${idempotencyKey},'pending','intent_created',${String(r.payer_uid)},${r.u2a_verified_at},${amount},'π','settlement_failed','refund_pending',${now},${now},0,'dr11_live_hold','awaiting_owner_concurrent_harness',${retryAt},'fin7_v2')
       RETURNING *`
     if(inserted.length!==1)return[]
     const audit=await tx`INSERT INTO refund_audit_events(event_id,refund_id,payment_id,event_type,actor_type,idempotency_key,created_at,details)
@@ -486,8 +486,8 @@ export async function createRefundCheckpoint(checkpoint: RefundCheckpoint): Prom
     `INSERT INTO refund_checkpoints
       (refund_id, payment_id, idempotency_key, status, stage, payer_uid,
        payer_uid_verified_at, amount, currency, source_payment_status,
-       source_settlement_state, created_at, updated_at, attempt_count)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       source_settlement_state, created_at, updated_at, attempt_count, pi_mutation_guard_version)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'fin7_v2')
      ON CONFLICT (payment_id) DO NOTHING
      RETURNING *`,
     [
@@ -540,6 +540,42 @@ export async function getRefundCheckpointByIdempotency(idempotencyKey: string): 
   const result = await query('SELECT * FROM refund_checkpoints WHERE idempotency_key = $1', [idempotencyKey])
   if (!Array.isArray(result) || result.length === 0) return null
   return normalizeCheckpoint(result[0])
+}
+
+export type RefundPiMutationAttemptResult =
+  | { outcome: 'RECORDED'; attemptedAt: string }
+  | { outcome: 'REPLAYED' | 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/** FIN7-S3: one-shot Pi mutation authority for Refund-owned external payments. */
+export async function claimRefundPiMutationAttempt(params: {
+  kind: 'dr11_a2u_cancel' | 'refund_complete'; refundId: string; paymentId: string; externalPaymentId: string; txid?: string
+}): Promise<RefundPiMutationAttemptResult> {
+  const text=(v:string)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+  if(!text(params.refundId)||!text(params.paymentId)||!text(params.externalPaymentId)||(params.txid!==undefined&&!/^[0-9a-f]{64}$/.test(params.txid)))return{outcome:'CONFLICT',error:'Refund Pi mutation attempt input invalid'}
+  try{
+    if(!(await ensureRefundCheckpointTables()))return{outcome:'INDETERMINATE',error:'Refund durable schema unavailable'}
+    const result=await withPaymentAuthorityTransaction(params.paymentId,async(tx)=>{
+      const rows=await tx`SELECT refund_id,payment_id,idempotency_key,status,stage,refund_payment_id,refund_txid,pi_mutation_guard_version
+        FROM refund_checkpoints WHERE refund_id=${params.refundId} AND payment_id=${params.paymentId} FOR UPDATE`
+      if(rows.length!==1)return[{conflict:true}]
+      const r=rows[0] as Record<string,unknown>
+      if(r.pi_mutation_guard_version!=='fin7_v2')return[{conflict:true}]
+      const exact=params.kind==='dr11_a2u_cancel'
+        ? r.idempotency_key===`dr11-live:${params.paymentId}`&&r.status==='pending'&&r.stage==='intent_created'&&r.refund_payment_id==null&&r.refund_txid==null
+        : r.status==='pending'&&['wallet_submission_confirmed','payment_checkpoint_updated','accounting_recorded','audit_recorded'].includes(String(r.stage))&&r.refund_payment_id===params.externalPaymentId&&r.refund_txid===params.txid
+      if(!exact)return[{conflict:true}]
+      const inserted=await tx`INSERT INTO financial_pi_mutation_attempts(mutation_kind,payment_id,external_payment_id,txid,refund_id)
+        VALUES(${params.kind},${params.paymentId},${params.externalPaymentId},${params.txid??null},${params.refundId}) ON CONFLICT DO NOTHING RETURNING attempted_at`
+      if(inserted.length===1)return[{recorded:true,attempted_at:inserted[0].attempted_at}]
+      return await tx`SELECT txid,refund_id FROM financial_pi_mutation_attempts WHERE mutation_kind=${params.kind} AND payment_id=${params.paymentId} AND external_payment_id=${params.externalPaymentId}`
+    })
+    if(!Array.isArray(result)||result.length!==1)return{outcome:'CONFLICT',error:'Refund Pi mutation authority absent or ambiguous'}
+    const r=result[0] as Record<string,unknown>
+    if(r.conflict===true)return{outcome:'CONFLICT',error:'Refund Pi mutation lifecycle is legacy or mismatched'}
+    if(r.recorded===true){const at=r.attempted_at;return{outcome:'RECORDED',attemptedAt:at instanceof Date?at.toISOString():String(at)}}
+    if(r.refund_id===params.refundId&&r.txid===(params.txid??null))return{outcome:'REPLAYED',error:'Refund Pi mutation attempt already recorded'}
+    return{outcome:'CONFLICT',error:'Refund Pi mutation attempt conflict'}
+  }catch{return{outcome:'INDETERMINATE',error:'Refund Pi mutation attempt uncertain'}}
 }
 
 export async function beginRefundSubmissionAttempt(refundId: string, event: RefundAuditEvent): Promise<{ checkpoint: RefundCheckpoint; startedNow: boolean } | null> {

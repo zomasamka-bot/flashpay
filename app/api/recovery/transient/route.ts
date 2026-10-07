@@ -5,7 +5,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2URecovery } from "@/lib/a2u-recovery-service"
 import { isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
 import { ensureAutomaticRefundIntent, readAutomaticRefundDrainHead, runAutomaticRefundPass, runAutomaticRefundPreparationStep, runAutomaticRefundFinalizationStep } from "@/lib/refund-auto-orchestrator"
-import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, listRecoverableU2AIngressCheckpointIds, getDurableU2AIngressAuthoritative, recordSettlementU2ACompletedCheckpoint, verifySettlementRefundAuthorityExclusion, readDr11RefundCertificationHold } from "@/lib/db"
+import { query, listOutstandingSettlementCheckpointIds, getSettlementCheckpointAuthoritative, listRecoverableU2AIngressCheckpointIds, getDurableU2AIngressAuthoritative, recordSettlementU2ACompletedCheckpoint, verifySettlementRefundAuthorityExclusion, readDr11RefundCertificationHold, claimSettlementPiMutationAttempt } from "@/lib/db"
 import { isRefundEligible as checkRefundEligibility } from "@/lib/types"
 import { reconcileIncompleteA2UPayment } from "@/lib/pi-reconciliation"
 import { isPaymentFinal } from "@/lib/payment-status"
@@ -163,6 +163,8 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
       let pi=await readExactPiU2A()
       if(!pi){result.piReadUncertain++;continue}
       if(pi.status.developer_completed!==true){
+        const completionAttempt=await claimSettlementPiMutationAttempt({kind:'u2a_complete',paymentId,externalPaymentId:ingress.u2aIdentifier,txid:ingress.u2aTxid})
+        if(completionAttempt.outcome!=='RECORDED'){result.piReadUncertain++;continue}
         try{
           await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(ingress.u2aIdentifier)}/complete`,{
             method:'POST',headers:{Authorization:`Key ${serverConfig.piApiKey}`,'Content-Type':'application/json'},body:JSON.stringify({txid:ingress.u2aTxid}),cache:'no-store',redirect:'error',

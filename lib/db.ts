@@ -200,6 +200,7 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
       u2a_completed_at TIMESTAMP,
       a2u_create_guard_version TEXT,
       a2u_create_attempted_at TIMESTAMP,
+      pi_mutation_guard_version TEXT,
       a2u_payment_id TEXT,
       a2u_from_address TEXT,
       a2u_to_address TEXT,
@@ -265,7 +266,8 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
       ADD COLUMN IF NOT EXISTS u2a_verified_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS u2a_completed_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS a2u_create_guard_version TEXT,
-      ADD COLUMN IF NOT EXISTS a2u_create_attempted_at TIMESTAMP
+      ADD COLUMN IF NOT EXISTS a2u_create_attempted_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS pi_mutation_guard_version TEXT
   `)
   if (u2aIdentityColumns === null) return false
 
@@ -284,6 +286,23 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
     )
   `)
   if (u2aApprovalRetirements === null) return false
+
+  // FIN7-S3: append-only one-shot authority for Pi mutation POSTs whose network
+  // outcome can become ambiguous across a process crash. The generation guard is
+  // stored on the owning durable lifecycle before any such mutation can occur;
+  // legacy lifecycles therefore cannot be silently upgraded into a fresh POST.
+  const piMutationAttempts = await query(`
+    CREATE TABLE IF NOT EXISTS financial_pi_mutation_attempts (
+      mutation_kind TEXT NOT NULL CHECK (mutation_kind IN ('u2a_cancel','u2a_complete','a2u_complete','dr11_a2u_cancel','refund_complete')),
+      payment_id TEXT NOT NULL,
+      external_payment_id TEXT NOT NULL,
+      txid TEXT,
+      refund_id TEXT,
+      attempted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (mutation_kind, payment_id, external_payment_id)
+    )
+  `)
+  if (piMutationAttempts === null) return false
 
   // R4P: append-only evidence for an A2U Stage1 identity that Pi has canonically
   // cancelled before transaction creation and whose Horizon movement absence was
@@ -428,11 +447,11 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
       const inserted = await tx`
         INSERT INTO settlement_checkpoints (
           payment_id, version, stage, merchant_id, merchant_uid,
-          customer_amount, merchant_amount, app_commission, a2u_create_guard_version
+          customer_amount, merchant_amount, app_commission, a2u_create_guard_version, pi_mutation_guard_version
         )
         VALUES (
           ${params.paymentId}, 1, 'payment_identity', ${params.merchantId}, ${params.merchantUid},
-          ${params.customerAmount}, ${params.customerAmount}, 0, 'fin5_v1'
+          ${params.customerAmount}, ${params.customerAmount}, 0, 'fin5_v1', 'fin7_v2'
         )
         ON CONFLICT DO NOTHING
         RETURNING version
@@ -877,6 +896,48 @@ export async function recordSettlementU2AApprovalClaim(params: {
     console.error('[DB] Settlement U2A approval claim uncertain:', error)
     return { outcome:'INDETERMINATE', error:'Settlement U2A approval claim uncertain' }
   }
+}
+
+export type SettlementPiMutationAttemptResult =
+  | { outcome: 'RECORDED'; attemptedAt: string }
+  | { outcome: 'REPLAYED' | 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+/** FIN7-S3: one-shot Pi mutation claim for Settlement-owned lifecycles.
+ * RECORDED is the only outcome that authorizes the caller's POST. REPLAYED means
+ * a prior runtime crossed the attempt boundary and must reconcile only. */
+export async function claimSettlementPiMutationAttempt(params: {
+  kind: 'u2a_cancel' | 'u2a_complete' | 'a2u_complete'
+  paymentId: string
+  externalPaymentId: string
+  txid?: string
+}): Promise<SettlementPiMutationAttemptResult> {
+  const text=(v:string)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
+  if(!text(params.paymentId)||!text(params.externalPaymentId)||(params.txid!==undefined&&!/^[0-9a-f]{64}$/.test(params.txid)))
+    return{outcome:'CONFLICT',error:'Settlement Pi mutation attempt input invalid'}
+  try{
+    if(!await ensureSettlementCheckpointTable())return{outcome:'INDETERMINATE',error:'Settlement durable schema unavailable'}
+    const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    return await client.begin(async(tx:any)=>{
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))`
+      const owner=await tx`SELECT stage,pi_mutation_guard_version,u2a_approval_identifier,u2a_identifier,u2a_txid,u2a_verified_at,a2u_payment_id,a2u_txid,horizon_confirmed_at
+        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+      if(owner.length!==1)return{outcome:'CONFLICT' as const,error:'Settlement Pi mutation owner absent or ambiguous'}
+      const r=owner[0] as Record<string,unknown>
+      if(r.pi_mutation_guard_version!=='fin7_v2')return{outcome:'CONFLICT' as const,error:'Settlement Pi mutation lifecycle is legacy or unguarded'}
+      const exact=params.kind==='u2a_cancel'
+        ? r.stage==='payment_identity'&&r.u2a_approval_identifier===params.externalPaymentId&&r.u2a_identifier==null&&r.u2a_txid==null
+        : params.kind==='u2a_complete'
+          ? r.stage==='payment_identity'&&r.u2a_identifier===params.externalPaymentId&&r.u2a_txid===params.txid&&r.u2a_verified_at!=null
+          : ['horizon_confirmed','pi_completed','db_finalized'].includes(String(r.stage))&&r.a2u_payment_id===params.externalPaymentId&&r.a2u_txid===params.txid&&r.horizon_confirmed_at!=null
+      if(!exact)return{outcome:'CONFLICT' as const,error:'Settlement Pi mutation durable identity mismatch'}
+      const inserted=await tx`INSERT INTO financial_pi_mutation_attempts(mutation_kind,payment_id,external_payment_id,txid)
+        VALUES(${params.kind},${params.paymentId},${params.externalPaymentId},${params.txid??null}) ON CONFLICT DO NOTHING RETURNING attempted_at`
+      if(inserted.length===1){const at=inserted[0].attempted_at;return{outcome:'RECORDED' as const,attemptedAt:at instanceof Date?at.toISOString():String(at)}}
+      const prior=await tx`SELECT txid FROM financial_pi_mutation_attempts WHERE mutation_kind=${params.kind} AND payment_id=${params.paymentId} AND external_payment_id=${params.externalPaymentId}`
+      if(prior.length===1&&prior[0].txid===(params.txid??null))return{outcome:'REPLAYED' as const,error:'Settlement Pi mutation attempt already recorded'}
+      return{outcome:'CONFLICT' as const,error:'Settlement Pi mutation attempt conflict'}
+    })
+  }catch(error){console.error('[FIN7-S3 SETTLEMENT PI MUTATION] uncertain:',error);return{outcome:'INDETERMINATE',error:'Settlement Pi mutation attempt uncertain'}}
 }
 
 export type SettlementU2AIngressCheckpointResult =
@@ -1863,10 +1924,20 @@ export async function ensureRefundCheckpointTables(): Promise<boolean> {
       attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
       last_error_code TEXT,
       last_error_message TEXT,
-      next_retry_at TIMESTAMP
+      next_retry_at TIMESTAMP,
+      pi_mutation_guard_version TEXT
     )
   `)
   if (checkpoints === null) return false
+  const refundMutationGuard = await query(`ALTER TABLE refund_checkpoints ADD COLUMN IF NOT EXISTS pi_mutation_guard_version TEXT`)
+  if (refundMutationGuard === null) return false
+  const refundPiMutationAttempts = await query(`
+    CREATE TABLE IF NOT EXISTS financial_pi_mutation_attempts (
+      mutation_kind TEXT NOT NULL CHECK (mutation_kind IN ('u2a_cancel','u2a_complete','a2u_complete','dr11_a2u_cancel','refund_complete')),
+      payment_id TEXT NOT NULL, external_payment_id TEXT NOT NULL, txid TEXT, refund_id TEXT,
+      attempted_at TIMESTAMP NOT NULL DEFAULT NOW(), PRIMARY KEY (mutation_kind,payment_id,external_payment_id)
+    )`)
+  if (refundPiMutationAttempts === null) return false
 
   // FIN-4 R4T: append-only containment for refund intents proven poisoned before
   // financial movement. The original checkpoint/audit history is never deleted

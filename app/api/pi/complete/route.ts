@@ -2,7 +2,7 @@ import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
-import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold, getDurableU2AIngressAuthoritative } from "@/lib/db"
+import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold, getDurableU2AIngressAuthoritative, claimSettlementPiMutationAttempt } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 import { createDr11RefundAuthorityFromDurableHold, getRefundCheckpointByIdempotency } from "@/lib/refund-checkpoint-store"
@@ -188,7 +188,11 @@ export async function POST(request: NextRequest) {
     // If not developer_completed, call Pi /complete endpoint and refetch
     let finalPiPayment = piPayment
     if (piPayment.status?.developer_completed !== true) {
-      console.log("[Pi Complete] Payment not developer_completed - calling Pi /complete endpoint")
+      console.log("[Pi Complete] Payment not developer_completed - claiming one-shot Pi /complete authority")
+      const completionAttempt = await claimSettlementPiMutationAttempt({ kind: "u2a_complete", paymentId: preFlashPaymentId, externalPaymentId: piPaymentId, txid: canonicalTxid })
+      if (completionAttempt.outcome !== "RECORDED") {
+        return NextResponse.json({ error: "Completion attempt unavailable", code: completionAttempt.outcome === "INDETERMINATE" ? "U2A_COMPLETE_ATTEMPT_INDETERMINATE" : "U2A_COMPLETE_ATTEMPT_RECONCILE_ONLY" }, { status: completionAttempt.outcome === "INDETERMINATE" ? 503 : 409 })
+      }
       
       // Crash/transport ambiguity rule: attempt Pi /complete exactly once, then always
       // reconcile by exact GET. A non-2xx response or thrown transport error is not

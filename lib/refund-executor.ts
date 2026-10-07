@@ -17,6 +17,7 @@ import {
   advanceRefundAuditWithAudit,
   completeRefundCheckpointWithAudit,
   finalizeRefundProjectionWithAudit,
+  claimRefundPiMutationAttempt,
 } from './refund-checkpoint-store'
 import { isRefundEligible, type Payment, type RefundAuditEvent, type RefundCheckpoint } from './types'
 import { reconcileRefundWithPi } from './refund-pi-reconciliation'
@@ -114,6 +115,8 @@ async function neutralizeDr11OrphanA2UIdentifier(checkpoint: RefundCheckpoint, p
   const beforeState = classifyDr11OrphanA2UPaymentDto(before, expected)
   if (beforeState === 'BLOCKED') return false
   if (beforeState === 'CANCELLED_UNMOVED') return true
+  const cancelAttempt = await claimRefundPiMutationAttempt({ kind: 'dr11_a2u_cancel', refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, externalPaymentId: expected.a2uPaymentId })
+  if (cancelAttempt.outcome !== 'RECORDED') return false
   let cancelResponse: Response | null = null
   try {
     cancelResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(expected.a2uPaymentId)}/cancel`, {
@@ -648,6 +651,8 @@ export async function executeRefundCompletion(refundId: string): Promise<RefundE
   }
   const needsCompletion = reconciliation.payment.status.developer_completed !== true
   if (needsCompletion) {
+    const completionAttempt = await claimRefundPiMutationAttempt({ kind: 'refund_complete', refundId, paymentId: checkpoint.paymentId, externalPaymentId: refundPaymentId, txid: refundTxid })
+    if (completionAttempt.outcome !== 'RECORDED') return { outcome: 'blocked', reason: completionAttempt.outcome === 'INDETERMINATE' ? 'completion_attempt_uncertain' : 'completion_reconcile_only' }
     const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(refundPaymentId)}/complete`, { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ txid: refundTxid }) }).catch(() => null)
     if (response === null || !response.ok) {
       const recovered = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId })

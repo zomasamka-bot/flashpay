@@ -1,6 +1,6 @@
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1, claimSettlementA2UCreateAttempt } from "@/lib/db"
+import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1, claimSettlementA2UCreateAttempt, claimSettlementPiMutationAttempt } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -1371,6 +1371,12 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
   const refetchCompleted = async (): Promise<boolean> => verifyCompletedDto(await fetchA2UPayment(a2uPaymentId))
 
   try {
+    if (await refetchCompleted()) return { ok: true }
+    const completionAttempt = await claimSettlementPiMutationAttempt({ kind: "a2u_complete", paymentId: ctx.paymentId, externalPaymentId: a2uPaymentId, txid: txidFromHorizon })
+    if (completionAttempt.outcome !== "RECORDED") {
+      if (await refetchCompleted()) return { ok: true }
+      return { ok: false, error: "Pi /complete attempt is reconcile-only", userFacingStatus: "settlement_pending" }
+    }
     console.log("[A2U Stage3] Calling Pi /v2/payments/complete")
 
     const response = await fetch(`https://api.minepi.com/v2/payments/${a2uPaymentId}/complete`, {
