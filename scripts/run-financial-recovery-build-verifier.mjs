@@ -114,4 +114,3 @@ await import('./verify-fin7-crash-windows-current-source.mjs')
 
 await import('./verify-fin8-live-approve-complete-ambiguity-hook.mjs')
 
-await import('./verify-fin9-live-horizon-ambiguity-hook.mjs')

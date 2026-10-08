@@ -8,7 +8,6 @@ import * as StellarSDK from "@stellar/stellar-sdk"
 import { numberToExactPositiveStroops } from "@/lib/financial-amount-stroops"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
 import { proveA2UStage1HorizonAbsence } from "@/lib/a2u-stage1-retirement"
-import { shouldInjectFin9AmbiguousHorizonSubmit } from "@/lib/fin9-live-horizon-ambiguity-certification"
 
 /**
  * UNIFIED A2U EXECUTOR - Single source of truth for ALL A2U execution paths
@@ -1112,19 +1111,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     let reconciledSubmitFeeStroops: number | null = null
     try {
       moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)
-      if (shouldInjectFin9AmbiguousHorizonSubmit({
-        paymentId: ctx.paymentId,
-        network: "Pi Testnet",
-        amount: ctx.customerAmount,
-        stage: "horizon_submit_post_response_lost",
-      })) {
-        console.warn("[FIN9 LIVE CERTIFICATION] injecting Horizon submit response loss", {
-          paymentId: ctx.paymentId,
-          preparedHash,
-          preparedSequence: transaction.sequence,
-        })
-        throw new Error("FIN9_CERTIFICATION_HORIZON_SUBMIT_RESPONSE_LOST")
-      }
     } catch (submitError) {
       // R100-7: a transport exception after submit is ambiguous. Reconcile the exact
       // prepared hash immediately via the existing GET-only Horizon proof path; never
