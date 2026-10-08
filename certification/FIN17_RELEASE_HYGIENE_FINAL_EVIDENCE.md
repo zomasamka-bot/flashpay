@@ -28,3 +28,15 @@ FIN-16 Byte Studio Round-Trip remains a separate proof gate. FIN-17 hygiene does
 
 ## Closure rule
 This artifact is PRE-PRODUCTION certified. FIN-17 becomes formally CLOSED only after publishing this exact clean package and proving Git SHA ↔ Vercel production deployment ↔ mandatory build output correspondence with `FIN17_RELEASE_HYGIENE=PASS`.
+
+## Vercel/Pi Studio workspace correction — 2026-10-08
+The first FIN-17 production build exposed a verifier-only defect: the hygiene verifier treated
+Vercel-generated `.git`, `node_modules`, `.next`, `.vercel`, and package-manager store content as
+if those ephemeral workspace paths had been shipped inside the clean release artifact.
+The application and all FIN-1→FIN-15 financial certifiers passed before this verifier stopped the build.
+
+Correction: FIN-17 now validates the immutable release-source set represented by
+`certification/SOURCE_MANIFEST.sha256` while excluding only known ephemeral workspace directories
+`.git`, `.vercel`, `node_modules`, `.next`, and `.pnpm-store` from the post-install workspace walk.
+The clean ZIP itself is independently inspected and MUST contain none of those directories.
+No application/runtime/schema/dependency/lockfile/financial-kernel file was changed by this correction.

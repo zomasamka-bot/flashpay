@@ -3,10 +3,13 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 const root=path.resolve(new URL('..',import.meta.url).pathname)
 const manifestPath=path.join(root,'certification/SOURCE_MANIFEST.sha256')
-const forbiddenDirs=new Set(['.git','.vercel','node_modules','.next'])
+// Vercel/Pi Studio create these ephemeral workspace directories after source checkout/install.
+// They are excluded from the release-source manifest; their presence in a build workspace is not
+// evidence that they were shipped in the clean release ZIP.
+const ephemeralWorkspaceDirs=new Set(['.git','.vercel','node_modules','.next','.pnpm-store'])
 const forbiddenFiles=(n)=>n==='.DS_Store'||n.startsWith('.env')||/\.(pem|key|p12|bak|orig|tmp|log)$/.test(n)||n.endsWith('~')
 const files=[]; const forbidden=[]
-function walk(dir){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,e.name);const rel=path.relative(root,p).replaceAll('\\','/');if(e.isDirectory()){if(forbiddenDirs.has(e.name)){forbidden.push(rel);continue}walk(p)}else if(e.isFile()){if(forbiddenFiles(e.name))forbidden.push(rel);files.push(rel)}}}
+function walk(dir){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,e.name);const rel=path.relative(root,p).replaceAll('\\','/');if(e.isDirectory()){if(ephemeralWorkspaceDirs.has(e.name))continue;walk(p)}else if(e.isFile()){if(forbiddenFiles(e.name))forbidden.push(rel);files.push(rel)}}}
 walk(root)
 const manifestLines=fs.readFileSync(manifestPath,'utf8').trim().split(/\r?\n/).filter(Boolean)
 const manifest=new Map(manifestLines.map(l=>{const m=l.match(/^([a-f0-9]{64})  (.+)$/);if(!m)throw new Error(`Malformed manifest: ${l}`);return [m[2],m[1]]}))
