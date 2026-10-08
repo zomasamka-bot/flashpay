@@ -118,3 +118,5 @@ await import('./verify-fin8-live-approve-complete-ambiguity-hook.mjs')
 await import('./verify-fin11-refund-prepared-replay.mjs')
 
 await import('./verify-fin12-refund-accounting-barrier-adversarial.mjs')
+
+await import('./verify-fin13-merchant-rebuild-adversarial.mjs')
