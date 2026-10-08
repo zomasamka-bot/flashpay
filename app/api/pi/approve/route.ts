@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { claimSettlementU2AApprovalAttempt, recordSettlementU2AApprovalClaimFromStartLease } from "@/lib/db"
+import { shouldInjectFin8AmbiguousPiPost } from "@/lib/fin8-live-ambiguity-certification"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 export const dynamic = "force-dynamic"
@@ -294,6 +295,19 @@ export async function POST(request: NextRequest) {
           },
         },
       )
+      // FIN-8 LIVE: simulate a lost Pi /approve response only for the explicitly
+      // armed 0.20 Pi Testnet fixture. The durable fin7_v1 attempt was claimed
+      // before POST, so a replay must reconcile canonical Pi state and cannot POST again.
+      if (shouldInjectFin8AmbiguousPiPost({
+        stage: "approve_post_response_lost",
+        paymentId,
+        network: canonicalPayment.network,
+        amount: canonicalPayment.amount,
+      })) {
+        console.warn("[FIN8 LIVE] injected approve response-loss boundary", { paymentId })
+        return new Response(JSON.stringify({ error: "FIN8 live approval ambiguity injected", code: "FIN8_APPROVE_POST_RESPONSE_LOST" }), { status: 503, headers: { "Content-Type": "application/json" } })
+      }
+
       const approvalData = await approvalResponse.json().catch(() => ({}))
       if (approvalResponse.ok) {
         approvalPostOutcome = "ok"

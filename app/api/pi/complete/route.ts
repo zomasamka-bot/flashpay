@@ -3,6 +3,7 @@ import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold, getDurableU2AIngressAuthoritative, claimSettlementPiMutationAttempt } from "@/lib/db"
+import { shouldInjectFin8AmbiguousPiPost } from "@/lib/fin8-live-ambiguity-certification"
 import type { Payment } from "@/lib/types"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 import { createDr11RefundAuthorityFromDurableHold, getRefundCheckpointByIdempotency } from "@/lib/refund-checkpoint-store"
@@ -206,6 +207,18 @@ export async function POST(request: NextRequest) {
           },
           body: JSON.stringify({ txid }),
         })
+        // FIN-8 LIVE: simulate a lost Pi /complete response only for the explicitly
+        // armed 0.20 Pi Testnet fixture. The shared fin7_v2 u2a_complete attempt
+        // authority is already consumed, including for transient recovery.
+        if (shouldInjectFin8AmbiguousPiPost({
+          stage: "complete_post_response_lost",
+          paymentId: preFlashPaymentId,
+          network: piPayment.network,
+          amount: piPayment.amount,
+        })) {
+          console.warn("[FIN8 LIVE] injected complete response-loss boundary", { paymentId: preFlashPaymentId })
+          return NextResponse.json({ error: "FIN8 live completion ambiguity injected", code: "FIN8_COMPLETE_POST_RESPONSE_LOST" }, { status: 503 })
+        }
         if (!completeResponse.ok) {
           console.error("[Pi Complete] Pi /complete returned non-OK; reconciling exact payment - status:", completeResponse.status)
         }
