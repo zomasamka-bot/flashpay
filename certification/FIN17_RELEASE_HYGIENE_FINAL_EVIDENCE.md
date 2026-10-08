@@ -40,3 +40,18 @@ Correction: FIN-17 now validates the immutable release-source set represented by
 `.git`, `.vercel`, `node_modules`, `.next`, and `.pnpm-store` from the post-install workspace walk.
 The clean ZIP itself is independently inspected and MUST contain none of those directories.
 No application/runtime/schema/dependency/lockfile/financial-kernel file was changed by this correction.
+
+## Final verifier boundary correction — Vercel evidence
+A second production build proved that Vercel may add `.gitignore` and transform `pnpm-lock.yaml`
+and `vercel.json` before the project build command. Therefore post-install workspace equality cannot
+serve as a clean-artifact hash attestation.
+
+Final split:
+1. Clean artifact certification (pre-publish): exact manifest/hash equality, forbidden artifact scan,
+   secret scan, ZIP integrity, dependency pins.
+2. Vercel/Pi Studio build-safety gate: well-formed manifest attestation present, dependency pins,
+   secret scan over release source, mandatory financial verifier wiring, FIN-15 gate wiring.
+3. All financial/runtime certifiers remain mandatory before `next build`.
+
+This is a verifier-boundary correction only. No app/lib/components/schema/package/lock/runtime
+financial source was changed.
