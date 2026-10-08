@@ -124,3 +124,5 @@ await import('./verify-fin13-merchant-rebuild-adversarial.mjs')
 await import('./verify-fin14-commission-migration-design.mjs')
 
 await import('./verify-fin15-mainnet-migration-gate.mjs')
+
+await import('./verify-fin17-release-hygiene.mjs')
