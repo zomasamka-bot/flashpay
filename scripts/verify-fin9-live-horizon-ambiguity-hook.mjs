@@ -1,0 +1,42 @@
+import { readFileSync } from 'node:fs'
+const read=(p)=>readFileSync(new URL(`../${p}`,import.meta.url),'utf8')
+const helper=read('lib/fin9-live-horizon-ambiguity-certification.ts')
+const executor=read('lib/a2u-executor.ts')
+const locked=read('lib/a2u-locked-executor.ts')
+const dr11=read('app/api/pi/complete/route.ts')
+const must=(ok,msg)=>{if(!ok)throw new Error(`FIN9 LIVE Horizon ambiguity verifier failed: ${msg}`)}
+
+must(helper.includes('process.env.VERCEL_ENV === "production"'),'hook is not production-gated')
+must(helper.includes('process.env.FLASHPAY_FIN9_LIVE_PAYMENT_ID'),'exact fixture identity gate missing')
+must(helper.includes('input.paymentId === armedPaymentId'),'fixture identity is not exact')
+must(helper.includes('input.network === "Pi Testnet"'),'Pi Testnet gate missing')
+must(helper.includes('input.amount === 0.3'),'exact 0.30 Pi gate missing')
+must(!helper.includes('input.amount === 0.1'),'FIN9 must not reuse DR11 0.10 scope')
+must(!helper.includes('input.amount === 0.2'),'FIN9 must not reuse FIN8 0.20 scope')
+
+const durable=executor.indexOf('const durablePrepared = await recordSettlementPreparedCheckpoint')
+const submitFn=executor.indexOf('const submitResult = await horizonServer.submitTransaction(transaction)')
+const moveCall=executor.indexOf('moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)',submitFn)
+const hook=executor.indexOf('stage: "horizon_submit_post_response_lost"',moveCall)
+const throwLoss=executor.indexOf('FIN9_CERTIFICATION_HORIZON_SUBMIT_RESPONSE_LOST',hook)
+const catchSubmit=executor.indexOf('catch (submitError)',submitFn)
+const reconcile=executor.indexOf('executeFinancialRecoverySettlementSubmitReplay({ payment: ctx.payment, paymentId: ctx.paymentId })',catchSubmit)
+const exactMovement=executor.indexOf('reconciled.outcome !== "MOVEMENT_VERIFIED"',reconcile)
+const durableHorizon=executor.indexOf('recordSettlementHorizonCheckpoint({',exactMovement)
+must(durable>=0&&submitFn>durable&&moveCall>submitFn&&hook>moveCall&&throwLoss>hook&&catchSubmit>throwLoss&&reconcile>catchSubmit&&exactMovement>reconcile&&durableHorizon>exactMovement,'ordering must be durable prepared -> Horizon POST -> response loss -> catch -> GET-only exact reconciliation -> durable Horizon')
+must(executor.includes('reconciled.reference.envelopeXdr !== transaction.toXDR()'),'immediate reconciliation does not bind exact XDR')
+must(executor.includes('reconciled.reference.preparedHash !== preparedHash'),'immediate reconciliation does not bind exact hash')
+must(executor.includes('reconciled.reference.preparedSequence !== transaction.sequence'),'immediate reconciliation does not bind exact sequence')
+
+const fromXdr=locked.indexOf('StellarSDK.TransactionBuilder.fromXDR(intent.envelopeXdr, "Pi Testnet")')
+const replaySubmit=locked.indexOf('await horizon.submitTransaction(transaction)',fromXdr)
+must(fromXdr>=0&&replaySubmit>fromXdr,'recovery exact stored-XDR replay path missing')
+must(locked.includes('transaction.toXDR() !== intent.envelopeXdr'),'recovery does not round-trip bind stored XDR')
+must(locked.includes('Buffer.from(transaction.hash()).toString("hex") !== intent.preparedHash'),'recovery does not bind stored hash')
+must(locked.includes('transaction.sequence !== intent.preparedSequence'),'recovery does not bind stored sequence')
+must(locked.includes('if (verifiedReplay.outcome !== "MOVEMENT_VERIFIED")'),'post-submit recovery does not require canonical movement proof')
+
+must(dr11.includes('finalPiPayment.amount === 0.1'),'DR11 permanent 0.10 refund hook changed or removed')
+must(executor.includes('shouldInjectFin9AmbiguousHorizonSubmit'),'FIN9 helper is not bound to production executor')
+
+console.log('FIN9_LIVE_HORIZON_AMBIGUITY_HOOK=PASS scope=production+Pi_Testnet+0.30+exact_payment_id boundary=post_horizon_submit_response_loss prepared=durable_before_submit reconciliation=exact_hash_xdr_sequence replay=exact_stored_xdr_only blind_resubmit=false DR11_0.10=preserved')
