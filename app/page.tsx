@@ -258,11 +258,11 @@ export default function HomePage() {
     createInFlightRef.current = true
     try {
       const merchant = unifiedStore.getMerchantState()
-      const intentId = acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, "")
+      const intentId = await acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, "")
       const result = await createPayment(amountNum, "", intentId)
 
       if (result.success && result.data) {
-        finishCreateIntent(intentId)
+        await finishCreateIntent(intentId)
         setCurrentPaymentId(result.data.id)
         setShowQR(true)
         hasShownSuccessRef.current = false

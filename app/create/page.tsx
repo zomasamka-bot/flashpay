@@ -48,11 +48,11 @@ export default function CreatePaymentPage() {
 
     try {
       const merchant = unifiedStore.getMerchantState()
-      const intentId = acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, note)
+      const intentId = await acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, note)
       const result = await createPayment(amountNum, note, intentId)
 
       if (result.success && result.data) {
-        finishCreateIntent(intentId)
+        await finishCreateIntent(intentId)
         toast({
           title: "Payment Created",
           description: "Your payment request is ready to share",

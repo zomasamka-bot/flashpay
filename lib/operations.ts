@@ -34,8 +34,11 @@ const RATE_LIMITS = {
   EXECUTE_PAYMENT: { maxAttempts: 5, windowMs: 60000 },
 }
 
-export async function createPayment(amount: number, note = "", createIntentId?: string): Promise<OperationResult<Payment>> {
-  const stableCreateIntentId = createIntentId || generateUUID()
+export async function createPayment(amount: number, note: string, createIntentId: string): Promise<OperationResult<Payment>> {
+  const stableCreateIntentId = createIntentId
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stableCreateIntentId)) {
+    return { success: false, error: "Durable payment request identity missing; creation blocked", code: "CREATE_INTENT_REQUIRED" }
+  }
   const operation = "createPayment"
   CoreLogger.operation(operation, { amount, noteLength: note.length })
 
