@@ -3,6 +3,31 @@
 // FIN-100B: only the opaque UUID and request identity are stored; never Pi credentials.
 const KEY = "flashpay:pending-create-intent:v1"
 const LOCK = "flashpay:create-intent:v1"
+const EPOCH_KEY = "flashpay:create-intent-epoch:v1"
+// Snapshot when this tab loads. Only this tab's Next Customer can advance it.
+// A stale tab must not inherit permission from another tab's Next Customer.
+let tabEpoch = readInitialEpoch()
+
+function readInitialEpoch(): number {
+  if (typeof window === "undefined") return 0
+  const raw = window.localStorage.getItem(EPOCH_KEY)
+  if (raw === null) return 0
+  const value: unknown = JSON.parse(raw)
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error("Payment generation invalid; creation blocked")
+  }
+  return value as number
+}
+
+function assertCurrentEpoch(): number {
+  const raw = window.localStorage.getItem(EPOCH_KEY)
+  const epoch: unknown = raw === null ? 0 : JSON.parse(raw)
+  if (!Number.isSafeInteger(epoch) || (epoch as number) < 0 || epoch !== tabEpoch) {
+    throw new Error("Another tab advanced to the next customer. Reload this tab before starting a new payment.")
+  }
+  return epoch as number
+}
+
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 type Pending = { id: string; merchantUid: string; merchantId: string; amount: number; note: string; completed?: boolean }
@@ -22,6 +47,7 @@ export async function acquireCreateIntent(merchantUid: string, merchantId: strin
     throw new Error("Merchant identity or payment amount unavailable")
   }
   return withIntentLock(() => {
+    assertCurrentEpoch()
     // Storage failure is indeterminate: do not create a new durable identity.
     const raw = window.localStorage.getItem(KEY)
     if (raw !== null) {
@@ -56,6 +82,7 @@ export async function acquireCreateIntent(merchantUid: string, merchantId: strin
 
 export async function finishCreateIntent(id: string): Promise<void> {
   await withIntentLock(() => {
+    assertCurrentEpoch()
     const raw = window.localStorage.getItem(KEY)
     if (!raw) throw new Error("Pending payment identity missing; cannot acknowledge completion")
     let current: Pending
@@ -76,6 +103,7 @@ export async function finishCreateIntent(id: string): Promise<void> {
 // Never retire an unresolved intent; uncertain network outcomes must retry.
 export async function beginNextCustomerIntent(): Promise<void> {
   await withIntentLock(() => {
+    const epoch = assertCurrentEpoch()
     const raw = window.localStorage.getItem(KEY)
     if (raw === null) return
     let current: Pending
@@ -83,6 +111,14 @@ export async function beginNextCustomerIntent(): Promise<void> {
     if (!current || !UUID_V4.test(current.id) || current.completed !== true) {
       throw new Error("Previous payment request is unresolved; cannot start another")
     }
+    // Advance the generation FIRST: a storage failure must never leave an
+    // empty intent under the old generation (which could mint a duplicate).
+    if (epoch === Number.MAX_SAFE_INTEGER) throw new Error("Payment generation exhausted")
+    const next = epoch + 1
+    window.localStorage.setItem(EPOCH_KEY, String(next))
+    if (window.localStorage.getItem(EPOCH_KEY) !== String(next)) throw new Error("Could not persist next-customer generation")
+    // This tab is the only one granted the next generation.
+    tabEpoch = next
     window.localStorage.removeItem(KEY)
     if (window.localStorage.getItem(KEY) !== null) throw new Error("Could not retire completed payment identity")
   })
