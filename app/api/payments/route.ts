@@ -8,7 +8,7 @@ import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/re
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
-import { ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic } from "@/lib/db"
+import { ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic, recoverInitialPaymentProjectionUnderDurableGuard } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 const PAYMENT_CREATE_LEASE_PREFIX = "flashpay:payment:create-active:"
@@ -218,6 +218,31 @@ export async function POST(request: NextRequest) {
       }
       let existing: any
       try { existing = typeof projected === "string" ? JSON.parse(projected) : projected } catch { existing = null }
+      if (!existing && (projected === null || projected === undefined)) {
+        const restored = await recoverInitialPaymentProjectionUnderDurableGuard({
+          paymentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
+          amount, note: normalizedNote, createdAt: durableCreatedAt,
+          persist: async () => {
+            const historyScore = Date.parse(durableCreatedAt)
+            if (!Number.isSafeInteger(historyScore)) return 'CONFLICT'
+            const result = Number(await redis.eval(`
+local raw=redis.call('GET',KEYS[1])
+if raw then return 0 end
+local score=redis.call('ZSCORE',KEYS[2],ARGV[3])
+if score and tonumber(score)~=tonumber(ARGV[2]) then return -1 end
+if not score then redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) end
+redis.call('SET',KEYS[1],ARGV[1]); return 1
+`, [`payment:${paymentId}`, `flashpay:merchant:${trustedMerchantId}:payments:v1`],
+              [JSON.stringify(payment), String(historyScore), paymentId]))
+            return result === 1 ? 'CREATED' : result === 0 ? 'PRESENT' : 'CONFLICT'
+          },
+        })
+        if (restored !== 'CREATED' && restored !== 'PRESENT') {
+          return NextResponse.json({ error: 'Durable payment exists; projection recovery required', code: 'CREATE_INTENT_RECOVERY_REQUIRED', paymentId }, { status: 503, headers: corsHeaders })
+        }
+        try { projected = await redis.get(`payment:${paymentId}`) } catch { projected = null }
+        try { existing = typeof projected === 'string' ? JSON.parse(projected) : projected } catch { existing = null }
+      }
       if (!existing || existing.id !== paymentId || existing.merchantUid !== verifiedMerchantUid ||
           existing.merchantId !== trustedMerchantId || Number(existing.amount) !== amount ||
           existing.note !== normalizedNote || existing.createdAt !== durableCreatedAt) {

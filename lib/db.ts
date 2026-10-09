@@ -3455,3 +3455,58 @@ export async function recordPaymentCreateIntentAtomic(params: {
     return { outcome: 'INDETERMINATE', error: 'Create-intent transaction uncertain' }
   }
 }
+
+
+/** FIN100B B-D04: recovery of the initial Redis projection only. PostgreSQL
+ * serializes this check against durable financial writers. No payment identity,
+ * Pi mutation, or settlement/refund authority is created by this operation.
+ * The callback performs the Redis NX+history write while the row is locked.
+ */
+export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
+  paymentId: string; merchantUid: string; merchantId: string; amount: number;
+  note: string; createdAt: string; persist: () => Promise<'CREATED' | 'PRESENT' | 'CONFLICT'>
+}): Promise<'CREATED' | 'PRESENT' | 'CONFLICT' | 'INDETERMINATE'> {
+  try {
+    const client = await getPostgresClient()
+    if (!client) return 'INDETERMINATE'
+    return await client.begin(async (tx: any) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
+      const intents = await tx`SELECT payment_id,merchant_uid,merchant_id,customer_amount,note,created_at
+        FROM payment_create_intents WHERE payment_id=${params.paymentId} FOR UPDATE`
+      const rows = await tx`SELECT * FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
+      if (intents.length !== 1 || rows.length !== 1) return 'CONFLICT' as const
+      const i = intents[0] as Record<string, unknown>
+      const r = rows[0] as Record<string, unknown>
+      if (i.payment_id !== params.paymentId || i.merchant_uid !== params.merchantUid ||
+          i.merchant_id !== params.merchantId || Number(i.customer_amount) !== params.amount ||
+          i.note !== params.note || new Date(i.created_at as string).toISOString() !== params.createdAt ||
+          r.payment_id !== params.paymentId || r.merchant_uid !== params.merchantUid ||
+          r.merchant_id !== params.merchantId || Number(r.customer_amount) !== params.amount ||
+          Number(r.merchant_amount) !== params.amount || Number(r.app_commission) !== 0 ||
+          r.stage !== 'payment_identity' || Number(r.version) !== 1 ||
+          r.a2u_create_guard_version !== 'fin5_v1' || r.pi_mutation_guard_version !== 'fin7_v2') return 'CONFLICT' as const
+      // Stage=payment_identity alone is NOT sufficient: Pi start/approval,
+      // ingress, holds, or an external attempt may already exist.
+      const mustBeEmpty = [
+        'u2a_approval_identifier','u2a_approval_claimed_at','u2a_approval_guard_version',
+        'u2a_approval_attempted_at','u2a_start_lease_token','u2a_start_lease_expires_at',
+        'u2a_identifier','u2a_txid','payer_uid','u2a_verified_at','u2a_completed_at',
+        'a2u_create_attempted_at','a2u_payment_id','a2u_from_address','a2u_to_address',
+        'prepared_envelope_xdr','prepared_tx_hash','prepared_sequence','a2u_txid',
+        'horizon_fee_stroops','horizon_confirmed_at','pi_completed_at','db_finalized_at',
+        'certification_hold','certification_hold_at','certification_hold_expires_at',
+      ]
+      if (mustBeEmpty.some((field) => r[field] !== null && r[field] !== undefined)) return 'CONFLICT' as const
+      const evidence = await tx`SELECT
+        EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId}) AS refund,
+        EXISTS(SELECT 1 FROM financial_pi_mutation_attempts WHERE payment_id=${params.paymentId}) AS pi_attempt,
+        EXISTS(SELECT 1 FROM settlement_u2a_approval_retirements WHERE payment_id=${params.paymentId}) AS retired`
+      if (evidence.length !== 1 || evidence[0].refund !== false ||
+          evidence[0].pi_attempt !== false || evidence[0].retired !== false) return 'CONFLICT' as const
+      return await params.persist()
+    })
+  } catch (error) {
+    console.error('[FIN100B B-D04] guarded initial projection recovery indeterminate', error)
+    return 'INDETERMINATE'
+  }
+}
