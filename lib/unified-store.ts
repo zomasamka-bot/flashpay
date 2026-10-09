@@ -812,7 +812,7 @@ class UnifiedStateStore {
     }
     this.saveToStorage()
     this.notify("merchant" as StateSection)
-    CoreLogger.info("Merchant state updated", updates)
+    CoreLogger.info("Merchant state updated", { fields: Object.keys(updates), hasAccessToken: Boolean(updates.accessToken) })
   }
 
   completeMerchantSetup(piUsername: string, walletAddress?: string, uid?: string) {

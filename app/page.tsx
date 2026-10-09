@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { createPayment } from "@/lib/operations"
+import { acquireCreateIntent, finishCreateIntent } from "@/lib/create-intent-client"
 import { config } from "@/lib/config"
 import { authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
@@ -35,7 +36,6 @@ export default function HomePage() {
   const [redirecting, setRedirecting] = useState(false)
   const hasShownSuccessRef = useRef(false)
   const createInFlightRef = useRef(false)
-  const createIntentRef = useRef<{ key: string; id: string } | null>(null)
   const merchantSetup = useMerchant()
   const [isConnecting, setIsConnecting] = useState(false)
   const [sdkInitStatus, setSdkInitStatus] = useState<"loading" | "ready" | "error">("loading")
@@ -256,17 +256,15 @@ export default function HomePage() {
 
     if (createInFlightRef.current) return
     createInFlightRef.current = true
-    const intentKey = `${merchantSetup.isSetupComplete}:${amountNum}:`
-    if (!createIntentRef.current || createIntentRef.current.key !== intentKey) {
-      createIntentRef.current = { key: intentKey, id: crypto.randomUUID() }
-    }
     try {
-      const result = await createPayment(amountNum, "", createIntentRef.current.id)
+      const merchant = unifiedStore.getMerchantState()
+      const intentId = acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, "")
+      const result = await createPayment(amountNum, "", intentId)
 
       if (result.success && result.data) {
+        finishCreateIntent(intentId)
         setCurrentPaymentId(result.data.id)
         setShowQR(true)
-        createIntentRef.current = null
         hasShownSuccessRef.current = false
       } else {
         toast({
@@ -278,7 +276,7 @@ export default function HomePage() {
     } catch (error) {
       toast({
         title: "Error",
-        description: "Unexpected error creating payment",
+        description: error instanceof Error ? error.message : "Payment creation uncertain; retry the original request",
         variant: "destructive",
       })
     } finally {

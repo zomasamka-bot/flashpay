@@ -12,6 +12,8 @@ import { Check } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { BackButton } from "@/components/back-button"
 import { createPayment } from "@/lib/operations"
+import { acquireCreateIntent, finishCreateIntent } from "@/lib/create-intent-client"
+import { unifiedStore } from "@/lib/unified-store"
 import { getPaymentLink, ROUTES } from "@/lib/router"
 import { useI18n } from "@/components/i18n-provider"
 
@@ -23,7 +25,6 @@ export default function CreatePaymentPage() {
   const [note, setNote] = useState("")
   const [isCreating, setIsCreating] = useState(false)
   const createInFlightRef = useRef(false)
-  const createIntentRef = useRef<{ key: string; id: string } | null>(null)
 
   useEffect(() => {
     router.replace(ROUTES.HOME)
@@ -44,15 +45,14 @@ export default function CreatePaymentPage() {
     if (createInFlightRef.current) return
     createInFlightRef.current = true
     setIsCreating(true)
-    const intentKey = `${amountNum}:${note}`
-    if (!createIntentRef.current || createIntentRef.current.key !== intentKey) {
-      createIntentRef.current = { key: intentKey, id: crypto.randomUUID() }
-    }
+
     try {
-      const result = await createPayment(amountNum, note, createIntentRef.current.id)
+      const merchant = unifiedStore.getMerchantState()
+      const intentId = acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, note)
+      const result = await createPayment(amountNum, note, intentId)
 
       if (result.success && result.data) {
-        createIntentRef.current = null
+        finishCreateIntent(intentId)
         toast({
           title: "Payment Created",
           description: "Your payment request is ready to share",
@@ -66,6 +66,8 @@ export default function CreatePaymentPage() {
           variant: "destructive",
         })
       }
+    } catch (error) {
+      toast({ title: "Payment creation blocked", description: error instanceof Error ? error.message : "Payment result uncertain", variant: "destructive" })
     } finally {
       createInFlightRef.current = false
       setIsCreating(false)

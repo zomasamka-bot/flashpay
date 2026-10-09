@@ -3370,8 +3370,7 @@ export async function recordA2UTransactionAtomic(params: {
 }
 
 
-// FIN-100B: creation-intent identity and financial checkpoint are committed together.
-// This schema is deliberately separate from settlement recovery and contains no secrets.
+// FIN-100B: the create-intent and its financial identity commit atomically.
 export async function ensurePaymentCreateIntentTable(): Promise<boolean> {
   try {
     const client = await getPostgresClient()
@@ -3405,7 +3404,6 @@ export async function recordPaymentCreateIntentAtomic(params: {
     const client = await getPostgresClient()
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
     return await client.begin(async (tx: any): Promise<PaymentCreateIntentResult> => {
-      // The unique (merchant_uid, create_intent_id) key serializes concurrent requests.
       const inserted = await tx`
         INSERT INTO payment_create_intents
           (merchant_uid, create_intent_id, payment_id, merchant_id, customer_amount, note, created_at)

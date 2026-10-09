@@ -24,6 +24,8 @@ interface OperationResult<T> {
   success: boolean
   data?: T
   error?: string
+  code?: string
+  paymentId?: string
   trackingId?: string
 }
 
@@ -150,7 +152,18 @@ export async function createPayment(amount: number, note = "", createIntentId?: 
     }
 
     if (!response.ok) {
-      throw new Error(`Failed to create payment: ${response.statusText}`)
+      let failure: { code?: string; paymentId?: string } = {}
+      try { failure = await response.json() } catch { /* preserve indeterminate request */ }
+      const code = typeof failure.code === "string" ? failure.code : "CREATE_RESULT_UNCERTAIN"
+      const paymentId = typeof failure.paymentId === "string" ? failure.paymentId : undefined
+      return {
+        success: false, code, paymentId,
+        error: code === "CREATE_INTENT_RECOVERY_REQUIRED"
+          ? `Payment ${paymentId || ""} already exists but needs recovery. Do not create another payment.`
+          : code === "CREATE_INTENT_CONFLICT"
+            ? "Payment request identity conflicts with existing data. Creation blocked."
+            : `Payment creation not confirmed (${code}). Retry the original request; do not start a new one.`,
+      }
     }
 
     const contentType = response.headers.get("content-type")
