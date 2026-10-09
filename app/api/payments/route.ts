@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
     if (durableIdentity.outcome === "CONFLICT") {
       return NextResponse.json({ error: durableIdentity.error, code: "CREATE_INTENT_CONFLICT" }, { status: 409, headers: corsHeaders })
     }
-    if (durableIdentity.outcome === "INDETERMINATE") {
+    if (durableIdentity.outcome !== "CREATED" && durableIdentity.outcome !== "REPLAYED") {
       return NextResponse.json({ error: "Payment durability unavailable", code: "PAYMENT_INTENT_INDETERMINATE" }, { status: 503, headers: corsHeaders })
     }
     paymentId = durableIdentity.paymentId
