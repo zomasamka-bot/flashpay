@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { createPayment } from "@/lib/operations"
-import { acquireCreateIntent, finishCreateIntent } from "@/lib/create-intent-client"
+import { acquireCreateIntent, finishCreateIntent, beginNextCustomerIntent } from "@/lib/create-intent-client"
 import { config } from "@/lib/config"
 import { authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
@@ -188,7 +188,13 @@ export default function HomePage() {
     }
   }, [payment?.status, showQR])
 
-  const handleNextCustomer = () => {
+  const handleNextCustomer = async () => {
+    try {
+      await beginNextCustomerIntent()
+    } catch (error) {
+      toast({ title: "Payment identity unresolved", description: error instanceof Error ? error.message : "Cannot start another payment", variant: "destructive" })
+      return
+    }
     setAmount("")
     setDisplayAmount("0.00")
     setCurrentPaymentId(null)
@@ -771,6 +777,15 @@ export default function HomePage() {
         >
           <Check className="h-6 w-6" />
           {t("home.generateQr", "Generate QR Code")}
+        </Button>
+
+        {/* Explicitly retire only an acknowledged payment identity after reload. */}
+        <Button
+          onClick={handleNextCustomer}
+          variant="outline"
+          className="w-full mt-3"
+        >
+          {t("home.nextCustomer", "Next Customer / New Payment")}
         </Button>
 
         {/* Convert Local Price Button */}
