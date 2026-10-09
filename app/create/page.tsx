@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -22,6 +22,8 @@ export default function CreatePaymentPage() {
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
   const [isCreating, setIsCreating] = useState(false)
+  const createInFlightRef = useRef(false)
+  const createIntentRef = useRef<{ key: string; id: string } | null>(null)
 
   useEffect(() => {
     router.replace(ROUTES.HOME)
@@ -39,12 +41,18 @@ export default function CreatePaymentPage() {
       return
     }
 
+    if (createInFlightRef.current) return
+    createInFlightRef.current = true
     setIsCreating(true)
-
+    const intentKey = `${amountNum}:${note}`
+    if (!createIntentRef.current || createIntentRef.current.key !== intentKey) {
+      createIntentRef.current = { key: intentKey, id: crypto.randomUUID() }
+    }
     try {
-      const result = await createPayment(amountNum, note)
+      const result = await createPayment(amountNum, note, createIntentRef.current.id)
 
       if (result.success && result.data) {
+        createIntentRef.current = null
         toast({
           title: "Payment Created",
           description: "Your payment request is ready to share",
@@ -59,6 +67,7 @@ export default function CreatePaymentPage() {
         })
       }
     } finally {
+      createInFlightRef.current = false
       setIsCreating(false)
     }
   }

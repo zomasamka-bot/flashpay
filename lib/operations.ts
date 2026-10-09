@@ -32,7 +32,8 @@ const RATE_LIMITS = {
   EXECUTE_PAYMENT: { maxAttempts: 5, windowMs: 60000 },
 }
 
-export async function createPayment(amount: number, note = ""): Promise<OperationResult<Payment>> {
+export async function createPayment(amount: number, note = "", createIntentId?: string): Promise<OperationResult<Payment>> {
+  const stableCreateIntentId = createIntentId || generateUUID()
   const operation = "createPayment"
   CoreLogger.operation(operation, { amount, noteLength: note.length })
 
@@ -109,7 +110,8 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
       body: JSON.stringify({ 
         amount, 
         note,
-        accessToken: tokenUsed
+        accessToken: tokenUsed,
+        createIntentId: stableCreateIntentId,
       }),
     })
 
@@ -133,6 +135,7 @@ export async function createPayment(amount: number, note = ""): Promise<Operatio
             amount,
             note,
             accessToken: tokenUsed,
+            createIntentId: stableCreateIntentId,
           }),
         })
 

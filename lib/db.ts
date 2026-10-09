@@ -3368,3 +3368,92 @@ export async function recordA2UTransactionAtomic(params: {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
   }
 }
+
+
+// FIN-100B: creation-intent identity and financial checkpoint are committed together.
+// This schema is deliberately separate from settlement recovery and contains no secrets.
+export async function ensurePaymentCreateIntentTable(): Promise<boolean> {
+  try {
+    const client = await getPostgresClient()
+    if (!client) return false
+    await client`CREATE TABLE IF NOT EXISTS payment_create_intents (
+      merchant_uid TEXT NOT NULL,
+      create_intent_id UUID NOT NULL,
+      payment_id TEXT NOT NULL UNIQUE,
+      merchant_id TEXT NOT NULL,
+      customer_amount NUMERIC NOT NULL CHECK (customer_amount > 0),
+      note TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (merchant_uid, create_intent_id)
+    )`
+    return true
+  } catch (error) {
+    console.error('[FIN100B] Create-intent schema unavailable', error)
+    return false
+  }
+}
+
+export type PaymentCreateIntentResult =
+  | { outcome: 'CREATED' | 'REPLAYED'; paymentId: string; createdAt: string }
+  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+
+export async function recordPaymentCreateIntentAtomic(params: {
+  createIntentId: string; paymentId: string; merchantUid: string; merchantId: string;
+  amount: number; note: string; createdAt: string
+}): Promise<PaymentCreateIntentResult> {
+  try {
+    const client = await getPostgresClient()
+    if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
+    return await client.begin(async (tx: any): Promise<PaymentCreateIntentResult> => {
+      // The unique (merchant_uid, create_intent_id) key serializes concurrent requests.
+      const inserted = await tx`
+        INSERT INTO payment_create_intents
+          (merchant_uid, create_intent_id, payment_id, merchant_id, customer_amount, note, created_at)
+        VALUES (${params.merchantUid}, ${params.createIntentId}, ${params.paymentId},
+                ${params.merchantId}, ${params.amount}, ${params.note}, ${params.createdAt})
+        ON CONFLICT (merchant_uid, create_intent_id) DO NOTHING
+        RETURNING payment_id, created_at
+      `
+      if (inserted.length === 1) {
+        const checkpoint = await tx`
+          INSERT INTO settlement_checkpoints (
+            payment_id, version, stage, merchant_id, merchant_uid,
+            customer_amount, merchant_amount, app_commission,
+            a2u_create_guard_version, pi_mutation_guard_version
+          ) VALUES (
+            ${params.paymentId}, 1, 'payment_identity', ${params.merchantId}, ${params.merchantUid},
+            ${params.amount}, ${params.amount}, 0, 'fin5_v1', 'fin7_v2'
+          ) RETURNING payment_id
+        `
+        if (checkpoint.length !== 1) throw new Error('Financial identity checkpoint not inserted')
+        return { outcome: 'CREATED', paymentId: params.paymentId, createdAt: params.createdAt }
+      }
+      const existing = await tx`
+        SELECT payment_id, merchant_id, customer_amount, note, created_at
+        FROM payment_create_intents
+        WHERE merchant_uid = ${params.merchantUid} AND create_intent_id = ${params.createIntentId}
+        FOR UPDATE
+      `
+      if (existing.length !== 1) return { outcome: 'INDETERMINATE', error: 'Intent identity unavailable' }
+      const row = existing[0]
+      if (row.merchant_id !== params.merchantId || Number(row.customer_amount) !== params.amount || row.note !== params.note) {
+        return { outcome: 'CONFLICT', error: 'Create intent payload mismatch' }
+      }
+      const checkpoint = await tx`
+        SELECT payment_id, merchant_id, merchant_uid, customer_amount, merchant_amount, app_commission
+        FROM settlement_checkpoints WHERE payment_id = ${row.payment_id}
+      `
+      if (checkpoint.length !== 1 || checkpoint[0].merchant_id !== params.merchantId ||
+          checkpoint[0].merchant_uid !== params.merchantUid ||
+          Number(checkpoint[0].customer_amount) !== params.amount ||
+          Number(checkpoint[0].merchant_amount) !== params.amount ||
+          Number(checkpoint[0].app_commission) !== 0) {
+        return { outcome: 'CONFLICT', error: 'Durable checkpoint identity mismatch' }
+      }
+      return { outcome: 'REPLAYED', paymentId: row.payment_id, createdAt: new Date(row.created_at).toISOString() }
+    })
+  } catch (error) {
+    console.error('[FIN100B] Create-intent transaction indeterminate', error)
+    return { outcome: 'INDETERMINATE', error: 'Create-intent transaction uncertain' }
+  }
+}

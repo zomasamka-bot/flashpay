@@ -34,6 +34,8 @@ export default function HomePage() {
   const [showQR, setShowQR] = useState(false)
   const [redirecting, setRedirecting] = useState(false)
   const hasShownSuccessRef = useRef(false)
+  const createInFlightRef = useRef(false)
+  const createIntentRef = useRef<{ key: string; id: string } | null>(null)
   const merchantSetup = useMerchant()
   const [isConnecting, setIsConnecting] = useState(false)
   const [sdkInitStatus, setSdkInitStatus] = useState<"loading" | "ready" | "error">("loading")
@@ -252,12 +254,19 @@ export default function HomePage() {
     }
 
 
+    if (createInFlightRef.current) return
+    createInFlightRef.current = true
+    const intentKey = `${merchantSetup.isSetupComplete}:${amountNum}:`
+    if (!createIntentRef.current || createIntentRef.current.key !== intentKey) {
+      createIntentRef.current = { key: intentKey, id: crypto.randomUUID() }
+    }
     try {
-      const result = await createPayment(amountNum, "")
+      const result = await createPayment(amountNum, "", createIntentRef.current.id)
 
       if (result.success && result.data) {
         setCurrentPaymentId(result.data.id)
         setShowQR(true)
+        createIntentRef.current = null
         hasShownSuccessRef.current = false
       } else {
         toast({
@@ -272,6 +281,8 @@ export default function HomePage() {
         description: "Unexpected error creating payment",
         variant: "destructive",
       })
+    } finally {
+      createInFlightRef.current = false
     }
   }
 
