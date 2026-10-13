@@ -296,7 +296,52 @@ redis.call('SET',KEYS[1],ARGV[1]); return 1
       } catch {
         return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
       }
-      if (indexedScore === null || !Number.isSafeInteger(indexedScore) || indexedScore !== historyScore) {
+      if (indexedScore === null) {
+        // FIN100B B-NEW-03: repair ONLY an absent merchant index, with the
+        // durable initial-state + append-only evidence guard holding its PG
+        // transaction lock throughout the conditional Redis operation.
+        // Re-read and compare the live projection inside the Redis script:
+        // the earlier GET is not authority and may have changed meanwhile.
+        const repaired = await recoverInitialPaymentProjectionUnderDurableGuard({
+          paymentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
+          amount, note: normalizedNote, createdAt: durableCreatedAt,
+          persist: async () => {
+            const result = Number(await redis.eval(`
+local raw=redis.call('GET',KEYS[1])
+if not raw then return -1 end
+local ok,p=pcall(cjson.decode,raw)
+if not ok or type(p)~='table' then return -1 end
+if p.id~=ARGV[1] or p.merchantUid~=ARGV[2] or p.merchantId~=ARGV[3] or
+   tonumber(p.amount)~=tonumber(ARGV[4]) or p.note~=ARGV[5] or
+   p.createdAt~=ARGV[6] or p.status~='pending' or
+   tonumber(p.redisProjectionVersion)~=1 then return -1 end
+local indexed=redis.call('ZSCORE',KEYS[2],ARGV[1])
+if indexed then
+  if tonumber(indexed)==tonumber(ARGV[7]) then return 0 end
+  return -1
+end
+redis.call('ZADD',KEYS[2],'NX',ARGV[7],ARGV[1])
+return 1
+`, [`payment:${paymentId}`, `flashpay:merchant:${trustedMerchantId}:payments:v1`],
+              [paymentId, verifiedMerchantUid, trustedMerchantId, String(amount), normalizedNote,
+               durableCreatedAt, String(historyScore)]))
+            return result === 1 ? 'CREATED' : result === 0 ? 'PRESENT' : 'CONFLICT'
+          },
+        })
+        if (repaired !== 'CREATED' && repaired !== 'PRESENT') {
+          return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+        }
+        // Verify the resulting index; do not turn a failed Redis write or
+        // concurrent index mutation into a successful replay response.
+        try {
+          const verifiedScore = await redis.zscore(`flashpay:merchant:${trustedMerchantId}:payments:v1`, paymentId)
+          if (verifiedScore === null || verifiedScore === undefined || Number(verifiedScore) !== historyScore) {
+            return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+          }
+        } catch {
+          return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+        }
+      } else if (!Number.isSafeInteger(indexedScore) || indexedScore !== historyScore) {
         return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
       }
       return NextResponse.json({ success: true, payment: { ...getPublicPayment(existing), merchantUid: verifiedMerchantUid } }, { status: 200, headers: corsHeaders })
