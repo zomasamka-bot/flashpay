@@ -24,5 +24,13 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts.DS_Store
+next-env.d.ts
+# FIN100B: keep internal audit/test-only materials outside deployable source
+/certification/
+/BD05_RUN_ISOLATED_SMOKE.sh
+/R41_02_PATCH_STATUS_NOT_FOR_DEPLOY.md
+*.docx
+*.pdf
+*.zip
+.DS_Store
 **/.DS_Store
