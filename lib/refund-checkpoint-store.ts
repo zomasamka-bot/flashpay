@@ -239,22 +239,26 @@ export async function markAutomaticRefundManualReview(refundId: string, expected
   try {
     const eventId = `refund:${refundId}:manual_review`
     const createdAt = new Date().toISOString()
-    const result = await query(`
+    // Resolve only the durable payment identity; never derive financial authority from Redis.
+    const identity = await query(`SELECT payment_id FROM refund_checkpoints WHERE refund_id=$1 LIMIT 2`, [refundId])
+    if (!Array.isArray(identity) || identity.length !== 1) return null
+    const paymentId = (identity[0] as { payment_id?: unknown } | null)?.payment_id
+    if (typeof paymentId !== 'string' || paymentId.length === 0) return null
+    const result = await withPaymentAuthorityTransaction(paymentId, async (tx) => tx`
       WITH transitioned AS (
         UPDATE refund_checkpoints
         SET status='manual_review_required', last_error_code='refund_cancelled', last_error_message='refund_cancelled', next_retry_at=NULL, updated_at=NOW()
-        WHERE refund_id=$1 AND stage=$2 AND status='pending'
+        WHERE refund_id=${refundId} AND payment_id=${paymentId} AND stage=${expectedStage} AND status='pending'
         RETURNING *
       ), audited AS (
         INSERT INTO refund_audit_events
           (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
-        SELECT $3, refund_id, payment_id, 'refund_manual_review', 'system', idempotency_key, $4, jsonb_build_object('refundId', refund_id, 'paymentId', payment_id, 'idempotencyKey', idempotency_key)
+        SELECT ${eventId}, refund_id, payment_id, 'refund_manual_review', 'system', idempotency_key, ${createdAt}, jsonb_build_object('refundId', refund_id, 'paymentId', payment_id, 'idempotencyKey', idempotency_key)
         FROM transitioned
         RETURNING refund_id
       )
-      SELECT transitioned.*
-      FROM transitioned
-      INNER JOIN audited ON audited.refund_id = transitioned.refund_id`, [refundId, expectedStage, eventId, createdAt])
+      SELECT transitioned.* FROM transitioned INNER JOIN audited ON audited.refund_id = transitioned.refund_id
+    `)
     let checkpoint: RefundCheckpoint | null = null
     if (Array.isArray(result) && result.length === 1) checkpoint = normalizeCheckpoint(result[0])
     if (!checkpoint) {
@@ -434,7 +438,17 @@ export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoi
   })
   if (!Array.isArray(result) || result.length === 0) return null
   const persisted = normalizeCheckpoint(result[0])
-  if (persisted && isRedisConfigured) await redis.set(redisKey(persisted.refundId), persisted)
+  if (persisted && isRedisConfigured) {
+    try {
+      await redis.set(redisKey(persisted.refundId), persisted)
+    } catch (error) {
+      // PostgreSQL refund checkpoint + audit committed atomically above.
+      // Redis is a recoverable projection, never the financial commit authority.
+      console.warn("[Refund Checkpoint] Redis projection deferred after durable commit", {
+        paymentId: persisted.paymentId, refundId: persisted.refundId,
+      })
+    }
+  }
   return persisted
 }
 
@@ -476,45 +490,6 @@ export async function createDr11RefundAuthorityFromDurableHold(paymentId:string)
   if(!Array.isArray(result)||result.length!==1)return null
   const persisted=normalizeCheckpoint(result[0]);if(!persisted)return null
   if(isRedisConfigured){try{await redis.set(redisKey(persisted.refundId),persisted)}catch(error){console.warn('[DR61] refund Redis projection deferred to durable recovery',{paymentId,refundId:persisted.refundId})}}
-  return persisted
-}
-
-export async function createRefundCheckpoint(checkpoint: RefundCheckpoint): Promise<RefundCheckpoint | null> {
-  if (!process.env.DATABASE_URL) return null
-
-  const result = await query(
-    `INSERT INTO refund_checkpoints
-      (refund_id, payment_id, idempotency_key, status, stage, payer_uid,
-       payer_uid_verified_at, amount, currency, source_payment_status,
-       source_settlement_state, created_at, updated_at, attempt_count, pi_mutation_guard_version)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'fin7_v2')
-     ON CONFLICT (payment_id) DO NOTHING
-     RETURNING *`,
-    [
-      checkpoint.refundId,
-      checkpoint.paymentId,
-      checkpoint.idempotencyKey,
-      checkpoint.status,
-      checkpoint.stage,
-      checkpoint.payerUid,
-      checkpoint.payerUidVerifiedAt,
-      checkpoint.amount,
-      checkpoint.currency,
-      checkpoint.sourcePaymentStatus,
-      checkpoint.sourceSettlementState,
-      checkpoint.createdAt,
-      checkpoint.updatedAt,
-      checkpoint.attemptCount,
-    ],
-  )
-
-  if (!Array.isArray(result) || result.length === 0) return null
-  const persisted = normalizeCheckpoint(result[0])
-  if (!persisted) return null
-
-  if (isRedisConfigured) {
-    await redis.set(redisKey(persisted.refundId), persisted)
-  }
   return persisted
 }
 

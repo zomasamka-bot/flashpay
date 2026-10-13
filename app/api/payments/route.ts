@@ -8,7 +8,7 @@ import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/re
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { readSystemState } from "@/lib/system-control"
-import { ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic, recoverInitialPaymentProjectionUnderDurableGuard } from "@/lib/db"
+import { ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic, classifyPaymentCreateIntentReplay, recoverInitialPaymentProjectionUnderDurableGuard, probeDurablePaymentIdentity } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
 
 const PAYMENT_CREATE_LEASE_PREFIX = "flashpay:payment:create-active:"
@@ -48,7 +48,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
     }
     createLeaseKey = `${PAYMENT_CREATE_LEASE_PREFIX}${crypto.randomUUID()}`
-    const createLease = await redis.set(createLeaseKey, "active", { nx: true, ex: 120 })
+    let createLease: string | null
+    try {
+      createLease = await redis.set(createLeaseKey, "active", { nx: true, ex: 120 })
+    } catch (leaseError) {
+      // B-D05-R3: dependency outage must fail closed with an explicit
+      // retryable service-unavailable contract, not a generic 500.
+      // No payment identity or financial record is written before this point.
+      console.error("[BD05 CREATE LEASE] Redis unavailable:", leaseError)
+      return NextResponse.json(
+        { error: "Payment persistence temporarily unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
     if (createLease !== "OK") {
       return NextResponse.json({ error: "Payment creation temporarily unavailable", code: "PAYMENT_CREATE_LEASE_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
     }
@@ -135,17 +147,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Verified merchant identity invalid" }, { status: 502, headers: corsHeaders })
     }
     
-    // R101-8: creation abuse control is keyed to the Pi-verified merchant UID,
-    // never IP-only. No payment identity exists yet, so limiter uncertainty can
-    // safely fail closed without stranding an existing financial lifecycle.
-    const creationLimit = await consumeFinancialRateLimit({
-      namespace: "payments-create", subject: verifiedMerchantUid, limit: 30, windowSeconds: 60,
-    })
-    if (creationLimit.outcome === "LIMITED") {
-      return NextResponse.json({ error: "Too many payment creation requests", code: "RATE_LIMITED" }, { status: 429, headers: { ...corsHeaders, "Retry-After": String(creationLimit.retryAfterSeconds) } })
+    // Cold-start prerequisite: classify must not query absent tables.
+    // Both initializers are idempotent; failure is fail-closed, not NEW.
+    if (!(await ensureSettlementCheckpointTable())) {
+      return NextResponse.json({ error: "Payment durability unavailable", code: "PAYMENT_SCHEMA_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
     }
-    if (creationLimit.outcome === "UNAVAILABLE") {
-      return NextResponse.json({ error: "Payment creation temporarily unavailable", code: "RATE_LIMIT_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    if (!(await ensurePaymentCreateIntentTable())) {
+      return NextResponse.json({ error: "Payment intent schema unavailable", code: "PAYMENT_INTENT_SCHEMA_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+
+    // B-D05-R1: authenticate first; classify the durable intent before charging
+    // the rate limit for NEW flows. The final atomic record call below remains
+    // authoritative against concurrent requests and mismatched payloads.
+    // Uncertain reads fail closed; they never bypass the creation limiter.
+    const replayClassification = await classifyPaymentCreateIntentReplay({
+      createIntentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
+      amount, note: normalizedNote,
+    })
+    if (replayClassification === "CONFLICT") {
+      return NextResponse.json({ error: "Create intent payload mismatch", code: "CREATE_INTENT_CONFLICT" }, { status: 409, headers: corsHeaders })
+    }
+    if (replayClassification === "INDETERMINATE") {
+      return NextResponse.json({ error: "Payment intent verification unavailable", code: "PAYMENT_INTENT_INDETERMINATE" }, { status: 503, headers: corsHeaders })
+    }
+    if (replayClassification === "NEW") {
+      const creationLimit = await consumeFinancialRateLimit({
+        namespace: "payments-create", subject: verifiedMerchantUid, limit: 30, windowSeconds: 60,
+      })
+      if (creationLimit.outcome === "LIMITED") {
+        return NextResponse.json({ error: "Too many payment creation requests", code: "RATE_LIMITED" }, { status: 429, headers: { ...corsHeaders, "Retry-After": String(creationLimit.retryAfterSeconds) } })
+      }
+      if (creationLimit.outcome === "UNAVAILABLE") {
+        return NextResponse.json({ error: "Payment creation temporarily unavailable", code: "RATE_LIMIT_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+      }
     }
 
     console.log("[API] ✅ UID VERIFIED")
@@ -410,11 +444,17 @@ export async function GET(request: NextRequest) {
     console.log("[API] Redis lookup result:", payment ? "FOUND" : "NOT FOUND")
 
     if (!payment) {
-      console.log("[API] ❌ Payment not found:", id)
-      return NextResponse.json({ 
-        error: "Payment not found",
-        paymentId: id,
-      }, { status: 404, headers: corsHeaders })
+      // B-D05-R2: Redis is a projection, not financial truth. Do not
+      // invent a pending payment or return a false 404 for durable identity.
+      const durable = await probeDurablePaymentIdentity(id)
+      if (durable !== 'ABSENT') {
+        return NextResponse.json({
+          error: 'Payment state temporarily unavailable',
+          code: durable === 'EXISTS' ? 'PAYMENT_PROJECTION_RECOVERY_REQUIRED' : 'PAYMENT_IDENTITY_INDETERMINATE',
+          paymentId: id,
+        }, { status: 503, headers: corsHeaders })
+      }
+      return NextResponse.json({ error: 'Payment not found', paymentId: id }, { status: 404, headers: corsHeaders })
     }
 
     console.log("[API] Payment retrieved:", id)

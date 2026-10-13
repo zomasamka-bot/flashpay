@@ -161,6 +161,8 @@ export async function POST(request: NextRequest) {
         httpStatus = 400
       } else if (result.status === 401) {
         httpStatus = 401
+      } else if (result.status === 409) {
+        httpStatus = 409
       } else {
         httpStatus = 400 // Default to 400 for unknown status
       }

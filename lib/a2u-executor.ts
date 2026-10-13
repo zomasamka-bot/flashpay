@@ -491,9 +491,18 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!a2uPaymentId || typeof a2uPaymentId !== "string" || !txidFromHorizon || typeof txidFromHorizon !== "string") {
       return { ok: false, status: "settlement_pending", error: "Pi-completed durable checkpoint identity missing" }
     }
-    // F2-7 crash closure: Redis/Pi may already say completed after a crash that
-    // happened before PostgreSQL advanced from horizon_confirmed -> pi_completed.
-    // Re-assert the durable Pi checkpoint idempotently before any DB reconciliation.
+    // Never advance durable Pi finality from a Redis-only completion flag.
+    // An uncertain crash window requires independent Pi reconciliation, not
+    // a PostgreSQL stage promotion based on cached state.
+    if (ctx.isRecovery) {
+      const piAuthority = await getSettlementCheckpointAuthoritative(ctx.paymentId)
+      if (piAuthority.outcome !== "FOUND" ||
+          (piAuthority.checkpoint.stage !== "pi_completed" && piAuthority.checkpoint.stage !== "db_finalized") ||
+          piAuthority.checkpoint.a2uPaymentId !== a2uPaymentId ||
+          piAuthority.checkpoint.a2uTxid !== txidFromHorizon) {
+        return { ok: false, status: "settlement_pending", error: "Recovered Pi completion lacks durable finality proof" }
+      }
+    }
     const durablePiReplay = await recordSettlementPiCompletedCheckpoint({
       paymentId: ctx.paymentId,
       a2uPaymentId,
@@ -1336,6 +1345,12 @@ async function ensureRecoveredHorizonDurability(
     })
     if (durableHorizon.outcome !== "RECORDED" && durableHorizon.outcome !== "REPLAYED") {
       return { ok: false, error: "Recovered Horizon durable checkpoint not proven" }
+    }
+    // Redis is only a projection. A stale piCompleted=true must never promote
+    // horizon_confirmed to pi_completed through the Stage 3 replay branch.
+    // Fail closed rather than attempting to downgrade monotonic Redis evidence.
+    if (d.stage === "horizon_confirmed" && ctx.payment.piCompleted === true) {
+      return { ok: false, error: "Recovered Pi completion conflicts with durable PostgreSQL stage" }
     }
     const horizonFeeCharged = d.horizonFeeStroops / 10_000_000
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, {

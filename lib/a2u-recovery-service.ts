@@ -192,6 +192,20 @@ async function rebuildSettlementProjectionFromDurable(paymentId:string):Promise<
   const readback=await redis.get(`payment:${paymentId}`)
   const parsed=readback?(typeof readback==='string'?JSON.parse(readback):readback):null
   if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==d.a2uPaymentId||parsed.piPaymentId!==d.u2aIdentifier||parsed.u2aTxid!==d.u2aTxid)return null
+  // A pre-existing Redis value is not evidence of durable financial finality.
+  // Fail closed rather than adopting a stale or refund-marked projection.
+  const financialKeys: (keyof Payment)[] = [
+    'merchantId','merchantUid','customerAmount','merchantAmount','amount',
+    'status','a2uFromAddress','a2uToAddress','a2uPreparedEnvelopeXdr',
+    'a2uPreparedTxHash','a2uPreparedSequence','a2uTxid',
+    'horizonSuccessFlag','horizonFeeCharged','appNetImpact',
+    'piCompletionPending','piCompleted','requiresDbReconciliation','dbRecorded',
+    'appCommission',
+  ]
+  for (const key of financialKeys) {
+    if (parsed[key] !== projected[key]) return null
+  }
+  if ((parsed.refundStatus != null && parsed.refundStatus !== 'not_started') || parsed.refundPaymentId != null || parsed.refundTxid != null) return null
   return parsed as Payment
 }
 
@@ -228,6 +242,25 @@ export async function executeA2URecovery(
 
   if (payment.id !== paymentId) {
     return { status: "manual_review_required", state: "payment_identity_mismatch", paymentId, details: { error: "Payment identity mismatch" } }
+  }
+
+  // Existing Redis is a projection, not evidence of durable settlement finality.
+  // Never classify a Redis terminal success before verifying its PostgreSQL checkpoint.
+  if (payment.status === "settled_to_merchant" || payment.dbRecorded === true) {
+    const finalCheckpoint = await getSettlementCheckpointAuthoritative(paymentId)
+    if (finalCheckpoint.outcome !== "FOUND" || finalCheckpoint.checkpoint.stage !== "db_finalized") {
+      return {status:"manual_review_required",state:"durable_finality_unverified",paymentId,details:{error:"Redis finality is not backed by a finalized PostgreSQL settlement checkpoint"}}
+    }
+    const d = finalCheckpoint.checkpoint
+    if (durableAuthority.refundActive || !durableAuthority.settlementActive ||
+        payment.merchantId !== d.merchantId || payment.merchantUid !== d.merchantUid ||
+        payment.piPaymentId !== d.u2aIdentifier || payment.u2aTxid !== d.u2aTxid ||
+        payment.a2uPaymentId !== d.a2uPaymentId || payment.a2uTxid !== d.a2uTxid ||
+        payment.customerAmount !== d.customerAmount || payment.merchantAmount !== d.merchantAmount ||
+        payment.status !== "settled_to_merchant" || payment.piCompleted !== true || payment.dbRecorded !== true ||
+        (payment.refundStatus != null && payment.refundStatus !== 'not_started') || payment.refundPaymentId != null || payment.refundTxid != null) {
+      return {status:"manual_review_required",state:"durable_finality_projection_mismatch",paymentId,details:{error:"Redis terminal settlement differs from durable financial evidence"}}
+    }
   }
 
   console.log("[A2U Recovery] State flags:", {

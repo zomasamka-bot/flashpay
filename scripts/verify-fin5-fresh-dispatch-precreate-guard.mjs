@@ -12,7 +12,7 @@ must(db.includes('export async function claimSettlementA2UCreateAttempt'), 'dura
 must(db.includes("AND a2u_create_guard_version='fin5_v1'"), 'claim does not reject legacy rows')
 must(db.includes('AND a2u_create_attempted_at IS NULL'), 'claim is not one-shot')
 must(db.includes("SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))"), 'claim lacks PostgreSQL payment serialization')
-must(db.includes("SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active"), 'claim lacks durable Refund exclusion')
+must(db.includes("SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} ) AS active"), 'claim lacks durable Refund exclusion')
 must(executor.includes('const createAttempt = await claimSettlementA2UCreateAttempt({'), 'Stage1 does not claim durable create authority')
 const claimAt = executor.indexOf('const createAttempt = await claimSettlementA2UCreateAttempt({')
 const postAt = executor.indexOf('fetch("https://api.minepi.com/v2/payments", {', claimAt)

@@ -311,13 +311,10 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         return { ok: false, status: 404, error: "Payment not found" }
       }
 
-      // Return current authoritative state without executing
-      console.log("[A2U Locked Executor] Returning current state - status:", payment.status)
-      const response = await buildA2USuccessResponse(paymentId)
-      if (!response) {
-        return { ok: false, status: 500, error: "Failed to build response" }
-      }
-      return { ok: true, status: 200, data: response }
+      // A denied Redis coordination lock cannot establish PostgreSQL finality.
+      // Never return a potentially stale final success from this branch.
+      console.warn("[A2U Locked Executor] Payment operation already in progress", { paymentId })
+      return { ok: false, status: 409, error: "Payment operation in progress; retry status after recovery" }
     }
 
     console.log("[A2U Locked Executor] ✓ Lock acquired")

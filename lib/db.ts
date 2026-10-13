@@ -1296,7 +1296,7 @@ export async function claimSettlementA2UCreateAttempt(params: {
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
     const rows = await client.begin(async (tx: any) => {
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
-      const opposite = await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active`
+      const opposite = await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} ) AS active`
       if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean') return [{ indeterminate: true }]
       if (opposite[0].active === true) return [{ conflict: true }]
       const claimed = await tx`
@@ -1398,7 +1398,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
         if(hold[0]?.certification_hold==='dr11_refund' && hold[0]?.certification_hold_at!=null && Number.isFinite(expires) && expires<=Date.now()) await tx`UPDATE settlement_checkpoints SET certification_hold=NULL,certification_hold_at=NULL,certification_hold_expires_at=NULL,updated_at=NOW() WHERE payment_id=${params.paymentId}`
         else return [{ authorityIndeterminate: true }]
       }
-      const opposite = await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active`
+      const opposite = await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} ) AS active`
       if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean') return [{ authorityIndeterminate: true }]
       if (opposite[0].active === true) return [{ authorityConflict: true }]
 
@@ -1626,7 +1626,7 @@ export async function retireCancelledSettlementA2UStage1(params:{paymentId:strin
     const client=await getPostgresClient(); if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const result=await client.begin(async(tx:any)=>{
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))`
-      const opposite=await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} AND status<>'manual_review_required') AS active`
+      const opposite=await tx`SELECT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId} ) AS active`
       if(opposite.length!==1||typeof opposite[0]?.active!=='boolean')return{kind:'INDETERMINATE'}
       if(opposite[0].active===true)return{kind:'CONFLICT'}
       const row=await tx`SELECT version,stage,a2u_payment_id,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid,horizon_fee_stroops,horizon_confirmed_at,pi_completed_at,db_finalized_at FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
@@ -1754,7 +1754,7 @@ export async function readSettlementRefundAuthority(paymentId:string):Promise<Se
     const rows=await client`
       SELECT
         EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')) AS settlement_active,
-        EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${paymentId} AND status<>'manual_review_required') AS refund_active
+        EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${paymentId} ) AS refund_active
     `
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Cross-authority durable read invalid'}
     const settlementActive=(rows[0] as any).settlement_active,refundActive=(rows[0] as any).refund_active
@@ -3370,6 +3370,30 @@ export async function recordA2UTransactionAtomic(params: {
 }
 
 
+/** B-D05-R2: read-only durable identity probe. Absence of a Redis projection
+ * must not be represented as absence of a payment when PostgreSQL knows it.
+ * This probe never synthesizes a financial status or writes any state.
+ */
+export async function probeDurablePaymentIdentity(paymentId: string): Promise<'EXISTS' | 'ABSENT' | 'INDETERMINATE'> {
+  try {
+    const client = await getPostgresClient()
+    if (!client) return 'INDETERMINATE'
+    // All three durable identity families must be readable before claiming ABSENT.
+    // A missing legacy table or any query failure is uncertainty, never a false 404.
+    const rows = await client`
+      SELECT (
+        EXISTS (SELECT 1 FROM payment_create_intents WHERE payment_id = ${paymentId})
+        OR EXISTS (SELECT 1 FROM settlement_checkpoints WHERE payment_id = ${paymentId})
+        OR EXISTS (SELECT 1 FROM transactions WHERE payment_id = ${paymentId})
+      ) AS known
+    `
+    return rows.length === 1 ? (rows[0].known === true ? 'EXISTS' : 'ABSENT') : 'INDETERMINATE'
+  } catch (error) {
+    console.error('[FIN100B B-D05-R2] Durable identity probe indeterminate', error)
+    return 'INDETERMINATE'
+  }
+}
+
 // FIN-100B: the create-intent and its financial identity commit atomically.
 export async function ensurePaymentCreateIntentTable(): Promise<boolean> {
   try {
@@ -3389,6 +3413,38 @@ export async function ensurePaymentCreateIntentTable(): Promise<boolean> {
   } catch (error) {
     console.error('[FIN100B] Create-intent schema unavailable', error)
     return false
+  }
+}
+
+// B-D05-R1: read-only, verified replay classification before the new-flow limiter.
+// Never treat a missing/uncertain durable identity as proof of an existing payment.
+export async function classifyPaymentCreateIntentReplay(params: {
+  createIntentId: string; merchantUid: string; merchantId: string; amount: number; note: string
+}): Promise<'NEW' | 'REPLAY' | 'CONFLICT' | 'INDETERMINATE'> {
+  try {
+    const client = await getPostgresClient()
+    if (!client) return 'INDETERMINATE'
+    const rows = await client`
+      SELECT i.payment_id, i.merchant_id, i.customer_amount, i.note,
+             c.payment_id AS checkpoint_payment_id, c.merchant_uid AS checkpoint_merchant_uid,
+             c.merchant_id AS checkpoint_merchant_id, c.customer_amount AS checkpoint_customer_amount,
+             c.merchant_amount, c.app_commission
+      FROM payment_create_intents i
+      LEFT JOIN settlement_checkpoints c ON c.payment_id = i.payment_id
+      WHERE i.merchant_uid = ${params.merchantUid} AND i.create_intent_id = ${params.createIntentId}
+    `
+    if (rows.length === 0) return 'NEW'
+    if (rows.length !== 1) return 'INDETERMINATE'
+    const row = rows[0]
+    if (row.merchant_id !== params.merchantId || Number(row.customer_amount) !== params.amount || row.note !== params.note) return 'CONFLICT'
+    if (!row.checkpoint_payment_id || row.checkpoint_merchant_uid !== params.merchantUid ||
+        row.checkpoint_merchant_id !== params.merchantId ||
+        Number(row.checkpoint_customer_amount) !== params.amount ||
+        Number(row.merchant_amount) !== params.amount || Number(row.app_commission) !== 0) return 'INDETERMINATE'
+    return 'REPLAY'
+  } catch (error) {
+    console.error('[FIN100B] Create-intent replay classification unavailable', error)
+    return 'INDETERMINATE'
   }
 }
 
@@ -3467,6 +3523,10 @@ export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
   note: string; createdAt: string; persist: () => Promise<'CREATED' | 'PRESENT' | 'CONFLICT'>
 }): Promise<'CREATED' | 'PRESENT' | 'CONFLICT' | 'INDETERMINATE'> {
   try {
+    // B-D04 clean-schema guard: recovery reads Refund authority below, so a
+    // clean database must establish that durable authority table before the
+    // evidence query. Failure remains fail-closed and performs no Redis write.
+    if (!(await ensureRefundCheckpointTables())) return 'INDETERMINATE'
     const client = await getPostgresClient()
     if (!client) return 'INDETERMINATE'
     return await client.begin(async (tx: any) => {
@@ -3497,12 +3557,21 @@ export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
         'certification_hold','certification_hold_at','certification_hold_expires_at',
       ]
       if (mustBeEmpty.some((field) => r[field] !== null && r[field] !== undefined)) return 'CONFLICT' as const
+      // FIN100B B-D05-R4: any append-only financial evidence invalidates an
+      // initial pending projection, even if the checkpoint still looks pristine.
+      // All evidence writers share this payment's durable advisory lock; query
+      // under the same transaction before the Redis persist callback executes.
+      // Missing evidence schema/query errors must fail closed (INDETERMINATE).
       const evidence = await tx`SELECT
         EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId}) AS refund,
         EXISTS(SELECT 1 FROM financial_pi_mutation_attempts WHERE payment_id=${params.paymentId}) AS pi_attempt,
-        EXISTS(SELECT 1 FROM settlement_u2a_approval_retirements WHERE payment_id=${params.paymentId}) AS retired`
+        EXISTS(SELECT 1 FROM settlement_u2a_approval_retirements WHERE payment_id=${params.paymentId}) AS retired,
+        EXISTS(SELECT 1 FROM settlement_a2u_stage1_retirements WHERE payment_id=${params.paymentId}) AS a2u_stage1_retired,
+        EXISTS(SELECT 1 FROM settlement_a2u_ongoing_observations WHERE payment_id=${params.paymentId}) AS a2u_ongoing_observed`
       if (evidence.length !== 1 || evidence[0].refund !== false ||
-          evidence[0].pi_attempt !== false || evidence[0].retired !== false) return 'CONFLICT' as const
+          evidence[0].pi_attempt !== false || evidence[0].retired !== false ||
+          evidence[0].a2u_stage1_retired !== false ||
+          evidence[0].a2u_ongoing_observed !== false) return 'CONFLICT' as const
       return await params.persist()
     })
   } catch (error) {

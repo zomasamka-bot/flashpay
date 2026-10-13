@@ -7,7 +7,7 @@ export const runtime = 'nodejs'
 import { redis, isRedisConfigured as isKvConfigured } from "@/lib/redis"
 import { isPaymentFinal } from "@/lib/payment-status"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
-import { getDurableU2AIngressAuthoritative, getSettlementCheckpointAuthoritative, readSettlementPaymentIdentityPresence, readSettlementRefundAuthority, readSettlementU2AApprovalOwnership } from "@/lib/db"
+import { getDurableU2AIngressAuthoritative, getSettlementCheckpointAuthoritative, probeDurablePaymentIdentity, readSettlementRefundAuthority, readSettlementU2AApprovalOwnership } from "@/lib/db"
 import { getRefundCheckpointsByPaymentIds } from "@/lib/refund-checkpoint-store"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 
@@ -171,13 +171,16 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         return allowCors && origin ? addCorsHeaders(successResponse, origin) : successResponse
       }
 
-      const identity = await readSettlementPaymentIdentityPresence(id)
+      // FIN100B B-D05-R2: a 404 requires absence across ALL durable identity
+      // families, including legacy transactions and create intents. Uncertain
+      // reads never become false 404s; this probe does not infer payment status.
+      const identity = await probeDurablePaymentIdentity(id)
       const refundEvidence = await getRefundCheckpointsByPaymentIds([id])
-      if (identity.outcome === "INDETERMINATE" || refundEvidence.state !== "ok") {
+      if (identity === "INDETERMINATE" || refundEvidence.state !== "ok") {
         const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
         return allowCors && origin ? addCorsHeaders(response, origin) : response
       }
-      if (identity.outcome === "PRESENT" || refundEvidence.checkpoints.has(id)) {
+      if (identity === "EXISTS" || refundEvidence.checkpoints.has(id)) {
         const response = NextResponse.json({ error: "Payment status temporarily unavailable", paymentId: id }, { status: 503 })
         return allowCors && origin ? addCorsHeaders(response, origin) : response
       }
