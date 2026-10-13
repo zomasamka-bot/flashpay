@@ -1301,7 +1301,7 @@ export async function completeRefundCheckpointWithAudit(
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_audit_recorded' AND ${auditIdentity} AND a.details->>'horizonFeeStroops'=$8::text)=1
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_completed')=0
     ), transitioned AS (
-      UPDATE refund_checkpoints SET status='completed', updated_at=NOW() WHERE refund_id IN (SELECT refund_id FROM eligible) RETURNING *
+      UPDATE refund_checkpoints SET status='completed', updated_at=NOW() WHERE refund_id IN (SELECT refund_id FROM eligible) AND status='pending' AND stage='audit_recorded' RETURNING *
     ), audited AS (
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $9, refund_id, payment_id, $10, $11, idempotency_key, $12, $13::jsonb FROM transitioned RETURNING refund_id
