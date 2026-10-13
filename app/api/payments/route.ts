@@ -282,6 +282,23 @@ redis.call('SET',KEYS[1],ARGV[1]); return 1
           existing.note !== normalizedNote || existing.createdAt !== durableCreatedAt) {
         return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
       }
+      // FIN100B B-NEW-03: replay must not acknowledge an invisible or conflicting
+      // merchant-history projection. Read-only validation: never repair from
+      // Redis alone or reconstruct a potentially advanced financial payment.
+      const historyScore = Date.parse(durableCreatedAt)
+      if (!Number.isSafeInteger(historyScore)) {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      let indexedScore: number | null
+      try {
+        const score = await redis.zscore(`flashpay:merchant:${trustedMerchantId}:payments:v1`, paymentId)
+        indexedScore = score === null || score === undefined ? null : Number(score)
+      } catch {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      if (indexedScore === null || !Number.isSafeInteger(indexedScore) || indexedScore !== historyScore) {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
       return NextResponse.json({ success: true, payment: { ...getPublicPayment(existing), merchantUid: verifiedMerchantUid } }, { status: 200, headers: corsHeaders })
     }
 
