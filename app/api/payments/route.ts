@@ -43,14 +43,20 @@ export async function OPTIONS() {
 export async function POST(request: NextRequest) {
   const paymentTimingStartedAt = Date.now()
   let createLeaseKey: string | null = null
+  let createLeaseOwner: string | null = null
   try {
     if (!isKvConfigured) {
       return NextResponse.json({ error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
     }
+    // Availability probe only: a per-request UUID is NOT a mutual-exclusion lock.
+    // PostgreSQL's atomic (merchant_uid, create_intent_id) constraint is the
+    // durable identity authority. Never replace this probe with a shared key
+    // without revalidating concurrent replay/409 response contracts.
     createLeaseKey = `${PAYMENT_CREATE_LEASE_PREFIX}${crypto.randomUUID()}`
+    createLeaseOwner = crypto.randomUUID()
     let createLease: string | null
     try {
-      createLease = await redis.set(createLeaseKey, "active", { nx: true, ex: 120 })
+      createLease = await redis.set(createLeaseKey, createLeaseOwner, { nx: true, ex: 120 })
     } catch (leaseError) {
       // B-D05-R3: dependency outage must fail closed with an explicit
       // retryable service-unavailable contract, not a generic 500.
@@ -470,8 +476,19 @@ return 1
       { status: 500, headers: corsHeaders },
     )
   } finally {
-    if (createLeaseKey) {
-      try { await redis.del(createLeaseKey) } catch { console.warn("[DR56 PAYMENT CREATE LEASE] cleanup deferred to TTL") }
+    if (createLeaseKey && createLeaseOwner) {
+      try {
+        // Atomic compare-and-delete: an expired owner cannot delete a newer
+        // owner's value, including under delayed finally/Redis responses.
+        await redis.eval<number>(`
+          if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+          end
+          return 0
+        `, [createLeaseKey], [createLeaseOwner])
+      } catch {
+        console.warn("[DR56 PAYMENT CREATE LEASE] cleanup deferred to TTL")
+      }
     }
   }
 }
