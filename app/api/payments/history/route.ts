@@ -50,18 +50,24 @@ export async function GET(request: NextRequest) {
     const safeLimit = Number.isNaN(limit) ? 100 : Math.max(1, Math.min(limit, 1000))
     const { redis, isRedisConfigured } = await import("@/lib/redis")
     if (!isRedisConfigured) return NextResponse.json({ error: "Active payment history unavailable" }, { status: 503 })
+    // Read the entire bounded index before applying limit: a corrupted Redis score
+    // can otherwise hide the true newest payment outside the requested page.
+    const MAX_VERIFIABLE_HISTORY = 2000
     let historyIds: unknown
     try {
       const bootstrapMarker = await redis.get("flashpay:merchant-history:v1:bootstrap")
       if (bootstrapMarker !== "done") return NextResponse.json({ error: "Payment history not ready" }, { status: 503 })
-      historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, safeLimit - 1, { rev: true })
+      historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, MAX_VERIFIABLE_HISTORY, { rev: true })
     } catch {
       return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
     }
     if (!Array.isArray(historyIds) || !historyIds.every((id): id is string => typeof id === "string" && id.length > 0 && id === id.trim() && historyIds.indexOf(id) === historyIds.lastIndexOf(id))) {
       return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
     }
+    // Refuse to certify a truncated index. Never return a misleading partial page.
+    if (historyIds.length > MAX_VERIFIABLE_HISTORY) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
     const ids = historyIds
+    let previousCreatedAtMs = Number.POSITIVE_INFINITY
     const payments: Array<Record<string, unknown>> = []
     for (let index = 0; index < ids.length; index += 200) {
       const batchIds = ids.slice(index, index + 200)
@@ -94,6 +100,10 @@ export async function GET(request: NextRequest) {
         const paidAt = payment.paidAt
         const createdAtMs = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN
         if (typeof id !== "string" || id !== batchIds[valueIndex] || typeof merchant !== "string" || merchant !== verifiedMerchant.username || typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || typeof createdAt !== "string" || !Number.isFinite(createdAtMs) || new Date(createdAtMs).toISOString() !== createdAt || typeof status !== "string" || status.trim().length === 0 || status !== status.trim() || (merchantUid !== undefined && typeof merchantUid !== "string") || (u2aTxid !== undefined && typeof u2aTxid !== "string") || (a2uTxid !== undefined && typeof a2uTxid !== "string") || (paidAt !== undefined && typeof paidAt !== "string")) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+        // The index ordering must agree with immutable payment creation times.
+        // Checking only the requested page would miss a newer excluded payment.
+        if (!Number.isSafeInteger(createdAtMs) || createdAtMs > previousCreatedAtMs) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+        previousCreatedAtMs = createdAtMs
         payments.push({
           transactionId: id,
           id,
@@ -111,8 +121,9 @@ export async function GET(request: NextRequest) {
         })
       }
     }
-    const totalAmount = payments.reduce((sum, payment) => sum + (typeof payment.amount === "number" ? payment.amount : 0), 0)
-    return NextResponse.json({ payments, balance: { total: totalAmount, currency: "π" }, source: "redis" })
+    const visiblePayments = payments.slice(0, safeLimit)
+    const totalAmount = visiblePayments.reduce((sum, payment) => sum + (typeof payment.amount === "number" ? payment.amount : 0), 0)
+    return NextResponse.json({ payments: visiblePayments, balance: { total: totalAmount, currency: "π" }, source: "redis" })
   } catch (error) {
     console.error("[Payment History] Error:", error)
     return NextResponse.json(

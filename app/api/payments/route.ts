@@ -480,7 +480,7 @@ return 1
       try {
         // Atomic compare-and-delete: an expired owner cannot delete a newer
         // owner's value, including under delayed finally/Redis responses.
-        await redis.eval<number>(`
+        await redis.eval<[string], number>(`
           if redis.call('GET', KEYS[1]) == ARGV[1] then
             return redis.call('DEL', KEYS[1])
           end
