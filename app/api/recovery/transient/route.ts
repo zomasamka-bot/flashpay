@@ -122,7 +122,7 @@ async function recoverMerchantHistoryProjectionAfterRedisLoss(): Promise<Merchan
         if (marker === "done") throw new Error("Merchant history certified index incomplete")
         // Conditional Redis mutation: only an absent index member, only after
         // durable identity and projection validation. Never rewrite scores.
-        const added = await redis.eval<[string, string], number>(
+        const added = await redis.eval<[string, string, string, string, string, string], number>(
           "local raw=redis.call('GET',KEYS[1]); if not raw then return -1 end; local ok,p=pcall(cjson.decode,raw); if not ok or type(p)~='table' then return -1 end; if p.id~=ARGV[1] or p.merchantId~=ARGV[2] or p.merchantUid~=ARGV[3] or tonumber(p.amount)~=tonumber(ARGV[4]) or p.createdAt~=ARGV[5] then return -1 end; local s=redis.call('ZSCORE',KEYS[2],ARGV[1]); if s then if tonumber(s)==tonumber(ARGV[6]) then return 0 else return -1 end end; return redis.call('ZADD',KEYS[2],'NX',ARGV[6],ARGV[1])",
           [`payment:${paymentId}`, indexKey], [paymentId, merchantId, byId.get(paymentId)!.merchantUid,
             String(byId.get(paymentId)!.amount), byId.get(paymentId)!.createdAt, String(scoreMs)])
