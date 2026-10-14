@@ -12,6 +12,7 @@ import { isPaymentFinal } from "@/lib/payment-status"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 import { serverConfig } from "@/lib/server-config"
 import type { Payment } from "@/lib/types"
+import { listDurableMerchantHistoryIdentities } from "@/lib/merchant-history-durable"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -49,6 +50,25 @@ const MERCHANT_HISTORY_BOOTSTRAP_KEY = "flashpay:merchant-history:v1:bootstrap"
 type MerchantHistoryRecovery = { state: "already_certified" | "rebuilt"; scanned: number; indexed: number }
 
 async function recoverMerchantHistoryProjectionAfterRedisLoss(): Promise<MerchantHistoryRecovery> {
+  // PostgreSQL is the source of membership truth. A Redis marker alone is not
+  // evidence of a complete merchant history. Never synthesize financial status.
+  const durableIdentities = await listDurableMerchantHistoryIdentities()
+  for (const identity of durableIdentities) {
+    const key = `payment:${identity.paymentId}`
+    const payment = parsePayment(await redis.get(key))
+    if (!payment || payment.id !== identity.paymentId ||
+        payment.merchantId !== identity.merchantId ||
+        payment.merchantUid !== identity.merchantUid ||
+        payment.amount !== identity.amount ||
+        payment.createdAt !== identity.createdAt) {
+      throw new Error("Merchant history durable projection absent or contradictory")
+    }
+    const indexKey = `flashpay:merchant:${identity.merchantId}:payments:v1`
+    const score = await redis.zscore(indexKey, identity.paymentId)
+    if (score === null || Number(score) !== identity.createdAtMs) {
+      throw new Error("Merchant history durable index absent or score contradictory")
+    }
+  }
   const marker = await redis.get(MERCHANT_HISTORY_BOOTSTRAP_KEY)
   if (marker === "done") return { state: "already_certified", scanned: 0, indexed: 0 }
   if (marker !== null) throw new Error("Merchant history bootstrap marker contradictory")

@@ -100,6 +100,19 @@ export async function GET(request: NextRequest) {
         const paidAt = payment.paidAt
         const createdAtMs = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN
         if (typeof id !== "string" || id !== batchIds[valueIndex] || typeof merchant !== "string" || merchant !== verifiedMerchant.username || typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || typeof createdAt !== "string" || !Number.isFinite(createdAtMs) || new Date(createdAtMs).toISOString() !== createdAt || typeof status !== "string" || status.trim().length === 0 || status !== status.trim() || (merchantUid !== undefined && typeof merchantUid !== "string") || (u2aTxid !== undefined && typeof u2aTxid !== "string") || (a2uTxid !== undefined && typeof a2uTxid !== "string") || (paidAt !== undefined && typeof paidAt !== "string")) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+        // B-FINAL-07A: verify the actual sorted-set score, not just the
+        // relative order of Redis projections. A monotonic but wrong score
+        // can otherwise pass the ordering check and corrupt pagination.
+        // This is a read-only consistency guard, NOT PostgreSQL coverage proof.
+        let indexedScore: unknown
+        try {
+          indexedScore = await redis.zscore(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, id)
+        } catch {
+          return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+        }
+        if (typeof indexedScore !== "number" || !Number.isSafeInteger(indexedScore) || indexedScore !== createdAtMs) {
+          return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+        }
         // The index ordering must agree with immutable payment creation times.
         // Checking only the requested page would miss a newer excluded payment.
         if (!Number.isSafeInteger(createdAtMs) || createdAtMs > previousCreatedAtMs) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
