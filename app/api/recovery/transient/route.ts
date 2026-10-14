@@ -50,12 +50,15 @@ const MERCHANT_HISTORY_BOOTSTRAP_KEY = "flashpay:merchant-history:v1:bootstrap"
 type MerchantHistoryRecovery = { state: "already_certified" | "rebuilt"; scanned: number; indexed: number }
 
 async function recoverMerchantHistoryProjectionAfterRedisLoss(): Promise<MerchantHistoryRecovery> {
-  // PostgreSQL is the source of membership truth. A Redis marker alone is not
-  // evidence of a complete merchant history. Never synthesize financial status.
+  // Fail closed: PostgreSQL determines membership; Redis is a projection only.
   const durableIdentities = await listDurableMerchantHistoryIdentities()
+  const byId = new Map(durableIdentities.map(identity => [identity.paymentId, identity]))
+  const marker = await redis.get(MERCHANT_HISTORY_BOOTSTRAP_KEY)
+  if (marker !== null && marker !== "done") throw new Error("Merchant history bootstrap marker contradictory")
+
+  // Verify all durable projections before attempting any index repair.
   for (const identity of durableIdentities) {
-    const key = `payment:${identity.paymentId}`
-    const payment = parsePayment(await redis.get(key))
+    const payment = parsePayment(await redis.get(`payment:${identity.paymentId}`))
     if (!payment || payment.id !== identity.paymentId ||
         payment.merchantId !== identity.merchantId ||
         payment.merchantUid !== identity.merchantUid ||
@@ -63,49 +66,83 @@ async function recoverMerchantHistoryProjectionAfterRedisLoss(): Promise<Merchan
         payment.createdAt !== identity.createdAt) {
       throw new Error("Merchant history durable projection absent or contradictory")
     }
-    const indexKey = `flashpay:merchant:${identity.merchantId}:payments:v1`
-    const score = await redis.zscore(indexKey, identity.paymentId)
-    if (score === null || Number(score) !== identity.createdAtMs) {
-      throw new Error("Merchant history durable index absent or score contradictory")
-    }
   }
-  const marker = await redis.get(MERCHANT_HISTORY_BOOTSTRAP_KEY)
-  if (marker === "done") return { state: "already_certified", scanned: 0, indexed: 0 }
-  if (marker !== null) throw new Error("Merchant history bootstrap marker contradictory")
 
+  // Scan for unaccounted projections even when a stale marker says "done".
+  // Preserve orphans as evidence: never delete, index, or certify them.
   let cursor = "0"
   let scanned = 0
-  let indexed = 0
+  const seen = new Set<string>()
   do {
     const page = await redis.scan(cursor, { match: "payment:*", count: 200 })
     if (!Array.isArray(page) || page.length !== 2 || !Array.isArray(page[1])) throw new Error("Merchant history scan indeterminate")
-    const nextRaw = page[0]
-    const next = typeof nextRaw === "string" && /^[0-9]+$/.test(nextRaw) ? nextRaw : typeof nextRaw === "number" && Number.isSafeInteger(nextRaw) && nextRaw >= 0 ? String(nextRaw) : null
+    const rawCursor = page[0]
+    const next = typeof rawCursor === "string" && /^[0-9]+$/.test(rawCursor) ? rawCursor :
+      typeof rawCursor === "number" && Number.isSafeInteger(rawCursor) && rawCursor >= 0 ? String(rawCursor) : null
     if (next === null) throw new Error("Merchant history scan cursor indeterminate")
     for (const key of page[1]) {
       if (typeof key !== "string" || !key.startsWith("payment:")) throw new Error("Merchant history scan key invalid")
       const paymentId = key.slice("payment:".length)
       if (!paymentId || paymentId !== paymentId.trim()) throw new Error("Merchant history payment id invalid")
+      const identity = byId.get(paymentId)
+      if (!identity) throw new Error("Merchant history Redis orphan without durable identity")
       const payment = parsePayment(await redis.get(key))
-      if (!payment || payment.id !== paymentId || typeof payment.merchantId !== "string" || !payment.merchantId || payment.merchantId !== payment.merchantId.trim() || typeof payment.createdAt !== "string") throw new Error("Merchant history projection invalid")
-      const createdAtMs = Date.parse(payment.createdAt)
-      if (!Number.isSafeInteger(createdAtMs) || new Date(createdAtMs).toISOString() !== payment.createdAt) throw new Error("Merchant history createdAt invalid")
-      const indexKey = `flashpay:merchant:${payment.merchantId}:payments:v1`
-      const added = await redis.eval<[string, string], number>("if redis.call('EXISTS',KEYS[1])~=1 then return -1 end return redis.call('ZADD',KEYS[2],'NX',ARGV[1],ARGV[2])", [key, indexKey], [String(createdAtMs), paymentId])
-      if (added !== 0 && added !== 1) throw new Error("Merchant history index race")
+      if (!payment || payment.id !== paymentId || payment.merchantId !== identity.merchantId ||
+          payment.merchantUid !== identity.merchantUid || payment.amount !== identity.amount ||
+          payment.createdAt !== identity.createdAt) throw new Error("Merchant history projection contradictory")
+      seen.add(paymentId)
       scanned++
-      indexed += added
       if (scanned > 100000) throw new Error("Merchant history rebuild bound exceeded")
     }
     cursor = next
   } while (cursor !== "0")
+  if (seen.size !== byId.size) throw new Error("Merchant history Redis scan incomplete")
 
-  const certified = await redis.set(MERCHANT_HISTORY_BOOTSTRAP_KEY, "done", { nx: true })
-  if (certified !== "OK") {
-    const reread = await redis.get(MERCHANT_HISTORY_BOOTSTRAP_KEY)
-    if (reread !== "done") throw new Error("Merchant history bootstrap certification race")
+  // Read the full bounded merchant indexes; reject extra members and bad scores.
+  const byMerchant = new Map<string, Map<string, number>>()
+  for (const identity of durableIdentities) {
+    let members = byMerchant.get(identity.merchantId)
+    if (!members) { members = new Map(); byMerchant.set(identity.merchantId, members) }
+    members.set(identity.paymentId, identity.createdAtMs)
   }
-  console.warn("[DR56 MERCHANT HISTORY RECOVERY] certified", { scanned, indexed, source: "redis_payment_projections", financialAuthorityMutated: false })
+  let indexed = 0
+  for (const [merchantId, members] of byMerchant) {
+    const indexKey = `flashpay:merchant:${merchantId}:payments:v1`
+    const current = await redis.zrange<string[]>(indexKey, 0, 2000)
+    if (!Array.isArray(current) || current.length > 2000 ||
+        current.some(id => typeof id !== "string" || !members.has(id))) {
+      throw new Error("Merchant history index contains unverified membership")
+    }
+    for (const [paymentId, scoreMs] of members) {
+      const score = await redis.zscore(indexKey, paymentId)
+      if (score !== null && (typeof score !== "number" || score !== scoreMs)) {
+        throw new Error("Merchant history durable index score contradictory")
+      }
+      if (score === null) {
+        if (marker === "done") throw new Error("Merchant history certified index incomplete")
+        // Conditional Redis mutation: only an absent index member, only after
+        // durable identity and projection validation. Never rewrite scores.
+        const added = await redis.eval<[string, string], number>(
+          "local raw=redis.call('GET',KEYS[1]); if not raw then return -1 end; local ok,p=pcall(cjson.decode,raw); if not ok or type(p)~='table' then return -1 end; if p.id~=ARGV[1] or p.merchantId~=ARGV[2] or p.merchantUid~=ARGV[3] or tonumber(p.amount)~=tonumber(ARGV[4]) or p.createdAt~=ARGV[5] then return -1 end; local s=redis.call('ZSCORE',KEYS[2],ARGV[1]); if s then if tonumber(s)==tonumber(ARGV[6]) then return 0 else return -1 end end; return redis.call('ZADD',KEYS[2],'NX',ARGV[6],ARGV[1])",
+          [`payment:${paymentId}`, indexKey], [paymentId, merchantId, byId.get(paymentId)!.merchantUid,
+            String(byId.get(paymentId)!.amount), byId.get(paymentId)!.createdAt, String(scoreMs)])
+        if (added !== 0 && added !== 1) throw new Error("Merchant history index repair conflict")
+        indexed += added
+      }
+    }
+    const verified = await redis.zrange<string[]>(indexKey, 0, 2000)
+    if (!Array.isArray(verified) || verified.length !== members.size ||
+        verified.some(id => typeof id !== "string" || !members.has(id))) {
+      throw new Error("Merchant history index coverage contradictory")
+    }
+    for (const [id, expected] of members) {
+      if (await redis.zscore(indexKey, id) !== expected) throw new Error("Merchant history index verification failed")
+    }
+  }
+  if (marker === "done") return { state: "already_certified", scanned, indexed: 0 }
+  const certified = await redis.set(MERCHANT_HISTORY_BOOTSTRAP_KEY, "done", { nx: true })
+  if (certified !== "OK") throw new Error("Merchant history bootstrap certification race")
+  console.warn("[DR56 MERCHANT HISTORY RECOVERY] certified", { scanned, indexed, source: "postgresql_durable_identities", financialAuthorityMutated: false })
   return { state: "rebuilt", scanned, indexed }
 }
 

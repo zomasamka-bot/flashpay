@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { listDurableMerchantHistoryIdentities } from "@/lib/merchant-history-durable"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -66,6 +67,17 @@ export async function GET(request: NextRequest) {
     }
     // Refuse to certify a truncated index. Never return a misleading partial page.
     if (historyIds.length > MAX_VERIFIABLE_HISTORY) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+    // Redis bootstrap and score consistency cannot establish durable membership.
+    // Compare the COMPLETE bounded merchant index to PostgreSQL, not just a page.
+    let durableIdentities: Awaited<ReturnType<typeof listDurableMerchantHistoryIdentities>>
+    try { durableIdentities = await listDurableMerchantHistoryIdentities() } catch {
+      return NextResponse.json({ error: "Payment history durable authority unavailable" }, { status: 503 })
+    }
+    const durableForMerchant = durableIdentities.filter(identity => identity.merchantId === verifiedMerchant.username)
+    const expected = new Map(durableForMerchant.map(identity => [identity.paymentId, identity]))
+    if (expected.size !== historyIds.length || historyIds.some(id => !expected.has(id))) {
+      return NextResponse.json({ error: "Payment history durable membership contradictory" }, { status: 503 })
+    }
     const ids = historyIds
     let previousCreatedAtMs = Number.POSITIVE_INFINITY
     const payments: Array<Record<string, unknown>> = []
@@ -100,6 +112,10 @@ export async function GET(request: NextRequest) {
         const paidAt = payment.paidAt
         const createdAtMs = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN
         if (typeof id !== "string" || id !== batchIds[valueIndex] || typeof merchant !== "string" || merchant !== verifiedMerchant.username || typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || typeof createdAt !== "string" || !Number.isFinite(createdAtMs) || new Date(createdAtMs).toISOString() !== createdAt || typeof status !== "string" || status.trim().length === 0 || status !== status.trim() || (merchantUid !== undefined && typeof merchantUid !== "string") || (u2aTxid !== undefined && typeof u2aTxid !== "string") || (a2uTxid !== undefined && typeof a2uTxid !== "string") || (paidAt !== undefined && typeof paidAt !== "string")) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+        const durable = expected.get(id)
+        if (!durable || merchantUid !== durable.merchantUid || amount !== durable.amount || createdAt !== durable.createdAt) {
+          return NextResponse.json({ error: "Payment history durable projection contradictory" }, { status: 503 })
+        }
         // B-FINAL-07A: verify the actual sorted-set score, not just the
         // relative order of Redis projections. A monotonic but wrong score
         // can otherwise pass the ordering check and corrupt pagination.
