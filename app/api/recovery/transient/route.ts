@@ -323,6 +323,29 @@ return 2
   return result
 }
 
+/** FIN-100B: exact original-time authority for an ABSENT Redis projection.
+ * Checkpoint creation time is NOT original payment creation time.
+ * Historical payments without durable intent are preserved for manual evidence
+ * reconciliation; never fabricate 1970 or silently use an unrelated timestamp.
+ */
+async function readOriginalCreationTimeForRecovery(paymentId: string, merchantId: string, merchantUid: string, amount: number): Promise<string> {
+  const rows = await query(`
+    SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+           floor(extract(epoch from created_at)*1000)::bigint::text AS "createdAtMs"
+    FROM payment_create_intents
+    WHERE payment_id=$1 AND merchant_id=$2 AND merchant_uid=$3 AND customer_amount=$4
+    LIMIT 2
+  `, [paymentId, merchantId, merchantUid, amount])
+  if (!rows || rows.length !== 1) throw new Error('Original creation time has no exact durable authority; projection preserved absent')
+  const raw = rows[0] as Record<string, unknown>
+  const iso = raw.createdAt
+  const ms = Number(raw.createdAtMs)
+  if (typeof iso !== 'string' || !Number.isSafeInteger(ms) ||
+      new Date(ms).toISOString() !== iso || ms <= 0)
+    throw new Error('Original creation time durable evidence contradictory')
+  return iso
+}
+
 async function repopulateDurableSettlementWork():Promise<{repopulated:number;conflicts:number}>{
   const page=await listOutstandingSettlementCheckpointIds(200)
   if(page.outcome!=='FOUND')throw new Error(page.error)
@@ -337,9 +360,16 @@ async function repopulateDurableSettlementWork():Promise<{repopulated:number;con
     const moved=d.stage==='horizon_confirmed'||d.stage==='pi_completed'||dbDone
     const piDone=d.stage==='pi_completed'||dbDone
     const prepared=d.stage!=='a2u_created'
-    const terminalProjection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:'',status:dbDone?'settled_to_merchant':moved||prepared?'settlement_pending':'paid_to_app',createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:'none',appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{})}
+    const terminalProjection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:'',status:dbDone?'settled_to_merchant':moved||prepared?'settlement_pending':'paid_to_app',createdAt:d.createdAt,piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:'none',appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{})}
     const rawExisting=await redis.get(`payment:${paymentId}`)
     const existing=parsePayment(rawExisting)
+    // An absent projection may be rebuilt only with the original timestamp
+    // attested by an exact payment_create_intent. A checkpoint timestamp is
+    // merely the checkpoint's own event time and must NEVER be substituted.
+    if (!existing) {
+      terminalProjection.createdAt = await readOriginalCreationTimeForRecovery(
+        d.paymentId, d.merchantId, d.merchantUid, d.customerAmount)
+    }
     if(dbDone){
       if(existing){
         if(existing.id!==d.paymentId||existing.merchantId!==d.merchantId||existing.merchantUid!==d.merchantUid||existing.piPaymentId!==d.u2aIdentifier||existing.u2aTxid!==d.u2aTxid||existing.a2uPaymentId!==d.a2uPaymentId||existing.a2uTxid!==d.a2uTxid||existing.refundPaymentId!==undefined||existing.refundTxid!==undefined){conflicts++;continue}
