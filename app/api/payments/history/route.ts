@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
-import { listDurableMerchantHistoryIdentities } from "@/lib/merchant-history-durable"
+import { listDurableMerchantHistoryIdentities, readMerchantHistoryCoverage } from "@/lib/merchant-history-durable"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -56,6 +56,13 @@ export async function GET(request: NextRequest) {
     const MAX_VERIFIABLE_HISTORY = 2000
     let historyIds: unknown
     try {
+      // A cached "done" marker is not a substitute for current PostgreSQL coverage.
+      const coverage = await readMerchantHistoryCoverage()
+      if (!coverage.completeChronology) return NextResponse.json({
+        error: "Payment history original creation authority incomplete",
+        chronologyComplete: false,
+        historicalMembershipEndpoint: "/api/payments/history/unverified",
+      }, { status: 503 })
       const bootstrapMarker = await redis.get("flashpay:merchant-history:v1:bootstrap")
       if (bootstrapMarker !== "done") return NextResponse.json({ error: "Payment history not ready" }, { status: 503 })
       historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, MAX_VERIFIABLE_HISTORY, { rev: true })

@@ -12,7 +12,7 @@ import { isPaymentFinal } from "@/lib/payment-status"
 import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 import { serverConfig } from "@/lib/server-config"
 import type { Payment } from "@/lib/types"
-import { listDurableMerchantHistoryIdentities } from "@/lib/merchant-history-durable"
+import { listDurableMerchantHistoryIdentities, readDurableOriginalPaymentCreationTime, readMerchantHistoryCoverage } from "@/lib/merchant-history-durable"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -323,29 +323,6 @@ return 2
   return result
 }
 
-/** FIN-100B: exact original-time authority for an ABSENT Redis projection.
- * Checkpoint creation time is NOT original payment creation time.
- * Historical payments without durable intent are preserved for manual evidence
- * reconciliation; never fabricate 1970 or silently use an unrelated timestamp.
- */
-async function readOriginalCreationTimeForRecovery(paymentId: string, merchantId: string, merchantUid: string, amount: number): Promise<string> {
-  const rows = await query(`
-    SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
-           floor(extract(epoch from created_at)*1000)::bigint::text AS "createdAtMs"
-    FROM payment_create_intents
-    WHERE payment_id=$1 AND merchant_id=$2 AND merchant_uid=$3 AND customer_amount=$4
-    LIMIT 2
-  `, [paymentId, merchantId, merchantUid, amount])
-  if (!rows || rows.length !== 1) throw new Error('Original creation time has no exact durable authority; projection preserved absent')
-  const raw = rows[0] as Record<string, unknown>
-  const iso = raw.createdAt
-  const ms = Number(raw.createdAtMs)
-  if (typeof iso !== 'string' || !Number.isSafeInteger(ms) ||
-      new Date(ms).toISOString() !== iso || ms <= 0)
-    throw new Error('Original creation time durable evidence contradictory')
-  return iso
-}
-
 async function repopulateDurableSettlementWork():Promise<{repopulated:number;conflicts:number}>{
   const page=await listOutstandingSettlementCheckpointIds(200)
   if(page.outcome!=='FOUND')throw new Error(page.error)
@@ -367,7 +344,7 @@ async function repopulateDurableSettlementWork():Promise<{repopulated:number;con
     // attested by an exact payment_create_intent. A checkpoint timestamp is
     // merely the checkpoint's own event time and must NEVER be substituted.
     if (!existing) {
-      terminalProjection.createdAt = await readOriginalCreationTimeForRecovery(
+      terminalProjection.createdAt = await readDurableOriginalPaymentCreationTime(
         d.paymentId, d.merchantId, d.merchantUid, d.customerAmount)
     }
     if(dbDone){
@@ -1034,17 +1011,47 @@ export async function POST(request: NextRequest) {
   // Pi/Horizon/Settlement/Refund movement; fully lost Redis projections remain
   // execution-deferred until F2-4 removes the access-token dependency.
   let durableU2AIngressRepopulation:DurableU2AIngressRepopulation
-  let merchantHistoryRecovery: MerchantHistoryRecovery
   try {
     await repopulateDurableSettlementWork()
     durableU2AIngressRepopulation=await repopulateDurableU2AIngressWork()
-    merchantHistoryRecovery=await recoverMerchantHistoryProjectionAfterRedisLoss()
   } catch (error) {
+    // Financial rediscovery errors remain fatal: never bypass financial authority.
     console.error("[DR56 RECOVERY BOOTSTRAP] unavailable", { error: error instanceof Error ? error.message : String(error) })
     return NextResponse.json({ error: "Durable financial work repopulation unavailable" }, { status: 503 })
   }
   console.log("[F2-3 DURABLE REDISCOVERY]", durableU2AIngressRepopulation)
-  console.log("[DR56 MERCHANT HISTORY RECOVERY]", merchantHistoryRecovery)
+
+  // Merchant History is a read-side projection, not a prerequisite for the
+  // PostgreSQL/Horizon-authoritative financial drain. Preserve any contradictory
+  // history keys as evidence and do not certify or alter them on failure.
+  // The /api/payments/history reader separately requires the bootstrap marker
+  // and exact durable membership; it must continue failing closed.
+  try {
+    // PostgreSQL membership and original-time coverage are separate facts.
+    // Never set the Redis "done" certification for incomplete chronology.
+    const coverage = await readMerchantHistoryCoverage()
+    if (!coverage.completeChronology) {
+      const existingMarker = await redis.get(MERCHANT_HISTORY_BOOTSTRAP_KEY)
+      if (existingMarker !== null && existingMarker !== "done")
+        throw new Error("Merchant history bootstrap marker contradictory")
+      // A pre-existing "done" marker is NOT trusted as proof of history coverage.
+      // Retain it unchanged for forensic review, and do not write any index keys.
+      console.warn("[DR56 MERCHANT HISTORY RECOVERY] original time evidence incomplete; no history certification", {
+        durableCheckpointIdentities: coverage.totalCheckpointIdentities,
+        certifiedOriginalTimes: coverage.originalTimeCertified,
+        missingOriginalTimes: coverage.originalTimeMissing,
+        existingMarkerPresent: existingMarker === "done",
+        financialAuthorityMutated: false,
+      })
+    } else {
+      const merchantHistoryRecovery: MerchantHistoryRecovery = await recoverMerchantHistoryProjectionAfterRedisLoss()
+      console.log("[DR56 MERCHANT HISTORY RECOVERY]", merchantHistoryRecovery)
+    }
+  } catch (error) {
+    console.error("[DR56 MERCHANT HISTORY RECOVERY] unavailable; financial wake continues", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 
   let readyBaselineAlreadyCertified = false
   let readyBaselineCoverageCertified = false

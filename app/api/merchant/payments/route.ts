@@ -314,10 +314,15 @@ export async function GET(request: NextRequest) {
         t.id,
         t.payment_id,
         t.merchant_id,
+        t.merchant_uid,
         t.amount,
         t.reference,
         t.description,
         t.status as payment_status,
+        r.id AS linked_receipt_id,
+        r.merchant_id AS linked_receipt_merchant_id,
+        r.merchant_uid AS linked_receipt_merchant_uid,
+        r.amount AS linked_receipt_amount,
         r.settlement_status,
         t.created_at,
         t.completed_at,
@@ -421,6 +426,17 @@ export async function GET(request: NextRequest) {
           throw new Error(`Invalid row ${id}: invalid completed_at date`)
         }
         completedAtIso = new Date(completedAtTime).toISOString()
+      }
+
+      // A receipt is optional (historical transactions can lack one), but a
+      // linked receipt must belong to the exact same merchant and amount.
+      // Never project another merchant's receipt fields into this response.
+      if (row.linked_receipt_id !== null && (
+        row.linked_receipt_merchant_id !== merchantIdVal ||
+        row.linked_receipt_merchant_uid !== row.merchant_uid ||
+        Number(row.linked_receipt_amount) !== amount
+      )) {
+        throw new Error("Merchant payment receipt identity contradiction")
       }
 
       // Require description, settlement_status, u2a_identifier, u2a_txid, a2u_identifier, a2u_txid to be exactly null|string

@@ -15,6 +15,15 @@ import { getReceiptLink } from "@/lib/router"
 import { Calendar, Search, Download, ChevronRight, ChevronDown, TrendingUp, Filter } from "lucide-react"
 import { useI18n } from "@/components/i18n-provider"
 
+type UndatedHistoricalIdentity = {
+  paymentId: string
+  merchantId: string
+  merchantUid: string
+  amount: number
+  createdAt: null
+  creationTimeAuthority: "missing"
+}
+
 interface MerchantPayment {
   id: string
   transactionId: string
@@ -83,6 +92,42 @@ export default function MerchantPaymentsPage() {
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [showFullSummary, setShowFullSummary] = useState(false)
+  // Display-only evidence inventory, deliberately excluded from balances,
+  // CSV exports, chronological payment lists, and receipt navigation.
+  const [undatedHistory, setUndatedHistory] = useState<UndatedHistoricalIdentity[]>([])
+  const [undatedHistoryError, setUndatedHistoryError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setUndatedHistory([])
+    setUndatedHistoryError(null)
+    if (!merchant?.merchantId || !merchant?.accessToken) return () => controller.abort()
+    void (async () => {
+      try {
+        const response = await fetch(
+          `${config.appUrl}/api/payments/history/unverified?merchantId=${encodeURIComponent(merchant.merchantId)}`,
+          { headers: { Authorization: `Bearer ${merchant.accessToken}` }, signal: controller.signal },
+        )
+        if (!response.ok) throw new Error(`Historical evidence HTTP ${response.status}`)
+        const result: unknown = await response.json()
+        if (!result || typeof result !== "object" || !("payments" in result) ||
+            !Array.isArray(result.payments) ||
+            !result.payments.every((item: unknown) => {
+              if (!item || typeof item !== "object") return false
+              const row = item as Record<string, unknown>
+              return typeof row.paymentId === "string" && row.paymentId.length > 0 &&
+                row.merchantId === merchant.merchantId && typeof row.merchantUid === "string" &&
+                typeof row.amount === "number" && Number.isFinite(row.amount) && row.amount > 0 &&
+                row.createdAt === null && row.creationTimeAuthority === "missing"
+            })) throw new Error("Historical evidence response invalid")
+        if (!controller.signal.aborted) setUndatedHistory(result.payments as UndatedHistoricalIdentity[])
+      } catch {
+        if (!controller.signal.aborted) setUndatedHistoryError("Historical evidence inventory unavailable")
+      }
+    })()
+    return () => controller.abort()
+  }, [merchant?.merchantId, merchant?.accessToken])
+
 
   useEffect(() => {
     const controller = new AbortController()
@@ -189,6 +234,31 @@ export default function MerchantPaymentsPage() {
             setError("Invalid dashboard data format")
             return
           }
+        }
+
+        // Never render unvalidated server rows, even if the outer JSON shape
+        // and aggregate summary are valid. Prevent cross-merchant display and
+        // malformed values from reaching receipt navigation or CSV export.
+        const validPayments = data.payments.every((item: unknown) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return false
+          const row = item as Record<string, unknown>
+          return row.merchantId === merchant.merchantId &&
+            typeof row.id === "string" && row.id.length > 0 &&
+            typeof row.transactionId === "string" && row.transactionId === row.id &&
+            typeof row.paymentId === "string" && row.paymentId.length > 0 &&
+            typeof row.reference === "string" &&
+            typeof row.note === "string" &&
+            typeof row.status === "string" && row.status.length > 0 &&
+            typeof row.paymentStatus === "string" &&
+            typeof row.createdAt === "string" && Number.isFinite(Date.parse(row.createdAt)) &&
+            typeof row.amount === "number" && Number.isFinite(row.amount) && row.amount > 0 &&
+            (row.settlementStatus === null || typeof row.settlementStatus === "string")
+        })
+        if (!validPayments) {
+          setPayments([])
+          setSummary(null)
+          setError("Invalid merchant payment data")
+          return
         }
 
         setPayments(data.payments)
@@ -676,6 +746,34 @@ export default function MerchantPaymentsPage() {
             {exportError && (
               <div className="p-3 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded text-sm">
                 {exportError}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Historical records without a verified creation date</CardTitle>
+            <CardDescription>
+              These are PostgreSQL checkpoint identities only. Dates, settlement status, and
+              financial finality are NOT certified by this inventory. Entries have no chronological order.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {undatedHistoryError ? (
+              <p role="alert" className="text-sm text-red-600">{undatedHistoryError}</p>
+            ) : undatedHistory.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No undated historical identities returned.</p>
+            ) : (
+              <div className="space-y-2">
+                {undatedHistory.map(item => (
+                  <div key={item.paymentId} className="rounded border p-3 text-sm">
+                    <p className="break-all font-medium">{item.paymentId}</p>
+                    <p>Checkpoint amount: {item.amount}π</p>
+                    <p>Original creation date: unknown — not chronologically ranked</p>
+                    <p>Financial outcome: not certified by this listing</p>
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>
