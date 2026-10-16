@@ -97,7 +97,7 @@ export function evaluateRefundPreparedRecoveryEvidence(input: { checkpoint: Refu
   return classifyRefundPreparedSequence(horizon)
 }
 
-export async function readRefundPreparedRecoveryEvidence(input: Input): Promise<ReturnType<typeof evaluateRefundPreparedRecoveryEvidence>> {
+export async function readRefundPreparedRecoveryEvidence(input: Pick<Input, "checkpoint" | "payment">): Promise<ReturnType<typeof evaluateRefundPreparedRecoveryEvidence>> {
   const blocked: { outcome: "BLOCKED"; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } = { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
   if (!isExactInput(input)) return blocked
   try {
