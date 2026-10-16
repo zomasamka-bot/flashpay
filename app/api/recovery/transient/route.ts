@@ -1970,6 +1970,3 @@ return 1`, ["flashpay:recovery:active-payments:v1:scan-cursor"], [scanStartToken
   }
 }
 
-// DR-8: Vercel Cron invokes configured paths with GET. The same handler and
-// lease/durable-recovery barriers are used; only authentication provenance differs.
-export { POST as GET }
