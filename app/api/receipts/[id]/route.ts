@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getReceipt, getReceiptByU2AIdentifier } from "@/lib/db"
+import { getReceipt, getReceiptByU2AIdentifier, query } from "@/lib/db"
+import { buildPostgresHistoricalReceipt } from "@/lib/legacy-receipt"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
@@ -172,7 +173,32 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (legacyReceipt.merchant_id !== verifiedMerchant.username) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
     const flashPayPaymentId = await resolveLegacyFlashPayId(legacyReceipt, verifiedMerchant.username)
-    if (!flashPayPaymentId) return NextResponse.json({ error: "Canonical FlashPay ID unavailable" }, { status: 503 })
+    if (!flashPayPaymentId) {
+      // Historical transaction IDs can be present in PostgreSQL even when their
+      // Redis history projection/index is absent or uncertified. Never invent a
+      // FlashPay payment ID from the transaction ID, and never use an unverified
+      // Redis/Pi inference as monetary authority. Display the actual receipt
+      // with its distinct PostgreSQL transaction identifier instead.
+      const rows = await query(`
+        SELECT t.id AS "transactionId", t.merchant_id AS "transactionMerchantId",
+               t.merchant_uid AS "transactionMerchantUid", t.payment_id AS "transactionPaymentId",
+               t.amount::text AS "transactionAmount", t.description AS "transactionDescription",
+               r.merchant_id AS "receiptMerchantId", r.merchant_uid AS "receiptMerchantUid",
+               r.amount::text AS "receiptAmount", r.customer_amount::text AS "customerAmount",
+               r.merchant_amount::text AS "merchantAmount", r.app_commission::text AS "appCommission",
+               r.currency AS "receiptCurrency", r.u2a_identifier AS "receiptU2aIdentifier",
+               r.settlement_status AS "receiptSettlementStatus", r.timestamp AS "receiptTimestamp",
+               r.payer_username AS "payerUsername"
+        FROM transactions t INNER JOIN receipts r ON r.transaction_id = t.id
+        WHERE t.id = $1 AND t.merchant_id = $2 LIMIT 2
+      `, [id, verifiedMerchant.username])
+      if (!Array.isArray(rows) || rows.length !== 1) {
+        return NextResponse.json({ error: "Historical receipt authority unavailable" }, { status: 503 })
+      }
+      const legacyView = buildPostgresHistoricalReceipt(rows[0], verifiedMerchant.username)
+      if (!legacyView) return NextResponse.json({ error: "Historical receipt contradiction" }, { status: 503 })
+      return NextResponse.json(legacyView, { headers: { "Cache-Control": "no-store" } })
+    }
     const canonicalLegacyPayment = await loadCanonicalPayment(flashPayPaymentId, verifiedMerchant.username)
     if (!canonicalLegacyPayment) return NextResponse.json({ error: "Canonical payment unavailable" }, { status: 503 })
     const view = buildReceiptView(

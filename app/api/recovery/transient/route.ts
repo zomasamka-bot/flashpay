@@ -956,8 +956,25 @@ function isPostHorizonEligible(payment: Payment, now: number): boolean {
   )
 }
 
+/** Vercel Cron invokes this configured path with GET. Preserve the existing
+ * financial executor and all its guards: only a valid CRON_SECRET bearer can
+ * enter through GET. QStash remains POST with its forwarded recovery secret.
+ */
+export async function GET(request: NextRequest) {
+  const authorization = request.headers.get("authorization")
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : null
+  if (!constantTimeSecretEqual(runtimeEnv.CRON_SECRET, bearer)) {
+    console.warn("[TRANSIENT WAKE] cron GET rejected: authorization failed")
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+  }
+  return POST(request)
+}
+
 export async function POST(request: NextRequest) {
   if (!hasValidSecret(request)) {
+    // Distinguishes a delivered-but-unauthorized QStash wake from no delivery.
+    // Never log the submitted token, full headers, body, or external identity.
+    console.warn("[TRANSIENT WAKE] POST rejected: authorization failed")
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
   }
 

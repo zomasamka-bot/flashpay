@@ -140,6 +140,24 @@ export interface FlashPayReceiptView {
   note?: string | null
 }
 
+/** Read-only historical receipt from a PostgreSQL transaction+receipt pair.
+ * This deliberately does NOT claim a canonical FlashPay payment ID, or an
+ * original payment creation time. Never feed this into payment/PDF upload APIs.
+ */
+export interface PostgresHistoricalReceiptView {
+  receiptAuthority: "postgres_transaction"
+  transactionId: string
+  merchantName: string
+  customerName: string | null
+  amount: number
+  currency: "π"
+  status: FlashPayReceiptStatus
+  receiptRecordedAt: string
+  note: string | null
+}
+
+export type MerchantReceiptDisplayView = FlashPayReceiptView | PostgresHistoricalReceiptView
+
 export interface MerchantReceiptResponse {
   id: string | undefined
   transactionId: string
