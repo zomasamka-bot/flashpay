@@ -133,7 +133,7 @@ export async function releasePiWalletIntent(sourceAddress: unknown, expectedOwne
 export async function acquirePiWalletIntentSubmitLock(
   sourceAddress: unknown,
   owner: unknown,
-): Promise<{ release: () => Promise<void> } | null> {
+): Promise<{ release: () => Promise<void>; verifyOwned: () => Promise<boolean> } | null> {
   const submitLock = await acquirePiWalletSubmitLock(sourceAddress)
   if (submitLock === null) return null
   let claimed = false
@@ -146,13 +146,13 @@ export async function acquirePiWalletIntentSubmitLock(
     await submitLock.release()
     return null
   }
-  return { release: submitLock.release }
+  return { release: submitLock.release, verifyOwned: submitLock.verifyOwned }
 }
 
 export async function acquirePiWalletExistingIntentSubmitLock(
   sourceAddress: unknown,
   expectedOwner: unknown,
-): Promise<{ release: () => Promise<void> } | null> {
+): Promise<{ release: () => Promise<void>; verifyOwned: () => Promise<boolean> } | null> {
   const expected = canonicalIntentOwner(expectedOwner)
   if (expected === null) return null
   const submitLock = await acquirePiWalletSubmitLock(sourceAddress)
@@ -163,7 +163,7 @@ export async function acquirePiWalletExistingIntentSubmitLock(
       await submitLock.release()
       return null
     }
-    return { release: submitLock.release }
+    return { release: submitLock.release, verifyOwned: submitLock.verifyOwned }
   } catch {
     await submitLock.release()
     return null

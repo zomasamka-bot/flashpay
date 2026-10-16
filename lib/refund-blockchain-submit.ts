@@ -27,6 +27,7 @@ export type RefundBlockchainSubmitResult =
 type Input = {
   checkpoint: RefundCheckpoint
   payment: RefundPiPayment
+  verifyOwned: () => Promise<boolean>
 }
 
 const HORIZON_URL = "https://api.testnet.minepi.com"
@@ -115,7 +116,7 @@ export function evaluateRefundPreparedReplayPreGate(input: { sourcePayment: Paym
   return { outcome: "ELIGIBLE_EXACT_REPLAY", prepared: input.prepared, observedSourceSequence: input.evidence.observedSourceSequence, reference: input.evidence.reference, moneyMovementProven: false, authorizesFinancialAction: false }
 }
 
-export async function submitRefundPreparedStoredXdrOnce(input: { payment: RefundPiPayment; gate: ReturnType<typeof evaluateRefundPreparedReplayPreGate> }): Promise<RefundBlockchainSubmitResult> {
+export async function submitRefundPreparedStoredXdrOnce(input: { payment: RefundPiPayment; gate: ReturnType<typeof evaluateRefundPreparedReplayPreGate>; verifyOwned: () => Promise<boolean> }): Promise<RefundBlockchainSubmitResult> {
   const blocked: RefundBlockchainSubmitResult = { outcome: "FAILED", code: "invalid_input", message: "Refund transaction is not an eligible exact replay" }
   if (input.gate.outcome !== "ELIGIBLE_EXACT_REPLAY" || input.payment.status.transaction_verified !== false || input.payment.status.developer_completed !== false || input.gate.prepared.state !== "present" || input.gate.reference.preparedHash !== input.gate.prepared.preparedHash || input.gate.reference.preparedSequence !== input.gate.prepared.preparedSequence || input.gate.reference.refundPaymentId !== input.payment.identifier || input.gate.reference.fromAddress !== input.payment.from_address || input.gate.reference.toAddress !== input.payment.to_address || input.gate.reference.amount !== input.payment.amount) return blocked
   try {
@@ -131,6 +132,7 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     const transaction = TransactionBuilder.fromXDR(input.gate.prepared.envelopeXdr, "Pi Testnet")
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.gate.prepared.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.gate.prepared.preparedHash || transaction.sequence !== input.gate.prepared.preparedSequence || transaction.source !== input.payment.from_address) return blocked
     const server = new Horizon.Server(HORIZON_URL)
+    if (!await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund wallet submit ownership lost" }
     await server.submitTransaction(transaction)
     if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
       console.log("[P7 TEST] Refund post-replay-submit 0.10")
@@ -208,6 +210,7 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   if (!authorization || authorization.authorizedNow !== true) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
 
   try {
+    if (!await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund wallet submit ownership lost" }
     const result = await server.submitTransaction(transaction)
     if (result.successful !== true || result.hash !== preparedHash) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
     return { outcome: "CONFIRMED_TX", txid: result.hash }

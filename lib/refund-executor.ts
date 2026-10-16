@@ -401,7 +401,7 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
           return blocked
         }
       }
-      const replay = await submit.submitRefundPreparedStoredXdrOnce({ payment: lockedRefund.payment, gate })
+      const replay = await submit.submitRefundPreparedStoredXdrOnce({ payment: lockedRefund.payment, gate, verifyOwned: walletLock.verifyOwned })
       return replay
     } finally {
       await walletLock.release()
@@ -479,7 +479,7 @@ export async function executeRefundBlockchain(refundId: string, refundAuthority?
   try {
     const claim = await beginRefundBlockchainSubmissionClaim(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId)
     if (!claim) return { outcome: 'blocked', reason: 'blockchain_claim_conflict' }
-    const submission = await import('./refund-blockchain-submit').then(({ submitRefundBlockchainOnce }) => submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment }))
+    const submission = await import('./refund-blockchain-submit').then(({ submitRefundBlockchainOnce }) => submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment, verifyOwned: walletLock.verifyOwned }))
     if (submission.outcome !== 'CONFIRMED_TX') {
       if (submission.code === 'submit_failed') return { outcome: 'blocked', reason: submission.code }
       const failureIntent = await readPiWalletIntent(refundPayment.from_address)

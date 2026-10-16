@@ -1016,7 +1016,8 @@ type Stage2MoveResult =
   | { ok: true; txidFromHorizon: string }
   | { ok: false; error: string; userFacingStatus: string }
 
-async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.Server, transaction: StellarSDK.Transaction, preparedHash: string): Promise<Stage2MoveResult> {
+async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.Server, transaction: StellarSDK.Transaction, preparedHash: string, verifyOwned: () => Promise<boolean>): Promise<Stage2MoveResult> {
+  if (!await verifyOwned()) return { ok: false, error: "Settlement wallet submit ownership lost", userFacingStatus: "settlement_pending" }
   const submitResult = await horizonServer.submitTransaction(transaction)
   const txidFromHorizon = submitResult.hash
   if (txidFromHorizon !== preparedHash) return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
@@ -1062,7 +1063,7 @@ async function finalizeStage2AfterMove(ctx: ExecutorContext, txidFromHorizon: st
  * Returns { txidFromHorizon, horizonFeeCharged } on success or error with userFacingStatus
  */
 async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> {
-  let walletLock: { release: () => Promise<void> } | null = null
+  let walletLock: { release: () => Promise<void>; verifyOwned: () => Promise<boolean> } | null = null
   try {
     // CRITICAL: Use ONLY Payment fields (never undefined a2uPayment object parameter)
     const toAddress = ctx.payment.a2uToAddress
@@ -1119,7 +1120,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     let moved: Stage2MoveResult
     let reconciledSubmitFeeStroops: number | null = null
     try {
-      moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)
+      moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash, () => walletLock!.verifyOwned())
     } catch (submitError) {
       // R100-7: a transport exception after submit is ambiguous. Reconcile the exact
       // prepared hash immediately via the existing GET-only Horizon proof path; never
