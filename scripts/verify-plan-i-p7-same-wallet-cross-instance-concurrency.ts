@@ -20,17 +20,19 @@ need(lock.includes('const INTENT_KEY_PREFIX = "flashpay:wallet:intent:v1:"'), "P
 
 const stage2 = a2u.indexOf('async function stage2SignAndSubmit')
 const settlementLock = a2u.indexOf('acquirePiWalletIntentSubmitLock(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId })', stage2)
-const settlementMove = a2u.indexOf('moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash)', settlementLock)
+const settlementMove = a2u.indexOf('moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash, () => walletLock!.verifyOwned())', settlementLock)
+need(a2u.includes('if (!await verifyOwned()) return { ok: false, error: "Settlement wallet submit ownership lost"'), 'P7 settlement pre-submit ownership fence missing')
 const settlementDurable = a2u.indexOf('recordSettlementHorizonCheckpoint({', settlementMove)
 const settlementFinally = a2u.indexOf('} finally {', settlementDurable)
 need(stage2 >= 0 && settlementLock > stage2 && settlementMove > settlementLock && settlementDurable > settlementMove && settlementFinally > settlementDurable, "P7 settlement submit must remain under source-wallet lock through durable Horizon checkpoint")
 need(a2u.includes('async function moveStage2UnderHeldWalletLock') && a2u.includes('horizonServer.submitTransaction(transaction)'), "P7 settlement Horizon side effect binding missing")
 
 const freshLock = refund.indexOf("acquirePiWalletIntentSubmitLock(refundPayment.from_address, { kind: 'refund_claim', paymentId: checkpoint.paymentId, refundId })")
-const freshSubmit = refund.indexOf("submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment })", freshLock)
+const freshSubmit = refund.indexOf("submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment, verifyOwned: walletLock.verifyOwned })", freshLock)
 const freshFinally = refund.indexOf('await walletLock.release()', freshSubmit)
 need(freshLock >= 0 && freshSubmit > freshLock && freshFinally > freshSubmit, "P7 fresh refund submit must remain under source-wallet lock")
 need(refundSubmit.includes('await server.submitTransaction(transaction)'), "P7 refund Horizon side effect missing")
+need(refundSubmit.includes('if (!await input.verifyOwned())'), "P7 refund pre-submit ownership fence missing")
 
 const replayFn = refund.indexOf('readRefundPreparedReplayUnderExistingOwner')
 const replayLock = refund.indexOf('acquirePiWalletSubmitLock(refund.payment.from_address)', replayFn)
