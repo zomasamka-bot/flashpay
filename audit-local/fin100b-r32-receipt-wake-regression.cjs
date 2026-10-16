@@ -43,7 +43,7 @@ let queryRows=[row()],receiptPresent=true,receiptOwner='merchant-1'
 const api=load('app/api/receipts/[id]/route.ts',{
  'next/server':{NextResponse:JSONResponse},'@/lib/db':{
   getReceipt:async()=>receiptPresent?{merchant_id:receiptOwner,u2a_identifier:'pi-payment-1'}:null,
-  getReceiptByU2AIdentifier:async()=>null,query:async(_sql,params)=>{assert.equal(params[0],UUID);assert.equal(params[1],'merchant-1');return queryRows}},
+  getReceiptByU2AIdentifier:async()=>null,query:async(_sql,params)=>{assert.equal(params[0],UUID);assert.equal(params[1],'merchant-1');return !receiptPresent || receiptOwner!=="merchant-1"?[]:queryRows}},
  '@/lib/legacy-receipt':legacy,
  '@/lib/merchant-auth':{authorizeFromHeader:async token=>token==='Bearer good'?{username:'merchant-1'}:null},
  '@/lib/redis':{isRedisConfigured:false,redis:{}},
@@ -58,7 +58,7 @@ async function run(){
  assert.equal(res.status,200);assert.equal(res.body.receiptAuthority,'postgres_transaction');assert.equal(res.body.transactionId,UUID);tests++;console.log('PASS authenticated_legacy_receipt_without_redis')
  res=await api.GET(req('Bearer bad'),route());assert.equal(res.status,401);tests++;console.log('PASS unauthenticated_receipt_denied')
  receiptPresent=false;res=await api.GET(req('Bearer good'),route());assert.equal(res.status,404);tests++;console.log('PASS missing_receipt_not_fabricated')
- receiptPresent=true;receiptOwner='foreign';res=await api.GET(req('Bearer good'),route());assert.equal(res.status,403);tests++;console.log('PASS cross_merchant_legacy_receipt_denied')
+ receiptPresent=true;receiptOwner='foreign';res=await api.GET(req('Bearer good'),route());assert.equal(res.status,404);tests++;console.log('PASS cross_merchant_legacy_receipt_not_disclosed')
  receiptOwner='merchant-1';queryRows=[{...row(),receiptMerchantId:'another-merchant'}]
  res=await api.GET(req('Bearer good'),route());assert.equal(res.status,503);tests++;console.log('PASS mixed_ownership_row_fail_closed')
  queryRows=[row(),row()];res=await api.GET(req('Bearer good'),route());assert.equal(res.status,503);tests++;console.log('PASS duplicate_receipt_rows_fail_closed')

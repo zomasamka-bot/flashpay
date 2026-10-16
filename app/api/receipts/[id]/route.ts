@@ -149,6 +149,9 @@ async function readHistoricalReceipt(transactionId: string, merchantUsername: st
     FROM transactions t INNER JOIN receipts r ON r.transaction_id = t.id
     WHERE t.id = $1 AND t.merchant_id = $2 LIMIT 2
   `, [transactionId, merchantUsername])
+  if (Array.isArray(rows) && rows.length === 0) {
+    return NextResponse.json({ error: "Receipt not found" }, { status: 404 })
+  }
   if (!Array.isArray(rows) || rows.length !== 1) {
     return NextResponse.json({ error: "Historical receipt authority unavailable" }, { status: 503 })
   }
@@ -189,6 +192,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       )
       if (!view) return NextResponse.json({ error: "Receipt presentation unavailable" }, { status: 503 })
       return NextResponse.json(view)
+    }
+
+    // A PostgreSQL transaction UUID is already a durable receipt lookup key.
+    // Prefer the authenticated DB pair directly; Redis history chronology is
+    // deliberately NOT a prerequisite for displaying a historical receipt.
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      return readHistoricalReceipt(id, verifiedMerchant.username)
     }
 
     // Legacy links/bookmarks may still contain the internal transaction ID.

@@ -77,16 +77,19 @@ export async function GET(request: NextRequest) {
 
     const operationalPayments: Array<Record<string, unknown>> = []
     const refundPaymentIds = new Set<string>()
+    // PostgreSQL profile totals/latest transaction are independent of the
+    // optional Redis operational projection. Do not erase durable receipts when
+    // history bootstrap cannot certify legacy original creation timestamps.
     if (!isRedisConfigured) {
-      return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+      return NextResponse.json({ ...profileSummary, operationalPayments: [], operationalHistoryAvailable: false })
     }
     let historyIds: unknown[]
     try {
       const bootstrapMarker = await redis.get("flashpay:merchant-history:v1:bootstrap")
-      if (bootstrapMarker !== "done") return NextResponse.json({ error: "Operational payment history not ready" }, { status: 503 })
+      if (bootstrapMarker !== "done") return NextResponse.json({ ...profileSummary, operationalPayments: [], operationalHistoryAvailable: false })
       historyIds = await redis.zrange<unknown[]>(`flashpay:merchant:${verifiedMerchant.username}:payments:v1`, 0, 1000)
     } catch {
-      return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
+      return NextResponse.json({ ...profileSummary, operationalPayments: [], operationalHistoryAvailable: false })
     }
     const seen = new Set<string>()
     const validatedIds: string[] = []
