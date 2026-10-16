@@ -74,7 +74,7 @@ function isValidPositiveAmount(value: number): boolean {
   return numberToExactPositiveStroops(value) !== null
 }
 
-function isExactInput({ checkpoint, payment }: Input): boolean {
+function isExactInput({ checkpoint, payment }: Pick<Input, "checkpoint" | "payment">): boolean {
   return checkpoint.stage === "wallet_submission_started" && checkpoint.status === "pending" &&
     typeof checkpoint.refundPaymentId === "string" && checkpoint.refundPaymentId === payment.identifier &&
     checkpoint.paymentId === payment.metadata.paymentId && checkpoint.refundId === payment.metadata.refundId &&
