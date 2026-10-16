@@ -753,34 +753,6 @@ export default function MerchantPaymentsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Historical records without a verified creation date</CardTitle>
-            <CardDescription>
-              These are PostgreSQL checkpoint identities only. Dates, settlement status, and
-              financial finality are NOT certified by this inventory. Entries have no chronological order.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {undatedHistoryError ? (
-              <p role="alert" className="text-sm text-red-600">{undatedHistoryError}</p>
-            ) : undatedHistory.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No undated historical identities returned.</p>
-            ) : (
-              <div className="space-y-2">
-                {undatedHistory.map(item => (
-                  <div key={item.paymentId} className="rounded border p-3 text-sm">
-                    <p className="break-all font-medium">{item.paymentId}</p>
-                    <p>Checkpoint amount: {item.amount}π</p>
-                    <p>Original creation date: unknown — not chronologically ranked</p>
-                    <p>Financial outcome: not certified by this listing</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>{t("dashboard.payments")} {filteredPayments.length > 0 && `(${filteredPayments.length})`}</CardTitle>
             <CardDescription>{t("dashboard.clickReceipt")}</CardDescription>
           </CardHeader>
@@ -840,6 +812,34 @@ export default function MerchantPaymentsPage() {
             )}
           </CardContent>
         </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Historical records without a verified creation date</CardTitle>
+            <CardDescription>
+              These are PostgreSQL checkpoint identities only. Dates, settlement status, and
+              financial finality are NOT certified by this inventory. Entries have no chronological order.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {undatedHistoryError ? (
+              <p role="alert" className="text-sm text-red-600">{undatedHistoryError}</p>
+            ) : undatedHistory.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No undated historical identities returned.</p>
+            ) : (
+              <div className="space-y-2">
+                {undatedHistory.map(item => (
+                  <div key={item.paymentId} className="rounded border p-3 text-sm">
+                    <p className="break-all font-medium">{item.paymentId}</p>
+                    <p>Checkpoint amount: {item.amount}π</p>
+                    <p>Original creation date: unknown — not chronologically ranked</p>
+                    <p>Financial outcome: not certified by this listing</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         </div>
       </div>
     </main>
