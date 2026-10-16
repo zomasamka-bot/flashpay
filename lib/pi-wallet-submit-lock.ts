@@ -172,7 +172,7 @@ export async function acquirePiWalletExistingIntentSubmitLock(
 
 export async function acquirePiWalletSubmitLock(
   sourceAddress: unknown,
-): Promise<{ release: () => Promise<void> } | null> {
+): Promise<{ release: () => Promise<void>; verifyOwned: () => Promise<boolean> } | null> {
   if (
     !isRedisConfigured ||
     typeof sourceAddress !== "string" ||
@@ -193,6 +193,7 @@ export async function acquirePiWalletSubmitLock(
   }
 
   let released = false
+  let ownershipLost = false
   let renewalInFlight = false
   const renewalTimer = setInterval(async () => {
     if (released || renewalInFlight) return
@@ -200,12 +201,14 @@ export async function acquirePiWalletSubmitLock(
     try {
       const renewed = await redis.eval<[string, string], number>(RENEW_SCRIPT, [key], [token, String(SUBMIT_LOCK_TTL_SECONDS)])
       if (renewed !== 1) {
-        // Token ownership was lost. Never extend a successor's lock.
+        // Once ownership is lost, this handle can never authorize another submit.
+        ownershipLost = true
         clearInterval(renewalTimer)
       }
     } catch {
-      // Fail closed at the Redis ownership layer: no blind SET/EXPIRE without token match.
-      // Durable wallet intent + Horizon reconciliation remain the movement authorities.
+      // Redis uncertainty is a loss of submit authority, not a reason to continue.
+      ownershipLost = true
+      clearInterval(renewalTimer)
     } finally {
       renewalInFlight = false
     }
@@ -213,6 +216,25 @@ export async function acquirePiWalletSubmitLock(
   renewalTimer.unref?.()
 
   return {
+    verifyOwned: async () => {
+      if (released || ownershipLost) return false
+      try {
+        // Compare the token and renew atomically immediately before Horizon submit.
+        // This is a fail-closed pre-submit gate, not a distributed fencing token:
+        // lease loss after this check remains a separate concurrency limitation.
+        const owned = await redis.eval<[string, string], number>(RENEW_SCRIPT, [key], [token, String(SUBMIT_LOCK_TTL_SECONDS)])
+        if (owned !== 1 || released || ownershipLost) {
+          ownershipLost = true
+          clearInterval(renewalTimer)
+          return false
+        }
+        return true
+      } catch {
+        ownershipLost = true
+        clearInterval(renewalTimer)
+        return false
+      }
+    },
     release: async () => {
       if (released) return
       released = true

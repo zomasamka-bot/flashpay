@@ -663,6 +663,11 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
           }
           if (params.schedulerWalletPaymentId !== undefined && params.schedulerWalletPaymentId !== paymentId) return { ok: false, status: 409, error: "wallet_drain_not_selected" }
+          // R36: stale owners must not submit after a detected Redis lease transfer.
+          // Do not replace the immutable prepared XDR or bypass durable replay authority.
+          if (!await walletLock.verifyOwned()) {
+            return { ok: false, status: 409, error: "Settlement wallet submit ownership lost" }
+          }
           const horizon = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
           const submitted = await horizon.submitTransaction(transaction)
           if (submitted.hash !== latestPayment.a2uPreparedTxHash) {
