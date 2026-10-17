@@ -1773,19 +1773,26 @@ export type SettlementDurableAdvanceResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
+export async function withAtomicSettlementPreparedAuthority<T>(work: (tx: any) => Promise<T>): Promise<T | null> {
+  const client = await getPostgresClient()
+  if (!client) return null
+  try { return await client.begin(async (tx: any) => work(tx)) }
+  catch (error) { console.error('[R36] Atomic settlement preparation rolled back:', error); return null }
+}
+
 export async function recordSettlementPreparedCheckpoint(params: {
   paymentId:string; merchantId:string; merchantUid:string; customerAmount:number; merchantAmount:number;
   a2uPaymentId:string; a2uFromAddress:string; a2uToAddress:string;
   preparedEnvelopeXdr:string; preparedTxHash:string; preparedSequence:string
-}):Promise<SettlementDurableAdvanceResult>{
+}, transactionClient?: any):Promise<SettlementDurableAdvanceResult>{
   if(!params.paymentId||!params.merchantId||!params.merchantUid||!params.a2uPaymentId||!params.a2uFromAddress||!params.a2uToAddress||
      !params.preparedEnvelopeXdr||params.preparedEnvelopeXdr!==params.preparedEnvelopeXdr.trim()||
      !/^[0-9a-f]{64}$/.test(params.preparedTxHash)||!/^[1-9][0-9]*$/.test(params.preparedSequence)||
      !Number.isFinite(params.customerAmount)||params.customerAmount<=0||!Number.isFinite(params.merchantAmount)||params.merchantAmount!==params.customerAmount)
     return {outcome:'CONFLICT',error:'Settlement prepared checkpoint input is invalid'}
   try{
-    const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
-    const rows=await client.begin(async(tx:any)=>{
+    const client=transactionClient ? null : await getPostgresClient();if(!client && !transactionClient)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const run = async(tx:any)=>{
       const a=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='prepared',
         prepared_envelope_xdr=${params.preparedEnvelopeXdr},prepared_tx_hash=${params.preparedTxHash},prepared_sequence=${params.preparedSequence},updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND stage='a2u_created'
@@ -1798,7 +1805,8 @@ export async function recordSettlementPreparedCheckpoint(params: {
       return await tx`SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
         a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid
         FROM settlement_checkpoints WHERE payment_id=${params.paymentId} OR a2u_payment_id=${params.a2uPaymentId} OR prepared_tx_hash=${params.preparedTxHash} FOR UPDATE`
-    })
+    };
+    const rows = transactionClient ? await run(transactionClient) : await client!.begin(run)
     if(!Array.isArray(rows)||rows.length!==1||!rows[0])return{outcome:'CONFLICT',error:'Settlement prepared durable identity is ambiguous or conflicting'}
     const r=rows[0] as Record<string,unknown>,v=Number(r.version);if(!Number.isSafeInteger(v)||v<2)return{outcome:'CONFLICT',error:'Settlement prepared durable version is invalid'}
     if(r.advanced===true)return{outcome:'RECORDED',version:v}

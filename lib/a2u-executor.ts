@@ -1,6 +1,7 @@
+import { claimPreparedWalletAuthority, claimFirstWalletSubmission, type WalletAuthorityClaim } from './financial-wallet-authority'
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
-import { recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1, claimSettlementA2UCreateAttempt, claimSettlementPiMutationAttempt } from "@/lib/db"
+import { withAtomicSettlementPreparedAuthority, recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1, claimSettlementA2UCreateAttempt, claimSettlementPiMutationAttempt } from "@/lib/db"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { validateFinancialData } from "@/lib/financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "@/lib/pi-wallet-submit-lock"
@@ -993,16 +994,29 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   const preparedSequence = transaction.sequence
   console.log("[DR41 STAGE2 DIAGNOSTIC] prepared_identity", { paymentId: ctx.paymentId, preparedHash, preparedSequence, envelopePresent: preparedEnvelopeXdr.length > 0 })
   if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
-  ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr, a2uPreparedTxHash: preparedHash, a2uPreparedSequence: preparedSequence, status: "settlement_pending" as const })
-  console.log("[DR41 STAGE2 DIAGNOSTIC] redis_prepared_persisted", { paymentId: ctx.paymentId, preparedHash, preparedSequence })
-  const durablePrepared = await recordSettlementPreparedCheckpoint({
+  // R36: claim and prepared evidence must share ONE PostgreSQL transaction.
+  // Redis is updated only AFTER this transaction commits successfully.
+  const durablePrepared = await withAtomicSettlementPreparedAuthority(async (tx) => {
+    const owned = await claimPreparedWalletAuthority({network:'Pi Testnet', sourceWallet:appPublicKey,
+      paymentId:ctx.paymentId, operationKind:'settlement', operationId:a2uPaymentId,
+      preparedHash, preparedSequence}, tx)
+    if (!owned) throw new Error('R36 wallet authority unavailable or occupied')
+    const checkpoint = await recordSettlementPreparedCheckpoint({
+
     paymentId:ctx.paymentId,merchantId:ctx.payment.merchantId,merchantUid:ctx.merchantUid,
     customerAmount:ctx.customerAmount,merchantAmount:amount,a2uPaymentId,a2uFromAddress:appPublicKey,a2uToAddress:toAddress,
     preparedEnvelopeXdr,preparedTxHash:preparedHash,preparedSequence
+    }, tx)
+    if (checkpoint.outcome !== 'RECORDED' && checkpoint.outcome !== 'REPLAYED')
+      throw new Error('R36 prepared checkpoint rejected; rolling back wallet authority')
+    return checkpoint
   })
-  console.log("[DR41 STAGE2 DIAGNOSTIC] durable_prepared_outcome", { paymentId: ctx.paymentId, outcome: durablePrepared.outcome, preparedHash, preparedSequence })
-  if(durablePrepared.outcome!=="RECORDED"&&durablePrepared.outcome!=="REPLAYED")
-    return {ok:false,error:"Prepared A2U durable checkpoint not proven",userFacingStatus:"settlement_pending"}
+  console.log("[DR41 STAGE2 DIAGNOSTIC] durable_prepared_outcome", { paymentId: ctx.paymentId, outcome: durablePrepared?.outcome, preparedHash, preparedSequence })
+  // A re-entered fresh path must NOT turn an earlier PREPARED identity into
+  // another POST. The reconciliation path must inspect the stored XDR via GET.
+  if (durablePrepared?.outcome !== "RECORDED")
+    return {ok:false,error:"Prepared settlement already exists or authority uncertain; reconcile without fresh submit",userFacingStatus:"settlement_pending"}
+  ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr, a2uPreparedTxHash: preparedHash, a2uPreparedSequence: preparedSequence, status: "settlement_pending" as const })
   const preparedOwnerReplaced = await replacePiWalletIntent(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId }, { kind: "settlement_prepared", paymentId: ctx.paymentId, preparedHash, preparedSequence })
   console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_intent_replace", { paymentId: ctx.paymentId, preparedOwnerReplaced })
   if (!preparedOwnerReplaced) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
@@ -1016,8 +1030,12 @@ type Stage2MoveResult =
   | { ok: true; txidFromHorizon: string }
   | { ok: false; error: string; userFacingStatus: string }
 
-async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.Server, transaction: StellarSDK.Transaction, preparedHash: string, verifyOwned: () => Promise<boolean>): Promise<Stage2MoveResult> {
+async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.Server, transaction: StellarSDK.Transaction, preparedHash: string, verifyOwned: () => Promise<boolean>, authority: WalletAuthorityClaim): Promise<Stage2MoveResult> {
   if (!await verifyOwned()) return { ok: false, error: "Settlement wallet submit ownership lost", userFacingStatus: "settlement_pending" }
+  if (transaction.source !== authority.sourceWallet || transaction.sequence !== authority.preparedSequence ||
+      Buffer.from(transaction.hash()).toString('hex') !== preparedHash || preparedHash !== authority.preparedHash ||
+      !(await claimFirstWalletSubmission(authority)))
+    return { ok: false, error: "Settlement durable one-shot submission authority denied", userFacingStatus: "settlement_pending" }
   const submitResult = await horizonServer.submitTransaction(transaction)
   const txidFromHorizon = submitResult.hash
   if (txidFromHorizon !== preparedHash) return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
@@ -1120,7 +1138,11 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     let moved: Stage2MoveResult
     let reconciledSubmitFeeStroops: number | null = null
     try {
-      moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash, () => walletLock!.verifyOwned())
+      moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash, () => walletLock!.verifyOwned(), {
+        network: 'Pi Testnet', sourceWallet: appPublicKey,
+        paymentId: ctx.paymentId, operationKind: 'settlement', operationId: a2uPaymentId,
+        preparedHash, preparedSequence: transaction.sequence,
+      })
     } catch (submitError) {
       // R100-7: a transport exception after submit is ambiguous. Reconcile the exact
       // prepared hash immediately via the existing GET-only Horizon proof path; never

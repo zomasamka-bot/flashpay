@@ -1,3 +1,4 @@
+import { verifyPreparedWalletAuthority, claimFirstWalletSubmission } from "@/lib/financial-wallet-authority"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
@@ -668,6 +669,19 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           if (!await walletLock.verifyOwned()) {
             return { ok: false, status: 409, error: "Settlement wallet submit ownership lost" }
           }
+          // R36: fail closed if PostgreSQL durable owner differs from this exact prepared intent.
+          if (!await verifyPreparedWalletAuthority({
+            network: 'Pi Testnet', sourceWallet: intent.fromAddress, paymentId,
+            operationKind: 'settlement', operationId: intent.a2uPaymentId,
+            preparedHash: intent.preparedHash, preparedSequence: intent.preparedSequence,
+          })) return { ok: false, status: 409, error: "Durable settlement wallet authority not proven" }
+          // One-shot PostgreSQL admission: even same stored XDR cannot be POSTed
+          // twice after a crash, Redis loss, or a competing recovery worker.
+          if (!await claimFirstWalletSubmission({
+            network: 'Pi Testnet', sourceWallet: intent.fromAddress, paymentId,
+            operationKind: 'settlement', operationId: intent.a2uPaymentId,
+            preparedHash: intent.preparedHash, preparedSequence: intent.preparedSequence,
+          })) return { ok: false, status: 409, error: "Settlement one-shot submission already used or unavailable" }
           const horizon = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
           const submitted = await horizon.submitTransaction(transaction)
           if (submitted.hash !== latestPayment.a2uPreparedTxHash) {

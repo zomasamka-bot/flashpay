@@ -9,9 +9,18 @@ function assert(condition, message) {
   if (!condition) throw new Error(`FIN7_SETTLEMENT_SUBMIT_DURABLE_PREPARED_AUTHORITY=FAIL ${message}`)
 }
 
-const redisPrepared = executor.indexOf('ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr')
-const pgPrepared = executor.indexOf('const durablePrepared = await recordSettlementPreparedCheckpoint({', redisPrepared)
-assert(redisPrepared >= 0 && pgPrepared > redisPrepared, 'crash window Redis-prepared-before-PostgreSQL-prepared is not source-bound')
+// R36 changed the crash window: PostgreSQL atomic claim+prepared checkpoint
+// MUST commit before the Redis mirror is updated. Preserve fail-closed ordering.
+const atomicStart = executor.indexOf('const durablePrepared = await withAtomicSettlementPreparedAuthority(')
+const durableClaim = executor.indexOf('await claimPreparedWalletAuthority(', atomicStart)
+const pgPrepared = executor.indexOf('await recordSettlementPreparedCheckpoint({', durableClaim)
+const atomicEnd = executor.indexOf('  })', pgPrepared)
+const redisPrepared = executor.indexOf('ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr', atomicEnd)
+assert(atomicStart >= 0 && durableClaim > atomicStart && pgPrepared > durableClaim &&
+  atomicEnd > pgPrepared && redisPrepared > atomicEnd,
+  'PostgreSQL atomic claim+prepared checkpoint must precede Redis mirror')
+assert(executor.slice(atomicStart, atomicEnd).includes('}, tx)'),
+  'prepared checkpoint must receive same PostgreSQL transaction client')
 
 const helperStart = locked.indexOf('async function verifySettlementSubmitDurablePreparedAuthority')
 const helperEnd = locked.indexOf('\n}\n', helperStart)
@@ -43,4 +52,4 @@ assert(submitBranch >= 0 && durableGuard > submitBranch, 'SETTLEMENT_SUBMIT dura
 assert(durableGuard < walletLock && durableGuard < promoteIntent && durableGuard < replay && durableGuard < horizonSubmit, 'durable guard must precede wallet authority promotion, replay authorization, and Horizon submit')
 assert(locked.slice(durableGuard, walletLock).includes('return { ok: false, status: 409'), 'missing fail-closed return when durable authority is absent/conflicting/uncertain')
 
-console.log('FIN7_SETTLEMENT_SUBMIT_DURABLE_PREPARED_AUTHORITY=PASS crash_window=redis_prepared_before_pg_prepared financial_authority=postgres stage=prepared fail_closed=true')
+console.log('FIN7_SETTLEMENT_SUBMIT_DURABLE_PREPARED_AUTHORITY=PASS crash_window=postgres_atomic_prepared_before_redis_mirror financial_authority=postgres stage=prepared fail_closed=true')

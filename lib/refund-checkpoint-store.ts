@@ -1,3 +1,4 @@
+import { claimPreparedWalletAuthority, type WalletAuthorityClaim } from './financial-wallet-authority'
 import { randomUUID } from 'node:crypto'
 import { redis, isRedisConfigured } from './redis'
 import { ensureRefundCheckpointTables, query, readSettlementRefundAuthority, withPaymentAuthorityTransaction } from './db'
@@ -683,13 +684,19 @@ export async function ensureRefundPreparedSubmit(
   envelopeXdr: string,
   preparedHash: string,
   preparedSequence: string,
+  walletAuthority: WalletAuthorityClaim,
 ): Promise<{ checkpoint: RefundCheckpoint; preparedNow: boolean; envelopeXdr: string; preparedHash: string; preparedSequence: string } | null> {
   if (!(await verifyRefundTables()) || !refundId || refundId !== refundId.trim() || !paymentId || paymentId !== paymentId.trim() || !idempotencyKey || idempotencyKey !== idempotencyKey.trim() || !refundPaymentId || refundPaymentId !== refundPaymentId.trim() || !envelopeXdr || envelopeXdr !== envelopeXdr.trim() || !/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return null
   const preparedEventId = `refund:${refundId}:blockchain_submit_prepared`
   const authorizationEventId = `refund:${refundId}:blockchain_submit_authorized`
   const blockchainEventId = `refund:${refundId}:blockchain_submission_started`
   const details = { refundPaymentId, envelopeXdr, preparedHash, preparedSequence, phase: 'horizon_prepared' }
-  const result = await query(`
+  const result = await withPaymentAuthorityTransaction(paymentId, async (tx) => {
+    if (walletAuthority.paymentId !== paymentId || walletAuthority.operationId !== refundId ||
+        walletAuthority.operationKind !== 'refund' || walletAuthority.preparedHash !== preparedHash ||
+        walletAuthority.preparedSequence !== preparedSequence ||
+        !(await claimPreparedWalletAuthority(walletAuthority, tx))) throw new Error('wallet_authority_conflict')
+    const inserted = await tx.unsafe(`
     WITH source AS (
       SELECT c.* FROM refund_checkpoints c JOIN refund_audit_events a
         ON a.event_id=$7 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
@@ -704,11 +711,15 @@ export async function ensureRefundPreparedSubmit(
       SELECT $6,refund_id,payment_id,'refund_blockchain_submit_prepared','system',idempotency_key,NOW(),$8::jsonb FROM source
       ON CONFLICT (event_id) DO NOTHING RETURNING refund_id
     ) SELECT source.* FROM source JOIN inserted USING (refund_id)`,
-    [refundId, paymentId, idempotencyKey, refundPaymentId, authorizationEventId, preparedEventId, blockchainEventId, details])
+    [refundId, paymentId, idempotencyKey, refundPaymentId, authorizationEventId, preparedEventId, blockchainEventId, JSON.stringify(details)])
+    if (!Array.isArray(inserted) || inserted.length !== 1) throw new Error('refund_prepare_not_inserted')
+    return inserted
+  })
   if (Array.isArray(result) && result.length === 1) {
     const checkpoint = normalizeCheckpoint(result[0])
     return checkpoint ? { checkpoint, preparedNow: true, envelopeXdr, preparedHash, preparedSequence } : null
   }
+  if (!result) return null
   const replay = await query(`
     SELECT c.*, a.details AS prepared_details FROM refund_checkpoints c JOIN refund_audit_events a
       ON a.event_id=$5 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
@@ -1102,7 +1113,8 @@ export async function advanceRefundAccountingWithAudit(
         AND a.payer_uid=c.payer_uid AND a.amount=c.amount AND a.horizon_fee_stroops=$7::bigint AND a.currency='π'
     ), transitioned AS (
       UPDATE refund_checkpoints SET stage='accounting_recorded', updated_at=NOW()
-      WHERE refund_id IN (SELECT refund_id FROM matching) RETURNING *
+      WHERE refund_id IN (SELECT refund_id FROM matching)
+        AND stage='payment_checkpoint_updated' AND status='pending' RETURNING *
     ), audited AS (
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $8, refund_id, payment_id, $9, $10, idempotency_key, $11, $12::jsonb FROM transitioned RETURNING refund_id
@@ -1158,7 +1170,8 @@ export async function advanceRefundAuditWithAudit(
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_accounting_recorded' AND a.payment_id=c.payment_id AND a.idempotency_key=c.idempotency_key AND a.event_id <> '' AND a.actor_type='system' AND a.details->>'refundPaymentId'=$4 AND a.details->>'refundTxid'=$5 AND a.details->>'horizonFeeStroops'=$8::text)=1
         AND (SELECT count(*) FROM refund_audit_events a WHERE a.refund_id=c.refund_id AND a.event_type='refund_audit_recorded')=0
     ), transitioned AS (
-      UPDATE refund_checkpoints SET stage='audit_recorded', updated_at=NOW() WHERE refund_id IN (SELECT refund_id FROM eligible) RETURNING *
+      UPDATE refund_checkpoints SET stage='audit_recorded', updated_at=NOW() WHERE refund_id IN (SELECT refund_id FROM eligible)
+        AND stage='accounting_recorded' AND status='pending' RETURNING *
     ), audited AS (
       INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details)
       SELECT $9, refund_id, payment_id, $10, $11, idempotency_key, $12, $13::jsonb FROM transitioned RETURNING refund_id

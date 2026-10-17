@@ -30,7 +30,7 @@ must(transient.includes("kind:'u2a_complete'")&&transient.includes("completionAt
 order(a2u,'const createAttempt = await claimSettlementA2UCreateAttempt','fetch("https://api.minepi.com/v2/payments"','A2U create attempt/POST ordering')
 must(a2u.includes('createAttempt.outcome !== "RECORDED"'),'A2U create not RECORDED-only')
 // S1 Redis prepared is not financial authority; PG prepared gate precedes Horizon submit.
-order(a2u,'ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr','const durablePrepared = await recordSettlementPreparedCheckpoint','Redis prepared/PG prepared boundary missing')
+order(a2u,'const durablePrepared = await withAtomicSettlementPreparedAuthority','ctx.payment = await persistCheckpointMerged(ctx.paymentId, { a2uPreparedEnvelopeXdr: preparedEnvelopeXdr','Atomic PostgreSQL prepared checkpoint must precede Redis mirror')
 const submitBranch=locked.indexOf('if (params.recoveryOperation === "SETTLEMENT_SUBMIT")')
 const durableGuard=locked.indexOf('verifySettlementSubmitDurablePreparedAuthority',submitBranch), horizon=locked.indexOf('horizon.submitTransaction',submitBranch)
 must(submitBranch>=0&&durableGuard>submitBranch&&horizon>durableGuard,'durable prepared authority must precede Horizon submit')

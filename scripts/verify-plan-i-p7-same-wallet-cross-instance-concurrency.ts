@@ -20,7 +20,8 @@ need(lock.includes('const INTENT_KEY_PREFIX = "flashpay:wallet:intent:v1:"'), "P
 
 const stage2 = a2u.indexOf('async function stage2SignAndSubmit')
 const settlementLock = a2u.indexOf('acquirePiWalletIntentSubmitLock(appPublicKey, { kind: "settlement_claim", paymentId: ctx.paymentId })', stage2)
-const settlementMove = a2u.indexOf('moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash, () => walletLock!.verifyOwned())', settlementLock)
+const settlementMove = a2u.indexOf('moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash, () => walletLock!.verifyOwned(), {', settlementLock)
+need(a2u.includes('!(await claimFirstWalletSubmission(authority))'), 'R36 settlement durable one-shot submit gate missing')
 need(a2u.includes('if (!await verifyOwned()) return { ok: false, error: "Settlement wallet submit ownership lost"'), 'P7 settlement pre-submit ownership fence missing')
 const settlementDurable = a2u.indexOf('recordSettlementHorizonCheckpoint({', settlementMove)
 const settlementFinally = a2u.indexOf('} finally {', settlementDurable)

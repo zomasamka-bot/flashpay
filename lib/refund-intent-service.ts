@@ -7,6 +7,7 @@ import { isRefundEligible as checkEligibility } from '@/lib/types'
 import { randomUUID } from 'node:crypto'
 import { getRefundReadiness } from '@/lib/refund-readiness'
 import { readSettlementRefundAuthority } from '@/lib/db'
+import { verifyRefundOriginalCustomerBinding } from '@/lib/refund-original-customer-binding'
 
 export type RefundIntentInternalResult = { status: number; body: unknown }
 
@@ -151,10 +152,12 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
     await releasePaymentOperationLock(payment.id, refundId)
     return { status: 409, body: { error: 'Payment changed while refund lock was acquired' } }
   }
+  const originalCustomer = await verifyRefundOriginalCustomerBinding({ paymentId: payment.id, payerUid: lockedPayment.payerUid!, amount: lockedPayment.customerAmount!, merchantId: lockedPayment.merchantId, merchantUid: lockedPayment.merchantUid })
+  if (originalCustomer.outcome !== 'VERIFIED') { await releasePaymentOperationLock(payment.id, refundId); return { status: 503, body: { error: 'Original customer U2A binding unavailable or conflicting' } } }
   const idempotencyClaimed = await claimRefundIdempotency(idempotencyKey, refundId)
   if (!idempotencyClaimed) { await releasePaymentOperationLock(payment.id, refundId); return { status: 409, body: { error: 'Idempotency key already in use' } } }
   const now = new Date().toISOString()
-  const checkpoint: RefundCheckpoint = { refundId, paymentId: payment.id, idempotencyKey, status: 'pending', stage: 'eligibility_verified', payerUid: payment.payerUid!, payerUidVerifiedAt: payment.payerUidCapturedAt || now, amount: payment.customerAmount, currency: 'π', sourcePaymentStatus: payment.status, sourceSettlementState: payment.settlementFailureState!, createdAt: now, updatedAt: now, attemptCount: 0 }
+  const checkpoint: RefundCheckpoint = { refundId, paymentId: payment.id, idempotencyKey, status: 'pending', stage: 'eligibility_verified', payerUid: payment.payerUid!, payerUidVerifiedAt: originalCustomer.verifiedAt, amount: payment.customerAmount, currency: 'π', sourcePaymentStatus: payment.status, sourceSettlementState: payment.settlementFailureState!, createdAt: now, updatedAt: now, attemptCount: 0 }
   console.log('[refunds/intent] Creating checkpoint:', { refundId, paymentId: payment.id, amount: checkpoint.amount, stage: checkpoint.stage })
   const auditEventId = randomUUID()
   const auditEvent: RefundAuditEvent = { eventId: auditEventId, refundId, paymentId: payment.id, eventType: 'eligibility_verified', actorType: 'system', idempotencyKey, createdAt: now, details: { refundAmount: checkpoint.amount, payerUid: checkpoint.payerUid.substring(0, 8), stage: checkpoint.stage } }

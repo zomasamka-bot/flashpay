@@ -1,3 +1,5 @@
+import { verifyRefundOriginalCustomerBinding } from './refund-original-customer-binding'
+import { verifyPreparedWalletAuthority, claimFirstWalletSubmission } from "./financial-wallet-authority"
 import "server-only"
 
 import {
@@ -133,6 +135,21 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.gate.prepared.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.gate.prepared.preparedHash || transaction.sequence !== input.gate.prepared.preparedSequence || transaction.source !== input.payment.from_address) return blocked
     const server = new Horizon.Server(HORIZON_URL)
     if (!await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund wallet submit ownership lost" }
+    if (!await verifyPreparedWalletAuthority({
+      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      paymentId: input.gate.prepared.checkpoint.paymentId, operationKind: 'refund',
+      operationId: input.gate.prepared.checkpoint.refundId,
+      preparedHash: input.gate.prepared.preparedHash,
+      preparedSequence: input.gate.prepared.preparedSequence,
+    })) return { outcome: "FAILED", code: "submit_failed", message: "Durable refund replay authority not proven" }
+    if ((await verifyRefundOriginalCustomerBinding({ paymentId: input.gate.prepared.checkpoint.paymentId, payerUid: input.gate.prepared.checkpoint.payerUid, amount: input.gate.prepared.checkpoint.amount })).outcome !== 'VERIFIED') return { outcome: 'FAILED', code: 'submit_failed', message: 'Original customer binding unverified before prepared replay' }
+    if (!await claimFirstWalletSubmission({
+      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      paymentId: input.gate.prepared.checkpoint.paymentId, operationKind: 'refund',
+      operationId: input.gate.prepared.checkpoint.refundId,
+      preparedHash: input.gate.prepared.preparedHash,
+      preparedSequence: input.gate.prepared.preparedSequence,
+    })) return { outcome: "FAILED", code: "submit_failed", message: "Refund one-shot submission already used or unavailable" }
     await server.submitTransaction(transaction)
     if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
       console.log("[P7 TEST] Refund post-replay-submit 0.10")
@@ -197,7 +214,12 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   const envelopeXdr = transaction.toXDR()
   const preparedHash = Buffer.from(transaction.hash()).toString("hex")
   const preparedSequence = transaction.sequence
-  const prepared = await ensureRefundPreparedSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence)
+  // R36: the wallet claim and refund prepared audit insert share one PG transaction.
+  const prepared = await ensureRefundPreparedSubmit(input.checkpoint.refundId, input.checkpoint.paymentId, input.checkpoint.idempotencyKey, input.payment.identifier, envelopeXdr, preparedHash, preparedSequence, {
+    network: input.payment.network, sourceWallet: input.payment.from_address,
+    paymentId: input.checkpoint.paymentId, operationKind: 'refund',
+    operationId: input.checkpoint.refundId, preparedHash, preparedSequence,
+  })
   if (!prepared || prepared.preparedNow !== true || prepared.envelopeXdr !== envelopeXdr || prepared.preparedHash !== preparedHash || prepared.preparedSequence !== preparedSequence) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
 
 
@@ -211,6 +233,17 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
 
   try {
     if (!await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund wallet submit ownership lost" }
+    if (!await verifyPreparedWalletAuthority({
+      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      paymentId: input.checkpoint.paymentId, operationKind: 'refund',
+      operationId: input.checkpoint.refundId, preparedHash, preparedSequence,
+    })) return { outcome: "FAILED", code: "submit_failed", message: "Durable refund authority not proven" }
+    if ((await verifyRefundOriginalCustomerBinding({ paymentId: input.checkpoint.paymentId, payerUid: input.checkpoint.payerUid, amount: input.checkpoint.amount })).outcome !== 'VERIFIED') return { outcome: 'FAILED', code: 'submit_failed', message: 'Original customer binding unverified before Horizon submission' }
+    if (!await claimFirstWalletSubmission({
+      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      paymentId: input.checkpoint.paymentId, operationKind: 'refund',
+      operationId: input.checkpoint.refundId, preparedHash, preparedSequence,
+    })) return { outcome: "FAILED", code: "submit_failed", message: "Refund one-shot submission already used or unavailable" }
     const result = await server.submitTransaction(transaction)
     if (result.successful !== true || result.hash !== preparedHash) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
     return { outcome: "CONFIRMED_TX", txid: result.hash }

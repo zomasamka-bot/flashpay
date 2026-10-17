@@ -1,3 +1,4 @@
+import { verifyRefundOriginalCustomerBinding } from './refund-original-customer-binding'
 import { redis, isRedisConfigured } from './redis'
 import {
   ensurePaymentOperationLock,
@@ -132,7 +133,11 @@ async function neutralizeDr11OrphanA2UIdentifier(checkpoint: RefundCheckpoint, p
 async function loadRefundPaymentProjection(checkpoint: RefundCheckpoint): Promise<RefundPaymentProjectionLoad> {
   const rawExisting = await redis.get(`payment:${checkpoint.paymentId}`)
   const existing = paymentFromRedis(rawExisting)
-  if (existing && refundProjectionMatchesCheckpoint(existing, checkpoint) && !(checkpoint.stage === 'intent_created' && checkpoint.status === 'pending' && !guarded(checkpoint, existing))) return { outcome: 'FOUND', payment: existing, rebuilt: false }
+  if (existing && refundProjectionMatchesCheckpoint(existing, checkpoint) && !(checkpoint.stage === 'intent_created' && checkpoint.status === 'pending' && !guarded(checkpoint, existing))) {
+    const binding = await verifyRefundOriginalCustomerBinding({ paymentId: checkpoint.paymentId, payerUid: checkpoint.payerUid, amount: checkpoint.amount, merchantId: existing.merchantId, merchantUid: existing.merchantUid })
+    if (binding.outcome !== 'VERIFIED') return { outcome: 'BLOCKED', reason: 'original_customer_binding_unverified' }
+    return { outcome: 'FOUND', payment: existing, rebuilt: false }
+  }
 
   // DR67: Redis is projection-only. Repair a stale pre-refund projection only
   // when it is still the same payment key, contains no merchant/refund/Horizon
@@ -286,6 +291,7 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
   if (checkpoint.stage === 'wallet_submission_started' && (checkpoint.status !== 'pending' || checkpoint.paymentId !== payment.id || checkpoint.payerUid !== payment.payerUid || checkpoint.amount !== payment.customerAmount || merchantEvidence || refundEvidence)) return { outcome: 'blocked', reason: 'preflight_failed' }
   const reconciliation = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
   if (reconciliation.outcome === 'INDETERMINATE') return { outcome: 'blocked', reason: 'reconciliation_uncertain' }
+  if ((await verifyRefundOriginalCustomerBinding({ paymentId: checkpoint.paymentId, payerUid: checkpoint.payerUid, amount: checkpoint.amount })).outcome !== 'VERIFIED') return { outcome: 'blocked', reason: 'original_customer_binding_unverified' }
   if (reconciliation.outcome === 'FOUND' && reconciliation.payment) {
     if (reconciliation.payment.status.cancelled || reconciliation.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'refund_cancelled' }
     if (checkpoint.refundPaymentId && checkpoint.refundPaymentId !== reconciliation.payment.identifier) return { outcome: 'blocked', reason: 'refund_id_conflict' }
