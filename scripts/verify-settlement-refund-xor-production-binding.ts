@@ -39,7 +39,7 @@ function scanRuntimeDirectory(dir: string): void {
     if (item.isDirectory()) { scanRuntimeDirectory(rel); continue }
     if (!item.isFile() || !/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(item.name)) continue
     if (rel === join('lib', 'refund-checkpoint-store.ts')) continue
-    assert(!/INSERT\s+INTO\s+(?:public\.)?refund_checkpoints/i.test(read(rel)), `unexpected runtime Refund INSERT: ${rel}`)
+    assert(!/\bINSERT\s+INTO\s+(?:public\.)?refund_checkpoints\b/i.test(read(rel)), `unexpected runtime Refund INSERT: ${rel}`)
   }
 }
 for (const dir of ['lib', 'app', 'pages', 'components']) {
@@ -60,7 +60,7 @@ const refundCreate = indexIn(refundStore, 'export async function createRefundChe
 const refundCreateEnd = indexIn(refundStore.slice(refundCreate), '\n}\n\nexport async function createDr11RefundAuthorityFromDurableHold', 'refund authority function end') + refundCreate
 const refundBody = refundStore.slice(refundCreate, refundCreateEnd)
 const rLock = indexIn(refundBody, 'withPaymentAuthorityTransaction(checkpoint.paymentId', 'Refund durable authority lock')
-const rOpposite = indexIn(refundBody, "SELECT EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${checkpoint.paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')) AS active", 'Refund opposite Settlement read')
+const rOpposite = indexIn(refundBody, "SELECT EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${checkpoint.paymentId} AND (stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized') OR a2u_create_attempted_at IS NOT NULL)) AS active", 'Refund opposite Settlement read')
 const rConflict = indexIn(refundBody, "opposite[0].active === true) return []", 'Refund conflict fail-closed')
 const rInsert = indexIn(refundBody, 'INSERT INTO refund_checkpoints', 'Refund authority insert')
 assert(rLock < rOpposite && rOpposite < rConflict && rConflict < rInsert, 'Refund authority ordering is not lock -> opposite read -> conflict gate -> insert')
@@ -85,7 +85,7 @@ assert(!stageBody.includes("status<>'manual_review_required'") && stageBody.incl
 const readStart = indexIn(db, 'export async function readSettlementRefundAuthority', 'readSettlementRefundAuthority')
 const readEnd = indexIn(db.slice(readStart), '\n}\n\nexport async function verifySettlementRefundAuthorityExclusion', 'authority reader end') + readStart
 const readBody = db.slice(readStart, readEnd)
-assert(readBody.includes("stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')"), 'Settlement active predicate drifted')
+assert(readBody.includes("(stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized') OR a2u_create_attempted_at IS NOT NULL)"), 'Settlement active predicate drifted')
 assert(!readBody.includes("status<>'manual_review_required'") && readBody.includes("FROM refund_checkpoints WHERE payment_id=${paymentId} "), 'Refund authority must include manual-review rows')
 assert(readBody.includes("if(settlementActive&&refundActive)return{outcome:'CONFLICT'"), 'dual durable authority does not fail closed')
 assert(readBody.includes("if(!client)return{outcome:'INDETERMINATE'"), 'PostgreSQL absence does not fail closed')
