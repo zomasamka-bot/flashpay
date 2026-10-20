@@ -1,10 +1,10 @@
 import fs from 'node:fs'
 const read=(p)=>fs.readFileSync(new URL(`../${p}`,import.meta.url),'utf8')
-const db=read('lib/db.ts'), refunds=read('lib/refund-checkpoint-store.ts'), pretx=read('app/api/pi/recover-pretransaction/route.ts')
+const db=read('lib/db.ts'), schema=read('migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql'), refunds=read('lib/refund-checkpoint-store.ts'), pretx=read('app/api/pi/recover-pretransaction/route.ts')
 const complete=read('app/api/pi/complete/route.ts'), transient=read('app/api/recovery/transient/route.ts'), a2u=read('lib/a2u-executor.ts'), rex=read('lib/refund-executor.ts')
 const must=(ok,msg)=>{if(!ok)throw new Error(`FIN7 mutation authority verifier failed: ${msg}`)}
-must(db.includes("pi_mutation_guard_version TEXT")&&db.includes("'fin7_v2'"),'settlement generation guard missing')
-must(db.includes('CREATE TABLE IF NOT EXISTS financial_pi_mutation_attempts'),'append-only mutation attempt table missing')
+must(schema.includes("pi_mutation_guard_version TEXT")&&db.includes("'fin7_v2'"),'settlement generation guard missing')
+must(schema.includes('CREATE TABLE IF NOT EXISTS financial_pi_mutation_attempts'),'append-only mutation attempt table missing')
 must(db.includes("kind: 'u2a_cancel' | 'u2a_complete' | 'a2u_complete'"),'settlement mutation kinds missing')
 must(db.includes("if(r.pi_mutation_guard_version!=='fin7_v2')"),'legacy settlement fail-closed guard missing')
 must(db.includes("if(inserted.length===1){")&&db.includes("outcome:'RECORDED'"),'settlement RECORDED-only claim missing')

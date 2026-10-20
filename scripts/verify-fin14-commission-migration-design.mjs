@@ -2,11 +2,12 @@ import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 
 const db = readFileSync(new URL('../lib/db.ts', import.meta.url), 'utf8')
+const schema = readFileSync(new URL('../migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql', import.meta.url), 'utf8')
 
 // FIN14 design evidence is maintained in the external reviewer archive.
 // Current production locks must still exist. FIN-14 is forbidden from enabling commission.
-assert.ok(db.includes('CHECK (app_commission = 0)'), 'current app_commission=0 schema lock missing')
-assert.ok(db.includes('CHECK (merchant_amount IS NULL OR merchant_amount = customer_amount)'), 'current merchant=customer schema lock missing')
+assert.ok(schema.includes('CHECK (app_commission = 0)'), 'current app_commission=0 schema lock missing')
+assert.ok(schema.includes('CHECK (merchant_amount IS NULL OR merchant_amount = customer_amount)'), 'current merchant=customer schema lock missing')
 assert.ok(db.includes('params.merchantAmount!==params.customerAmount'), 'current settlement zero-fee runtime lock missing')
 assert.ok(db.includes('params.appCommission!==0'), 'current settlement commission=0 runtime lock missing')
 

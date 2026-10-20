@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs'
 
 const db = readFileSync(new URL('../lib/db.ts', import.meta.url), 'utf8')
+const migration = readFileSync(new URL('../migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql', import.meta.url), 'utf8')
 const executor = readFileSync(new URL('../lib/a2u-executor.ts', import.meta.url), 'utf8')
 
 const must = (condition, message) => { if (!condition) throw new Error(`FIN5_PRECREATE_GUARD_FAIL: ${message}`) }
 
-must(db.includes("a2u_create_guard_version TEXT"), 'guard generation column missing')
-must(db.includes("a2u_create_attempted_at TIMESTAMP"), 'durable attempt timestamp missing')
+must(migration.includes("a2u_create_guard_version TEXT"), 'guard generation column missing')
+must(migration.includes("a2u_create_attempted_at TIMESTAMP"), 'durable attempt timestamp missing')
 must(db.includes("0, 'fin5_v1'"), 'new payment identities are not born guarded')
 must(db.includes('export async function claimSettlementA2UCreateAttempt'), 'durable attempt claim missing')
 must(db.includes("AND a2u_create_guard_version='fin5_v1'"), 'claim does not reject legacy rows')

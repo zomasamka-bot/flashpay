@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
 
 const db = readFileSync(new URL('../lib/db.ts', import.meta.url), 'utf8')
+const migration = readFileSync(new URL('../migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql', import.meta.url), 'utf8')
 const route = readFileSync(new URL('../app/api/pi/approve/route.ts', import.meta.url), 'utf8')
 const must = (ok, msg) => { if (!ok) throw new Error(`FIN7-S2 verifier failed: ${msg}`) }
 
-must(db.includes('u2a_approval_guard_version TEXT'), 'guard-version schema missing')
-must(db.includes('u2a_approval_attempted_at TIMESTAMP'), 'attempt timestamp schema missing')
+must(migration.includes('u2a_approval_guard_version TEXT'), 'guard-version schema missing')
+must(migration.includes('u2a_approval_attempted_at TIMESTAMP'), 'attempt timestamp schema missing')
 must(db.includes("u2a_approval_guard_version='fin7_v1',u2a_approval_attempted_at=NULL"), 'new ownership is not version-bound')
 must(db.includes('export async function claimSettlementU2AApprovalAttempt'), 'one-shot attempt claim missing')
 must(db.includes("u2a_approval_guard_version='fin7_v1' AND u2a_approval_attempted_at IS NULL"), 'attempt claim is not guarded one-shot')

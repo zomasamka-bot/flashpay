@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 
 const db = fs.readFileSync(new URL('../lib/db.ts', import.meta.url), 'utf8')
+const migration = fs.readFileSync(new URL('../migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql', import.meta.url), 'utf8')
 const refund = fs.readFileSync(new URL('../lib/refund-accounting.ts', import.meta.url), 'utf8')
 const status = fs.readFileSync(new URL('../lib/payment-status.ts', import.meta.url), 'utf8')
 
@@ -11,15 +12,15 @@ const must = (haystack, needle, label) => check(haystack.includes(needle), label
 
 // Settlement schema/accounting invariants (1-10)
 must(db, "'db_finalized'", 'db_finalized stage exists')
-must(db, 'app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0)', 'commission fixed at zero')
-must(db, 'CHECK (merchant_amount IS NULL OR merchant_amount = customer_amount)', 'merchant equals customer amount')
-must(db, "prepared_tx_hash TEXT CHECK (prepared_tx_hash IS NULL OR prepared_tx_hash ~ '^[0-9a-f]{64}$')", 'prepared hash shape')
-must(db, "a2u_txid TEXT CHECK (a2u_txid IS NULL OR a2u_txid ~ '^[0-9a-f]{64}$')", 'a2u txid shape')
-must(db, 'prepared_tx_hash = a2u_txid', 'prepared hash binds horizon txid')
-must(db, 'horizon_fee_stroops IS NOT NULL', 'horizon fee required for final movement')
-must(db, 'horizon_confirmed_at IS NOT NULL', 'horizon timestamp required')
-must(db, 'OR pi_completed_at IS NOT NULL', 'pi completion timestamp required')
-must(db, "stage <> 'db_finalized'\n        OR db_finalized_at IS NOT NULL", 'db final timestamp required')
+must(migration, 'app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0)', 'commission fixed at zero')
+must(migration, 'CHECK (merchant_amount IS NULL OR merchant_amount = customer_amount)', 'merchant equals customer amount')
+must(migration, "prepared_tx_hash TEXT CHECK (prepared_tx_hash IS NULL OR prepared_tx_hash ~ '^[0-9a-f]{64}$')", 'prepared hash shape')
+must(migration, "a2u_txid TEXT CHECK (a2u_txid IS NULL OR a2u_txid ~ '^[0-9a-f]{64}$')", 'a2u txid shape')
+must(migration, 'prepared_tx_hash = a2u_txid', 'prepared hash binds horizon txid')
+must(migration, 'horizon_fee_stroops IS NOT NULL', 'horizon fee required for final movement')
+must(migration, 'horizon_confirmed_at IS NOT NULL', 'horizon timestamp required')
+must(migration, 'OR pi_completed_at IS NOT NULL', 'pi completion timestamp required')
+must(migration, "stage <> 'db_finalized'\n        OR db_finalized_at IS NOT NULL", 'db final timestamp required')
 
 // DB-finalized exact receipt barrier (11-20)
 must(db, 'export async function recordSettlementDbFinalizedCheckpoint', 'db finality writer exists')

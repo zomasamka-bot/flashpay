@@ -10,6 +10,62 @@ export type WalletAuthorityClaim = {
   operationKind: 'settlement' | 'refund'; operationId: string;
   preparedHash: string; preparedSequence: string;
 }
+/** R36 production schema + ACL admission. No DDL, no financial writes.
+ * Missing tables, missing privileges, or inaccessible catalog => DENY.
+ * This is a necessary condition, never a clearance or wallet release.
+ */
+export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
+  try {
+    const rows = await db.unsafe(`
+      WITH required(name) AS (VALUES
+        ('financial_wallet_authorities'),('financial_wallet_activation'),
+        ('financial_wallet_authority_history'),('financial_wallet_submission_attempts'),
+        ('financial_wallet_finality_seals'),('financial_wallet_rotation_approvals'),
+        ('r36_rotation_approval_evidence'),('r36_signed_approval_consumptions')),
+      catalog AS (
+        SELECT name, to_regclass('public.' || name) AS oid FROM required
+      )
+      SELECT count(*) FILTER (WHERE oid IS NOT NULL) AS present,
+        count(*) FILTER (WHERE oid IS NOT NULL AND
+          (SELECT c.relkind FROM pg_class c WHERE c.oid=catalog.oid) IN ('r','p')) AS real_tables,
+        coalesce(bool_or(CASE WHEN name IN
+          ('financial_wallet_rotation_approvals','r36_rotation_approval_evidence',
+           'financial_wallet_activation',
+           'financial_wallet_authority_history','r36_signed_approval_consumptions')
+          THEN oid IS NULL OR
+            has_table_privilege(current_user,oid,'INSERT') OR
+            has_table_privilege(current_user,oid,'UPDATE') OR
+            has_table_privilege(current_user,oid,'DELETE') OR
+            pg_has_role(current_user,(SELECT c.relowner FROM pg_class c WHERE c.oid=catalog.oid),'MEMBER')
+          ELSE false END),true) AS can_mutate_protected,
+        coalesce(bool_or(CASE WHEN oid IS NOT NULL AND
+          name='financial_wallet_submission_attempts'
+          THEN NOT has_table_privilege(current_user,oid,'INSERT')
+          ELSE false END),true) AS missing_attempt_insert
+      FROM catalog
+    `, [])
+    const r = Array.isArray(rows) ? rows[0] as {
+      present: string|number; real_tables: string|number;
+      can_mutate_protected: boolean; missing_attempt_insert: boolean
+    } : null
+    if (!r || Number(r.present) !== 8 || Number(r.real_tables) !== 8 ||
+        r.can_mutate_protected !== false || r.missing_attempt_insert !== false) return false
+    // The app must never execute the operator-only wallet-owner rotation
+    // function, including via PUBLIC or an inherited role. Reject privileged
+    // DB identities that can bypass ordinary table ACL checks.
+    const acl = await db.unsafe(`
+      SELECT NOT (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user)
+          AS unprivileged,
+        CASE WHEN to_regprocedure('public.r36_rotate_wallet_owner_quarantined(text,text,text,text,text,text,text,text,text)') IS NULL
+          THEN true ELSE NOT has_function_privilege(current_user,
+            'public.r36_rotate_wallet_owner_quarantined(text,text,text,text,text,text,text,text,text)', 'EXECUTE')
+        END AS cannot_rotate
+    `, [])
+    const a = Array.isArray(acl) ? acl[0] as { unprivileged: boolean; cannot_rotate: boolean } : null
+    return !!a && a.unprivileged === true && a.cannot_rotate === true
+  } catch { return false }
+}
+
 export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
   if (input.network !== 'Pi Testnet' ||
       !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
@@ -18,6 +74,9 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
       !['settlement', 'refund'].includes(input.operationKind) ||
       !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
       !/^[1-9][0-9]*$/.test(input.preparedSequence)) return false
+  // Fail closed before attempting any durable wallet authority mutation.
+  // The optional transaction is mandatory for atomic prepare and uses the same DB client.
+  if (!tx || !(await checkR36SchemaAdmission(tx))) return false
   // Unique (network,source_wallet) serializes contenders. Conflict is
   // intentionally NOT reassigned, even after Redis loss, TTL or restart.
   // Exact same owner+prepared identity is the only allowed replay.
@@ -32,10 +91,19 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
     AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s
       WHERE s.a2u_from_address=$2 AND s.payment_id<>$3
         AND s.stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed'))
-    -- Refund checkpoints lack a trustworthy source-wallet column. Conservatively
-    -- treat every OTHER pending/manual-review refund as a possible contender.
+    -- Only a distinct-wallet durable R36 refund authority with exact refund/payment
+    -- identity can exclude another refund from this wallet's blocker set.
+    -- Missing, mismatched or same-wallet authority remains fail-closed.
     AND NOT EXISTS (SELECT 1 FROM refund_checkpoints r
-      WHERE r.payment_id<>$3 AND r.status IN ('pending','manual_review_required'))
+      WHERE r.payment_id<>$3 AND r.status IN ('pending','manual_review_required')
+        AND NOT EXISTS (
+          SELECT 1 FROM financial_wallet_authorities ra
+          WHERE ra.network=$1 AND ra.operation_kind='refund'
+            AND ra.owner_payment_id=r.payment_id
+            AND ra.owner_operation_id=r.refund_id
+            AND ra.source_wallet<>$2
+            AND ra.state='prepared'
+        ))
     ON CONFLICT (network, source_wallet) DO UPDATE SET
       updated_at = financial_wallet_authorities.updated_at
     WHERE financial_wallet_authorities.owner_payment_id = EXCLUDED.owner_payment_id
@@ -87,6 +155,11 @@ export async function claimFirstWalletSubmission(input: WalletAuthorityClaim): P
       !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
       !/^[1-9][0-9]*$/.test(input.preparedSequence)) return false
   try {
+    if (!(await checkR36SchemaAdmission({ unsafe: async (sql, values) => {
+      const rows = await query(sql, values)
+      if (!rows) throw new Error('R36_SCHEMA_QUERY_NULL')
+      return rows
+    } }))) return false
     // A single INSERT statement makes the exact-owner check and append-only
     // one-shot admission atomic. The authority row is locked until commit;
     // lock conflicts and database outages always deny the submit.
@@ -105,8 +178,18 @@ export async function claimFirstWalletSubmission(input: WalletAuthorityClaim): P
         AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s
           WHERE s.a2u_from_address=$2 AND s.payment_id<>$3
             AND s.stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed'))
+        -- Unknown or same-wallet pending refunds remain blockers. Only exact
+        -- immutable R36 authority for a DIFFERENT wallet can exclude one.
         AND NOT EXISTS (SELECT 1 FROM refund_checkpoints r
-          WHERE r.payment_id<>$3 AND r.status IN ('pending','manual_review_required'))
+          WHERE r.payment_id<>$3 AND r.status IN ('pending','manual_review_required')
+            AND NOT EXISTS (
+              SELECT 1 FROM financial_wallet_authorities ra
+              WHERE ra.network=$1 AND ra.operation_kind='refund'
+                AND ra.owner_payment_id=r.payment_id
+                AND ra.owner_operation_id=r.refund_id
+                AND ra.source_wallet<>$2
+                AND ra.state='prepared'
+            ))
       FOR UPDATE OF a
       ON CONFLICT DO NOTHING
       RETURNING prepared_tx_hash`,

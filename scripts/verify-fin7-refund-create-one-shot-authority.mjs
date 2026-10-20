@@ -1,10 +1,10 @@
 import fs from 'node:fs'
 const read=(p)=>fs.readFileSync(new URL(`../${p}`,import.meta.url),'utf8')
-const db=read('lib/db.ts'), store=read('lib/refund-checkpoint-store.ts'), exec=read('lib/refund-executor.ts')
+const schema=read('migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql'), store=read('lib/refund-checkpoint-store.ts'), exec=read('lib/refund-executor.ts')
 const must=(ok,msg)=>{if(!ok)throw new Error(`FIN7 refund-create verifier failed: ${msg}`)}
-must(db.includes('CREATE TABLE IF NOT EXISTS refund_pi_create_attempts'),'durable create-attempt table missing')
-must(db.includes('refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT'),'refund identity uniqueness/FK missing')
-must(db.includes('payment_id TEXT NOT NULL UNIQUE')&&db.includes('idempotency_key TEXT NOT NULL UNIQUE'),'payment/idempotency uniqueness missing')
+must(schema.includes('CREATE TABLE IF NOT EXISTS refund_pi_create_attempts'),'durable create-attempt table missing')
+must(schema.includes('refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT'),'refund identity uniqueness/FK missing')
+must(schema.includes('payment_id TEXT NOT NULL UNIQUE')&&schema.includes('idempotency_key TEXT NOT NULL UNIQUE'),'payment/idempotency uniqueness missing')
 must(store.includes('export async function claimRefundCreateAttempt'),'create claim missing')
 must(store.includes("r.pi_mutation_guard_version!=='fin7_v2'")&&store.includes("r.stage!=='wallet_submission_started'")&&store.includes('r.refund_payment_id!=null||r.refund_txid!=null'),'exact guarded lifecycle missing')
 must(store.includes('INSERT INTO refund_pi_create_attempts(refund_id,payment_id,idempotency_key)')&&store.includes('ON CONFLICT DO NOTHING RETURNING attempted_at'),'append-only claim missing')

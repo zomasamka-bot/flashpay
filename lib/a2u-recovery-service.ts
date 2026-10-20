@@ -6,7 +6,7 @@ import { markRefundPendingAfterFailedSettlement } from "@/lib/types"
 import { reconcileIncompleteA2UPayment, isPiA2UPayment, isRecord } from "@/lib/pi-reconciliation"
 import { persistCheckpointMerged } from "@/lib/a2u-executor"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
-import { getSettlementCheckpointAuthoritative, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
+import { getSettlementCheckpointAuthoritative, recordSettlementA2UCreatedCheckpoint, verifySettlementRefundAuthorityExclusion } from "@/lib/db"
 import type { Payment } from "@/lib/types"
 
 /**
@@ -123,19 +123,63 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
     const stateMatches = mode === 6
       ? latest?.settlementFailureState === "held" || latest?.settlementFailureState === "manual_review_required"
       : latest?.status === "settlement_failed"
-    if (!latest || latest.id !== paymentId || !stateMatches || latest.customerAmount !== customerAmount || latest.merchantUid !== merchantUid || latest.a2uPaymentId || latest.a2uTxid || latest.a2uPreparedTxHash || latest.a2uPreparedSequence || latest.a2uPreparedEnvelopeXdr || latest.horizonSuccessFlag || latest.refundPaymentId || latest.refundTxid || refundLookup.state !== "absent") return "MANUAL_REVIEW"
+    if (!latest || latest.id !== paymentId || !stateMatches || latest.customerAmount !== customerAmount || latest.merchantUid !== merchantUid || latest.a2uTxid || latest.a2uPreparedTxHash || latest.a2uPreparedSequence || latest.a2uPreparedEnvelopeXdr || latest.horizonSuccessFlag || latest.refundPaymentId || latest.refundTxid || refundLookup.state !== "absent") return "MANUAL_REVIEW"
 
     const reconciliation = await reconcileIncompleteA2UPayment(paymentId, latest.customerAmount, latest.merchantUid)
     if (reconciliation.outcome === "INDETERMINATE") return "INDETERMINATE"
     if (reconciliation.outcome === "FOUND") {
       if (!reconciliation.dto || !isPiA2UPayment(reconciliation.dto)) return "MANUAL_REVIEW"
-      const identifier = reconciliation.dto.identifier
-      if (typeof identifier !== "string" || identifier.trim().length === 0) return "MANUAL_REVIEW"
-      const transaction = isRecord(reconciliation.dto.transaction) ? reconciliation.dto.transaction : null
-      await persistCheckpointMerged(paymentId, { a2uPaymentId: identifier, ...(typeof transaction?.txid === "string" ? { a2uTxid: transaction.txid } : {}) })
+      const dto = reconciliation.dto
+      const identifier = dto.identifier
+      const fromAddress = dto.from_address
+      const toAddress = dto.to_address
+      const metadata = isRecord(dto.metadata) ? dto.metadata : null
+      const transaction = isRecord(dto.transaction) ? dto.transaction : null
+      const status = isRecord(dto.status) ? dto.status : null
+      // R15-G: reuse the exact unmoved-Pi-identity gate from SETTLEMENT_RECONCILE.
+      // A Pi identifier alone is never enough to authorize a durable Stage1 claim.
+      const unmovedExactIdentity =
+        typeof identifier === "string" && identifier.trim() !== "" && identifier === identifier.trim() &&
+        typeof fromAddress === "string" && fromAddress.trim() !== "" && fromAddress === fromAddress.trim() &&
+        typeof toAddress === "string" && toAddress.trim() !== "" && toAddress === toAddress.trim() &&
+        dto.network === "Pi Testnet" && dto.direction === "app_to_user" && dto.amount === latest.customerAmount &&
+        dto.user_uid === latest.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === paymentId &&
+        typeof dto.txid !== "string" && typeof dto.transaction_id !== "string" && dto.completed !== true && dto.cancelled !== true && dto.rejected !== true &&
+        typeof transaction?.txid !== "string" && transaction?.verified !== true &&
+        status?.transaction_verified !== true && status?.developer_completed !== true && status?.cancelled !== true && status?.user_cancelled !== true
+      if (!unmovedExactIdentity) return "MANUAL_REVIEW"
+      // Redis is untrusted projection: allow reentry only for the exact Pi identity.
+      if (latest.a2uPaymentId != null && latest.a2uPaymentId !== identifier) return "MANUAL_REVIEW"
+      if (latest.a2uFromAddress != null && latest.a2uFromAddress !== fromAddress) return "MANUAL_REVIEW"
+      if (latest.a2uToAddress != null && latest.a2uToAddress !== toAddress) return "MANUAL_REVIEW"
+      if (latest.merchantAmount !== latest.customerAmount || latest.appCommission !== 0 ||
+          typeof latest.merchantId !== "string" || typeof latest.piPaymentId !== "string" ||
+          typeof latest.u2aTxid !== "string") return "MANUAL_REVIEW"
+      // PostgreSQL serializes XOR and exact U2A/merchant identity under payment advisory lock.
+      // No Redis update is permitted before durable Stage1 is RECORDED or exact REPLAYED.
+      const durable = await recordSettlementA2UCreatedCheckpoint({
+        paymentId, merchantId: latest.merchantId, merchantUid: latest.merchantUid!,
+        customerAmount: latest.customerAmount!, merchantAmount: latest.merchantAmount!,
+        u2aIdentifier: latest.piPaymentId, u2aTxid: latest.u2aTxid,
+        a2uPaymentId: identifier as string, a2uFromAddress: fromAddress as string, a2uToAddress: toAddress as string,
+      })
+      if (durable.outcome !== "RECORDED" && durable.outcome !== "REPLAYED") return "MANUAL_REVIEW"
+      const durableRead = await getSettlementCheckpointAuthoritative(paymentId)
+      if (durableRead.outcome !== "FOUND" || durableRead.checkpoint.stage !== "a2u_created" ||
+          durableRead.checkpoint.a2uPaymentId !== identifier ||
+          durableRead.checkpoint.a2uFromAddress !== fromAddress ||
+          durableRead.checkpoint.a2uToAddress !== toAddress) return "MANUAL_REVIEW"
+      // Crash after the PG commit is replay-safe: the same writer returns REPLAYED.
+      await persistCheckpointMerged(paymentId, {
+        a2uPaymentId: identifier as string,
+        a2uFromAddress: fromAddress as string,
+        a2uToAddress: toAddress as string,
+      })
       return "FOUND"
     }
     if (reconciliation.outcome !== "CONFIRMED_NONE") return "MANUAL_REVIEW"
+    // A Redis-observed Pi A2U identity must never be downgraded into refund eligibility.
+    if (latest.a2uPaymentId) return "MANUAL_REVIEW"
 
     const refundPending = markRefundPendingAfterFailedSettlement(
       mode === 6 ? { ...latest, status: "settlement_failed" } : latest,
@@ -583,7 +627,7 @@ export async function executeA2URecovery(
   // This code deliberately refuses to refund without verified payer eligibility and proof
   // that neither Pi A2U nor Horizon contains merchant-transfer evidence.
   if (payment.settlementFailureState === "held" || payment.settlementFailureState === "manual_review_required") {
-    const hasMerchantEvidence = Boolean(payment.a2uPaymentId || payment.a2uTxid || payment.horizonSuccessFlag)
+    const hasMerchantEvidence = Boolean(payment.a2uTxid || payment.horizonSuccessFlag || payment.a2uPreparedTxHash || payment.a2uPreparedSequence || payment.a2uPreparedEnvelopeXdr)
     if (hasMerchantEvidence) {
       return { status: "manual_review_required", state: "refund_blocked_transfer_evidence", paymentId, details: { a2uTxid: payment.a2uTxid, error: "Refund blocked until transfer evidence is reconciled" } }
     }

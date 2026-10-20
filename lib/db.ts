@@ -169,258 +169,28 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   }
 }
 
-async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
-  const table = await query(`
-    CREATE TABLE IF NOT EXISTS settlement_checkpoints (
-      payment_id TEXT PRIMARY KEY,
-      version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
-      stage TEXT NOT NULL CHECK (stage IN (
-        'payment_identity',
-        'a2u_created',
-        'prepared',
-        'horizon_confirmed',
-        'pi_completed',
-        'db_finalized'
-      )),
-      merchant_id TEXT NOT NULL CHECK (length(btrim(merchant_id)) > 0),
-      merchant_uid TEXT NOT NULL CHECK (length(btrim(merchant_uid)) > 0),
-      customer_amount NUMERIC(18, 8) NOT NULL CHECK (customer_amount > 0),
-      merchant_amount NUMERIC(18, 8) CHECK (merchant_amount > 0),
-      app_commission NUMERIC(18, 8) NOT NULL DEFAULT 0 CHECK (app_commission = 0),
-      u2a_approval_identifier TEXT,
-      u2a_approval_claimed_at TIMESTAMP,
-      u2a_approval_guard_version TEXT,
-      u2a_approval_attempted_at TIMESTAMP,
-      u2a_start_lease_token TEXT,
-      u2a_start_lease_expires_at TIMESTAMP,
-      u2a_identifier TEXT,
-      u2a_txid TEXT,
-      payer_uid TEXT,
-      u2a_verified_at TIMESTAMP,
-      u2a_completed_at TIMESTAMP,
-      a2u_create_guard_version TEXT,
-      a2u_create_attempted_at TIMESTAMP,
-      pi_mutation_guard_version TEXT,
-      a2u_payment_id TEXT,
-      a2u_from_address TEXT,
-      a2u_to_address TEXT,
-      prepared_envelope_xdr TEXT,
-      prepared_tx_hash TEXT CHECK (prepared_tx_hash IS NULL OR prepared_tx_hash ~ '^[0-9a-f]{64}$'),
-      prepared_sequence NUMERIC(30, 0) CHECK (prepared_sequence IS NULL OR prepared_sequence > 0),
-      a2u_txid TEXT CHECK (a2u_txid IS NULL OR a2u_txid ~ '^[0-9a-f]{64}$'),
-      horizon_fee_stroops BIGINT CHECK (horizon_fee_stroops IS NULL OR horizon_fee_stroops >= 0),
-      horizon_confirmed_at TIMESTAMP,
-      pi_completed_at TIMESTAMP,
-      db_finalized_at TIMESTAMP,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      CHECK (merchant_amount IS NULL OR merchant_amount = customer_amount),
-      CHECK (
-        stage NOT IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')
-        OR a2u_payment_id IS NOT NULL
-      ),
-      CHECK (
-        stage NOT IN ('prepared','horizon_confirmed','pi_completed','db_finalized')
-        OR (
-          a2u_from_address IS NOT NULL AND
-          a2u_to_address IS NOT NULL AND
-          prepared_envelope_xdr IS NOT NULL AND
-          prepared_tx_hash IS NOT NULL AND
-          prepared_sequence IS NOT NULL
-        )
-      ),
-      CHECK (
-        stage NOT IN ('horizon_confirmed','pi_completed','db_finalized')
-        OR (
-          a2u_txid IS NOT NULL AND
-          prepared_tx_hash = a2u_txid AND
-          horizon_fee_stroops IS NOT NULL AND
-          horizon_confirmed_at IS NOT NULL
-        )
-      ),
-      CHECK (
-        stage NOT IN ('pi_completed','db_finalized')
-        OR pi_completed_at IS NOT NULL
-      ),
-      CHECK (
-        stage <> 'db_finalized'
-        OR db_finalized_at IS NOT NULL
-      )
-    )
-  `)
-  if (table === null) return false
-
-  // N-FIN-10E + F2-2: existing installations must gain the durable U2A ingress
-  // identity/finality evidence needed across Redis/Pi crash boundaries. No token/secret is stored.
-  const u2aIdentityColumns = await query(`
-    ALTER TABLE settlement_checkpoints
-      ADD COLUMN IF NOT EXISTS u2a_approval_identifier TEXT,
-      ADD COLUMN IF NOT EXISTS u2a_approval_claimed_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS u2a_approval_guard_version TEXT,
-      ADD COLUMN IF NOT EXISTS u2a_approval_attempted_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS u2a_start_lease_token TEXT,
-      ADD COLUMN IF NOT EXISTS u2a_start_lease_expires_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS u2a_identifier TEXT,
-      ADD COLUMN IF NOT EXISTS u2a_txid TEXT,
-      ADD COLUMN IF NOT EXISTS payer_uid TEXT,
-      ADD COLUMN IF NOT EXISTS u2a_verified_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS u2a_completed_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS a2u_create_guard_version TEXT,
-      ADD COLUMN IF NOT EXISTS a2u_create_attempted_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS pi_mutation_guard_version TEXT
-  `)
-  if (u2aIdentityColumns === null) return false
-
-  // R4J: append-only evidence for a Pi U2A approval that was canonically
-  // cancelled before any blockchain transaction existed. This never records
-  // movement; it preserves the retired owner before the active owner slot is
-  // released for a fresh Pi payment.
-  const u2aApprovalRetirements = await query(`
-    CREATE TABLE IF NOT EXISTS settlement_u2a_approval_retirements (
-      payment_id TEXT NOT NULL,
-      pi_payment_id TEXT NOT NULL,
-      reason TEXT NOT NULL CHECK (reason = 'pi_pretransaction_cancelled'),
-      pi_cancelled_at TIMESTAMP NOT NULL,
-      retired_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      PRIMARY KEY(payment_id, pi_payment_id)
-    )
-  `)
-  if (u2aApprovalRetirements === null) return false
-
-  // FIN7-S3: append-only one-shot authority for Pi mutation POSTs whose network
-  // outcome can become ambiguous across a process crash. The generation guard is
-  // stored on the owning durable lifecycle before any such mutation can occur;
-  // legacy lifecycles therefore cannot be silently upgraded into a fresh POST.
-  const piMutationAttempts = await query(`
-    CREATE TABLE IF NOT EXISTS financial_pi_mutation_attempts (
-      mutation_kind TEXT NOT NULL CHECK (mutation_kind IN ('u2a_cancel','u2a_complete','a2u_complete','dr11_a2u_cancel','refund_complete')),
-      payment_id TEXT NOT NULL,
-      external_payment_id TEXT NOT NULL,
-      txid TEXT,
-      refund_id TEXT,
-      attempted_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (mutation_kind, payment_id, external_payment_id)
-    )
-  `)
-  if (piMutationAttempts === null) return false
-
-  // R4P: append-only evidence for an A2U Stage1 identity that Pi has canonically
-  // cancelled before transaction creation and whose Horizon movement absence was
-  // independently proven. The row is preserved before the active Stage1 pointer
-  // can be retired back to payment_identity.
-  const a2uStage1Retirements = await query(`
-    CREATE TABLE IF NOT EXISTS settlement_a2u_stage1_retirements (
-      payment_id TEXT NOT NULL,
-      a2u_payment_id TEXT NOT NULL,
-      reason TEXT NOT NULL CHECK (reason = 'pi_cancelled_before_transaction'),
-      pi_cancelled_at TIMESTAMP NOT NULL,
-      horizon_absence_proven_at TIMESTAMP NOT NULL,
-      retired_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      PRIMARY KEY(payment_id, a2u_payment_id)
-    )
-  `)
-  if (a2uStage1Retirements === null) return false
-
-  // R4P: append-only capture of a Pi ongoing_payment_found identifier before any
-  // caller can lose the only server-side evidence returned by the failed create.
-  const a2uOngoingObservations = await query(`
-    CREATE TABLE IF NOT EXISTS settlement_a2u_ongoing_observations (
-      payment_id TEXT NOT NULL,
-      a2u_payment_id TEXT NOT NULL,
-      observed_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      PRIMARY KEY(payment_id, a2u_payment_id)
-    )
-  `)
-  if (a2uOngoingObservations === null) return false
-
-  // DR60: durable certification hold lives on the existing payment identity row.
-  // It is coordination metadata only: it never represents Settlement or Refund movement.
-  const certificationHoldColumns = await query(`
-    ALTER TABLE settlement_checkpoints
-      ADD COLUMN IF NOT EXISTS certification_hold TEXT,
-      ADD COLUMN IF NOT EXISTS certification_hold_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS certification_hold_expires_at TIMESTAMP
-  `)
-  if (certificationHoldColumns === null) return false
-
-  const stageIndex = await query(`
-    CREATE INDEX IF NOT EXISTS idx_settlement_checkpoints_stage_updated
-    ON settlement_checkpoints(stage, updated_at ASC)
-  `)
-  if (stageIndex === null) return false
-
-  const a2uPaymentIndex = await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_settlement_checkpoints_a2u_payment_id
-    ON settlement_checkpoints(a2u_payment_id)
-    WHERE a2u_payment_id IS NOT NULL
-  `)
-  if (a2uPaymentIndex === null) return false
-
-  const preparedHashIndex = await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_settlement_checkpoints_prepared_tx_hash
-    ON settlement_checkpoints(prepared_tx_hash)
-    WHERE prepared_tx_hash IS NOT NULL
-  `)
-  if (preparedHashIndex === null) return false
-
-  const txidIndex = await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_settlement_checkpoints_a2u_txid
-    ON settlement_checkpoints(a2u_txid)
-    WHERE a2u_txid IS NOT NULL
-  `)
-  if (txidIndex === null) return false
-
-  // N-FIN-X1: PostgreSQL-owned recovery rotation cursor. This is durability
-  // metadata only; it never authorizes or records financial movement.
-  const recoveryCursor = await query(`
-    CREATE TABLE IF NOT EXISTS settlement_recovery_scan_cursor (
-      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton = TRUE),
-      last_updated_at TIMESTAMP,
-      last_payment_id TEXT,
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `)
-  if (recoveryCursor === null) return false
-  const recoveryCursorSeed = await query(`
-    INSERT INTO settlement_recovery_scan_cursor(singleton)
-    VALUES(TRUE)
-    ON CONFLICT(singleton) DO NOTHING
-  `)
-  if (recoveryCursorSeed === null) return false
-
-  // F2-3: independent PostgreSQL-owned cursor for pre-A2U durable U2A ingress
-  // rediscovery. It is intentionally separate from the Settlement Stage1+ cursor
-  // so neither recovery lane can starve or advance the other.
-  const u2aIngressRecoveryCursor = await query(`
-    CREATE TABLE IF NOT EXISTS u2a_ingress_recovery_scan_cursor (
-      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton = TRUE),
-      last_updated_at TIMESTAMP,
-      last_payment_id TEXT,
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `)
-  if (u2aIngressRecoveryCursor === null) return false
-  const u2aIngressRecoveryCursorSeed = await query(`
-    INSERT INTO u2a_ingress_recovery_scan_cursor(singleton)
-    VALUES(TRUE)
-    ON CONFLICT(singleton) DO NOTHING
-  `)
-  return u2aIngressRecoveryCursorSeed !== null
+/** R36 ACL: runtime schema probes are read-only and fail closed. Migration is separate. */
+async function r36VerifyColumns(table: string, columns: readonly string[]): Promise<boolean> {
+  if (!process.env.DATABASE_URL) return false
+  try {
+    const result = await query(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`, [table])
+    if (!Array.isArray(result)) return false
+    const actual = new Set(result.map((r: any) => String(r.column_name)))
+    return columns.every((name) => actual.has(name))
+  } catch (error) {
+    console.error('[DB] R36 read-only schema verification failed:', error)
+    return false
+  }
+}
+async function r36VerifyTables(spec: ReadonlyArray<readonly [string, readonly string[]]>): Promise<boolean> {
+  for (const [table, columns] of spec) if (!(await r36VerifyColumns(table, columns))) return false
+  return true
 }
 
-export type SettlementPaymentIdentityCheckpointResult =
-  | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
-  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
+async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
+  return r36VerifyTables([['settlement_checkpoints', ['payment_id','version','stage','merchant_id','merchant_uid','customer_amount','merchant_amount','app_commission','prepared_envelope_xdr','prepared_tx_hash','prepared_sequence','a2u_txid','horizon_fee_stroops','db_finalized_at']]])
+}
 
-/**
- * F2-1: durable pre-U2A payment identity.
- *
- * This is an identity/accounting checkpoint only. It stores no access token,
- * authorizes no Settlement or Refund movement, and performs no blockchain work.
- * New payment creation accepts only RECORDED so a generated payment ID can never
- * alias an older flow; REPLAYED exists only to make the writer itself monotonic
- * and fail-safe under an uncertain caller retry.
- */
 export async function recordSettlementPaymentIdentityCheckpoint(params: {
   paymentId: string
   merchantId: string
@@ -1753,7 +1523,7 @@ export async function readSettlementRefundAuthority(paymentId:string):Promise<Se
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
       SELECT
-        EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')) AS settlement_active,
+        EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${paymentId} AND (stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized') OR a2u_create_attempted_at IS NOT NULL)) AS settlement_active,
         EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${paymentId} ) AS refund_active
     `
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Cross-authority durable read invalid'}
@@ -1908,363 +1678,31 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
 }
 
 export async function ensureRefundCheckpointTables(): Promise<boolean> {
-  if (!process.env.DATABASE_URL) return false
-  // DR-13: first Refund request must be able to establish its durable schema on
-  // a clean database. DDL is idempotent/concurrency-safe; every step is checked
-  // and no financial movement is possible until the complete schema exists.
-  const checkpoints = await query(`
-    CREATE TABLE IF NOT EXISTS refund_checkpoints (
-      refund_id TEXT PRIMARY KEY,
-      payment_id TEXT NOT NULL UNIQUE,
-      idempotency_key TEXT NOT NULL UNIQUE,
-      status TEXT NOT NULL,
-      stage TEXT NOT NULL,
-      payer_uid TEXT NOT NULL,
-      payer_uid_verified_at TIMESTAMP NOT NULL,
-      amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
-      currency TEXT NOT NULL DEFAULT 'π',
-      source_payment_status TEXT NOT NULL,
-      source_settlement_state TEXT NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      refund_payment_id TEXT,
-      refund_txid TEXT,
-      attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-      last_error_code TEXT,
-      last_error_message TEXT,
-      next_retry_at TIMESTAMP,
-      pi_mutation_guard_version TEXT
-    )
-  `)
-  if (checkpoints === null) return false
-  const refundMutationGuard = await query(`ALTER TABLE refund_checkpoints ADD COLUMN IF NOT EXISTS pi_mutation_guard_version TEXT`)
-  if (refundMutationGuard === null) return false
-  const refundPiMutationAttempts = await query(`
-    CREATE TABLE IF NOT EXISTS financial_pi_mutation_attempts (
-      mutation_kind TEXT NOT NULL CHECK (mutation_kind IN ('u2a_cancel','u2a_complete','a2u_complete','dr11_a2u_cancel','refund_complete')),
-      payment_id TEXT NOT NULL, external_payment_id TEXT NOT NULL, txid TEXT, refund_id TEXT,
-      attempted_at TIMESTAMP NOT NULL DEFAULT NOW(), PRIMARY KEY (mutation_kind,payment_id,external_payment_id)
-    )`)
-  if (refundPiMutationAttempts === null) return false
-  // FIN7-S4: Refund creation has no external Pi identifier before POST, so it
-  // needs its own append-only authority keyed by the durable Refund identity.
-  // A crash after this row is recorded can never authorize a second create.
-  const refundCreateAttempts = await query(`
-    CREATE TABLE IF NOT EXISTS refund_pi_create_attempts (
-      refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
-      payment_id TEXT NOT NULL UNIQUE,
-      idempotency_key TEXT NOT NULL UNIQUE,
-      attempted_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )`)
-  if (refundCreateAttempts === null) return false
-
-  // FIN-4 R4T: append-only containment for refund intents proven poisoned before
-  // financial movement. The original checkpoint/audit history is never deleted
-  // or rewritten; automatic execution excludes an exact retirement record.
-  const retirements = await query(`
-    CREATE TABLE IF NOT EXISTS refund_automatic_retirements (
-      refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
-      payment_id TEXT NOT NULL UNIQUE,
-      reason TEXT NOT NULL,
-      evidence_code TEXT NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `)
-  if (retirements === null) return false
-
-  if (!(await ensureRefundAccountingTable())) return false
-
-  const audits = await query(`
-    CREATE TABLE IF NOT EXISTS refund_audit_events (
-      event_id TEXT PRIMARY KEY,
-      refund_id TEXT NOT NULL REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
-      payment_id TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      actor_type TEXT NOT NULL,
-      idempotency_key TEXT NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      details JSONB NOT NULL DEFAULT '{}'::jsonb
-    )
-  `)
-  if (audits === null) return false
-
-  for (const ddl of [
-    `CREATE INDEX IF NOT EXISTS idx_refund_checkpoints_status_retry ON refund_checkpoints(status, next_retry_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_refund_checkpoints_payment ON refund_checkpoints(payment_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_refund_audit_payment_created ON refund_audit_events(payment_id, created_at ASC)`,
-    `CREATE INDEX IF NOT EXISTS idx_refund_audit_refund_created ON refund_audit_events(refund_id, created_at ASC)`,
-  ]) if ((await query(ddl)) === null) return false
-
-  return true
+  return r36VerifyTables([
+    ['refund_checkpoints',['refund_id','payment_id','idempotency_key','status','stage','payer_uid','amount','pi_mutation_guard_version']],
+    ['financial_pi_mutation_attempts',['mutation_kind','payment_id','external_payment_id']],
+    ['refund_pi_create_attempts',['refund_id','payment_id','idempotency_key']],
+    ['refund_automatic_retirements',['refund_id','payment_id','evidence_code']],
+    ['refund_accounting_records',['refund_id','payment_id','refund_txid','amount']],
+    ['refund_audit_events',['event_id','refund_id','payment_id','event_type']]
+  ])
 }
 
 export async function ensureRefundAccountingTable(): Promise<boolean> {
-  if (!process.env.DATABASE_URL) return false
-  const result = await query(`
-      CREATE TABLE IF NOT EXISTS refund_accounting_records (
-        refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT,
-        payment_id TEXT NOT NULL UNIQUE,
-        refund_payment_id TEXT NOT NULL UNIQUE,
-        refund_txid TEXT NOT NULL UNIQUE,
-        payer_uid TEXT NOT NULL,
-        amount NUMERIC(18, 8) NOT NULL CHECK (amount > 0),
-        horizon_fee_stroops BIGINT NOT NULL CHECK (horizon_fee_stroops >= 0),
-        currency TEXT NOT NULL DEFAULT 'π',
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )
-    `)
-  return result !== null
+  return r36VerifyColumns('refund_accounting_records', ['refund_id','payment_id','refund_payment_id','refund_txid','payer_uid','amount','horizon_fee_stroops'])
 }
 
 export async function initializeSchema() {
-  if (!process.env.DATABASE_URL) {
-    console.log('[DB] PostgreSQL not configured, skipping schema initialization')
-    return
-  }
-
-  try {
-    console.log('[DB] Creating database schema...')
-
-    // Create transactions table
-    await query(`
-      CREATE TABLE IF NOT EXISTS transactions (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        payment_id TEXT NOT NULL UNIQUE,
-        merchant_id TEXT NOT NULL,
-        merchant_uid TEXT NOT NULL,
-        amount NUMERIC(18, 8) NOT NULL,
-        currency TEXT DEFAULT 'π',
-        reference TEXT NOT NULL UNIQUE,
-        description TEXT,
-        status TEXT NOT NULL DEFAULT 'completed',
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        completed_at TIMESTAMP
-      )
-    `)
-
-    // Create indexes for transactions
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_transactions_merchant_created
-      ON transactions(merchant_id, created_at DESC)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_transactions_created
-      ON transactions(created_at DESC)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_transactions_payment_id
-      ON transactions(payment_id)
-    `)
-
-    // Create receipts table with U2A and A2U identifiers
-    await query(`
-      CREATE TABLE IF NOT EXISTS receipts (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        transaction_id UUID NOT NULL UNIQUE,
-        merchant_id TEXT NOT NULL,
-        merchant_uid TEXT NOT NULL,
-        amount NUMERIC(18, 8) NOT NULL,
-        currency TEXT DEFAULT 'π',
-        timestamp TIMESTAMP NOT NULL,
-        txid TEXT,
-        payer_username TEXT,
-        u2a_identifier TEXT,
-        u2a_txid TEXT,
-        a2u_identifier TEXT,
-        a2u_txid TEXT,
-        metadata JSONB,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
-      )
-    `)
-
-    // Create indexes for receipts
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_receipts_merchant
-      ON receipts(merchant_id, created_at DESC)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_receipts_created
-      ON receipts(created_at DESC)
-    `)
-
-    // Safely add merchant_uid column to transactions if it doesn't exist
-    try {
-      await query(`
-        ALTER TABLE transactions
-        ADD COLUMN IF NOT EXISTS merchant_uid TEXT NOT NULL DEFAULT ''
-      `)
-      console.log('[DB] merchant_uid column added to transactions (if needed)')
-    } catch (e) {
-      // Column may already exist or table may not exist yet, continue
-      console.log('[DB] merchant_uid column migration for transactions (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    // Safely add merchant_uid column to receipts if it doesn't exist
-    try {
-      await query(`
-        ALTER TABLE receipts
-        ADD COLUMN IF NOT EXISTS merchant_uid TEXT NOT NULL DEFAULT ''
-      `)
-      console.log('[DB] merchant_uid column added to receipts (if needed)')
-    } catch (e) {
-      // Column may already exist or table may not exist yet, continue
-      console.log('[DB] merchant_uid column migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    // Safely add U2A identifier columns to receipts
-    try {
-      await query(`
-        ALTER TABLE receipts
-        ADD COLUMN IF NOT EXISTS u2a_identifier TEXT
-      `)
-      console.log('[DB] u2a_identifier column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] u2a_identifier migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    try {
-      await query(`
-        ALTER TABLE receipts
-        ADD COLUMN IF NOT EXISTS u2a_txid TEXT
-      `)
-      console.log('[DB] u2a_txid column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] u2a_txid migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    // Safely add A2U identifier columns to receipts
-    try {
-      await query(`
-        ALTER TABLE receipts
-        ADD COLUMN IF NOT EXISTS a2u_identifier TEXT
-      `)
-      console.log('[DB] a2u_identifier column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] a2u_identifier migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    try {
-      await query(`
-        ALTER TABLE receipts
-        ADD COLUMN IF NOT EXISTS a2u_txid TEXT
-      `)
-      console.log('[DB] a2u_txid column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] a2u_txid migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    // Add fee and accounting tracking columns to receipts (each independently for idempotency)
-    try {
-      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS customer_amount NUMERIC(18, 8)`)
-      console.log('[DB] customer_amount column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] customer_amount migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    try {
-      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS horizon_fee_charged NUMERIC(18, 8) DEFAULT 0`)
-      console.log('[DB] horizon_fee_charged column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] horizon_fee_charged migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    try {
-      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_commission NUMERIC(18, 8) DEFAULT 0`)
-      console.log('[DB] app_commission column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] app_commission migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    try {
-      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_amount NUMERIC(18, 8)`)
-      console.log('[DB] merchant_amount column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] merchant_amount migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    try {
-      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_net_impact NUMERIC(18, 8) DEFAULT 0`)
-      console.log('[DB] app_net_impact column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] app_net_impact migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    try {
-      await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS settlement_status TEXT DEFAULT 'pending'`)
-      console.log('[DB] settlement_status column added to receipts (if needed)')
-    } catch (e) {
-      console.log('[DB] settlement_status migration for receipts (non-blocking):', (e as any).message?.substring(0, 100))
-    }
-
-    // Create merchant balances table
-    await query(`
-      CREATE TABLE IF NOT EXISTS merchant_balances (
-        merchant_id TEXT PRIMARY KEY,
-        settled NUMERIC(18, 8) DEFAULT 0,
-        unsettled NUMERIC(18, 8) DEFAULT 0,
-        last_updated TIMESTAMP DEFAULT NOW()
-      )
-    `)
-
-    // Create index for merchant balances
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_merchant_balances_merchant
-      ON merchant_balances(merchant_id)
-    `)
-
-    // Create settlement_requests table for tracking merchant payouts
-    await query(`
-      CREATE TABLE IF NOT EXISTS settlement_requests (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        merchant_id TEXT NOT NULL,
-        transaction_id UUID NOT NULL,
-        amount NUMERIC(18, 8) NOT NULL,
-        status TEXT NOT NULL DEFAULT 'queued',
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        completed_at TIMESTAMP,
-        txid TEXT,
-        error_message TEXT,
-        retry_count INTEGER DEFAULT 0,
-        FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
-      )
-    `)
-
-    // N-FIN-10A: create the durable Settlement authority schema only.
-    // No Settlement runtime path uses it until the later monotonic-writer stage.
-    if (!(await ensureSettlementCheckpointTable())) {
-      throw new Error('Settlement checkpoint schema initialization failed')
-    }
-
-    // DR-13: use the same idempotent first-request-safe Refund schema initializer
-    // as the live Refund entry point so bootstrap and runtime cannot drift.
-    if (!(await ensureRefundCheckpointTables())) {
-      throw new Error('Refund checkpoint schema initialization failed')
-    }
-
-    // Create indexes for settlement requests
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_settlement_requests_merchant_status
-      ON settlement_requests(merchant_id, status)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_settlement_requests_created
-      ON settlement_requests(created_at DESC)
-    `)
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_settlement_requests_status
-      ON settlement_requests(status)
-    `)
-
-    console.log('[DB] Schema initialization complete')
-  } catch (error) {
-    console.error('[DB] Schema initialization error:', error)
-    throw error
+  // R36: startup must never create or alter financial schema.
+  const ready = await r36VerifyTables([
+    ['transactions',['id','payment_id','merchant_id','amount','status']],
+    ['receipts',['transaction_id','customer_amount','app_commission','merchant_amount','app_net_impact','settlement_status']],
+    ['merchant_balances',['merchant_id']],
+    ['settlement_checkpoints',['payment_id','version','stage']],
+    ['refund_checkpoints',['refund_id','payment_id','status']]
+  ])
+  if (!ready || !(await ensureSettlementCheckpointTable()) || !(await ensureRefundCheckpointTables())) {
+    throw new Error('R36_SCHEMA_NOT_READY: offline migration and catalog verification required')
   }
 }
 
@@ -2274,34 +1712,8 @@ export async function initializeSchema() {
  * This is called before client.begin() to guarantee schema readiness
  */
 export async function ensureReceiptsSchema() {
-  if (!process.env.DATABASE_URL) {
-    console.log('[DB] PostgreSQL not configured, skipping receipts schema check')
-    return
-  }
-
-  console.log('[DB] Ensuring receipts table accounting columns exist...')
-
-  // Each column add is separate and explicit - no nested try-catch during migration
-  // If any fail, the error propagates to Stage 4 caller
-  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS customer_amount NUMERIC(18, 8)`)
-  console.log('[DB] ✓ customer_amount column ensured')
-
-  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS horizon_fee_charged NUMERIC(18, 8) DEFAULT 0`)
-  console.log('[DB] ✓ horizon_fee_charged column ensured')
-
-  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_commission NUMERIC(18, 8) DEFAULT 0`)
-  console.log('[DB] ✓ app_commission column ensured')
-
-  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_amount NUMERIC(18, 8)`)
-  console.log('[DB] ✓ merchant_amount column ensured')
-
-  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS app_net_impact NUMERIC(18, 8) DEFAULT 0`)
-  console.log('[DB] ✓ app_net_impact column ensured')
-
-  await query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS settlement_status TEXT DEFAULT 'pending'`)
-  console.log('[DB] ✓ settlement_status column ensured')
-
-  console.log('[DB] Receipts schema accounting columns verified')
+  const ready = await r36VerifyColumns('receipts', ['customer_amount','horizon_fee_charged','app_commission','merchant_amount','app_net_impact','settlement_status'])
+  if (!ready) throw new Error('R36_RECEIPTS_SCHEMA_NOT_READY: offline migration required')
 }
 
 /**
@@ -2998,6 +2410,7 @@ export async function getSettlementHistory(merchantId: string, limit: number = 5
  * Uses transaction-scoped client for true ACID guarantees - all or nothing
  */
 export async function recordA2UTransactionAtomic(params: {
+  paymentId: string          // Canonical internal payment ID; financial authority lock key
   u2aIdentifier: string      // U2A identifier from Pi webhook (identifier field)
   u2aTxid: string            // clientTxid from U2A flow
   a2uIdentifier: string      // A2U identifier from A2U response
@@ -3016,6 +2429,9 @@ export async function recordA2UTransactionAtomic(params: {
 > {
   // STRICT VALIDATION: Reject transaction if any required field is missing or invalid
   
+  if (typeof params.paymentId !== 'string' || !params.paymentId.trim() || params.paymentId !== params.paymentId.trim()) {
+    throw new Error('Canonical paymentId is required for accounting authority')
+  }
   // Validate identifiers - must not be empty strings
   if (!params.u2aIdentifier || typeof params.u2aIdentifier !== 'string') {
     throw new Error('u2aIdentifier is required and must be a non-empty string')
@@ -3104,6 +2520,39 @@ export async function recordA2UTransactionAtomic(params: {
     try {
       // Use postgres transaction callback API (no manual BEGIN/COMMIT/ROLLBACK)
       const result = await client.begin(async (tx) => {
+        // G8-F3-R5: Authoritative accounting barrier. Same PostgreSQL transaction and
+        // same payment advisory lock as the settlement/refund authority writers.
+        // Never use Redis or a prior preflight as accounting authority.
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
+        const authority = await tx`
+          SELECT s.payment_id, s.stage, s.version, s.merchant_id, s.merchant_uid,
+                 s.customer_amount, s.merchant_amount, s.app_commission,
+                 s.u2a_identifier, s.u2a_txid, s.a2u_payment_id, s.a2u_txid,
+                 s.prepared_tx_hash, s.horizon_fee_stroops,
+                 s.horizon_confirmed_at, s.pi_completed_at,
+                 EXISTS(SELECT 1 FROM refund_checkpoints r WHERE r.payment_id = ${params.paymentId}) AS refund_active
+          FROM settlement_checkpoints s WHERE s.payment_id = ${params.paymentId}
+          FOR UPDATE OF s
+        `
+        if (authority.length !== 1) throw new Error('G8_ACCOUNTING_AUTHORITY_ABSENT_OR_AMBIGUOUS')
+        const a = authority[0]
+        const feeStroops = params.horizonFeeCharged * 10_000_000
+        if (a.refund_active !== false || !['pi_completed', 'db_finalized'].includes(a.stage) ||
+            !Number.isSafeInteger(Number(a.version)) || Number(a.version) < 4 ||
+            a.merchant_id !== params.merchantId || a.merchant_uid !== params.merchantUid ||
+            normalizePostgresNumeric(a.customer_amount, 'authority.customer_amount') !== customerAmount ||
+            normalizePostgresNumeric(a.merchant_amount, 'authority.merchant_amount') !== merchantAmount ||
+            normalizePostgresNumeric(a.app_commission, 'authority.app_commission') !== 0 ||
+            customerAmount <= 0 || customerAmount !== merchantAmount || appCommission !== 0 ||
+            a.u2a_identifier !== params.u2aIdentifier || a.u2a_txid !== params.u2aTxid ||
+            a.a2u_payment_id !== params.a2uIdentifier || a.a2u_txid !== params.a2uTxid ||
+            a.prepared_tx_hash !== params.a2uTxid ||
+            !Number.isSafeInteger(feeStroops) || feeStroops < 0 ||
+            normalizePostgresNumeric(a.horizon_fee_stroops, 'authority.horizon_fee_stroops') !== feeStroops ||
+            a.horizon_confirmed_at == null || a.pi_completed_at == null) {
+          throw new Error('G8_ACCOUNTING_AUTHORITY_CONFLICT_OR_UNPROVEN_FINALITY')
+        }
+
         // 0. Check for existing transaction - if found, verify it matches identifiers and amounts (idempotency check)
         const existingTxCheck = await tx`
           SELECT id, merchant_id, merchant_uid, amount FROM transactions WHERE payment_id = ${params.u2aIdentifier}
@@ -3404,24 +2853,11 @@ export async function probeDurablePaymentIdentity(paymentId: string): Promise<'E
 
 // FIN-100B: the create-intent and its financial identity commit atomically.
 export async function ensurePaymentCreateIntentTable(): Promise<boolean> {
-  try {
-    const client = await getPostgresClient()
-    if (!client) return false
-    await client`CREATE TABLE IF NOT EXISTS payment_create_intents (
-      merchant_uid TEXT NOT NULL,
-      create_intent_id UUID NOT NULL,
-      payment_id TEXT NOT NULL UNIQUE,
-      merchant_id TEXT NOT NULL,
-      customer_amount NUMERIC NOT NULL CHECK (customer_amount > 0),
-      note TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL,
-      PRIMARY KEY (merchant_uid, create_intent_id)
-    )`
-    return true
-  } catch (error) {
-    console.error('[FIN100B] Create-intent schema unavailable', error)
-    return false
-  }
+  // R36 ACL: schema changes belong to an offline migration, never the payment path.
+  return r36VerifyColumns('payment_create_intents', [
+    'merchant_uid', 'create_intent_id', 'payment_id', 'merchant_id',
+    'customer_amount', 'note', 'created_at',
+  ])
 }
 
 // B-D05-R1: read-only, verified replay classification before the new-flow limiter.

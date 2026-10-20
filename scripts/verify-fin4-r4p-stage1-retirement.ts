@@ -1,9 +1,9 @@
 import fs from "fs"; import path from "path";
-const root=process.cwd(), db=fs.readFileSync(path.join(root,"lib/db.ts"),"utf8"), ex=fs.readFileSync(path.join(root,"lib/a2u-executor.ts"),"utf8"), hp=fs.readFileSync(path.join(root,"lib/a2u-stage1-retirement.ts"),"utf8")
+const root=process.cwd(), migration=fs.readFileSync(path.join(process.cwd(),"migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql"),"utf8"), db=fs.readFileSync(path.join(root,"lib/db.ts"),"utf8"), ex=fs.readFileSync(path.join(root,"lib/a2u-executor.ts"),"utf8"), hp=fs.readFileSync(path.join(root,"lib/a2u-stage1-retirement.ts"),"utf8")
 function need(v:boolean,n:string){if(!v)throw new Error(`R4P:${n}`)}
-need(db.includes("CREATE TABLE IF NOT EXISTS settlement_a2u_stage1_retirements"),"retirement_table")
-need(db.includes("PRIMARY KEY(payment_id, a2u_payment_id)"),"append_only_key")
-need(db.includes("CREATE TABLE IF NOT EXISTS settlement_a2u_ongoing_observations"),"ongoing_capture_table")
+need(migration.includes("CREATE TABLE IF NOT EXISTS settlement_a2u_stage1_retirements"),"retirement_table")
+need(migration.includes("PRIMARY KEY(payment_id, a2u_payment_id)"),"append_only_key")
+need(migration.includes("CREATE TABLE IF NOT EXISTS settlement_a2u_ongoing_observations"),"ongoing_capture_table")
 need(db.includes("pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))"),"pg_lock")
 need(db.includes("SELECT EXISTS(SELECT 1 FROM refund_checkpoints"),"refund_opposite")
 need(db.includes("stage='a2u_created'")&&db.includes("prepared_envelope_xdr IS NULL")&&db.includes("a2u_txid IS NULL")&&db.includes("stage='payment_identity'"),"retirement_cas")

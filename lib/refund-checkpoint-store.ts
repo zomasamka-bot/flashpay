@@ -21,7 +21,7 @@ export async function acquirePaymentOperationLock(paymentId: string, owner: stri
 export async function ensurePaymentOperationLock(paymentId: string, refundId: string): Promise<boolean> {
   if (!isRedisConfigured) return false
   const result = await redis.eval(
-    'local v=redis.call("get",KEYS[1]); if not v then local ok=redis.call("set",KEYS[1],ARGV[1],"NX","EX",ARGV[2]); return ok=="OK" and 1 or 0 end; if v==ARGV[1] then redis.call("expire",KEYS[1],ARGV[2]); return 1 end; return 0',
+    'local v=redis.call("get",KEYS[1]); if not v then local ok=redis.call("set",KEYS[1],ARGV[1],"NX","EX",ARGV[2]); return (ok and ok.ok=="OK") and 1 or 0 end; if v==ARGV[1] then redis.call("expire",KEYS[1],ARGV[2]); return 1 end; return 0',
     [paymentOperationLockKey(paymentId)], [refundId, String(60 * 60 * 24 * 30)],
   )
   return Number(result) === 1
@@ -419,7 +419,7 @@ export async function verifyRefundTables(): Promise<boolean> {
 export async function createRefundCheckpointWithAudit(checkpoint: RefundCheckpoint, event: RefundAuditEvent): Promise<RefundCheckpoint | null> {
   if (!process.env.DATABASE_URL) return null
   const result = await withPaymentAuthorityTransaction(checkpoint.paymentId, async (tx) => {
-    const opposite = await tx`SELECT EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${checkpoint.paymentId} AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')) AS active`
+    const opposite = await tx`SELECT EXISTS(SELECT 1 FROM settlement_checkpoints WHERE payment_id=${checkpoint.paymentId} AND (stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized') OR a2u_create_attempted_at IS NOT NULL)) AS active`
     if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean' || opposite[0].active === true) return []
     return await tx`
       WITH inserted AS (
@@ -1272,7 +1272,9 @@ export async function completeRefundCheckpointWithAudit(
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const object = parsed as Record<string, unknown>
     const feeEvent = record.event_type === 'refund_accounting_recorded' || record.event_type === 'refund_audit_recorded'
-    if (Object.keys(object).length !== (feeEvent ? 3 : 2) || object.refundPaymentId !== refundPaymentId || object.refundTxid !== refundTxid || (feeEvent && String(object.horizonFeeStroops) !== String(horizonFeeStroops))) return null
+    const submissionRecovered = record.event_type === 'refund_submission_confirmed' && object.recovered === true
+    const expectedKeys = feeEvent ? ['refundPaymentId', 'refundTxid', 'horizonFeeStroops'] : submissionRecovered ? ['refundPaymentId', 'refundTxid', 'recovered'] : ['refundPaymentId', 'refundTxid']
+    if (Object.keys(object).length !== expectedKeys.length || !expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(object, key)) || object.refundPaymentId !== refundPaymentId || object.refundTxid !== refundTxid || (feeEvent && String(object.horizonFeeStroops) !== String(horizonFeeStroops))) return null
   }
   if (requiredTypes.size !== 0) return null
   if (legacyTypes.length > 0) {

@@ -1513,6 +1513,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     // Call DB with VALIDATED financial data only
     // CRITICAL: Pass ONLY validated identifiers from financialData
     const dbResult = await recordA2UTransactionAtomic({
+      paymentId: ctx.paymentId,
       u2aIdentifier: financialData.piPaymentId,
       u2aTxid: financialData.u2aTxid,
       a2uIdentifier: financialData.a2uPaymentId,

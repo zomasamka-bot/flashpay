@@ -2,6 +2,7 @@ import fs from 'node:fs'
 const root=new URL('../', import.meta.url).pathname.replace(/\/$/, '')
 const truth=fs.readFileSync(root+'/app/api/operations/r1001-accounting-truth/route.ts','utf8')
 const db=fs.readFileSync(root+'/lib/db.ts','utf8')
+const schema=fs.readFileSync(root+'/migrations/R36_ACL_LEGACY_SCHEMA_REFERENCE_REVIEW_ONLY.sql','utf8')
 const refund=fs.readFileSync(root+'/lib/refund-accounting.ts','utf8')
 const checks=[
  ['canonical_receipts_sum',truth,"SELECT merchant_id, COALESCE(SUM(merchant_amount),0) AS canonical_settled"],
@@ -24,7 +25,7 @@ const checks=[
  ['receipt_insert_returning_identity',db,'RETURNING id'],
  ['credit_only_new_receipt',db,'if (receiptWasInserted) {'],
  ['merchant_credit_exact_amount',db,'VALUES (${params.merchantId}, ${merchantAmount}, 0, NOW())'],
- ['merchant_balance_pk',db,'merchant_id TEXT PRIMARY KEY'],
+ ['merchant_balance_pk',schema,'merchant_id TEXT PRIMARY KEY'],
  ['refund_accounting_separate_table',refund,'INSERT INTO refund_accounting_records'],
 ]
 let pass=0
