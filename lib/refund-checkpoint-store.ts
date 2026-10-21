@@ -250,6 +250,26 @@ export async function markAutomaticRefundManualReview(refundId: string, expected
         UPDATE refund_checkpoints
         SET status='manual_review_required', last_error_code='refund_cancelled', last_error_message='refund_cancelled', next_retry_at=NULL, updated_at=NOW()
         WHERE refund_id=${refundId} AND payment_id=${paymentId} AND stage=${expectedStage} AND status='pending'
+          -- R36: recheck durable opposite authority at the same PG commit boundary.
+          -- Never hide confirmed or prepared movements behind manual review.
+          AND refund_txid IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM refund_accounting_records ra
+            WHERE ra.payment_id=${paymentId} OR ra.refund_id=${refundId}
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM settlement_checkpoints sc
+            WHERE sc.payment_id=${paymentId}
+              AND (
+                sc.stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')
+                OR sc.a2u_create_attempted_at IS NOT NULL
+                OR sc.a2u_payment_id IS NOT NULL
+                OR sc.prepared_envelope_xdr IS NOT NULL
+                OR sc.prepared_tx_hash IS NOT NULL
+                OR sc.a2u_txid IS NOT NULL
+                OR sc.horizon_confirmed_at IS NOT NULL
+              )
+          )
         RETURNING *
       ), audited AS (
         INSERT INTO refund_audit_events
