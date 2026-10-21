@@ -8,7 +8,7 @@ const checks=[
  ['accounting_stage_gate',acct,'checkpoint.stage !== "payment_checkpoint_updated" || checkpoint.status !== "pending"'],
  ['horizon_fee_verified',acct,'fee.outcome !== "VERIFIED_FEE"'],
  ['accounting_insert_idempotent',acct,'ON CONFLICT DO NOTHING'],
- ['accounting_union_identity_lookup',acct,'WHERE refund_id=$1 OR payment_id=$2 OR refund_payment_id=$3 OR refund_txid=$4'],
+ ['accounting_union_identity_lookup',acct,'WHERE refund_id=${refundId} OR payment_id=${checkpoint.paymentId}\n          OR refund_payment_id=${checkpoint.refundPaymentId}\n          OR refund_txid=${checkpoint.refundTxid}'],
  ['accounting_single_row_replay',acct,'rows.length !== 1'],
  ['accounting_exact_numeric',acct,'row.exact_numeric_match !== true'],
  ['schema_refund_unique',schema,'refund_id TEXT PRIMARY KEY REFERENCES refund_checkpoints(refund_id) ON DELETE RESTRICT'],

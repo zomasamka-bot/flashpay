@@ -191,10 +191,6 @@ async function ensureSettlementCheckpointTableUncached(): Promise<boolean> {
   return r36VerifyTables([['settlement_checkpoints', ['payment_id','version','stage','merchant_id','merchant_uid','customer_amount','merchant_amount','app_commission','prepared_envelope_xdr','prepared_tx_hash','prepared_sequence','a2u_txid','horizon_fee_stroops','db_finalized_at']]])
 }
 
-export type SettlementPaymentIdentityCheckpointResult =
-  | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
-  | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
-
 export async function recordSettlementPaymentIdentityCheckpoint(params: {
   paymentId: string
   merchantId: string
