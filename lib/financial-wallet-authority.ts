@@ -49,7 +49,10 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
       can_mutate_protected: boolean; missing_attempt_insert: boolean
     } : null
     if (!r || Number(r.present) !== 8 || Number(r.real_tables) !== 8 ||
-        r.can_mutate_protected !== false || r.missing_attempt_insert !== false) return false
+        r.can_mutate_protected !== false || r.missing_attempt_insert !== false) {
+      console.warn('[R36 READONLY DIAGNOSTIC] admission_catalog_denied', { present: r ? Number(r.present) : null, realTables: r ? Number(r.real_tables) : null, protectedMutationPrivilege: r?.can_mutate_protected ?? null, missingAttemptInsert: r?.missing_attempt_insert ?? null })
+      return false
+    }
     // The app must never execute the operator-only wallet-owner rotation
     // function, including via PUBLIC or an inherited role. Reject privileged
     // DB identities that can bypass ordinary table ACL checks.
@@ -62,7 +65,10 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
         END AS cannot_rotate
     `, [])
     const a = Array.isArray(acl) ? acl[0] as { unprivileged: boolean; cannot_rotate: boolean } : null
-    if (!a || a.unprivileged !== true || a.cannot_rotate !== true) return false
+    if (!a || a.unprivileged !== true || a.cannot_rotate !== true) {
+      console.warn('[R36 READONLY DIAGNOSTIC] admission_acl_denied', { unprivileged: a?.unprivileged ?? null, cannotRotate: a?.cannot_rotate ?? null })
+      return false
+    }
     // An app role with ownership, CREATEROLE, schema CREATE or attestation DML
     // can manufacture its own trust boundary despite an apparent function gate.
     // All checks are against CURRENT_USER in the same DB transaction.
@@ -84,9 +90,11 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
       restricted_role:boolean; cannot_create_public:boolean; attestation_present:boolean;
       cannot_forge_attestation:boolean; claim_executable:boolean
     } : null
-    return !!b && b.restricted_role === true && b.cannot_create_public === true &&
+    const admitted = !!b && b.restricted_role === true && b.cannot_create_public === true &&
       b.attestation_present === true && b.cannot_forge_attestation === true && b.claim_executable === true
-  } catch { return false }
+    if (!admitted) console.warn('[R36 READONLY DIAGNOSTIC] admission_boundary_denied', { restrictedRole: b?.restricted_role ?? null, cannotCreatePublic: b?.cannot_create_public ?? null, attestationPresent: b?.attestation_present ?? null, cannotForgeAttestation: b?.cannot_forge_attestation ?? null, claimExecutable: b?.claim_executable ?? null })
+    return admitted
+  } catch (error) { console.warn('[R36 READONLY DIAGNOSTIC] admission_query_exception', { code: (error as {code?:string})?.code ?? 'unknown' }); return false }
 }
 
 export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
@@ -99,7 +107,10 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
       !/^[1-9][0-9]*$/.test(input.preparedSequence)) return false
   // Fail closed before attempting any durable wallet authority mutation.
   // The optional transaction is mandatory for atomic prepare and uses the same DB client.
-  if (!tx || !(await checkR36SchemaAdmission(tx))) return false
+  if (!tx || !(await checkR36SchemaAdmission(tx))) {
+    console.warn('[R36 READONLY DIAGNOSTIC] claim_admission_denied', { paymentId: input.paymentId, operationKind: input.operationKind, hasTransaction: !!tx })
+    return false
+  }
   // Unique (network,source_wallet) serializes contenders. Conflict is
   // intentionally NOT reassigned, even after Redis loss, TTL or restart.
   // Exact same owner+prepared identity is the only allowed replay.
@@ -111,8 +122,11 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
       SELECT public.r36_claim_prepared_authority($1,$2,$3,$4,$5,$6,$7) AS admitted`,
       [input.network,input.sourceWallet,input.paymentId,input.operationKind,
        input.operationId,input.preparedHash,input.preparedSequence])
-    return Array.isArray(rows) && rows.length === 1 && (rows[0] as { admitted?: boolean })?.admitted === true
-  } catch {
+    const admitted = Array.isArray(rows) && rows.length === 1 && (rows[0] as { admitted?: boolean })?.admitted === true
+    if (!admitted) console.warn('[R36 READONLY DIAGNOSTIC] claim_function_denied', { paymentId: input.paymentId, operationKind: input.operationKind, rowCount: Array.isArray(rows) ? rows.length : null })
+    return admitted
+  } catch (error) {
+    console.warn('[R36 READONLY DIAGNOSTIC] claim_function_exception', { paymentId: input.paymentId, operationKind: input.operationKind, code: (error as {code?:string})?.code ?? 'unknown' })
     return false
   }
 }
