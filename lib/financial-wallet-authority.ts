@@ -62,7 +62,30 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
         END AS cannot_rotate
     `, [])
     const a = Array.isArray(acl) ? acl[0] as { unprivileged: boolean; cannot_rotate: boolean } : null
-    return !!a && a.unprivileged === true && a.cannot_rotate === true
+    if (!a || a.unprivileged !== true || a.cannot_rotate !== true) return false
+    // An app role with ownership, CREATEROLE, schema CREATE or attestation DML
+    // can manufacture its own trust boundary despite an apparent function gate.
+    // All checks are against CURRENT_USER in the same DB transaction.
+    const boundary = await db.unsafe(`
+      SELECT
+        NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole) AS restricted_role,
+        NOT has_schema_privilege(current_user,'public','CREATE') AS cannot_create_public,
+        to_regclass('public.r36_independent_u2a_attestations') IS NOT NULL AS attestation_present,
+        CASE WHEN to_regclass('public.r36_independent_u2a_attestations') IS NULL THEN false
+          ELSE NOT (has_table_privilege(current_user,'public.r36_independent_u2a_attestations','INSERT')
+             OR has_table_privilege(current_user,'public.r36_independent_u2a_attestations','UPDATE')
+             OR has_table_privilege(current_user,'public.r36_independent_u2a_attestations','DELETE')
+             OR pg_has_role(current_user,(SELECT relowner FROM pg_class WHERE oid='public.r36_independent_u2a_attestations'::regclass),'MEMBER')) END AS cannot_forge_attestation,
+        CASE WHEN to_regprocedure('public.r36_claim_prepared_authority(text,text,text,text,text,text,text)') IS NULL THEN false
+          ELSE has_function_privilege(current_user,'public.r36_claim_prepared_authority(text,text,text,text,text,text,text)','EXECUTE') END AS claim_executable
+      FROM pg_roles r WHERE r.rolname=current_user
+    `, [])
+    const b = Array.isArray(boundary) ? boundary[0] as {
+      restricted_role:boolean; cannot_create_public:boolean; attestation_present:boolean;
+      cannot_forge_attestation:boolean; claim_executable:boolean
+    } : null
+    return !!b && b.restricted_role === true && b.cannot_create_public === true &&
+      b.attestation_present === true && b.cannot_forge_attestation === true && b.claim_executable === true
   } catch { return false }
 }
 
@@ -80,46 +103,18 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
   // Unique (network,source_wallet) serializes contenders. Conflict is
   // intentionally NOT reassigned, even after Redis loss, TTL or restart.
   // Exact same owner+prepared identity is the only allowed replay.
-  const rows = await (tx ? tx.unsafe.bind(tx) : query)(`
-    INSERT INTO financial_wallet_authorities
-      (network, source_wallet, owner_payment_id, operation_kind,
-       owner_operation_id, prepared_tx_hash, prepared_sequence, state)
-    SELECT $1,$2,$3,$4,$5,$6,$7,'prepared'
-    WHERE EXISTS (SELECT 1 FROM financial_wallet_activation g
-      WHERE g.network=$1 AND g.source_wallet=$2 AND g.state='enabled'
-      AND g.clearance_digest ~ '^[0-9a-f]{64}$')
-    AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s
-      WHERE s.a2u_from_address=$2 AND s.payment_id<>$3
-        AND s.stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed'))
-    -- Only a distinct-wallet durable R36 refund authority with exact refund/payment
-    -- identity can exclude another refund from this wallet's blocker set.
-    -- Missing, mismatched or same-wallet authority remains fail-closed.
-    AND NOT EXISTS (SELECT 1 FROM refund_checkpoints r
-      WHERE r.payment_id<>$3 AND r.status IN ('pending','manual_review_required')
-        AND NOT EXISTS (
-          SELECT 1 FROM financial_wallet_authorities ra
-          WHERE ra.network=$1 AND ra.operation_kind='refund'
-            AND ra.owner_payment_id=r.payment_id
-            AND ra.owner_operation_id=r.refund_id
-            AND ra.source_wallet<>$2
-            AND ra.state='prepared'
-        ))
-    ON CONFLICT (network, source_wallet) DO UPDATE SET
-      updated_at = financial_wallet_authorities.updated_at
-    WHERE financial_wallet_authorities.owner_payment_id = EXCLUDED.owner_payment_id
-      AND financial_wallet_authorities.operation_kind = EXCLUDED.operation_kind
-      AND financial_wallet_authorities.owner_operation_id = EXCLUDED.owner_operation_id
-      AND financial_wallet_authorities.prepared_tx_hash = EXCLUDED.prepared_tx_hash
-      AND financial_wallet_authorities.prepared_sequence = EXCLUDED.prepared_sequence
-      AND financial_wallet_authorities.state = 'prepared'
-    RETURNING owner_payment_id, owner_operation_id, prepared_tx_hash, prepared_sequence`,
-    [input.network,input.sourceWallet,input.paymentId,input.operationKind,
-     input.operationId,input.preparedHash,input.preparedSequence])
-  return Array.isArray(rows) && rows.length === 1 &&
-    (rows[0] as {owner_payment_id: string})?.owner_payment_id === input.paymentId &&
-    (rows[0] as {owner_operation_id: string})?.owner_operation_id === input.operationId &&
-    (rows[0] as {prepared_tx_hash: string})?.prepared_tx_hash === input.preparedHash &&
-    String((rows[0] as {prepared_sequence: string})?.prepared_sequence) === input.preparedSequence
+  // R36-A candidate: DB SECURITY DEFINER function enforces immutable issuer attestation.
+  // This intentionally fails closed if the protected function is not installed.
+  // The runtime DB role must have EXECUTE only; no direct authority/attestation DML.
+  try {
+    const rows = await tx.unsafe(`
+      SELECT public.r36_claim_prepared_authority($1,$2,$3,$4,$5,$6,$7) AS admitted`,
+      [input.network,input.sourceWallet,input.paymentId,input.operationKind,
+       input.operationId,input.preparedHash,input.preparedSequence])
+    return Array.isArray(rows) && rows.length === 1 && rows[0]?.admitted === true
+  } catch {
+    return false
+  }
 }
 
 /** R36 fail-closed exact durable prepared-identity gate at Horizon boundary.

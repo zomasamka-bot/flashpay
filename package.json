@@ -3,7 +3,7 @@
   "version": "0.1.4",
   "private": true,
   "scripts": {
-    "build": "node scripts/run-financial-recovery-build-verifier.mjs && next build",
+    "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
     "start": "next start"

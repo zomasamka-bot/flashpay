@@ -1645,30 +1645,59 @@ export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:st
   }catch(e){console.error('[DB] Settlement Pi checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement Pi checkpoint uncertain'}}
 }
 
+/** Convert a finite Pi fee to exact integer stroops without IEEE-754 multiplication noise.
+ * Reject fractional stroops rather than silently rounding them into financial authority. */
+function exactHorizonFeeStroops(fee: number): number {
+  if (!Number.isFinite(fee) || fee < 0) return NaN
+  const rounded = Math.round(fee * 10_000_000)
+  if (!Number.isSafeInteger(rounded) ||
+      Math.abs(fee - rounded / 10_000_000) > 1e-12) return NaN
+  return rounded
+}
+
 export async function recordSettlementDbFinalizedCheckpoint(params:{
   paymentId:string;u2aIdentifier:string;u2aTxid:string;a2uPaymentId:string;a2uTxid:string;merchantId:string;merchantUid:string;
   customerAmount:number;merchantAmount:number;horizonFeeCharged:number;appCommission:number
 }):Promise<SettlementDurableAdvanceResult>{
-  const feeStroops=params.horizonFeeCharged*10_000_000
+  const feeStroops=exactHorizonFeeStroops(params.horizonFeeCharged)
   if(!params.paymentId||!params.u2aIdentifier||!/^[0-9a-f]{64}$/.test(params.u2aTxid)||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid)||!params.merchantId||!params.merchantUid||
     !Number.isFinite(params.customerAmount)||params.customerAmount<=0||params.merchantAmount!==params.customerAmount||params.appCommission!==0||
     !Number.isSafeInteger(feeStroops)||feeStroops<0)return{outcome:'CONFLICT',error:'Settlement DB-finality input invalid'}
   try{
     const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client.begin(async(tx:any)=>{
+      // Serialize finality with accounting and refund authority on the same payment key.
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
       const a=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='db_finalized',db_finalized_at=NOW(),updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND stage='pi_completed' AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
         AND customer_amount=${params.customerAmount} AND merchant_amount=${params.merchantAmount} AND app_commission=0
         AND a2u_payment_id=${params.a2uPaymentId} AND a2u_txid=${params.a2uTxid} AND prepared_tx_hash=${params.a2uTxid}
         AND horizon_fee_stroops=${feeStroops} AND horizon_confirmed_at IS NOT NULL AND pi_completed_at IS NOT NULL AND db_finalized_at IS NULL
-        AND EXISTS(SELECT 1 FROM receipts r WHERE r.u2a_identifier=${params.u2aIdentifier} AND r.u2a_txid=${params.u2aTxid}
+        AND NOT EXISTS(SELECT 1 FROM refund_checkpoints rf WHERE rf.payment_id=${params.paymentId})
+        AND EXISTS(SELECT 1 FROM receipts r JOIN transactions t ON t.id=r.transaction_id
+          WHERE t.payment_id=${params.u2aIdentifier} AND t.merchant_id=${params.merchantId} AND t.merchant_uid=${params.merchantUid}
+          AND t.amount=${params.merchantAmount} AND t.status='completed'
+          AND r.u2a_identifier=${params.u2aIdentifier} AND r.u2a_txid=${params.u2aTxid}
           AND r.a2u_identifier=${params.a2uPaymentId} AND r.a2u_txid=${params.a2uTxid} AND r.customer_amount=${params.customerAmount} AND r.merchant_amount=${params.merchantAmount}
           AND r.horizon_fee_charged=${params.horizonFeeCharged} AND r.app_commission=0)
         RETURNING version,stage`
       if(a.length===1)return[{...a[0],advanced:true}]
-      return await tx`SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
-        a2u_payment_id,a2u_txid,prepared_tx_hash,horizon_fee_stroops,pi_completed_at,db_finalized_at
-        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} OR a2u_payment_id=${params.a2uPaymentId} OR a2u_txid=${params.a2uTxid} FOR UPDATE`
+      // R36: replay evidence must be read under the SAME advisory lock and
+      // transaction snapshot as the checkpoint. No post-commit TOCTOU read.
+      return await tx`SELECT s.version,s.stage,s.merchant_id,s.merchant_uid,s.customer_amount,s.merchant_amount,s.app_commission,
+        s.a2u_payment_id,s.a2u_txid,s.prepared_tx_hash,s.horizon_fee_stroops,s.pi_completed_at,s.db_finalized_at,
+        EXISTS(SELECT 1 FROM receipts rc JOIN transactions t ON t.id=rc.transaction_id
+          WHERE t.payment_id=${params.u2aIdentifier} AND t.merchant_id=${params.merchantId}
+            AND t.merchant_uid=${params.merchantUid} AND t.amount=${params.merchantAmount}
+            AND t.status='completed' AND rc.u2a_identifier=${params.u2aIdentifier}
+            AND rc.u2a_txid=${params.u2aTxid} AND rc.a2u_identifier=${params.a2uPaymentId}
+            AND rc.a2u_txid=${params.a2uTxid} AND rc.customer_amount=${params.customerAmount}
+            AND rc.merchant_amount=${params.merchantAmount} AND rc.horizon_fee_charged=${params.horizonFeeCharged}
+            AND rc.app_commission=0) AS accounting_valid,
+        NOT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId}) AS xor_valid
+        FROM settlement_checkpoints s
+        WHERE s.payment_id=${params.paymentId} OR s.a2u_payment_id=${params.a2uPaymentId} OR s.a2u_txid=${params.a2uTxid}
+        FOR UPDATE OF s`
     })
     if(!Array.isArray(rows)||rows.length!==1||!rows[0])return{outcome:'CONFLICT',error:'Settlement DB-finality durable identity ambiguous'}
     const r=rows[0] as Record<string,unknown>,v=Number(r.version);if(!Number.isSafeInteger(v)||v<5)return{outcome:'CONFLICT',error:'Settlement DB-finality durable version invalid'}
@@ -1677,6 +1706,8 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
     if(r.stage!=='db_finalized'||r.merchant_id!==params.merchantId||r.merchant_uid!==params.merchantUid||ca!==params.customerAmount||ma!==params.merchantAmount||ac!==0||
       r.a2u_payment_id!==params.a2uPaymentId||r.a2u_txid!==params.a2uTxid||r.prepared_tx_hash!==params.a2uTxid||fs!==feeStroops||r.pi_completed_at==null||r.db_finalized_at==null)
       return{outcome:'CONFLICT',error:'Settlement DB-finality durable evidence mismatch'}
+    if(r.accounting_valid!==true || r.xor_valid!==true)
+      return{outcome:'CONFLICT',error:'Settlement DB-finality replay accounting or XOR evidence missing'}
     return{outcome:'REPLAYED',version:v}
   }catch(e){console.error('[DB] Settlement DB-finality checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement DB-finality checkpoint uncertain'}}
 }
@@ -2540,7 +2571,7 @@ export async function recordA2UTransactionAtomic(params: {
         `
         if (authority.length !== 1) throw new Error('G8_ACCOUNTING_AUTHORITY_ABSENT_OR_AMBIGUOUS')
         const a = authority[0]
-        const feeStroops = params.horizonFeeCharged * 10_000_000
+        const feeStroops = exactHorizonFeeStroops(params.horizonFeeCharged)
         if (a.refund_active !== false || !['pi_completed', 'db_finalized'].includes(a.stage) ||
             !Number.isSafeInteger(Number(a.version)) || Number(a.version) < 4 ||
             a.merchant_id !== params.merchantId || a.merchant_uid !== params.merchantUid ||
