@@ -111,7 +111,7 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
       SELECT public.r36_claim_prepared_authority($1,$2,$3,$4,$5,$6,$7) AS admitted`,
       [input.network,input.sourceWallet,input.paymentId,input.operationKind,
        input.operationId,input.preparedHash,input.preparedSequence])
-    return Array.isArray(rows) && rows.length === 1 && rows[0]?.admitted === true
+    return Array.isArray(rows) && rows.length === 1 && (rows[0] as { admitted?: boolean })?.admitted === true
   } catch {
     return false
   }
