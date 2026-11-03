@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { unifiedStore } from "./unified-store"
 import { config } from "./config"
 import { CoreLogger } from "./core"
@@ -6,12 +6,21 @@ import type { Payment } from "./types"
 
 /**
  * Hook to load persistent payment history on app mount
- * Fetches from PostgreSQL (persistent) with Redis fallback
+ * Reads verified indexed history and a PostgreSQL-backed accounting summary.
  * Automatically loads payment history for the current merchant
  */
 export function useLoadPaymentHistory() {
+  const [summary, setSummary] = useState<{ total: number; settledTransactions: number } | null>(null)
   useEffect(() => {
+    let disposed = false
+    let generation = 0
+    const identity = () => { const m = unifiedStore.getMerchantState(); return `${m.merchantId}\u0000${m.accessToken}` }
+    let currentIdentity = identity()
     const loadHistory = async () => {
+      const requestGeneration = ++generation
+      const requestIdentity = identity()
+      const current = () => !disposed && requestGeneration === generation && requestIdentity === identity()
+      setSummary(null)
       try {
         const merchantId = unifiedStore.getMerchantState().merchantId
         
@@ -34,6 +43,7 @@ export function useLoadPaymentHistory() {
           }
         )
 
+        if (!current()) return
         if (response.status === 401) {
           // A persisted merchant token can expire between sessions. Fail closed:
           // discard the stale merchant authentication and let the existing
@@ -51,6 +61,12 @@ export function useLoadPaymentHistory() {
         }
 
         const data = await response.json()
+        if (!current()) return
+        const balance = data?.balance
+        if (!balance || balance.source !== "postgres" || balance.scope !== "all_time_settled" ||
+            typeof balance.total !== "number" || !Number.isFinite(balance.total) || balance.total < 0 ||
+            !Number.isSafeInteger(balance.settledTransactions) || balance.settledTransactions < 0) return
+        setSummary({ total: balance.total, settledTransactions: balance.settledTransactions })
         
         if (data.payments && Array.isArray(data.payments)) {
           CoreLogger.info(
@@ -92,6 +108,11 @@ export function useLoadPaymentHistory() {
     // Optionally reload periodically (e.g., every 5 minutes)
     const interval = setInterval(loadHistory, 5 * 60 * 1000)
 
-    return () => clearInterval(interval)
+    const unsubscribe = unifiedStore.subscribe("merchant", () => {
+      const nextIdentity = identity()
+      if (nextIdentity !== currentIdentity) { currentIdentity = nextIdentity; void loadHistory() }
+    })
+    return () => { disposed = true; generation++; clearInterval(interval); unsubscribe() }
   }, [])
+  return summary
 }

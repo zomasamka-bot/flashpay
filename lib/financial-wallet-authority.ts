@@ -2,7 +2,7 @@
  * CANDIDATE ONLY: no automatic release; migration/backfill required before enabling.
  * This guard must be called for ALL financial submit writers before production use.
  */
-import { query } from './db'
+import { query, getR36RestrictedClient } from './db'
 // An optional transaction client ensures the wallet claim and financial checkpoint
 // are committed or rolled back together; never fall back to an independent query.
 export type WalletAuthorityClaim = {
@@ -21,7 +21,9 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
         ('financial_wallet_authorities'),('financial_wallet_activation'),
         ('financial_wallet_authority_history'),('financial_wallet_submission_attempts'),
         ('financial_wallet_finality_seals'),('financial_wallet_rotation_approvals'),
-        ('r36_rotation_approval_evidence'),('r36_signed_approval_consumptions')),
+        ('r36_rotation_approval_evidence'),('r36_signed_approval_consumptions'),
+        ('r36_certificate_policies'),('r36_certificate_requests'),
+        ('r36_certificate_receipts'),('r36_certificate_revocations')),
       catalog AS (
         SELECT name, to_regclass('public.' || name) AS oid FROM required
       )
@@ -31,7 +33,9 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
         coalesce(bool_or(CASE WHEN name IN
           ('financial_wallet_rotation_approvals','r36_rotation_approval_evidence',
            'financial_wallet_activation',
-           'financial_wallet_authority_history','r36_signed_approval_consumptions')
+           'financial_wallet_authority_history','r36_signed_approval_consumptions',
+           'r36_certificate_policies','r36_certificate_requests',
+           'r36_certificate_receipts','r36_certificate_revocations')
           THEN oid IS NULL OR
             has_table_privilege(current_user,oid,'INSERT') OR
             has_table_privilege(current_user,oid,'UPDATE') OR
@@ -40,17 +44,20 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
           ELSE false END),true) AS can_mutate_protected,
         coalesce(bool_or(CASE WHEN oid IS NOT NULL AND
           name='financial_wallet_submission_attempts'
-          THEN NOT has_table_privilege(current_user,oid,'INSERT')
-          ELSE false END),true) AS missing_attempt_insert
+          THEN has_table_privilege(current_user,oid,'INSERT') OR
+               has_table_privilege(current_user,oid,'UPDATE') OR
+               has_table_privilege(current_user,oid,'DELETE') OR
+               pg_has_role(current_user,(SELECT c.relowner FROM pg_class c WHERE c.oid=catalog.oid),'MEMBER')
+          ELSE false END),true) AS can_mutate_attempts_directly
       FROM catalog
     `, [])
     const r = Array.isArray(rows) ? rows[0] as {
       present: string|number; real_tables: string|number;
-      can_mutate_protected: boolean; missing_attempt_insert: boolean
+      can_mutate_protected: boolean; can_mutate_attempts_directly: boolean
     } : null
-    if (!r || Number(r.present) !== 8 || Number(r.real_tables) !== 8 ||
-        r.can_mutate_protected !== false || r.missing_attempt_insert !== false) {
-      console.warn('[R36 READONLY DIAGNOSTIC] admission_catalog_denied', { present: r ? Number(r.present) : null, realTables: r ? Number(r.real_tables) : null, protectedMutationPrivilege: r?.can_mutate_protected ?? null, missingAttemptInsert: r?.missing_attempt_insert ?? null })
+    if (!r || Number(r.present) !== 12 || Number(r.real_tables) !== 12 ||
+        r.can_mutate_protected !== false || r.can_mutate_attempts_directly !== false) {
+      console.warn('[R36 READONLY DIAGNOSTIC] admission_catalog_denied', { present: r ? Number(r.present) : null, realTables: r ? Number(r.real_tables) : null, protectedMutationPrivilege: r?.can_mutate_protected ?? null, canMutateAttemptsDirectly: r?.can_mutate_attempts_directly ?? null })
       return false
     }
     // The app must never execute the operator-only wallet-owner rotation
@@ -83,17 +90,30 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
              OR has_table_privilege(current_user,'public.r36_independent_u2a_attestations','DELETE')
              OR pg_has_role(current_user,(SELECT relowner FROM pg_class WHERE oid='public.r36_independent_u2a_attestations'::regclass),'MEMBER')) END AS cannot_forge_attestation,
         CASE WHEN to_regprocedure('public.r36_claim_prepared_authority(text,text,text,text,text,text,text)') IS NULL THEN false
-          ELSE has_function_privilege(current_user,'public.r36_claim_prepared_authority(text,text,text,text,text,text,text)','EXECUTE') END AS claim_executable
+          ELSE has_function_privilege(current_user,'public.r36_claim_prepared_authority(text,text,text,text,text,text,text)','EXECUTE') END AS claim_executable,
+        CASE WHEN to_regprocedure('public.r36_claim_first_submission(text,text,text,text,text,text,text)') IS NULL THEN false
+          ELSE has_function_privilege(current_user,'public.r36_claim_first_submission(text,text,text,text,text,text,text)','EXECUTE') END AS submission_claim_executable
       FROM pg_roles r WHERE r.rolname=current_user
     `, [])
     const b = Array.isArray(boundary) ? boundary[0] as {
       restricted_role:boolean; cannot_create_public:boolean; attestation_present:boolean;
-      cannot_forge_attestation:boolean; claim_executable:boolean
+      cannot_forge_attestation:boolean; claim_executable:boolean; submission_claim_executable:boolean
     } : null
     const admitted = !!b && b.restricted_role === true && b.cannot_create_public === true &&
-      b.attestation_present === true && b.cannot_forge_attestation === true && b.claim_executable === true
-    if (!admitted) console.warn('[R36 READONLY DIAGNOSTIC] admission_boundary_denied', { restrictedRole: b?.restricted_role ?? null, cannotCreatePublic: b?.cannot_create_public ?? null, attestationPresent: b?.attestation_present ?? null, cannotForgeAttestation: b?.cannot_forge_attestation ?? null, claimExecutable: b?.claim_executable ?? null })
-    return admitted
+      b.attestation_present === true && b.cannot_forge_attestation === true && b.claim_executable === true && b.submission_claim_executable === true
+    if (!admitted) console.warn('[R36 READONLY DIAGNOSTIC] admission_boundary_denied', { restrictedRole: b?.restricted_role ?? null, cannotCreatePublic: b?.cannot_create_public ?? null, attestationPresent: b?.attestation_present ?? null, cannotForgeAttestation: b?.cannot_forge_attestation ?? null, claimExecutable: b?.claim_executable ?? null, submissionClaimExecutable: b?.submission_claim_executable ?? null })
+    if (!admitted) return false
+    // The certificate-aware SQL wrappers are mandatory. A missing extension must
+    // never silently fall back to the former attestation-only admission contract.
+    const certificate = await db.unsafe(`SELECT public.r36_certificate_gate_version() AS version,
+      (SELECT count(*)=3 AND bool_and(NOT has_function_privilege(current_user,oid,'EXECUTE'))
+       FROM unnest(ARRAY[to_regprocedure('public.r36_certificate_context(text)'),
+         to_regprocedure('public.r36_record_certificate(text,text,jsonb,text)'),
+         to_regprocedure('public.r36_revoke_certificate(text,text)')]) AS f(oid)
+       WHERE oid IS NOT NULL) AS cannot_issue`, [])
+    return Array.isArray(certificate) && certificate.length === 1 &&
+      (certificate[0] as {version?:number;cannot_issue?:boolean})?.version === 1 &&
+      (certificate[0] as {cannot_issue?:boolean})?.cannot_issue === true
   } catch (error) { console.warn('[R36 READONLY DIAGNOSTIC] admission_query_exception', { code: (error as {code?:string})?.code ?? 'unknown' }); return false }
 }
 
@@ -164,47 +184,18 @@ export async function claimFirstWalletSubmission(input: WalletAuthorityClaim): P
       !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
       !/^[1-9][0-9]*$/.test(input.preparedSequence)) return false
   try {
-    if (!(await checkR36SchemaAdmission({ unsafe: async (sql, values) => {
-      const rows = await query(sql, values)
-      if (!rows) throw new Error('R36_SCHEMA_QUERY_NULL')
-      return rows
-    } }))) return false
-    // A single INSERT statement makes the exact-owner check and append-only
-    // one-shot admission atomic. The authority row is locked until commit;
-    // lock conflicts and database outages always deny the submit.
-    const rows = await query(`
-      INSERT INTO financial_wallet_submission_attempts
-        (network,source_wallet,owner_payment_id,operation_kind,owner_operation_id,prepared_tx_hash,prepared_sequence)
-      SELECT a.network,a.source_wallet,a.owner_payment_id,a.operation_kind,
-             a.owner_operation_id,a.prepared_tx_hash,a.prepared_sequence
-      FROM financial_wallet_authorities a
-      JOIN financial_wallet_activation g
-        ON g.network=a.network AND g.source_wallet=a.source_wallet
-       AND g.state='enabled' AND g.clearance_digest ~ '^[0-9a-f]{64}$'
-      WHERE a.network=$1 AND a.source_wallet=$2 AND a.owner_payment_id=$3
-        AND a.operation_kind=$4 AND a.owner_operation_id=$5
-        AND a.prepared_tx_hash=$6 AND a.prepared_sequence=$7 AND a.state='prepared'
-        AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s
-          WHERE s.a2u_from_address=$2 AND s.payment_id<>$3
-            AND s.stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed'))
-        -- Unknown or same-wallet pending refunds remain blockers. Only exact
-        -- immutable R36 authority for a DIFFERENT wallet can exclude one.
-        AND NOT EXISTS (SELECT 1 FROM refund_checkpoints r
-          WHERE r.payment_id<>$3 AND r.status IN ('pending','manual_review_required')
-            AND NOT EXISTS (
-              SELECT 1 FROM financial_wallet_authorities ra
-              WHERE ra.network=$1 AND ra.operation_kind='refund'
-                AND ra.owner_payment_id=r.payment_id
-                AND ra.owner_operation_id=r.refund_id
-                AND ra.source_wallet<>$2
-                AND ra.state='prepared'
-            ))
-      FOR UPDATE OF a
-      ON CONFLICT DO NOTHING
-      RETURNING prepared_tx_hash`,
+    const restricted = await getR36RestrictedClient()
+    if (!restricted || !(await checkR36SchemaAdmission(restricted))) return false
+    // R36: execute the one-shot admission as the protected SQL owner.
+    // Keep the existing schema admission gate and fail-closed result contract.
+    // Never grant direct UPDATE on wallet authority to the runtime role.
+    const rows = await restricted.unsafe(`
+      SELECT public.r36_claim_first_submission(
+        $1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text
+      ) AS claimed`,
       [input.network,input.sourceWallet,input.paymentId,input.operationKind,
        input.operationId,input.preparedHash,input.preparedSequence])
-    return Array.isArray(rows) && rows.length === 1 && (rows[0] as {prepared_tx_hash: string})?.prepared_tx_hash === input.preparedHash
+    return Array.isArray(rows) && rows.length === 1 && (rows[0] as {claimed: boolean})?.claimed === true
   } catch { return false }
 }
 
@@ -258,7 +249,7 @@ export async function recordWalletFinalitySeal(input: WalletAuthorityClaim & {
               AND s.a2u_txid=a.prepared_tx_hash
               AND s.prepared_sequence::text=a.prepared_sequence
               AND s.horizon_confirmed_at IS NOT NULL AND s.db_finalized_at IS NOT NULL
-              AND s.horizon_fee_stroops=$9::bigint))
+              AND s.horizon_fee_stroops=$9::text::bigint))
           OR
           (a.operation_kind='refund' AND EXISTS (
             SELECT 1 FROM refund_checkpoints r

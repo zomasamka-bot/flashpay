@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto'
 import { readR36IndependentHorizonProof, type R36HorizonProofInput } from './r36-independent-horizon-proof'
 
 type Queryable = { query: (sql: string, params: readonly unknown[]) => Promise<{ rows: Record<string, unknown>[] }> }
-export type R36GateResult = Readonly<{ outcome: 'MATCHED_NOT_AUTHORIZED' | 'BLOCKED'; reason: string; authorizesRotation: false; evidenceDigest?: string }>
+export type R36GateResult = Readonly<{ outcome: 'MATCHED_NOT_AUTHORIZED' | 'BLOCKED'; reason: string; authorizesRotation: false; evidenceDigest?: string;
+  durableIdentity?: Readonly<{paymentId:string; operationKind:string; operationId:string}> }>
 const deny = (reason: string): R36GateResult => ({ outcome: 'BLOCKED', reason, authorizesRotation: false })
 const fields = ['network', 'source_wallet', 'prepared_tx_hash', 'prepared_sequence'] as const
 /** Caller supplies a dedicated READ-ONLY PostgreSQL client; never call with live financial write transaction. */
@@ -61,6 +62,9 @@ export async function checkR36HorizonAgainstDurableRecords(
       envelopeXdr:input.envelopeXdr,ledger:proof.ledger,fee:proof.feeStroops,
       ownerPayment:r.owner_payment_id,operationKind:r.operation_kind,ownerOperation:r.owner_operation_id,
     })).digest('hex')
-    return { outcome:'MATCHED_NOT_AUTHORIZED',reason:'DURABLE_IDENTITY_AND_HORIZON_MATCH',authorizesRotation:false,evidenceDigest }
+    // Expose the already-compared durable identity for signature review, never approval.
+    const durableIdentity = typeof r.owner_payment_id === 'string' && typeof r.operation_kind === 'string' &&
+      typeof r.owner_operation_id === 'string' ? {paymentId:r.owner_payment_id,operationKind:r.operation_kind,operationId:r.owner_operation_id} : undefined
+    return { outcome:'MATCHED_NOT_AUTHORIZED',reason:'DURABLE_IDENTITY_AND_HORIZON_MATCH',authorizesRotation:false,evidenceDigest,durableIdentity }
   } catch { return deny('DB_OR_HORIZON_READ_FAILED') }
 }

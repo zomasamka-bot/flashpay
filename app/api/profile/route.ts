@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getMerchantProfileSummary, getSettledPaymentIds } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { verifyFinalPaymentPresentation } from "@/lib/payment-presentation-authority"
 import { readRefundPresentation } from "@/lib/refund-presentation-reader"
 import { readRefundPresentationPersistences, readRefundPresentationProofs } from "@/lib/refund-presentation-persistence"
 import { getRefundCheckpointsByPaymentIds } from "@/lib/refund-checkpoint-store"
@@ -125,6 +126,7 @@ export async function GET(request: NextRequest) {
           return NextResponse.json({ error: "Operational payment history unavailable" }, { status: 503 })
         }
         const payment = paymentValue
+        if (!(await verifyFinalPaymentPresentation(payment))) return NextResponse.json({ error: "Operational payment finality unavailable" }, { status: 503 })
         const status = typeof payment.status === "string" ? payment.status : undefined
         const settlementFailureState = typeof payment.settlementFailureState === "string" ? payment.settlementFailureState : undefined
         const refundStatus = typeof payment.refundStatus === "string" ? payment.refundStatus : undefined
@@ -312,6 +314,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Only completed refunds can be removed from Profile" }, { status: 409 })
     }
 
+    if (!await verifyFinalPaymentPresentation(paymentValue)) {
+      return NextResponse.json({ error: "Completed refund authority unavailable" }, { status: 503 })
+    }
     await redis.set(dismissedRefundKey(verifiedMerchant.username, paymentId), "dismissed")
     const marker = await redis.get(dismissedRefundKey(verifiedMerchant.username, paymentId))
     if (marker !== "dismissed") return NextResponse.json({ error: "Profile presentation unavailable" }, { status: 503 })

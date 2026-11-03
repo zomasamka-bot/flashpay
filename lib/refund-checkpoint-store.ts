@@ -1,7 +1,7 @@
 import { claimPreparedWalletAuthority, type WalletAuthorityClaim } from './financial-wallet-authority'
 import { randomUUID } from 'node:crypto'
 import { redis, isRedisConfigured } from './redis'
-import { ensureRefundCheckpointTables, query, readSettlementRefundAuthority, withPaymentAuthorityTransaction } from './db'
+import { ensureRefundCheckpointTables, query, readSettlementRefundAuthority, withPaymentAuthorityTransaction, withR36RestrictedPaymentTransaction } from './db'
 import type { Payment, RefundAuditEvent, RefundCheckpoint } from './types'
 
 const redisKey = (refundId: string) => `flashpay:refund:checkpoint:${refundId}`
@@ -711,27 +711,13 @@ export async function ensureRefundPreparedSubmit(
   const authorizationEventId = `refund:${refundId}:blockchain_submit_authorized`
   const blockchainEventId = `refund:${refundId}:blockchain_submission_started`
   const details = { refundPaymentId, envelopeXdr, preparedHash, preparedSequence, phase: 'horizon_prepared' }
-  const result = await withPaymentAuthorityTransaction(paymentId, async (tx) => {
+  const result = await withR36RestrictedPaymentTransaction(paymentId, async (tx) => {
     if (walletAuthority.paymentId !== paymentId || walletAuthority.operationId !== refundId ||
         walletAuthority.operationKind !== 'refund' || walletAuthority.preparedHash !== preparedHash ||
         walletAuthority.preparedSequence !== preparedSequence ||
         !(await claimPreparedWalletAuthority(walletAuthority, tx))) throw new Error('wallet_authority_conflict')
-    const inserted = await tx.unsafe(`
-    WITH source AS (
-      SELECT c.* FROM refund_checkpoints c JOIN refund_audit_events a
-        ON a.event_id=$7 AND a.refund_id=c.refund_id AND a.payment_id=c.payment_id
-       AND a.idempotency_key=c.idempotency_key AND a.actor_type='system'
-       AND a.event_type='refund_blockchain_submission_started'
-       AND a.details=jsonb_build_object('refundPaymentId',$4::text,'phase','blockchain_submission')
-      WHERE c.refund_id=$1 AND c.payment_id=$2 AND c.idempotency_key=$3
-        AND c.refund_payment_id=$4::text AND c.stage='wallet_submission_started' AND c.status='pending'
-        AND NOT EXISTS (SELECT 1 FROM refund_audit_events z WHERE z.event_id=$5 AND z.refund_id=c.refund_id AND z.payment_id=c.payment_id AND z.idempotency_key=c.idempotency_key AND z.event_type='refund_blockchain_submit_authorized')
-    ), inserted AS (
-      INSERT INTO refund_audit_events (event_id,refund_id,payment_id,event_type,actor_type,idempotency_key,created_at,details)
-      SELECT $6,refund_id,payment_id,'refund_blockchain_submit_prepared','system',idempotency_key,NOW(),$8::jsonb FROM source
-      ON CONFLICT (event_id) DO NOTHING RETURNING refund_id
-    ) SELECT source.* FROM source JOIN inserted USING (refund_id)`,
-    [refundId, paymentId, idempotencyKey, refundPaymentId, authorizationEventId, preparedEventId, blockchainEventId, JSON.stringify(details)])
+    const inserted = await tx.unsafe(`SELECT * FROM public.r36_insert_refund_prepared_audit($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+      [refundId,paymentId,idempotencyKey,refundPaymentId,authorizationEventId,preparedEventId,blockchainEventId,details])
     if (!Array.isArray(inserted) || inserted.length !== 1) throw new Error('refund_prepare_not_inserted')
     return inserted
   })

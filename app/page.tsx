@@ -27,7 +27,7 @@ export default function HomePage() {
   const { locale, setLocale, t } = useI18n()
 
   // Load persistent payment history on app mount
-  useLoadPaymentHistory()
+  const verifiedHistorySummary = useLoadPaymentHistory()
 
   const [amount, setAmount] = useState("")
   const [displayAmount, setDisplayAmount] = useState("0.00")
@@ -525,9 +525,9 @@ export default function HomePage() {
         <div className="border-b bg-muted/30 px-4 py-3">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
-              <span className="text-muted-foreground">{t("home.today", "Today:")}</span>
-              <span className="font-semibold">{paymentStats.paidPayments} sales</span>
-              <span className="font-semibold">{paymentStats.totalAmount.toFixed(2)} π</span>
+              <span className="text-muted-foreground">{t("home.verifiedTotal", "Verified total:")}</span>
+              <span className="font-semibold">{verifiedHistorySummary?.settledTransactions ?? "—"} sales</span>
+              <span className="font-semibold">{verifiedHistorySummary ? verifiedHistorySummary.total.toFixed(2) : "—"} π</span>
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Check className="h-3 w-3 text-green-600" />
@@ -676,9 +676,9 @@ export default function HomePage() {
         <div className="border-b bg-muted/30 px-4 py-3">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-4">
-              <span className="text-muted-foreground">{t("home.today", "Today:")}</span>
-              <span className="font-semibold">{paymentStats.paidPayments} sales</span>
-              <span className="font-semibold">{paymentStats.totalAmount.toFixed(2)} π</span>
+              <span className="text-muted-foreground">{t("home.verifiedTotal", "Verified total:")}</span>
+              <span className="font-semibold">{verifiedHistorySummary?.settledTransactions ?? "—"} sales</span>
+              <span className="font-semibold">{verifiedHistorySummary ? verifiedHistorySummary.total.toFixed(2) : "—"} π</span>
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Check className="h-3 w-3 text-green-600" />

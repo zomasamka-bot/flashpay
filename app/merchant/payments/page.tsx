@@ -178,10 +178,8 @@ export default function MerchantPaymentsPage() {
         if (controller.signal.aborted) return
 
         if (!response.ok) {
-          if (!background) {
-            setPayments([])
-            setSummary(null)
-          }
+          setPayments([])
+          setSummary(null)
           setError(`Failed to load payments: ${response.statusText}`)
           return
         }
@@ -268,10 +266,8 @@ export default function MerchantPaymentsPage() {
         if (controller.signal.aborted) return
 
         console.error("[Merchant Payments] Error fetching payments:", err)
-        if (!background) {
-          setPayments([])
-          setSummary(null)
-        }
+        setPayments([])
+        setSummary(null)
         setError(err instanceof Error ? err.message : "Failed to load payments")
       } finally {
         if (!controller.signal.aborted && !background) {

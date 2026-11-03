@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { query } from "@/lib/db"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
 import { isPaymentFinal } from "@/lib/payment-status"
+import { verifyFinalPaymentPresentation } from "@/lib/payment-presentation-authority"
 import { findRefundCheckpointByPaymentId } from "@/lib/refund-checkpoint-store"
 import { isRedisConfigured, redis } from "@/lib/redis"
 import type { Payment } from "@/lib/types"
@@ -68,11 +69,16 @@ async function readPayment(paymentId: string): Promise<Payment | null> {
 async function proveNoCommittedFinancialRows(paymentId: string): Promise<boolean> {
   const rows = await query(`SELECT
     (SELECT COUNT(*)::int FROM transactions WHERE payment_id=$1) AS transaction_count,
-    (SELECT COUNT(*)::int FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id=$1 OR r.u2a_identifier=$1) AS receipt_count`, [paymentId])
+    (SELECT COUNT(*)::int FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id=$1 OR r.u2a_identifier=$1) AS receipt_count,
+    (SELECT COUNT(*)::int FROM settlement_checkpoints WHERE payment_id=$1 AND (
+      stage <> 'payment_identity' OR u2a_approval_identifier IS NOT NULL OR u2a_approval_claimed_at IS NOT NULL OR u2a_identifier IS NOT NULL OR u2a_txid IS NOT NULL OR
+      a2u_create_attempted_at IS NOT NULL OR (u2a_start_lease_token IS NOT NULL AND (u2a_start_lease_expires_at IS NULL OR u2a_start_lease_expires_at > NOW()))
+    )) AS financial_authority_count`, [paymentId])
   const row = Array.isArray(rows) && rows.length === 1 && rows[0] && typeof rows[0] === "object" ? rows[0] as Record<string, unknown> : null
   if (!row) return false
-  const transactionCount = Number(row.transaction_count), receiptCount = Number(row.receipt_count)
-  return Number.isSafeInteger(transactionCount) && transactionCount === 0 && Number.isSafeInteger(receiptCount) && receiptCount === 0
+  const transactionCount = Number(row.transaction_count), receiptCount = Number(row.receipt_count), authorityCount = Number(row.financial_authority_count)
+  return Number.isSafeInteger(transactionCount) && transactionCount === 0 && Number.isSafeInteger(receiptCount) && receiptCount === 0 &&
+    row.financial_authority_count != null && Number.isSafeInteger(authorityCount) && authorityCount === 0
 }
 
 async function buildReview(payment: Payment) {
@@ -80,11 +86,11 @@ async function buildReview(payment: Payment) {
   const refund = await findRefundCheckpointByPaymentId(paymentId)
   let dbEvidence: { state: "present" | "absent" | "unknown"; transactionCount?: number; receiptCount?: number; merchantUid?: string | null; payerUsername?: string | null } = { state: "unknown" }
   try {
-    const rows = await query(`SELECT
-      (SELECT COUNT(*)::int FROM transactions WHERE payment_id=$1) AS transaction_count,
-      (SELECT COUNT(*)::int FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id=$1 OR r.u2a_identifier=$1) AS receipt_count,
-      (SELECT merchant_uid FROM transactions WHERE payment_id=$1 LIMIT 1) AS merchant_uid,
-      (SELECT r.payer_username FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id=$1 LIMIT 1) AS payer_username`, [paymentId])
+    const rows = await query(`WITH identity AS (SELECT $1::text AS id UNION SELECT u2a_identifier FROM settlement_checkpoints WHERE payment_id=$1 AND u2a_identifier IS NOT NULL) SELECT
+      (SELECT COUNT(*)::int FROM transactions WHERE payment_id IN (SELECT id FROM identity)) AS transaction_count,
+      (SELECT COUNT(*)::int FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id IN (SELECT id FROM identity) OR r.u2a_identifier IN (SELECT id FROM identity)) AS receipt_count,
+      (SELECT merchant_uid FROM transactions WHERE payment_id IN (SELECT id FROM identity) LIMIT 1) AS merchant_uid,
+      (SELECT r.payer_username FROM receipts r JOIN transactions t ON t.id=r.transaction_id WHERE t.payment_id IN (SELECT id FROM identity) LIMIT 1) AS payer_username`, [paymentId])
     const row = Array.isArray(rows) && rows.length === 1 && rows[0] && typeof rows[0] === "object" ? rows[0] as Record<string, unknown> : null
     if (row) {
       const transactionCount = Number(row.transaction_count), receiptCount = Number(row.receipt_count)
@@ -94,8 +100,10 @@ async function buildReview(payment: Payment) {
 
   const settlementEvidence = Boolean(payment.a2uPaymentId || payment.a2uTxid || payment.a2uPreparedTxHash || payment.horizonSuccessFlag)
   const refundEvidence = refund.state === "present" || Boolean(payment.refundPaymentId || payment.refundTxid || (payment.refundStatus && payment.refundStatus !== "not_started"))
+  const finalPresentationVerified = await verifyFinalPaymentPresentation(payment as unknown as Record<string, unknown>)
   let verdict: Verdict = "Unknown", reason = "Evidence is insufficient for an automatic conclusion"
   if (settlementEvidence && refundEvidence) { verdict = "Conflict"; reason = "Settlement and refund evidence coexist; financial action is blocked" }
+  else if (!finalPresentationVerified) { verdict = "Unknown"; reason = "Projected finality lacks matching durable authority; retain for review" }
   else if (isPaymentFinal(payment)) { verdict = "Final"; reason = "Canonical finality proof is complete" }
   else if (refund.state === "uncertain" || dbEvidence.state === "unknown") { verdict = "Unknown"; reason = "One or more authoritative reads are uncertain" }
   else if (payment.status === "settlement_failed" && (payment.settlementFailureState === "manual_review_required" || payment.refundStatus === "manual_review_required")) { verdict = "Manual Review"; reason = "Canonical state requires manual review" }
@@ -108,7 +116,7 @@ async function buildReview(payment: Payment) {
     database: dbEvidence, refund: refund.state === "present" ? { state: "present", status: refund.checkpoint.status, stage: refund.checkpoint.stage, refundId: refund.checkpoint.refundId, refundPaymentId: refund.checkpoint.refundPaymentId ?? null, refundTxid: refund.checkpoint.refundTxid ?? null, amount: refund.checkpoint.amount, attemptCount: refund.checkpoint.attemptCount, lastErrorCode: refund.checkpoint.lastErrorCode ?? null, lastErrorMessage: refund.checkpoint.lastErrorMessage ?? null, updatedAt: refund.checkpoint.updatedAt } : { state: refund.state },
     action: {
       allowed: false,
-      canPruneFromQueue: isTerminalNoMovementProjectionCandidate(payment) && refund.state === "absent" && dbEvidence.state === "absent",
+      canPruneFromQueue: isTerminalNoMovementProjectionCandidate(payment) && refund.state === "absent" && dbEvidence.state === "absent" && await proveNoCommittedFinancialRows(payment.id),
       message: verdict === "Final" ? "No action required." : verdict === "Recovering" ? "Recovery is automatic. Manual execution is intentionally unavailable while the authoritative recovery path owns this payment." : "No financial action is exposed until the existing Plan 7 authority can prove a safe transition. Unknown/conflict always fails closed."
     } }
 }
@@ -200,11 +208,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Queue removal is blocked because terminal no-movement evidence is not proven" }, { status: 409 })
     }
     const requestId = request.headers.get("x-vercel-id") || crypto.randomUUID()
-    const removed = await redis.eval<[string], number>(
-      "local a=redis.call('SREM',KEYS[1],ARGV[1]); local r=redis.call('ZREM',KEYS[2],ARGV[1]); if a==1 or r==1 then return 1 end; return 0",
-      [ACTIVE_KEY, "flashpay:settlement:ready:v1"],
-      [payment.id],
+    // Prune only the exact projection that was reviewed. A concurrent recovery
+    // update must keep its queue membership; this never deletes financial truth.
+    const removed = await redis.eval<[string, string], number>(
+      `local raw=redis.call('GET',KEYS[3]); if not raw then return -1 end
+local ok,current=pcall(cjson.decode,raw); if not ok then return -1 end
+local expected=cjson.decode(ARGV[2])
+local function same(a,b)
+  if type(a)~=type(b) then return false end
+  if type(a)~='table' then return a==b end
+  for k,v in pairs(a) do if not same(v,b[k]) then return false end end
+  for k,_ in pairs(b) do if a[k]==nil then return false end end
+  return true
+end
+if not same(current,expected) then return -1 end
+local activeType=redis.call('TYPE',KEYS[1]).ok; local readyType=redis.call('TYPE',KEYS[2]).ok
+if (activeType~='none' and activeType~='set') or (readyType~='none' and readyType~='zset') then return -1 end
+local a=redis.call('SREM',KEYS[1],ARGV[1]); local r=redis.call('ZREM',KEYS[2],ARGV[1]); if a==1 or r==1 then return 1 end; return 0`,
+      [ACTIVE_KEY, "flashpay:settlement:ready:v1", `payment:${payment.id}`],
+      [payment.id, JSON.stringify(payment)],
     )
+    if (removed === -1) return NextResponse.json({ error: "Payment changed during review; queue preserved" }, { status: 409 })
     if (removed !== 0 && removed !== 1) return NextResponse.json({ error: "Invalid queue removal result" }, { status: 503 })
     await appendOperationalQueueAuditEvent({ actorUid: auth.uid, requestId, paymentId: payment.id, action: "queue.prune_terminal", reason: "Owner removed a proven terminal no-movement payment from operational recovery indexes" })
     return NextResponse.json({ success: true, paymentId: payment.id, removed: removed === 1, requestId }, { headers: { "Cache-Control": "no-store" } })

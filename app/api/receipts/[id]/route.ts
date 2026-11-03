@@ -112,13 +112,18 @@ function buildReceiptView(
   merchantName: string,
   customerName: string | null,
 ): FlashPayReceiptView | null {
-  // The PostgreSQL receipt proves the durable settlement record exists, but all
-  // user-facing payment facts come from the canonical FlashPay payment so the
-  // merchant and customer see the same receipt projection.
-  const amount = Number(canonicalPayment.customerAmount ?? canonicalPayment.amount)
-  const occurredAt = normalizeReceiptTimestamp(canonicalPayment.paidAt)
-    ?? normalizeReceiptTimestamp(canonicalPayment.createdAt)
-  if (!Number.isFinite(amount) || amount <= 0 || occurredAt === null) return null
+  // The durable receipt owns monetary facts. Redis can supply presentation
+  // metadata only after its payment/merchant/amount binding agrees with it.
+  const amount = Number(receipt.customer_amount ?? receipt.amount)
+  const piId = canonicalPayment.piPaymentId
+  if (typeof piId !== "string" || !piId || receipt.merchant_id !== merchantName ||
+      canonicalPayment.merchantId !== merchantName || canonicalPayment.id !== flashPayPaymentId ||
+      receipt.u2a_identifier !== piId || (receipt.payment_id != null && receipt.payment_id !== piId) ||
+      !Number.isFinite(amount) || amount <= 0 || Number(receipt.amount) !== amount ||
+      canonicalPayment.amount !== amount ||
+      (canonicalPayment.customerAmount != null && canonicalPayment.customerAmount !== amount)) return null
+  const occurredAt = normalizeReceiptTimestamp(receipt.timestamp ?? receipt.created_at)
+  if (occurredAt === null) return null
 
   return {
     flashPayPaymentId,

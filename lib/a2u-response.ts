@@ -1,5 +1,6 @@
 import { redis } from "@/lib/redis"
 import { isPaymentFinal } from "@/lib/payment-status"
+import { verifyFinalPaymentPresentation } from "@/lib/payment-presentation-authority"
 
 /**
  * Unified payment response shape - used by ALL response paths (processing or final).
@@ -104,6 +105,7 @@ export async function buildA2USuccessResponse(
   }
 
   // CRITICAL: Use single source of truth finality predicate
+  if (!(await verifyFinalPaymentPresentation(payment))) return null
   const isFinalSuccess = isPaymentFinal(payment)
 
   // CRITICAL: Processing states (never success, preserve identifiers)

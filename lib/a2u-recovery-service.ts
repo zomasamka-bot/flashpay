@@ -1,4 +1,6 @@
+import { readDurableSettlementProjection } from "./settlement-durable-projection"
 import { redis } from "@/lib/redis"
+import { compareAndSwapPaymentProjection } from "@/lib/payment-projection-cas"
 import { randomUUID } from "crypto"
 import { buildA2USuccessResponse } from "@/lib/a2u-response"
 import { executeA2ULocked, isStage1OnlySettlementDispatchCandidate } from "@/lib/a2u-locked-executor"
@@ -212,30 +214,12 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
 
 
 async function rebuildSettlementProjectionFromDurable(paymentId:string):Promise<Payment|null>{
-  const durable=await getSettlementCheckpointAuthoritative(paymentId)
-  if(durable.outcome!=='FOUND')return null
-  const d=durable.checkpoint
-  const moved=d.stage==='horizon_confirmed'||d.stage==='pi_completed'||d.stage==='db_finalized'
-  const piDone=d.stage==='pi_completed'||d.stage==='db_finalized'
-  const dbDone=d.stage==='db_finalized'
-  const prepared=d.stage!=='a2u_created'
-  const projected:Payment={
-    id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:'',redisProjectionVersion:1,
-    amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,
-    note:'',status:dbDone?'settled_to_merchant':moved||prepared?'settlement_pending':'paid_to_app',
-    createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,
-    a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,
-    settlementFailureState:'none',appCommission:0,
-    ...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),
-    ...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,
-      appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,
-      requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{}),
-    ...(dbDone?{settledAt:new Date().toISOString()}:{}),
-  }
+  const projected = await readDurableSettlementProjection(paymentId)
+  if (!projected) return null
   await redis.set(`payment:${paymentId}`,JSON.stringify(projected),{nx:true})
   const readback=await redis.get(`payment:${paymentId}`)
   const parsed=readback?(typeof readback==='string'?JSON.parse(readback):readback):null
-  if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==d.a2uPaymentId||parsed.piPaymentId!==d.u2aIdentifier||parsed.u2aTxid!==d.u2aTxid)return null
+  if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==projected.a2uPaymentId||parsed.piPaymentId!==projected.piPaymentId||parsed.u2aTxid!==projected.u2aTxid)return null
   // A pre-existing Redis value is not evidence of durable financial finality.
   // Fail closed rather than adopting a stale or refund-marked projection.
   const financialKeys: (keyof Payment)[] = [
@@ -244,7 +228,7 @@ async function rebuildSettlementProjectionFromDurable(paymentId:string):Promise<
     'a2uPreparedTxHash','a2uPreparedSequence','a2uTxid',
     'horizonSuccessFlag','horizonFeeCharged','appNetImpact',
     'piCompletionPending','piCompleted','requiresDbReconciliation','dbRecorded',
-    'appCommission',
+    'appCommission','payerUid','payerUidSource','payerUidCapturedAt','paidAt',
   ]
   for (const key of financialKeys) {
     if (parsed[key] !== projected[key]) return null
@@ -286,6 +270,59 @@ export async function executeA2URecovery(
 
   if (payment.id !== paymentId) {
     return { status: "manual_review_required", state: "payment_identity_mismatch", paymentId, details: { error: "Payment identity mismatch" } }
+  }
+
+  // A crash may commit Prepared in PostgreSQL before the Stage1 Redis projection.
+  // Restore only the exact durable XDR; the existing submit replay path still
+  // verifies Pi/Horizon, XOR, wallet ownership and one-shot admission independently.
+  if (isStage1OnlySettlementDispatchCandidate(payment, Date.now())) {
+    const preparedRead = await getSettlementCheckpointAuthoritative(paymentId)
+    if (preparedRead.outcome === "INDETERMINATE") {
+      return {status:"manual_review_required",state:"durable_prepared_unavailable",paymentId,details:{error:"Prepared recovery authority unavailable"}}
+    }
+    if (preparedRead.outcome === "FOUND" && preparedRead.checkpoint.stage === "prepared") {
+      const d = preparedRead.checkpoint
+      if (!durableAuthority.settlementActive || durableAuthority.refundActive ||
+          payment.merchantId !== d.merchantId || payment.merchantUid !== d.merchantUid ||
+          payment.customerAmount !== d.customerAmount || payment.merchantAmount !== d.merchantAmount ||
+          payment.piPaymentId !== d.u2aIdentifier || payment.u2aTxid !== d.u2aTxid ||
+          payment.a2uPaymentId !== d.a2uPaymentId || payment.a2uFromAddress !== d.a2uFromAddress ||
+          payment.a2uToAddress !== d.a2uToAddress || payment.appCommission !== 0) {
+        return {status:"manual_review_required",state:"durable_prepared_identity_mismatch",paymentId,details:{error:"Stage1 projection differs from durable Prepared identity"}}
+      }
+      const restored = await compareAndSwapPaymentProjection(paymentId, payment, {
+        ...payment, status:"settlement_pending",
+        a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,
+        a2uPreparedTxHash:d.preparedTxHash, a2uPreparedSequence:d.preparedSequence,
+      })
+      if (restored.outcome !== "UPDATED") {
+        return {status:"manual_review_required",state:"durable_prepared_projection_conflict",paymentId,details:{error:"Prepared projection changed during recovery"}}
+      }
+      payment = restored.payment
+    }
+  }
+
+  // A crash can commit Horizon before its Redis projection. Reconstruct only a
+  // compatible earlier Prepared state; existing conflicting financial evidence is never overwritten.
+  if (payment.status === "settlement_pending" && payment.a2uPreparedTxHash &&
+      payment.a2uTxid === undefined && payment.horizonSuccessFlag !== true &&
+      payment.piCompleted !== true && payment.dbRecorded !== true && payment.requiresDbReconciliation !== true) {
+    const projected = await readDurableSettlementProjection(paymentId)
+    if (projected?.horizonSuccessFlag === true) {
+      const exact: (keyof Payment)[] = ["id","merchantId","merchantUid","amount","customerAmount","merchantAmount",
+        "piPaymentId","u2aTxid","a2uPaymentId","a2uFromAddress","a2uToAddress",
+        "a2uPreparedEnvelopeXdr","a2uPreparedTxHash","a2uPreparedSequence","appCommission"]
+      if (exact.some(key => payment[key] !== projected[key]) ||
+          (payment.payerUid !== undefined && payment.payerUid !== projected.payerUid) ||
+          payment.refundPaymentId != null || payment.refundTxid != null ||
+          (payment.refundStatus != null && payment.refundStatus !== "not_started") ||
+          payment.horizonFeeCharged !== undefined || payment.appNetImpact !== undefined) {
+        return {status:"manual_review_required",state:"durable_progress_identity_mismatch",paymentId,details:{error:"Redis Prepared identity conflicts with durable progress"}}
+      }
+      const restored = await compareAndSwapPaymentProjection(paymentId, payment, {...payment,...projected})
+      if (restored.outcome !== "UPDATED") return {status:"manual_review_required",state:"durable_progress_projection_conflict",paymentId,details:{error:"Projection changed during durable progress recovery"}}
+      payment = restored.payment
+    }
   }
 
   // Existing Redis is a projection, not evidence of durable settlement finality.

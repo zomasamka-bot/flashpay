@@ -1,5 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { getMerchantPaymentDashboardSummary } from "@/lib/db"
 import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { verifyFinalPaymentPresentation } from "@/lib/payment-presentation-authority"
 import { listDurableMerchantHistoryIdentities, readMerchantHistoryCoverage } from "@/lib/merchant-history-durable"
 
 export const dynamic = "force-dynamic"
@@ -108,6 +110,7 @@ export async function GET(request: NextRequest) {
           return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
         }
         if (!isRecord(payment)) return NextResponse.json({ error: "Payment history unavailable" }, { status: 503 })
+        if (!(await verifyFinalPaymentPresentation(payment))) return NextResponse.json({ error: "Payment history finality unavailable" }, { status: 503 })
         const id = payment.id
         const amount = payment.amount
         const merchant = payment.merchantId
@@ -158,8 +161,10 @@ export async function GET(request: NextRequest) {
       }
     }
     const visiblePayments = payments.slice(0, safeLimit)
-    const totalAmount = visiblePayments.reduce((sum, payment) => sum + (typeof payment.amount === "number" ? payment.amount : 0), 0)
-    return NextResponse.json({ payments: visiblePayments, balance: { total: totalAmount, currency: "π" }, source: "redis" })
+    const summary = await getMerchantPaymentDashboardSummary(verifiedMerchant.username)
+    if (!summary) return NextResponse.json({ error: "Payment history accounting unavailable" }, { status: 503 })
+    const totalAmount = summary.total_settled_amount
+    return NextResponse.json({ payments: visiblePayments, balance: { total: totalAmount, currency: "π", source: "postgres", scope: "all_time_settled", settledTransactions: summary.settled_transactions }, source: "redis" })
   } catch (error) {
     console.error("[Payment History] Error:", error)
     return NextResponse.json(

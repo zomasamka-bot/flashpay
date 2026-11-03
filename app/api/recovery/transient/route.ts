@@ -212,7 +212,9 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
         if(!response.ok)return null
         const dto=asRecord(await response.json().catch(()=>null)),status=dto?asRecord(dto.status):null,transaction=dto?asRecord(dto.transaction):null,metadata=dto?asRecord(dto.metadata):null
         const payerUid=dto&&typeof dto.user_uid==='string'&&dto.user_uid.trim()!==''&&dto.user_uid===dto.user_uid.trim()?dto.user_uid:''
-        if(!dto||!status||!transaction||dto.identifier!==ingress.u2aIdentifier||dto.direction!=='user_to_app'||Number(dto.amount)!==ingress.customerAmount||
+        // The durable ingress contract is Testnet-only, as in /api/pi/complete.
+        // Check both the initial read and the post-completion refetch before claiming or recording.
+        if(!dto||!status||!transaction||dto.network!=='Pi Testnet'||dto.identifier!==ingress.u2aIdentifier||dto.direction!=='user_to_app'||Number(dto.amount)!==ingress.customerAmount||
           metadata?.paymentId!==paymentId||transaction.txid!==ingress.u2aTxid||transaction.verified!==true||payerUid!==ingress.payerUid||
           status.developer_approved!==true||status.transaction_verified!==true||status.cancelled===true||status.user_cancelled===true)return null
         return{dto,status,transaction}
@@ -296,22 +298,7 @@ redis.call('SET',KEYS[1],cjson.encode(current)); return 1
     // No new financial authority is invented here. Only an already executable
     // original Redis projection may regain lost active/ready membership.
     if(isFreshSettlementDispatchCandidate(readback,Date.now())){
-      const indexed=await redis.eval<[string],number>(`
-local id=ARGV[1]
-redis.call('SADD',KEYS[1],id)
-if redis.call('ZSCORE',KEYS[2],id) then return 1 end
-local sequence=redis.call('GET',KEYS[3])
-if not sequence then
-  local top=redis.call('ZRANGE',KEYS[2],-1,-1,'WITHSCORES')
-  if #top~=0 and #top~=2 then return -1 end
-  local base=0
-  if #top==2 then base=tonumber(top[2]); if not base or base<0 or base~=math.floor(base) then return -1 end end
-  redis.call('SET',KEYS[3],base)
-end
-local nextSequence=redis.call('INCR',KEYS[3])
-redis.call('ZADD',KEYS[2],'NX',nextSequence,id)
-return 2
-`,['flashpay:recovery:active-payments:v1','flashpay:settlement:ready:v1',READY_SEQUENCE_KEY],[paymentId])
+      const indexed=await restoreSettlementReadyMembership(paymentId)
       if(indexed!==1&&indexed!==2)throw new Error('F2-3 ready index reconstruction unavailable')
       result.indexed++
     }else{
@@ -321,6 +308,36 @@ return 2
     }
   }
   return result
+}
+
+/** D: validate all Redis key types and exact sequence bounds before mutation.
+ * Lua errors do not roll back earlier writes; reject corruption before SADD/INCR. */
+async function restoreSettlementReadyMembership(paymentId:string):Promise<number>{
+  return redis.eval<[string],number>(`
+local expected={'set','zset','string'}
+for i=1,3 do local t=redis.call('TYPE',KEYS[i]).ok; if t~='none' and t~=expected[i] then return -1 end end
+local top=redis.call('ZRANGE',KEYS[2],-1,-1,'WITHSCORES')
+if #top~=0 and #top~=2 then return -1 end
+local maximum=9007199254740990
+local topScore=0
+if #top==2 then topScore=tonumber(top[2]); if not topScore or topScore<1 or topScore>maximum or topScore~=math.floor(topScore) then return -1 end end
+local sequence=redis.call('GET',KEYS[3])
+local base=topScore
+if sequence then
+  if sequence~='0' and not string.match(sequence,'^[1-9][0-9]*$') then return -1 end
+  base=tonumber(sequence)
+  if not base or base<topScore or base>maximum or base~=math.floor(base) then return -1 end
+end
+local score=redis.call('ZSCORE',KEYS[2],ARGV[1])
+if score then local n=tonumber(score); if not n or n<1 or n>maximum or n~=math.floor(n) then return -1 end
+elseif base>=maximum then return -1 end
+redis.call('SADD',KEYS[1],ARGV[1])
+if score then return 1 end
+if not sequence then redis.call('SET',KEYS[3],string.format('%.0f',base)) end
+local nextSequence=redis.call('INCR',KEYS[3])
+redis.call('ZADD',KEYS[2],'NX',nextSequence,ARGV[1])
+return 2
+`,['flashpay:recovery:active-payments:v1','flashpay:settlement:ready:v1',READY_SEQUENCE_KEY],[paymentId])
 }
 
 async function repopulateDurableSettlementWork():Promise<{repopulated:number;conflicts:number}>{
@@ -367,12 +384,10 @@ async function repopulateDurableSettlementWork():Promise<{repopulated:number;con
     if(existing){await redis.sadd('flashpay:recovery:active-payments:v1',paymentId);continue}
     const created=await redis.set(`payment:${paymentId}`,JSON.stringify(terminalProjection),{nx:true})
     if(created==='OK')repopulated++
-    await redis.sadd('flashpay:recovery:active-payments:v1',paymentId)
     const parsed=parsePayment(await redis.get(`payment:${paymentId}`))
     if(!parsed||parsed.id!==paymentId||parsed.a2uPaymentId!==d.a2uPaymentId)throw new Error('Durable Settlement repopulation readback failed')
-    const seq=await redis.incr(READY_SEQUENCE_KEY)
-    if(!Number.isSafeInteger(seq)||seq<1)throw new Error('Settlement ready sequence unavailable')
-    await redis.zadd('flashpay:settlement:ready:v1',{score:seq,member:paymentId})
+    const indexed=await restoreSettlementReadyMembership(paymentId)
+    if(indexed!==1&&indexed!==2)throw new Error('Settlement ready sequence unavailable')
   }
   return{repopulated,conflicts}
 }
@@ -442,8 +457,10 @@ async function readPiCreateBackpressure(now: number): Promise<PiCreateBackpressu
   try {
     const value = await redis.get<unknown>(PI_CREATE_BACKPRESSURE_KEY)
     if (value === null) return { state: "inactive" }
-    if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return { state: "unavailable" }
-    const untilMs = Number(value)
+    // Upstash deserializes the raw decimal written by the Lua writer as a
+    // number. Accept that exact scalar as well as the legacy string encoding.
+    const untilMs = typeof value === "number" ? value :
+      typeof value === "string" && /^[0-9]+$/.test(value) ? Number(value) : NaN
     if (!Number.isSafeInteger(untilMs) || untilMs < 0) return { state: "unavailable" }
     return untilMs > now ? { state: "active", untilMs } : { state: "inactive" }
   } catch {

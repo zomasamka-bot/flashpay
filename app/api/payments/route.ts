@@ -7,6 +7,8 @@ export const runtime = "nodejs"
 import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/redis"
 import type { Payment } from "@/lib/types"
 import { isPaymentFinal } from "@/lib/payment-status"
+import { GET as readPaymentStatus } from "./[id]/route"
+import { verifyFinalPaymentPresentation } from "@/lib/payment-presentation-authority"
 import { readSystemState } from "@/lib/system-control"
 import { ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic, classifyPaymentCreateIntentReplay, recoverInitialPaymentProjectionUnderDurableGuard, probeDurablePaymentIdentity } from "@/lib/db"
 import { consumeFinancialRateLimit } from "@/lib/server-rate-limit"
@@ -250,7 +252,7 @@ export async function POST(request: NextRequest) {
     payment.id = paymentId
     payment.createdAt = durableCreatedAt
 
-    if (durableIdentity.outcome === "REPLAYED") {
+    async function respondToDurableReplay() {
       // Never recreate an absent or advanced financial projection as pending.
       let projected: unknown
       try { projected = await redis.get(`payment:${paymentId}`) } catch {
@@ -350,8 +352,13 @@ return 1
       } else if (!Number.isSafeInteger(indexedScore) || indexedScore !== historyScore) {
         return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
       }
+      if (!(await verifyFinalPaymentPresentation(existing))) {
+        return NextResponse.json({ error: "Payment finality unavailable", code: "PAYMENT_FINALITY_UNAVAILABLE", paymentId }, { status: 503, headers: corsHeaders })
+      }
       return NextResponse.json({ success: true, payment: { ...getPublicPayment(existing), merchantUid: verifiedMerchantUid } }, { status: 200, headers: corsHeaders })
     }
+
+    if (durableIdentity.outcome === "REPLAYED") return await respondToDurableReplay()
 
     try {
       const kvKey = `payment:${paymentId}`
@@ -386,6 +393,9 @@ return 1
         [kvKey, historyKey],
         [paymentString, String(historyScore), payment.id]
       )
+      // Another authenticated replay may have restored this durable identity.
+      // Reuse all identity/index checks; never accept Redis existence alone.
+      if (redisPersistResult === 0) return await respondToDurableReplay()
       if (redisPersistResult !== 1) {
         throw new Error("Atomic payment persistence failed")
       }
@@ -495,62 +505,10 @@ return 1
 
 // GET /api/payments?id={paymentId} - Retrieve a payment by ID
 export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const id = searchParams.get("id")
-
-    console.log("[API] GET /api/payments called with id:", id)
-
-    if (!id) {
-      return NextResponse.json(
-        { error: "Payment ID required. Use ?id=<paymentId>" },
-        { status: 400, headers: corsHeaders },
-      )
-    }
-
-    if (!isKvConfigured) {
-      return NextResponse.json({ 
-        error: "Redis not configured",
-        paymentId: id,
-      }, { status: 500, headers: corsHeaders })
-    }
-
-    console.log("[API] Looking up payment with ID:", id)
-    console.log("[API] Fetching from Upstash Redis with key:", `payment:${id}`)
-    
-    const data = await redis.get(`payment:${id}`)
-    const payment = data ? (typeof data === 'string' ? JSON.parse(data) : data) : null
-    console.log("[API] Redis lookup result:", payment ? "FOUND" : "NOT FOUND")
-
-    if (!payment) {
-      // B-D05-R2: Redis is a projection, not financial truth. Do not
-      // invent a pending payment or return a false 404 for durable identity.
-      const durable = await probeDurablePaymentIdentity(id)
-      if (durable !== 'ABSENT') {
-        return NextResponse.json({
-          error: 'Payment state temporarily unavailable',
-          code: durable === 'EXISTS' ? 'PAYMENT_PROJECTION_RECOVERY_REQUIRED' : 'PAYMENT_IDENTITY_INDETERMINATE',
-          paymentId: id,
-        }, { status: 503, headers: corsHeaders })
-      }
-      return NextResponse.json({ error: 'Payment not found', paymentId: id }, { status: 404, headers: corsHeaders })
-    }
-
-    console.log("[API] Payment retrieved:", id)
-
-    if (typeof payment.id !== "string" || payment.id !== id) {
-      return NextResponse.json({ error: "Payment identity conflict", paymentId: id }, { status: 409, headers: corsHeaders })
-    }
-
-    return NextResponse.json(
-      {
-        success: true,
-        payment: getPublicPayment(payment),
-      },
-      { headers: corsHeaders },
-    )
-  } catch (error) {
-    console.error("[API] Error fetching payment:", error)
-    return NextResponse.json({ error: "Failed to fetch payment" }, { status: 500, headers: corsHeaders })
-  }
+  const id = new URL(request.url).searchParams.get("id")
+  if (!id) return NextResponse.json({ error: "Payment ID required. Use ?id=<paymentId>" }, { status: 400, headers: corsHeaders })
+  // Both public lookup forms must cross the same durable status guard.
+  const response = await readPaymentStatus(request, { params: Promise.resolve({ id }) })
+  for (const [name, value] of Object.entries(corsHeaders)) response.headers.set(name, value)
+  return response
 }

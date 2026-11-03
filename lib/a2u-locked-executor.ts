@@ -1,3 +1,4 @@
+import { readDurableSettlementProjection } from "./settlement-durable-projection"
 import { verifyPreparedWalletAuthority, claimFirstWalletSubmission } from "@/lib/financial-wallet-authority"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { executeA2U, persistCheckpointMerged } from "@/lib/a2u-executor"
@@ -328,10 +329,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
     // Inside lock: reload LATEST payment checkpoint
     let paymentData = await redis.get(`payment:${paymentId}`)
     if (!paymentData && params.isRecovery === true) {
-      const durable = await getSettlementCheckpointAuthoritative(paymentId)
-      if (durable.outcome === "FOUND") {
-        const d=durable.checkpoint, moved=d.stage==="horizon_confirmed"||d.stage==="pi_completed"||d.stage==="db_finalized", piDone=d.stage==="pi_completed"||d.stage==="db_finalized", dbDone=d.stage==="db_finalized", prepared=d.stage!=="a2u_created"
-        const projection:Payment={id:d.paymentId,merchantId:d.merchantId,merchantUid:d.merchantUid,accessToken:"",redisProjectionVersion:1,amount:d.customerAmount,customerAmount:d.customerAmount,merchantAmount:d.merchantAmount,note:"",status:dbDone?"settled_to_merchant":moved||prepared?"settlement_pending":"paid_to_app",createdAt:new Date(0).toISOString(),piPaymentId:d.u2aIdentifier,u2aTxid:d.u2aTxid,a2uPaymentId:d.a2uPaymentId,a2uFromAddress:d.a2uFromAddress,a2uToAddress:d.a2uToAddress,settlementFailureState:"none",appCommission:0,...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{})}
+      const projection = await readDurableSettlementProjection(paymentId)
+      if (projection) {
         await redis.set(`payment:${paymentId}`,JSON.stringify(projection),{nx:true})
         paymentData=await redis.get(`payment:${paymentId}`)
       }

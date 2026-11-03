@@ -996,7 +996,7 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
   // R36: claim and prepared evidence must share ONE PostgreSQL transaction.
   // Redis is updated only AFTER this transaction commits successfully.
-  const durablePrepared = await withAtomicSettlementPreparedAuthority(async (tx) => {
+  const durablePrepared = await withAtomicSettlementPreparedAuthority(ctx.paymentId, async (tx) => {
     const owned = await claimPreparedWalletAuthority({network:'Pi Testnet', sourceWallet:appPublicKey,
       paymentId:ctx.paymentId, operationKind:'settlement', operationId:a2uPaymentId,
       preparedHash, preparedSequence}, tx)
@@ -1279,7 +1279,7 @@ async function ensureRecoveredHorizonDurability(
   if (durable.outcome !== "FOUND") {
     return { ok: false, error: "Recovered Horizon durable authority unavailable" }
   }
-  const d = durable.checkpoint
+  let d = durable.checkpoint
   if (
     d.paymentId !== ctx.paymentId ||
     d.merchantId !== ctx.payment.merchantId ||
@@ -1369,11 +1369,61 @@ async function ensureRecoveredHorizonDurability(
     if (durableHorizon.outcome !== "RECORDED" && durableHorizon.outcome !== "REPLAYED") {
       return { ok: false, error: "Recovered Horizon durable checkpoint not proven" }
     }
+    // Recover the remote-complete/local-checkpoint gap using a fresh read, never Redis authority.
+    if (d.stage === "horizon_confirmed") {
+      const matchesCompletionProof = (value: unknown, completed: boolean): boolean => {
+        if (!isReconciledPiA2UPayment(value) || !isPiA2UPayment(value)) return false
+        return value.identifier === d.a2uPaymentId && value.network === "Pi Testnet" &&
+          value.direction === "app_to_user" && value.user_uid === d.merchantUid &&
+          value.amount === d.merchantAmount && value.from_address === d.a2uFromAddress &&
+          value.to_address === d.a2uToAddress && value.metadata?.paymentId === d.paymentId &&
+          value.metadata?.type === "a2u_settlement" && value.transaction?.txid === d.a2uTxid &&
+          value.transaction?.verified === true && value.status?.transaction_verified === true &&
+          value.status?.developer_approved === true && value.status?.developer_completed === completed &&
+          value.status?.cancelled === false && value.status?.user_cancelled === false
+      }
+      let proof = await fetchA2UPayment(a2uPaymentId)
+      if (matchesCompletionProof(proof, false)) {
+        // An unproven monotonic Redis completion flag cannot authorize a new mutation.
+        if (ctx.payment.piCompleted === true) {
+          return { ok: false, error: "Recovered Pi completion conflicts with independent incomplete evidence" }
+        }
+        // Existing durable one-shot claim authorizes only a previously unattempted completion.
+        // A prior/ambiguous attempt is GET-only and fails closed until completion is proven.
+        const resumed = await stage3CompletePi(ctx, a2uPaymentId, a2uTxid)
+        if (!resumed.ok) return { ok: false, error: resumed.error }
+        proof = await fetchA2UPayment(a2uPaymentId)
+      }
+      if (!matchesCompletionProof(proof, true)) {
+        return { ok: false, error: "Recovered Pi completion independent proof unavailable or mismatched" }
+      }
+      const completion = await recordSettlementPiCompletedCheckpoint({ paymentId: d.paymentId, a2uPaymentId, a2uTxid })
+      if (completion.outcome !== "RECORDED" && completion.outcome !== "REPLAYED") {
+        return { ok: false, error: "Recovered Pi completion durable transition unproven" }
+      }
+      const refreshed = await getSettlementCheckpointAuthoritative(ctx.paymentId)
+      if (refreshed.outcome !== "FOUND" ||
+          !["pi_completed", "db_finalized"].includes(refreshed.checkpoint.stage) ||
+          refreshed.checkpoint.a2uPaymentId !== a2uPaymentId || refreshed.checkpoint.a2uTxid !== a2uTxid ||
+          refreshed.checkpoint.preparedTxHash !== d.preparedTxHash ||
+          refreshed.checkpoint.merchantId !== d.merchantId || refreshed.checkpoint.merchantUid !== d.merchantUid ||
+          refreshed.checkpoint.customerAmount !== d.customerAmount || refreshed.checkpoint.merchantAmount !== d.merchantAmount ||
+          refreshed.checkpoint.a2uFromAddress !== d.a2uFromAddress || refreshed.checkpoint.a2uToAddress !== d.a2uToAddress ||
+          refreshed.checkpoint.preparedSequence !== d.preparedSequence ||
+          typeof refreshed.checkpoint.horizonFeeStroops !== "number" || !Number.isSafeInteger(refreshed.checkpoint.horizonFeeStroops) ||
+          refreshed.checkpoint.horizonFeeStroops < 0 || refreshed.checkpoint.horizonFeeStroops !== d.horizonFeeStroops) {
+        return { ok: false, error: "Recovered Pi completion durable readback mismatch" }
+      }
+      d = refreshed.checkpoint
+    }
     // Redis is only a projection. A stale piCompleted=true must never promote
     // horizon_confirmed to pi_completed through the Stage 3 replay branch.
     // Fail closed rather than attempting to downgrade monotonic Redis evidence.
     if (d.stage === "horizon_confirmed" && ctx.payment.piCompleted === true) {
       return { ok: false, error: "Recovered Pi completion conflicts with durable PostgreSQL stage" }
+    }
+    if (typeof d.horizonFeeStroops !== "number" || !Number.isSafeInteger(d.horizonFeeStroops) || d.horizonFeeStroops < 0) {
+      return { ok: false, error: "Recovered Horizon durable fee unavailable" }
     }
     const horizonFeeCharged = d.horizonFeeStroops / 10_000_000
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, {

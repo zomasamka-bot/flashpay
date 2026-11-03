@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
+import { financialPresentationIntegrityCTE } from "@/lib/financial-presentation-integrity"
 import { query } from "@/lib/db"
 import { isRedisConfigured, redis } from "@/lib/redis"
 import { verifyOwnerAuthorizationHeader } from "@/lib/owner-server-auth"
@@ -13,6 +14,7 @@ const DRAIN_LEASE_KEY = "flashpay:recovery:transient:drain-lease:v1"
 const PI_BACKPRESSURE_KEY = "flashpay:recovery:pi-create-backpressure:v1"
 
 function count(value: unknown): number | null {
+  if ((typeof value !== "number" && typeof value !== "string") || (typeof value === "string" && !/^[0-9]+$/.test(value))) return null
   const n = Number(value)
   return Number.isSafeInteger(n) && n >= 0 ? n : null
 }
@@ -24,11 +26,15 @@ export async function GET(request: NextRequest) {
   const asOf = new Date().toISOString()
   let postgres: Record<string, number> | null = null
   if (process.env.DATABASE_URL) {
-    const rows = await query(`SELECT
+    const rows = await query(`WITH ${financialPresentationIntegrityCTE} SELECT
       COUNT(*) FILTER (WHERE settlement_status='settled_to_merchant') AS settled,
-      COUNT(*) FILTER (WHERE settlement_status IN ('pending','paid_to_app','settlement_pending')) AS settlement_open,
+      (SELECT count(*) FROM settlement_checkpoints s WHERE s.stage <> 'db_finalized'
+        AND (s.a2u_payment_id IS NOT NULL OR s.u2a_completed_at IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM refund_checkpoints f WHERE f.payment_id=s.payment_id))
+      + COUNT(*) FILTER (WHERE settlement_status IN ('pending','paid_to_app','settlement_pending')
+        AND NOT EXISTS (SELECT 1 FROM settlement_checkpoints s WHERE s.u2a_identifier=receipts.u2a_identifier)) AS settlement_open,
       COUNT(*) FILTER (WHERE settlement_status='settlement_failed') AS settlement_failed
-      FROM receipts`)
+      FROM receipts HAVING (SELECT valid FROM presentation_integrity)`, [null])
     const refunds = await query(`SELECT
       COUNT(*) FILTER (WHERE status='pending') AS refund_pending,
       COUNT(*) FILTER (WHERE status='manual_review_required') AS refund_manual_review
@@ -51,10 +57,10 @@ export async function GET(request: NextRequest) {
       const [active, ready, lease, backpressure] = await Promise.all([
         redis.scard(ACTIVE_KEY), redis.zcard(READY_KEY), redis.exists(DRAIN_LEASE_KEY), redis.get<unknown>(PI_BACKPRESSURE_KEY),
       ])
-      const activeCount = count(active), readyCount = count(ready)
-      if (activeCount !== null && readyCount !== null) {
-        const until = typeof backpressure === "string" && /^[0-9]+$/.test(backpressure) ? Number(backpressure) : 0
-        recovery = { active: activeCount, ready: readyCount, drainLeaseActive: Number(lease) === 1, piCreateBackpressureActive: Number.isSafeInteger(until) && until > Date.now() }
+      const activeCount = count(active), readyCount = count(ready), leaseCount = count(lease)
+      const until = backpressure === null ? 0 : count(backpressure)
+      if (activeCount !== null && readyCount !== null && (leaseCount === 0 || leaseCount === 1) && until !== null) {
+        recovery = { active: activeCount, ready: readyCount, drainLeaseActive: leaseCount === 1, piCreateBackpressureActive: Number.isSafeInteger(until) && until > Date.now() }
       }
     } catch {}
   }

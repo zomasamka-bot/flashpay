@@ -1,6 +1,8 @@
 'use server'
 
 import { randomUUID } from 'crypto'
+import { financialPresentationIntegrityCTE } from './financial-presentation-integrity'
+import { numberToExactPositiveStroops } from './financial-amount-stroops'
 import type {
   SettlementRequest,
   TransactionRow,
@@ -84,6 +86,56 @@ async function getPostgresClient() {
     console.error('[DB] Failed to load postgres client:', error)
     initializationAttempted = true
     sqlClient = null
+    return null
+  }
+}
+
+// R36 restricted DB identity. This connection must never use DATABASE_URL.
+// Fail closed until a separately provisioned runtime credential is present.
+let r36RestrictedClient: any = null
+export async function getR36RestrictedClient(): Promise<any | null> {
+  if (r36RestrictedClient) return r36RestrictedClient
+  const url = process.env.R36_RUNTIME_DATABASE_URL
+  if (!url || url === process.env.DATABASE_URL) return null
+  try {
+    const postgres = (await import('postgres')).default
+    const candidate = postgres(url, { max: 2, prepare: false })
+    const identity = await candidate.unsafe(`
+      SELECT current_user AS role, rolbypassrls AS bypass, rolcreaterole AS create_role,
+             rolsuper AS superuser, rolcanlogin AS can_login,
+             has_schema_privilege(current_user, 'public', 'CREATE') AS schema_create,
+             pg_has_role(current_user, 'r36_owner', 'MEMBER') AS owner_member,
+             pg_has_role(current_user, 'r36_issuer', 'MEMBER') AS issuer_member
+      FROM pg_roles WHERE rolname = current_user`)
+    if (identity.length !== 1 || identity[0].role !== 'r36_runtime' ||
+        identity[0].bypass !== false || identity[0].create_role !== false ||
+        identity[0].superuser !== false || identity[0].can_login !== true ||
+        identity[0].schema_create !== false || identity[0].owner_member !== false ||
+        identity[0].issuer_member !== false) {
+      await candidate.end({ timeout: 1 })
+      return null
+    }
+    r36RestrictedClient = candidate
+    return candidate
+  } catch { return null }
+}
+
+// For R36 atomic operations: advisory lock, checkpoint and protected claim
+// share the SAME restricted SQL transaction. Caller must use the provided tx.
+export async function withR36RestrictedPaymentTransaction<T>(
+  paymentId: string, work: (tx: any) => Promise<T>
+): Promise<T | null> {
+  if (!paymentId || paymentId !== paymentId.trim()) return null
+  const client = await getR36RestrictedClient()
+  if (!client) return null
+  try {
+    return await client.begin(async (tx: any) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${paymentId}, 0))`
+      return await work(tx)
+    })
+  } catch (error) {
+    console.error('[R36] Restricted financial transaction failed closed',
+      { code: (error as {code?: string})?.code ?? 'unknown' })
     return null
   }
 }
@@ -1304,7 +1356,7 @@ export type SettlementDurableCheckpointRead =
   | { outcome: 'FOUND'; checkpoint: {
       paymentId:string; version:number; stage:'a2u_created'|'prepared'|'horizon_confirmed'|'pi_completed'|'db_finalized';
       merchantId:string; merchantUid:string; customerAmount:number; merchantAmount:number;
-      createdAt:string; paidAt:string|null;
+      createdAt:string; paidAt:string|null; payerUid?:string; u2aVerifiedAt?:string; a2uCreateAttemptedAt?:string;
       u2aIdentifier:string; u2aTxid:string; a2uPaymentId:string; a2uFromAddress:string; a2uToAddress:string;
       preparedEnvelopeXdr?:string; preparedTxHash?:string; preparedSequence?:string;
       a2uTxid?:string; horizonFeeStroops?:number
@@ -1320,10 +1372,21 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
       SELECT payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
-        created_at,u2a_completed_at,u2a_identifier,u2a_txid,a2u_payment_id,a2u_from_address,a2u_to_address,
+        created_at,u2a_completed_at,payer_uid,u2a_verified_at,a2u_create_attempted_at,u2a_identifier,u2a_txid,a2u_payment_id,a2u_from_address,a2u_to_address,
         prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid,horizon_fee_stroops,
-        horizon_confirmed_at,pi_completed_at,db_finalized_at
-      FROM settlement_checkpoints WHERE payment_id=${paymentId}
+        horizon_confirmed_at,pi_completed_at,db_finalized_at,
+        CASE WHEN s.stage='db_finalized' THEN EXISTS(
+          SELECT 1 FROM transactions t JOIN receipts r ON r.transaction_id=t.id
+          WHERE t.payment_id=s.u2a_identifier AND t.merchant_id=s.merchant_id AND t.merchant_uid=s.merchant_uid
+            AND t.amount=s.merchant_amount AND t.status='completed' AND t.currency='π'
+            AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid AND r.currency='π'
+            AND r.amount=s.merchant_amount AND r.customer_amount=s.customer_amount AND r.merchant_amount=s.merchant_amount
+            AND r.app_commission=0 AND r.horizon_fee_charged=s.horizon_fee_stroops::numeric/10000000
+            AND r.app_net_impact=-s.horizon_fee_stroops::numeric/10000000 AND r.settlement_status='settled_to_merchant'
+            AND r.u2a_identifier=s.u2a_identifier AND r.u2a_txid=s.u2a_txid
+            AND r.a2u_identifier=s.a2u_payment_id AND r.a2u_txid=s.a2u_txid AND r.txid=s.a2u_txid
+        ) ELSE TRUE END AS accounting_valid
+      FROM settlement_checkpoints s WHERE payment_id=${paymentId}
     `
     if(rows.length===0)return{outcome:'ABSENT'}
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Settlement durable identity is ambiguous'}
@@ -1358,10 +1421,12 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
       if(!Number.isSafeInteger(fee)||fee<0)return{outcome:'INDETERMINATE',error:'Settlement durable Horizon fee invalid'}
     }
     if(['pi_completed','db_finalized'].includes(String(stage))&&r.pi_completed_at==null)return{outcome:'INDETERMINATE',error:'Settlement durable Pi finality invalid'}
-    if(stage==='db_finalized'&&r.db_finalized_at==null)return{outcome:'INDETERMINATE',error:'Settlement durable DB finality invalid'}
+    if(stage==='db_finalized'&&(r.db_finalized_at==null||r.accounting_valid!==true))return{outcome:'INDETERMINATE',error:'Settlement durable DB finality or accounting evidence invalid'}
     return{outcome:'FOUND',checkpoint:{
       paymentId,version,stage:stage as any,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,
-      customerAmount:ca,merchantAmount:ma,createdAt,paidAt,u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,
+      customerAmount:ca,merchantAmount:ma,createdAt,paidAt,
+      ...(text(r.payer_uid)&&iso(r.u2a_verified_at)!==null?{payerUid:r.payer_uid as string,u2aVerifiedAt:iso(r.u2a_verified_at)!}:{}),
+      ...(iso(r.a2u_create_attempted_at)!==null?{a2uCreateAttemptedAt:iso(r.a2u_create_attempted_at)!}:{}),u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,
       a2uPaymentId:r.a2u_payment_id as string,a2uFromAddress:r.a2u_from_address as string,a2uToAddress:r.a2u_to_address as string,
       ...(advanced?{preparedEnvelopeXdr:r.prepared_envelope_xdr as string,preparedTxHash:r.prepared_tx_hash as string,preparedSequence:String(r.prepared_sequence)}:{}),
       ...(moved?{a2uTxid:r.a2u_txid as string,horizonFeeStroops:fee}:{}),
@@ -1547,11 +1612,13 @@ export type SettlementDurableAdvanceResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-export async function withAtomicSettlementPreparedAuthority<T>(work: (tx: any) => Promise<T>): Promise<T | null> {
-  const client = await getPostgresClient()
-  if (!client) return null
-  try { return await client.begin(async (tx: any) => work(tx)) }
-  catch (error) { console.error('[R36] Atomic settlement preparation rolled back:', error); return null }
+export async function withAtomicSettlementPreparedAuthority<T>(
+  paymentId: string, work: (tx: any) => Promise<T>
+): Promise<T | null> {
+  // The protected wallet claim and settlement checkpoint must share the
+  // same restricted transaction and payment-scoped advisory lock.
+  // Missing restricted credentials fail closed; never use DATABASE_URL here.
+  return withR36RestrictedPaymentTransaction(paymentId, work)
 }
 
 export async function recordSettlementPreparedCheckpoint(params: {
@@ -1565,20 +1632,16 @@ export async function recordSettlementPreparedCheckpoint(params: {
      !Number.isFinite(params.customerAmount)||params.customerAmount<=0||!Number.isFinite(params.merchantAmount)||params.merchantAmount!==params.customerAmount)
     return {outcome:'CONFLICT',error:'Settlement prepared checkpoint input is invalid'}
   try{
-    const client=transactionClient ? null : await getPostgresClient();if(!client && !transactionClient)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
+    const client=transactionClient ? null : await getR36RestrictedClient();if(!client && !transactionClient)return{outcome:'INDETERMINATE',error:'R36 restricted PostgreSQL unavailable'}
     const run = async(tx:any)=>{
-      const a=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='prepared',
-        prepared_envelope_xdr=${params.preparedEnvelopeXdr},prepared_tx_hash=${params.preparedTxHash},prepared_sequence=${params.preparedSequence},updated_at=NOW()
-        WHERE payment_id=${params.paymentId} AND stage='a2u_created'
-        AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
-        AND customer_amount=${params.customerAmount} AND merchant_amount=${params.merchantAmount} AND app_commission=0
-        AND a2u_payment_id=${params.a2uPaymentId} AND a2u_from_address=${params.a2uFromAddress} AND a2u_to_address=${params.a2uToAddress}
-        AND prepared_envelope_xdr IS NULL AND prepared_tx_hash IS NULL AND prepared_sequence IS NULL
-        AND a2u_txid IS NULL AND horizon_confirmed_at IS NULL RETURNING version,stage`
-      if(a.length===1)return[{...a[0],advanced:true}]
+      const a=await tx`SELECT version,stage,advanced FROM public.r36_advance_settlement_prepared(
+        ${params.paymentId},${params.merchantId},${params.merchantUid},${params.customerAmount},${params.merchantAmount},
+        ${params.a2uPaymentId},${params.a2uFromAddress},${params.a2uToAddress},${params.preparedEnvelopeXdr},
+        ${params.preparedTxHash},${params.preparedSequence})`
+      if(a.length===1)return a
       return await tx`SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
         a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid
-        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} OR a2u_payment_id=${params.a2uPaymentId} OR prepared_tx_hash=${params.preparedTxHash} FOR UPDATE`
+        FROM settlement_checkpoints WHERE payment_id=${params.paymentId} OR a2u_payment_id=${params.a2uPaymentId} OR prepared_tx_hash=${params.preparedTxHash}`
     };
     const rows = transactionClient ? await run(transactionClient) : await client!.begin(run)
     if(!Array.isArray(rows)||rows.length!==1||!rows[0])return{outcome:'CONFLICT',error:'Settlement prepared durable identity is ambiguous or conflicting'}
@@ -1649,10 +1712,7 @@ export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:st
  * Reject fractional stroops rather than silently rounding them into financial authority. */
 function exactHorizonFeeStroops(fee: number): number {
   if (!Number.isFinite(fee) || fee < 0) return NaN
-  const rounded = Math.round(fee * 10_000_000)
-  if (!Number.isSafeInteger(rounded) ||
-      Math.abs(fee - rounded / 10_000_000) > 1e-12) return NaN
-  return rounded
+  return fee === 0 ? 0 : numberToExactPositiveStroops(fee) ?? NaN
 }
 
 export async function recordSettlementDbFinalizedCheckpoint(params:{
@@ -1661,7 +1721,7 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
 }):Promise<SettlementDurableAdvanceResult>{
   const feeStroops=exactHorizonFeeStroops(params.horizonFeeCharged)
   if(!params.paymentId||!params.u2aIdentifier||!/^[0-9a-f]{64}$/.test(params.u2aTxid)||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid)||!params.merchantId||!params.merchantUid||
-    !Number.isFinite(params.customerAmount)||params.customerAmount<=0||params.merchantAmount!==params.customerAmount||params.appCommission!==0||
+    numberToExactPositiveStroops(params.customerAmount)===null||params.merchantAmount!==params.customerAmount||params.appCommission!==0||
     !Number.isSafeInteger(feeStroops)||feeStroops<0)return{outcome:'CONFLICT',error:'Settlement DB-finality input invalid'}
   try{
     const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
@@ -1676,7 +1736,10 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
         AND NOT EXISTS(SELECT 1 FROM refund_checkpoints rf WHERE rf.payment_id=${params.paymentId})
         AND EXISTS(SELECT 1 FROM receipts r JOIN transactions t ON t.id=r.transaction_id
           WHERE t.payment_id=${params.u2aIdentifier} AND t.merchant_id=${params.merchantId} AND t.merchant_uid=${params.merchantUid}
-          AND t.amount=${params.merchantAmount} AND t.status='completed'
+          AND t.amount=${params.merchantAmount} AND t.status='completed' AND t.currency='π'
+          AND r.merchant_id=${params.merchantId} AND r.merchant_uid=${params.merchantUid} AND r.currency='π'
+          AND r.amount=${params.merchantAmount} AND r.txid=${params.a2uTxid}
+          AND r.app_net_impact=${-params.horizonFeeCharged} AND r.settlement_status='settled_to_merchant'
           AND r.u2a_identifier=${params.u2aIdentifier} AND r.u2a_txid=${params.u2aTxid}
           AND r.a2u_identifier=${params.a2uPaymentId} AND r.a2u_txid=${params.a2uTxid} AND r.customer_amount=${params.customerAmount} AND r.merchant_amount=${params.merchantAmount}
           AND r.horizon_fee_charged=${params.horizonFeeCharged} AND r.app_commission=0)
@@ -1689,7 +1752,11 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
         EXISTS(SELECT 1 FROM receipts rc JOIN transactions t ON t.id=rc.transaction_id
           WHERE t.payment_id=${params.u2aIdentifier} AND t.merchant_id=${params.merchantId}
             AND t.merchant_uid=${params.merchantUid} AND t.amount=${params.merchantAmount}
-            AND t.status='completed' AND rc.u2a_identifier=${params.u2aIdentifier}
+            AND t.status='completed' AND t.currency='π'
+            AND rc.merchant_id=${params.merchantId} AND rc.merchant_uid=${params.merchantUid} AND rc.currency='π'
+            AND rc.amount=${params.merchantAmount} AND rc.txid=${params.a2uTxid}
+            AND rc.app_net_impact=${-params.horizonFeeCharged} AND rc.settlement_status='settled_to_merchant'
+            AND rc.u2a_identifier=${params.u2aIdentifier}
             AND rc.u2a_txid=${params.u2aTxid} AND rc.a2u_identifier=${params.a2uPaymentId}
             AND rc.a2u_txid=${params.a2uTxid} AND rc.customer_amount=${params.customerAmount}
             AND rc.merchant_amount=${params.merchantAmount} AND rc.horizon_fee_charged=${params.horizonFeeCharged}
@@ -2061,7 +2128,7 @@ export async function getMerchantPaymentDashboardSummary(
   try {
     // Parameterized CTE: transactions LEFT JOIN receipts, use r.settlement_status as single source of truth
     const result = await query(
-      `WITH payment_summary AS (
+      `WITH ${financialPresentationIntegrityCTE}, payment_summary AS (
         SELECT 
           COUNT(*) as total_requests,
           COALESCE(SUM(t.amount), 0) as total_payment_volume,
@@ -2081,7 +2148,7 @@ export async function getMerchantPaymentDashboardSummary(
         LEFT JOIN receipts r ON r.transaction_id = t.id
         WHERE t.merchant_id = $1
       )
-      SELECT * FROM payment_summary`,
+      SELECT * FROM payment_summary WHERE (SELECT valid FROM presentation_integrity)`,
       [merchantId]
     )
 
@@ -2511,6 +2578,14 @@ export async function recordA2UTransactionAtomic(params: {
     throw new Error('appCommission is required and must be a finite number')
   }
   const appCommission = params.appCommission
+
+  // D: reject non-network precision before any SQL write. NUMERIC(18,8)
+  // must not round an invalid amount/fee and leave a committed partial result.
+  if (numberToExactPositiveStroops(customerAmount) === null ||
+      numberToExactPositiveStroops(merchantAmount) === null ||
+      !Number.isSafeInteger(exactHorizonFeeStroops(horizonFeeCharged))) {
+    throw new Error('Accounting amounts and fee must use exact network stroops')
+  }
   
   // Calculate app net impact: what the app absorbs (may be negative if app bears fees)
   // appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
@@ -2590,12 +2665,18 @@ export async function recordA2UTransactionAtomic(params: {
 
         // 0. Check for existing transaction - if found, verify it matches identifiers and amounts (idempotency check)
         const existingTxCheck = await tx`
-          SELECT id, merchant_id, merchant_uid, amount FROM transactions WHERE payment_id = ${params.u2aIdentifier}
+          SELECT id, merchant_id, merchant_uid, amount, status, currency FROM transactions WHERE payment_id = ${params.u2aIdentifier}
           LIMIT 1
         `
         
+        if (a.stage === 'db_finalized' && existingTxCheck.length !== 1) {
+          throw new Error('Accounting evidence missing for finalized payment; SAFE_HOLD_NO_RESEND')
+        }
         if (existingTxCheck && existingTxCheck.length > 0) {
           const existing = existingTxCheck[0]
+          if (existing.status !== 'completed' || existing.currency !== 'π') {
+            throw new Error('Idempotency violation: transaction state or currency differs')
+          }
           // IDEMPOTENCY: Verify the existing transaction matches merchant identity and canonical amount
           if (existing.merchant_id !== params.merchantId) {
             throw new Error(`Idempotency violation: existing transaction has different merchantId: ${existing.merchant_id} vs ${params.merchantId}`)
@@ -2632,14 +2713,27 @@ export async function recordA2UTransactionAtomic(params: {
         // On conflict, verify amounts match (idempotency check)
         // All required columns must exist before transaction begins
         const existingReceiptCheck = await tx`
-          SELECT id, customer_amount, horizon_fee_charged, app_commission, merchant_amount,
+          SELECT id, merchant_id, merchant_uid, amount, currency, txid, app_net_impact, settlement_status,
+                 customer_amount, horizon_fee_charged, app_commission, merchant_amount,
                  u2a_identifier, u2a_txid, a2u_identifier, a2u_txid
           FROM receipts
           WHERE transaction_id = ${actualTransactionId} LIMIT 1
         `
         
+        // A committed transaction and its receipt were created atomically.
+        // Missing evidence is not a new credit opportunity; never repair it by guessing.
+        if (existingTxCheck.length > 0 && existingReceiptCheck.length !== 1) {
+          throw new Error('Accounting receipt missing; SAFE_HOLD_NO_RESEND')
+        }
         if (existingReceiptCheck.length > 0) {
           const existing = existingReceiptCheck[0]
+          if (existing.merchant_id !== params.merchantId || existing.merchant_uid !== params.merchantUid ||
+              existing.currency !== 'π' || existing.txid !== params.a2uTxid ||
+              existing.settlement_status !== 'settled_to_merchant' ||
+              normalizePostgresNumeric(existing.amount, 'receipt.amount') !== merchantAmount ||
+              normalizePostgresNumeric(existing.app_net_impact, 'receipt.app_net_impact') !== appNetImpact) {
+            throw new Error('Idempotency violation: receipt owner, state or accounting differs')
+          }
           // IDEMPOTENCY: Verify existing receipt matches every stored accounting amount exactly
           // Normalize all PostgreSQL NUMERIC values to validated numbers for precise comparison
           const storedCustomerAmount = normalizePostgresNumeric(existing.customer_amount, 'existing.customer_amount')
