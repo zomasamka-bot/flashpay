@@ -34,7 +34,7 @@ export function useOwnerUid() {
    * Verify UID with backend
    * This is a NON-BLOCKING operation for owner operations only
    */
-  const verifyUid = useCallback(async (uid: string, accessToken: string, username?: string) => {
+  const verifyUid = useCallback(async (uid: string, accessToken: string, username?: string, sdkWalletAddress?: string) => {
     ownerUidStore.setPending()
     setUidData(ownerUidStore.getUid())
 
@@ -42,7 +42,7 @@ export function useOwnerUid() {
       const response = await fetch("/api/owner/verify-uid", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid, accessToken }),
+        body: JSON.stringify({ uid, accessToken, sdkWalletAddress }),
       })
 
       if (!response.ok) {
@@ -60,8 +60,9 @@ export function useOwnerUid() {
 
       if (result.success) {
         // Store will notify subscribers automatically
-        ownerUidStore.setUid(uid, accessToken, result.walletAddress, username)
-        return { success: true }
+        const displayAddress = result.walletAddress ?? result.sdkDisplayAddress ?? null
+        ownerUidStore.setUid(uid, accessToken, displayAddress, username)
+        return { success: true, walletShared: Boolean(displayAddress) }
       } else {
         throw new Error(result.error || "Verification failed")
       }

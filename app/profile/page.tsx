@@ -192,7 +192,7 @@ function ProfileContent() {
 
 
 
-  // Profile authentication - verifies owner AND persists to canonical merchant state
+  // Owner profile authentication is separate from the merchant payment session.
   const handleConnectWallet = async () => {
     setIsAuthenticating(true)
 
@@ -203,7 +203,7 @@ function ProfileContent() {
 
       // Call Pi.authenticate with owner scopes
       const authResult = await window.Pi.authenticate(
-        ["username", "payments", "wallet_address"],
+        ["username", "wallet_address"],
         () => {
           // Ignore incomplete payments during profile auth
         }
@@ -235,20 +235,17 @@ function ProfileContent() {
       const walletAddress = authResult.user.wallet_address || ""
 
       // PHASE 1: Store in isolated ownerUidStore and verify against NEXT_PUBLIC_OWNER_UID
-      const verifyResult = await verifyUid(uid, accessToken, username)
+      const verifyResult = await verifyUid(uid, accessToken, username, walletAddress || undefined)
 
       if (!verifyResult.success) {
         throw new Error(verifyResult.error || "Owner verification failed")
       }
 
-      // PHASE 1: Persist same verified identity through canonical merchant state
-      // This bridges Profile auth to the merchant pages (Home, Payments, etc.)
-      unifiedStore.completeMerchantSetup(username, walletAddress, uid)
-      unifiedStore.updateMerchantState({ accessToken })
-
       toast({
-        title: "Connected",
-        description: `Verified by Pi Network as @${username}`,
+        title: verifyResult.walletShared ? "Wallet address shared" : "Account verified",
+        description: verifyResult.walletShared
+          ? `Pi Browser shared a wallet address for @${username}`
+          : "Pi did not share a wallet address.",
       })
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Failed to connect wallet"
@@ -343,7 +340,7 @@ function ProfileContent() {
 
   // Owner access: Verified UID must exactly match NEXT_PUBLIC_OWNER_UID
   const isOwner = uidData.status === "success" && uidData.uid === config.ownerUid
-  const isConnected = uidData.status === "success"
+  const isConnected = isOwner && Boolean(uidData.walletAddress)
 
   // Merchant authentication and username
   const merchantAuthenticated = Boolean(merchantState.merchantId.trim() && merchantState.accessToken?.trim())
@@ -385,7 +382,7 @@ function ProfileContent() {
                 <div className="space-y-3">
                   <div className="text-sm">
                     <p className="font-medium text-green-900">Wallet Connected</p>
-                    <p className="text-xs text-green-700 mt-1">Your wallet has been authenticated with FlashPay</p>
+                    <p className="text-xs text-green-700 mt-1">Pi shared a wallet address for this account</p>
                   </div>
                   <Button onClick={handleDisconnect} variant="outline" className="w-full gap-2">
                     Disconnect Wallet
