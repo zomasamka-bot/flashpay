@@ -619,7 +619,10 @@ export async function POST(request: NextRequest) {
       console.warn("[DR60 DR11 REFUND AUTHORITY] pristine intent held", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, amount: finalPiAmount, settlementQueued: false, authority: "postgres" })
     }
 
-    if (atomicU2AResultNumber === 2 || (atomicU2AResultNumber === 3 && dr11RefundCertificationCandidate)) {
+    // A production qualification wake carries this payment across the HTTP boundary.
+    // The periodic read covers a lost event, including a coalesced Redis kick.
+    const observeNewIntents = process.env.VERCEL_ENV === "production" && process.env.FLASHPAY_RECOVERY_SCOPE === "observe_new"
+    if (observeNewIntents || atomicU2AResultNumber === 2 || (atomicU2AResultNumber === 3 && dr11RefundCertificationCandidate)) {
       const recoverySecret = process.env.FLASHPAY_TRANSIENT_RECOVERY_SECRET
       const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL
       const isProductionVercel = process.env.VERCEL_ENV === "production"
@@ -627,8 +630,9 @@ export async function POST(request: NextRequest) {
         try {
           after(async () => {
             try {
-              const immediateDrainRequestUrl = new URL("/api/recovery/transient", `https://${productionHost}`)
-              immediateDrainRequestUrl.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
+              const immediateDrainRequestUrl = new URL(observeNewIntents ? "/api/recovery/new-intents" : "/api/recovery/transient", `https://${productionHost}`)
+              if (observeNewIntents) immediateDrainRequestUrl.searchParams.set("paymentId", flashPaymentId)
+              else immediateDrainRequestUrl.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
               const immediateDrainUrl = immediateDrainRequestUrl.toString()
               const response = await fetch(immediateDrainUrl, {
                 method: "POST",

@@ -995,6 +995,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
   }
 
+  // An old, delayed continuation must never enter the global drain during rollout.
+  if (process.env.FLASHPAY_RECOVERY_SCOPE === "observe_new")
+    return NextResponse.json({ state: "global_recovery_held" }, { status: 423 })
+
   if (!isRedisConfigured) {
     return NextResponse.json({ error: "Redis not configured" }, { status: 500 })
   }

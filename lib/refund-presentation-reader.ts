@@ -22,7 +22,7 @@ import type {
   RefundPresentationReadResult,
 } from "./types"
 
-export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult }, suppliedPersistence?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationPersistenceReadResult }): Promise<RefundPresentationReadResult> {
+export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult }, suppliedPersistence?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationPersistenceReadResult }, proofMode: "read" | "record" = "read"): Promise<RefundPresentationReadResult> {
   try {
     if (suppliedCheckpoint && suppliedCheckpoint.refundId !== refundId) return { outcome: "INDETERMINATE" }
     const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
@@ -115,6 +115,9 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
           horizonSuccessful: proof.proof.horizonSuccessful,
         }
       } else {
+        // User-facing reads cannot append to the financial audit. The protected
+        // internal reconciliation caller retains its verified proof-write path.
+        if (proofMode === "read") return { outcome: "INDETERMINATE" }
         const blockchainRead = await readRefundPresentationBlockchain(checkpoint)
         if (blockchainRead.outcome !== "CONFIRMED" || blockchainRead.piDeveloperCompleted !== true) {
           return { outcome: "INDETERMINATE" }

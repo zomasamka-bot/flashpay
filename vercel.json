@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/recovery/transient",
+      "path": "/api/recovery/new-intents",
       "schedule": "0 21 * * *"
     }
   ]
