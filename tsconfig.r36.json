@@ -1,4 +1,4 @@
 {
  "compilerOptions":{"target":"ES2022","module":"CommonJS","moduleResolution":"Node","strict":true,"esModuleInterop":true,"skipLibCheck":true,"outDir":".r36-build","rootDir":"lib","noEmitOnError":true},
- "include":["lib/r36-operator-cli.ts"],"exclude":["node_modules"]
+ "include":["lib/r36-operator-cli.ts","lib/r36-production-operator.ts"],"exclude":["node_modules"]
 }

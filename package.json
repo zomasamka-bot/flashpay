@@ -8,7 +8,8 @@
     "lint": "eslint .",
     "start": "next start",
     "r36:build": "tsc -p tsconfig.r36.json",
-    "r36:operator": "node .r36-build/r36-operator-cli.js"
+    "r36:operator": "node .r36-build/r36-operator-cli.js",
+    "r36:production-operator": "node .r36-build/r36-production-operator.js"
   },
   "overrides": {
     "react": "^19",
