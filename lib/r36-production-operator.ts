@@ -2,13 +2,14 @@
 // Neither a Next.js route nor the B2 launcher can select this production target.
 import postgres from 'postgres'
 import { once } from 'node:events'
+import { isAbsolute } from 'node:path'
+import { lstat, realpath } from 'node:fs/promises'
 import { createR36HttpsPorts } from './r36-provider-transport'
 import { createR36OperatorService, type R36ServiceConfig } from './r36-operator-service'
 import { certifyR36PreparedAdmission } from './r36-trusted-certification-gate'
 import type { R36CertificateDatabase } from './r36-certificate-consumer'
 
-const databaseHost = 'ep-falling-bonus-albeetu0.c-3.eu-central-1.aws.neon.tech'
-const branchId = 'br-tiny-mode-aliatv40'
+import {productionR36Host as databaseHost, productionR36Branch as branchId} from './r36-production-runtime'
 const digest = /^[0-9a-f]{64}$/
 type Mode = 'issuer' | 'signer'
 type ProviderConfig = Parameters<typeof createR36HttpsPorts>[0]
@@ -91,7 +92,29 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
   if (!matches) throw Error('APPROVAL_SCOPE')
 }
 
+async function startProtectedService(server:ReturnType<typeof createR36OperatorService>, service:R36ServiceConfig, onClose:()=>void) {
+  const ready=once(server,'listening')
+  server.listen(service.port,service.host)
+  await ready
+  const close=()=>server.close()
+  process.once('SIGTERM',close)
+  process.once('SIGINT',close)
+  server.once('close',()=>{process.off('SIGTERM',close);process.off('SIGINT',close);onClose()})
+}
+
 export async function runProductionOperator(input: unknown) {
+  if (input && typeof input==='object' && 'mode' in input && input.mode==='evidence') {
+    const c=input as {mode:'evidence';network?:string;service?:R36ServiceConfig;directory?:string}
+    const svc=c.service, directory=c.directory
+    if (Object.keys(c).sort().join()!=='directory,mode,network,service' || c.network!=='Pi Testnet' ||
+        !svc || !['127.0.0.1','::1'].includes(svc.host) || !Number.isInteger(svc.port) || svc.port<1 || svc.port>65535 ||
+        typeof directory!=='string' || !isAbsolute(directory) || await realpath(directory)!==directory ||
+        !(await lstat(directory)).isDirectory()) throw Error('EVIDENCE_CONFIGURATION')
+    // This service only serves previously published immutable signed artifacts.
+    // No DB connection, signing key, evidence generation or financial transport.
+    await startProtectedService(createR36OperatorService(svc,{kind:'evidence',directory}),svc,()=>{})
+    return {outcome:'EVIDENCE_LISTENING',scope:'DIGEST_BOUND_READ_ONLY'}
+  }
   const c = validateProductionConfig(input)
   const url = new URL(c.databaseUrl)
   const sql = postgres({host:databaseHost, database:'neondb', port:5432, username:url.username,
@@ -118,14 +141,8 @@ export async function runProductionOperator(input: unknown) {
     await db.begin(async () => undefined)
     const service = c.service!
     const server = createR36OperatorService(service,{kind:'signer',db,signingKeyPem:c.signingKeyPem!})
-    const ready = once(server,'listening')
-    server.listen(service.port,service.host)
-    await ready
+    await startProtectedService(server,service,()=>{void sql.end({timeout:2})})
     listening = true
-    const close = () => server.close()
-    process.once('SIGTERM',close)
-    process.once('SIGINT',close)
-    server.once('close',()=>{process.off('SIGTERM',close);process.off('SIGINT',close);void sql.end({timeout:2})})
     return {outcome:'SIGNER_LISTENING',scope:'SINGLE_APPROVED_DIGEST'}
   } finally { if (!listening) await sql.end({timeout:2}) }
 }
@@ -142,6 +159,6 @@ if (require.main === module) {
     }
     const result = await runProductionOperator(JSON.parse(Buffer.concat(chunks).toString('utf8')))
     process.stdout.write(JSON.stringify(result)+'\n')
-    if (result.outcome !== 'SIGNER_LISTENING' && result.outcome !== 'RECORDED' && result.outcome !== 'REPLAYED') process.exitCode=2
+    if (result.outcome !== 'EVIDENCE_LISTENING' && result.outcome !== 'SIGNER_LISTENING' && result.outcome !== 'RECORDED' && result.outcome !== 'REPLAYED') process.exitCode=2
   })().catch(()=>{process.stderr.write('R36_PRODUCTION_OPERATOR_BLOCKED\n');process.exitCode=2})
 }

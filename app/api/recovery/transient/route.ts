@@ -996,7 +996,7 @@ export async function POST(request: NextRequest) {
   }
 
   // An old, delayed continuation must never enter the global drain during rollout.
-  if (process.env.FLASHPAY_RECOVERY_SCOPE === "observe_new")
+  if ((process.env.FLASHPAY_RECOVERY_SCOPE === "observe_new" || process.env.FLASHPAY_RECOVERY_SCOPE === "admitted_new"))
     return NextResponse.json({ state: "global_recovery_held" }, { status: 423 })
 
   if (!isRedisConfigured) {

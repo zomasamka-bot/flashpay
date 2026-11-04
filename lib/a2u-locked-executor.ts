@@ -1,3 +1,4 @@
+import {currentRecoveryRight} from './r36-recovery-scope'
 import { readDurableSettlementProjection } from "./settlement-durable-projection"
 import { verifyPreparedWalletAuthority, claimFirstWalletSubmission } from "@/lib/financial-wallet-authority"
 import { redis, isRedisConfigured } from "@/lib/redis"
@@ -365,6 +366,15 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       latestPayment = verifiedPayment
       console.log("[R101-6 DURABLE MERCHANT AUTHORITY] verified", { paymentId, merchantId: latestPayment.merchantId, merchantUid: latestPayment.merchantUid, recoveryOperation: params.recoveryOperation ?? "normal" })
     }
+
+    const scopedRight = currentRecoveryRight()
+    if (scopedRight && (scopedRight.kind !== 'settlement' || scopedRight.id !== paymentId ||
+        latestPayment.id !== paymentId || scopedRight.op !== latestPayment.a2uPaymentId ||
+        scopedRight.hash !== latestPayment.a2uPreparedTxHash || scopedRight.seq !== latestPayment.a2uPreparedSequence ||
+        scopedRight.wallet !== latestPayment.a2uFromAddress ||
+        (params.recoveryOperation !== undefined && params.recoveryOperation !== 'SETTLEMENT_SUBMIT') ||
+        (params.recoveryOperation === undefined && latestPayment.a2uTxid !== scopedRight.hash)))
+      return {ok:false,status:409,error:"Scoped prepared identity unavailable"}
 
     if (params.recoveryOperation === "SETTLEMENT_DISPATCH") {
       const now = Date.now()

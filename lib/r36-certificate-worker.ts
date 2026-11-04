@@ -40,7 +40,7 @@ async function bounded<T>(operation:(signal:AbortSignal)=>Promise<T>):Promise<T>
 
 /** A complete trusted artifact chain is required before the first signing request.
  * The transaction serializes workers on the protected nonce. A durable receipt is
- * checked before fetching/signing again; the original consumer rechecks revocation.
+ * reused without signing again. Pilot receipts must still match the approved wallets.
  */
 export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:string,ports:R36WorkerPorts):Promise<R36CertificateResult>{
  if(!hex.test(nonce))return fail('INVALID_NONCE')
@@ -55,7 +55,8 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   if(!operators.every(x=>typeof x==='string'&&/^[A-Za-z0-9_.:-]{1,128}$/.test(x))||new Set(operators).size!==3||profile.issuerId!==p.issuerId||profile.keyId!==p.keyId)return fail('ISSUER_IDENTITY_NOT_SEPARATE')
   // This is a policy-bound identity assertion. The enrollment approver must establish
   // actual organizational independence; distinct strings alone do not establish it.
-  if(c.receipt!==null&&c.receipt!==undefined)return consumeR36AdmissionCertificate({begin:fn=>fn(tx)},c.receipt)
+  const replay=c.receipt!==null&&c.receipt!==undefined
+  if(replay&&profile.recoveryPilot===undefined)return consumeR36AdmissionCertificate({begin:fn=>fn(tx)},c.receipt)
   if(typeof p.validUntil!=='number'||typeof p.maxAgeSeconds!=='number'||typeof p.validFrom!=='number')return fail('INVALID_WORKER_VALIDITY')
   const issued=c.requestCreatedAt,expires=Math.min(p.validUntil,issued+p.maxAgeSeconds)
   if(![now,issued,expires].every(Number.isSafeInteger)||issued<p.validFrom||issued>now||expires<=now)return fail('WORKER_REQUEST_EXPIRED')
@@ -85,6 +86,16 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   if(op.type!=='payment'||op.source!==undefined||!op.asset.isNative()||op.destination!==b.destinationWallet||amount(op.amount)!==b.amountStroops)return fail('PREPARED_OPERATION_MISMATCH')
   if(f.schema!=='R36_INBOUND_FINALITY_V1'||!obj(f.horizonInput)||!obj(f.horizonRecord)||!obj(f.piRecord)||f.finalityPolicyDigest!==profile.finalityPolicyDigest||typeof f.ledgerHash!=='string'||!hex.test(f.ledgerHash))return fail('INBOUND_FINALITY_MISSING')
   const pi=f.piRecord,hi=f.horizonInput
+  // Only an explicitly enrolled trial policy may certify these test wallets.
+  // Use the signed inbound record, not the requester or a Redis projection.
+  if (profile.recoveryPilot !== undefined) {
+    const pilot=profile.recoveryPilot
+    if(!obj(pilot)||pilot.schema!=='FLASHPAY_TESTNET_NEW_RIGHTS_V1'||!Array.isArray(pilot.wallets)||
+      !Array.isArray(pilot.payerUids)||!pilot.payerUids.includes(i.customerUid)||
+      !pilot.wallets.includes(b.sourceWallet)||!pilot.wallets.includes(b.destinationWallet)||!pilot.wallets.includes(hi.sourceWallet)||
+      i.inboundAmountStroops!==b.amountStroops||BigInt(i.inboundAmountStroops)>BigInt(2000000))
+      return fail('TESTNET_PILOT_SUBJECT_NOT_ENROLLED')
+  }
   if(pi.network!==b.network||pi.user_uid!==i.customerUid||pi.identifier!==b.piPaymentId||pi.direction!=='user_to_app'||pi.to_address!==b.sourceWallet||pi.from_address!==hi.sourceWallet||amount(pi.amount)!==i.inboundAmountStroops||!obj(pi.transaction)||pi.transaction.txid!==b.u2aTxid||pi.transaction.verified!==true||!obj(pi.status)||pi.status.developer_approved!==true||pi.status.transaction_verified!==true||pi.status.developer_completed!==true||pi.status.cancelled!==false||pi.status.user_cancelled!==false||hi.network!=='Pi Testnet'||hi.destinationWallet!==b.sourceWallet||hi.preparedHash!==b.u2aTxid||amount(hi.amount)!==i.inboundAmountStroops)return fail('PI_INBOUND_IDENTITY_OR_COMPLETION_MISMATCH')
   const inbound=verifyR36IndependentHorizonRecord(hi as R36HorizonProofInput,f.horizonRecord as R36HorizonRecord)
   if(inbound.outcome!=='PROVEN'||!inbound.ledger||BigInt(inbound.ledger)>BigInt(b.cutoffLedger as string))return fail('INBOUND_HORIZON_NOT_PROVEN')
@@ -95,6 +106,7 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   if(g.schema!=='R36_WALLET_CLEARANCE_V1'||g.authorityDisposition!=='CLEARED_FOR_BOUND_INTENT'||g.currentRightsDigest!==a.currentRightsDigest||!['walletHistoryDigest','accountingDigest','exceptionsDigest','exceptionIsolationDigest'].every(k=>g[k]===b[k]))return fail('WALLET_CLEARANCE_MISMATCH')
   const snapshotReview=reviewR36EvidenceSnapshot(b,artifacts)
   if(snapshotReview.outcome!=='VERIFIED_SNAPSHOT')return fail('SNAPSHOT_'+snapshotReview.reason)
+  if(replay)return consumeR36AdmissionCertificate({begin:fn=>fn(tx)},c.receipt)
   const manifest={schema:'R36_ADMISSION_CERTIFICATE_V1',purpose:'INITIAL_PREPARED_ADMISSION',issuerId:p.issuerId,keyId:p.keyId,policyDigest:p.policyDigest,...b,issuedAt:String(issued),expiresAt:String(expires)} as Record<string,unknown>
   const bytes=Buffer.from('FLASHpay:R36:INITIAL_ADMISSION:V1\n'+JSON.stringify(certificateFields.map(k=>manifest[k]))),digest=hash(bytes)
   if(typeof p.issuerId!=='string'||typeof p.keyId!=='string'||typeof p.policyDigest!=='string')return fail('SIGNER_POLICY_MISSING')

@@ -67,6 +67,20 @@ async function observe(request: NextRequest) {
   const result = { mode: "observe_only", scope: id ? "one" : "since_cutover", held: counts.held,
     pending: counts.pending, terminalCheckpoints: counts.terminal, financialDispatch: false }
   console.info("[Recovery new intents]", result)
+  if (process.env.FLASHPAY_RECOVERY_SCOPE === "admitted_new") {
+    try {
+      const {resumeAdmittedRecovery} = await import("@/lib/r36-scoped-recovery")
+      const dispatch = await resumeAdmittedRecovery(id ?? null)
+      const invoked = dispatch.endsWith("_invoked") || dispatch === "executor_held"
+      const outcome = {scope:result.scope, mode:"admitted_new", dispatch, executorInvoked:invoked,
+        financialOutcome:invoked ? "verify_durable_result" : "not_invoked"}
+      console.info("[Recovery admitted right]", outcome)
+      const unavailable = dispatch === "configuration_held" || dispatch === "runtime_held"
+      return NextResponse.json(outcome, {status:unavailable ? 503 : 200, headers:{"Cache-Control":"no-store"}})
+    } catch {
+      return NextResponse.json({error:"Scoped recovery unavailable"}, {status:503})
+    }
+  }
   return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } })
 }
 

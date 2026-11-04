@@ -1,3 +1,4 @@
+import {currentRecoveryRight} from './r36-recovery-scope'
 import { verifyRefundOriginalCustomerBinding } from './refund-original-customer-binding'
 import { redis, isRedisConfigured } from './redis'
 import {
@@ -421,6 +422,10 @@ export async function executeRefundBlockchain(refundId: string, refundAuthority?
   if (!isRedisConfigured || !serverConfig.piApiKey) return { outcome: 'blocked', reason: 'unavailable' }
   let checkpoint = await getRefundCheckpointAuthoritative(refundId)
   if (!checkpoint || checkpoint.stage !== 'wallet_submission_started' || checkpoint.status !== 'pending' || !checkpoint.refundPaymentId) return { outcome: 'blocked', reason: 'invalid_stage' }
+  const scopedRight=currentRecoveryRight()
+  if(scopedRight && (scopedRight.kind!=='refund' || scopedRight.id!==checkpoint.paymentId ||
+    scopedRight.op!==refundId || refundAuthority?.paymentId!==scopedRight.id || refundAuthority.refundId!==refundId))
+    return {outcome:'blocked',reason:'preflight_failed'}
   if (!await ensurePaymentOperationLock(checkpoint.paymentId, checkpoint.refundId)) return { outcome: 'blocked', reason: 'lock_conflict' }
   checkpoint = await getRefundCheckpointAuthoritative(refundId)
   if (!checkpoint) return { outcome: 'blocked', reason: 'preflight_failed' }

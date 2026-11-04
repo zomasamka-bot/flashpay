@@ -98,6 +98,11 @@ export async function getR36RestrictedClient(): Promise<any | null> {
   const url = process.env.R36_RUNTIME_DATABASE_URL
   if (!url || url === process.env.DATABASE_URL) return null
   try {
+    if (process.env.VERCEL_ENV === 'production') {
+      const { openProductionR36Runtime } = await import('./r36-production-runtime')
+      r36RestrictedClient = await openProductionR36Runtime(url,process.env.DATABASE_URL)
+      return r36RestrictedClient
+    }
     const postgres = (await import('postgres')).default
     const candidate = postgres(url, { max: 2, prepare: false })
     const identity = await candidate.unsafe(`

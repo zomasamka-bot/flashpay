@@ -621,7 +621,7 @@ export async function POST(request: NextRequest) {
 
     // A production qualification wake carries this payment across the HTTP boundary.
     // The periodic read covers a lost event, including a coalesced Redis kick.
-    const observeNewIntents = process.env.VERCEL_ENV === "production" && process.env.FLASHPAY_RECOVERY_SCOPE === "observe_new"
+    const observeNewIntents = process.env.VERCEL_ENV === "production" && (process.env.FLASHPAY_RECOVERY_SCOPE === "observe_new" || process.env.FLASHPAY_RECOVERY_SCOPE === "admitted_new")
     if (observeNewIntents || atomicU2AResultNumber === 2 || (atomicU2AResultNumber === 3 && dr11RefundCertificationCandidate)) {
       const recoverySecret = process.env.FLASHPAY_TRANSIENT_RECOVERY_SECRET
       const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL

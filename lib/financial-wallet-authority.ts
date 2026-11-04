@@ -2,6 +2,7 @@
  * CANDIDATE ONLY: no automatic release; migration/backfill required before enabling.
  * This guard must be called for ALL financial submit writers before production use.
  */
+import {matchesRecoveryClaim} from './r36-recovery-scope'
 import { query, getR36RestrictedClient } from './db'
 // An optional transaction client ensures the wallet claim and financial checkpoint
 // are committed or rolled back together; never fall back to an independent query.
@@ -118,6 +119,7 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
 }
 
 export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
+  if (!matchesRecoveryClaim(input)) return false
   if (input.network !== 'Pi Testnet' ||
       !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !input.paymentId || input.paymentId.trim() !== input.paymentId ||
@@ -177,6 +179,7 @@ export async function verifyPreparedWalletAuthority(input: WalletAuthorityClaim)
  * wallet's historical outstanding movements and explicitly enabled its gate.
  */
 export async function claimFirstWalletSubmission(input: WalletAuthorityClaim): Promise<boolean> {
+  if (!matchesRecoveryClaim(input)) return false
   if (input.network !== 'Pi Testnet' || !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !input.paymentId || input.paymentId.trim() !== input.paymentId ||
       !input.operationId || input.operationId.trim() !== input.operationId ||
