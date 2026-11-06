@@ -7,7 +7,7 @@ import {X509Certificate,createHash,createPrivateKey,randomUUID} from 'node:crypt
 import type {TLSSocket} from 'node:tls'
 import {readFile,lstat,realpath,open,link,unlink} from 'node:fs/promises'
 import path from 'node:path'
-import type {R36CertificateDatabase} from './r36-certificate-consumer'
+import type {R36CertificateDatabase,R36CertificateResult} from './r36-certificate-consumer'
 import {signR36ApprovedOnce,type R36SignRequest} from './r36-durable-signer'
 import {R36_WORKER_KINDS} from './r36-certificate-worker'
 const sha=(b:string|Buffer)=>createHash('sha256').update(b).digest('hex')
@@ -27,7 +27,7 @@ export async function publishR36Artifact(directory:string,kind:string,digest:str
  const st=await lstat(file);if(!st.isFile()||st.isSymbolicLink()||(await readFile(file,'utf8'))!==bytes)throw Error('ARTIFACT_IMMUTABLE_CONFLICT');const directoryHandle=await open(base,'r');try{await directoryHandle.sync()}finally{await directoryHandle.close()}return'REPLAYED'
 }
 export type R36ServiceConfig={host:string;port:number;serverCertPem:string;serverKeyPem:string;clientCaPem:string;clientPins:readonly string[]}
-export function createR36OperatorService(config:R36ServiceConfig,mode:{kind:'evidence';directory:string}|{kind:'signer';db:R36CertificateDatabase;signingKeyPem:string}){
+export function createR36OperatorService(config:R36ServiceConfig,mode:{kind:'evidence';directory:string}|{kind:'signer';db:R36CertificateDatabase;signingKeyPem:string}|{kind:'issuer';issue:(nonce:string)=>Promise<R36CertificateResult>}){
  const c={...config,clientPins:[...config.clientPins]};if(!Number.isInteger(c.port)||c.port<0||c.port>65535||!c.clientPins.length||!c.clientPins.every(v=>/^[0-9a-f]{64}$/.test(v)))throw Error('SERVICE_CONFIG')
  const signingKey=mode.kind==='signer'?createPrivateKey(mode.signingKeyPem):undefined
  const server=https.createServer({cert:c.serverCertPem,key:c.serverKeyPem,ca:c.clientCaPem,requestCert:true,rejectUnauthorized:true,minVersion:'TLSv1.3'},async(req,res)=>{
@@ -42,12 +42,27 @@ export function createR36OperatorService(config:R36ServiceConfig,mode:{kind:'evi
     const raw=await readFile(file,'utf8'),e=JSON.parse(raw)
     if(typeof e.text!=='string'||sha(e.text)!==match[3]||e.manifest?.subjectDigest!==match[2])throw Error('ARTIFACT_HASH');reply(200,e);return
    }
-   if(req.method!=='POST'||req.url!=='/r36/v1/sign'||!String(req.headers['content-type']).startsWith('application/json')){reply(404,{error:'ROUTE_NOT_ALLOWED'});return}
+   const route=mode.kind==='issuer'?'/r36/v1/issue':'/r36/v1/sign'
+   if(req.method!=='POST'||req.url!==route||!String(req.headers['content-type']).startsWith('application/json')){reply(404,{error:'ROUTE_NOT_ALLOWED'});return}
    const chunks:Buffer[]=[];let size=0
    for await(const chunk of req){const b=Buffer.from(chunk);size+=b.length;if(size>65536){reply(413,{error:'REQUEST_TOO_LARGE'});req.destroy();return}chunks.push(b)}
-   const out=await signR36ApprovedOnce(mode.db,signingKey!,JSON.parse(Buffer.concat(chunks).toString('utf8')) as R36SignRequest);reply(200,out)
+   const body:unknown=JSON.parse(Buffer.concat(chunks).toString('utf8'))
+   if(mode.kind==='issuer'){
+    // The transport only names an already protected request. It cannot enroll
+    // policy, evidence, wallet authority, signing bytes or caller approvals.
+    if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).join(',')!=='nonce'||
+       typeof (body as {nonce?:unknown}).nonce!=='string'||!/^[0-9a-f]{64}$/.test((body as {nonce:string}).nonce)){
+     reply(422,{error:'ISSUER_REQUEST_INVALID'});return
+    }
+    const out=await mode.issue((body as {nonce:string}).nonce)
+    reply(out.outcome==='RECORDED'||out.outcome==='REPLAYED'?200:422,out);return
+   }
+   const out=await signR36ApprovedOnce(mode.db,signingKey!,body as R36SignRequest);reply(200,out)
   }catch{reply(422,{error:'REQUEST_REJECTED'})}
  })
- server.requestTimeout=10000;server.headersTimeout=10000;server.setTimeout(10000,s=>s.destroy())
+ server.requestTimeout=10000;server.headersTimeout=10000
+ // Issuance checks seven bounded evidence artifacts and one bounded signing call.
+ // The body deadline stays short; the response permits the original worker budget.
+ server.setTimeout(mode.kind==='issuer'?70000:10000,s=>s.destroy())
  return server
 }

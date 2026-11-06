@@ -18,8 +18,8 @@ type Config = {
   network: 'Pi Testnet'
   databaseUrl: string
   policyDigest: string
-  // null is signer-only: serve already-approved requests for this one policy.
-  // It never enrolls a request or grants the signer approval privileges.
+  // null selects a persistent service for already-approved requests in one policy.
+  // No service may enroll a request or grant itself approval privileges.
   approvalId: string | null
   providers?: ProviderConfig
   service?: R36ServiceConfig
@@ -32,11 +32,10 @@ export function validateProductionConfig(input: unknown): Config {
   const c = input as Config
   if (c.network !== 'Pi Testnet' || (c.mode !== 'issuer' && c.mode !== 'signer')) throw Error('OPERATOR_TARGET')
   const fields = ['mode', 'network', 'databaseUrl', 'policyDigest', 'approvalId',
-    ...(c.mode === 'issuer' ? ['providers'] : ['service', 'signingKeyPem'])]
+    ...(c.mode === 'issuer' ? ['providers', ...(c.approvalId === null ? ['service'] : [])] : ['service', 'signingKeyPem'])]
   if (Object.keys(c).length !== fields.length || !fields.every(f => Object.hasOwn(c, f))) throw Error('CONFIG_FIELDS')
   if (typeof c.policyDigest !== 'string' || !digest.test(c.policyDigest) ||
-      !(typeof c.approvalId === 'string' && digest.test(c.approvalId) ||
-        c.mode === 'signer' && c.approvalId === null)) throw Error('APPROVAL_ID')
+      !(typeof c.approvalId === 'string' && digest.test(c.approvalId) || c.approvalId === null)) throw Error('APPROVAL_ID')
   const url = new URL(c.databaseUrl)
   if (url.protocol !== 'postgresql:' || url.hostname !== databaseHost || (url.port && url.port !== '5432') ||
       url.pathname !== '/neondb' || url.username !== 'r36_' + c.mode || !url.password || url.search || url.hash) throw Error('DATABASE_TARGET')
@@ -44,9 +43,10 @@ export function validateProductionConfig(input: unknown): Config {
     const ports = c.providers
     if (!ports || new URL(ports.evidence.origin).origin === new URL(ports.signer.origin).origin ||
         ports.evidence.serverSpkiSha256 === ports.signer.serverSpkiSha256) throw Error('SERVICES_NOT_SEPARATE')
-  } else if (!c.service || !['127.0.0.1', '::1'].includes(c.service.host) ||
-             !Number.isInteger(c.service.port) || c.service.port < 1 || c.service.port > 65535 ||
-             typeof c.signingKeyPem !== 'string' || !c.signingKeyPem) throw Error('SIGNER_CONFIGURATION')
+  } else if (typeof c.signingKeyPem !== 'string' || !c.signingKeyPem) throw Error('SIGNER_CONFIGURATION')
+  if ((c.mode === 'signer' || c.approvalId === null) && (!c.service ||
+      !['127.0.0.1', '::1'].includes(c.service.host) || !Number.isInteger(c.service.port) ||
+      c.service.port < 1 || c.service.port > 65535)) throw Error('SERVICE_CONFIGURATION')
   return c
 }
 
@@ -85,9 +85,9 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
     FROM pg_roles r WHERE r.rolname=current_user`, [branchId, 'r36_'+c.mode])
   if (rows.length !== 1 || !['identity_ok','restricted','acl_ok','separation_ok'].every(k => rows[0][k] === true))
     throw Error('DATABASE_AUTHORITY')
-  // An idle policy-scoped signer has no request yet. Actual signing still needs
-  // a valid protected context, checked by scopeProductionSignerTransaction below.
-  if (c.mode === 'signer' && c.approvalId === null) return
+  // Idle services have no request. Every issuer job supplies an exact nonce to
+  // this same physical-session check before the original verifier can run.
+  if (c.approvalId === null) return
   const sql = c.mode === 'issuer' ? 'SELECT public.r36_certificate_context($1) AS ctx' : 'SELECT r36_signing.context($1) AS ctx'
   const contextRows = await tx.unsafe(sql, [c.approvalId])
   const context = contextRows[0]?.ctx as {policy?:{policyDigest?:string};binding?:{network?:string;nonce?:string};policy_digest?:string;idempotency_key?:string} | null
@@ -155,23 +155,31 @@ export async function runProductionOperator(input: unknown) {
   const sql = postgres({host:databaseHost, database:'neondb', port:5432, username:url.username,
     password:decodeURIComponent(url.password), ssl:{rejectUnauthorized:true,servername:databaseHost},
     prepare:false, max:1, idle_timeout:10, connect_timeout:8, onnotice:()=>{}})
-  const db: R36CertificateDatabase = {
+  const databaseFor = (approvalId:string|null):R36CertificateDatabase => ({
     async begin<T>(run: (tx: Tx)=>Promise<T>): Promise<T> {
       // postgres.js adapts arrays of results. Wrap T to preserve its type.
       const wrapped = await sql.begin(async inner => {
         const tx: Tx = {unsafe: async (query, values) => inner.unsafe(query, values as never)}
-        await checkProductionTransaction(tx, c)
+        await checkProductionTransaction(tx, {...c,approvalId})
         const scoped: Tx = c.mode === 'issuer' ? tx : scopeProductionSignerTransaction(tx,c)
         return {value: await run(scoped)}
       })
       return wrapped.value as T
     }
-  }
+  })
+  const db=databaseFor(c.approvalId)
   let listening = false
   try {
     if (c.mode === 'issuer') {
-      if (c.approvalId === null) throw Error('APPROVAL_ID')
-      return await certifyR36PreparedAdmission(db,c.approvalId,createR36HttpsPorts(c.providers!))
+      const ports=createR36HttpsPorts(c.providers!)
+      if (c.approvalId !== null) return await certifyR36PreparedAdmission(db,c.approvalId,ports)
+      await db.begin(async () => undefined)
+      const service=c.service!
+      const server=createR36OperatorService(service,{kind:'issuer',issue:nonce=>
+        certifyR36PreparedAdmission(databaseFor(nonce),nonce,ports)})
+      await startProtectedService(server,service,()=>{void sql.end({timeout:2})})
+      listening=true
+      return {outcome:'ISSUER_LISTENING',scope:'SINGLE_POLICY_PROTECTED_REQUESTS'}
     }
     await db.begin(async () => undefined)
     const service = c.service!
@@ -194,6 +202,6 @@ if (require.main === module) {
     }
     const result = await runProductionOperator(JSON.parse(Buffer.concat(chunks).toString('utf8')))
     process.stdout.write(JSON.stringify(result)+'\n')
-    if (result.outcome !== 'EVIDENCE_LISTENING' && result.outcome !== 'SIGNER_LISTENING' && result.outcome !== 'RECORDED' && result.outcome !== 'REPLAYED') process.exitCode=2
+    if (result.outcome !== 'EVIDENCE_LISTENING' && result.outcome !== 'SIGNER_LISTENING' && result.outcome !== 'ISSUER_LISTENING' && result.outcome !== 'RECORDED' && result.outcome !== 'REPLAYED') process.exitCode=2
   })().catch(()=>{process.stderr.write('R36_PRODUCTION_OPERATOR_BLOCKED\n');process.exitCode=2})
 }
