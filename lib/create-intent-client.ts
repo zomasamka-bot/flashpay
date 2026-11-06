@@ -32,6 +32,41 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 
 type Pending = { id: string; merchantUid: string; merchantId: string; amount: number; note: string; completed?: boolean }
 
+// A reload must allow the merchant to recover the saved identity and payload.
+// Reading never acknowledges, retires or changes the original request.
+export async function readSavedCreateIntent(merchantUid: string, merchantId: string): Promise<Readonly<Pending> | null> {
+  return withIntentLock(() => {
+    assertCurrentEpoch()
+    const raw = window.localStorage.getItem(KEY)
+    if (raw === null) return null
+    const p: unknown = JSON.parse(raw)
+    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('Saved request invalid; creation blocked')
+    const v = p as Pending
+    if (!UUID_V4.test(v.id) || typeof v.merchantUid !== 'string' || typeof v.merchantId !== 'string' ||
+        typeof v.amount !== 'number' || !Number.isFinite(v.amount) || v.amount <= 0 || typeof v.note !== 'string' ||
+        (v.completed !== undefined && typeof v.completed !== 'boolean')) throw new Error('Saved request invalid; creation blocked')
+    if (!merchantUid || !merchantId || v.merchantUid !== merchantUid || v.merchantId !== merchantId) return null
+    return Object.freeze({id:v.id,merchantUid:v.merchantUid,merchantId:v.merchantId,amount:v.amount,note:v.note,completed:v.completed})
+  })
+}
+
+async function checkCreationAvailability(amount: number) {
+  let body: unknown
+  try {
+    const response = await fetch('/api/control/availability', {cache:'no-store',redirect:'error',signal:AbortSignal.timeout(10000)})
+    if (!response.ok) throw new Error('UNAVAILABLE')
+    body = await response.json()
+  } catch { throw new Error('Payment availability could not be verified. Your saved request is unchanged; try again later.') }
+  const v = body as {available?:unknown;creation?:{canRequest?:unknown;maxTrialAmountPi?:unknown}} | null
+  if (!v || v.available !== true || v.creation?.canRequest !== true)
+    throw new Error('Payment creation is temporarily held. Your saved request is unchanged; try again after financial admission is enabled.')
+  const max = v.creation.maxTrialAmountPi
+  if (max !== null && (typeof max !== 'number' || !Number.isFinite(max) || max <= 0))
+    throw new Error('Payment limit could not be verified. Your saved request is unchanged.')
+  if (typeof max === 'number' && amount > max)
+    throw new Error(`The Testnet trial limit is ${max} Pi. Any earlier saved request remains unchanged; do not replace an unresolved request.`)
+}
+
 // localStorage's read-then-write is not a cross-tab compare-and-swap. The
 // exclusive origin-scoped Web Lock serializes identity acquisition and release.
 // Without this primitive, fail closed rather than mint independent identities.
@@ -46,6 +81,9 @@ export async function acquireCreateIntent(merchantUid: string, merchantId: strin
   if (!merchantUid || !merchantId || !Number.isFinite(amount) || amount <= 0 || typeof note !== "string") {
     throw new Error("Merchant identity or payment amount unavailable")
   }
+  // Read-only hint before allocating a browser identity. A later server/WAF
+  // change is still handled with the same durable identity, never a new one.
+  await checkCreationAvailability(amount)
   return withIntentLock(() => {
     assertCurrentEpoch()
     // Storage failure is indeterminate: do not create a new durable identity.

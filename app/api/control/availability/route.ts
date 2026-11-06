@@ -9,6 +9,7 @@
 
 import { NextResponse } from "next/server"
 import { readSystemState } from "@/lib/system-control"
+import { requiresTestnetIngress, testnetIngressEnabled } from "@/lib/r36-testnet-ingress"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -32,6 +33,12 @@ export async function GET() {
       message: result.state.killSwitchEnabled
         ? (result.state.maintenanceMessage || "Maintenance in progress. Please try again later.")
         : "",
+      // Presentation/preflight only. This never grants admission; the create
+      // route and PostgreSQL still reserve the real budget and wallet authority.
+      creation: {
+        canRequest: !result.state.killSwitchEnabled && (!requiresTestnetIngress() || testnetIngressEnabled()),
+        maxTrialAmountPi: requiresTestnetIngress() ? 0.20 : null,
+      },
     },
     { status: 200, headers: NO_STORE },
   )

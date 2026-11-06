@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { createPayment } from "@/lib/operations"
-import { acquireCreateIntent, finishCreateIntent, beginNextCustomerIntent } from "@/lib/create-intent-client"
+import { acquireCreateIntent, finishCreateIntent, beginNextCustomerIntent, readSavedCreateIntent } from "@/lib/create-intent-client"
 import { config } from "@/lib/config"
 import { authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
@@ -30,6 +30,7 @@ export default function HomePage() {
   const verifiedHistorySummary = useLoadPaymentHistory()
 
   const [amount, setAmount] = useState("")
+  const [createNote, setCreateNote] = useState("")
   const [displayAmount, setDisplayAmount] = useState("0.00")
   const [currentPaymentId, setCurrentPaymentId] = useState<string | null>(null)
   const [showQR, setShowQR] = useState(false)
@@ -37,6 +38,17 @@ export default function HomePage() {
   const hasShownSuccessRef = useRef(false)
   const createInFlightRef = useRef(false)
   const merchantSetup = useMerchant()
+  const [savedRequest, setSavedRequest] = useState<Awaited<ReturnType<typeof readSavedCreateIntent>>>(null)
+  useEffect(() => {
+    let current = true
+    const merchant = unifiedStore.getMerchantState()
+    setSavedRequest(null)
+    if (!merchant.uid || !merchant.merchantId) { setSavedRequest(null); return }
+    void readSavedCreateIntent(merchant.uid,merchant.merchantId).then(value => {
+      if (current) setSavedRequest(value && !value.completed ? value : null)
+    }).catch(() => { if (current) setSavedRequest(null) })
+    return () => { current = false }
+  }, [merchantSetup.uid, merchantSetup.merchantId])
   const [isConnecting, setIsConnecting] = useState(false)
   const [sdkInitStatus, setSdkInitStatus] = useState<"loading" | "ready" | "error">("loading")
   const [sdkError, setSdkError] = useState<string | null>(null)
@@ -196,6 +208,8 @@ export default function HomePage() {
       return
     }
     setAmount("")
+    setCreateNote("")
+    setSavedRequest(null)
     setDisplayAmount("0.00")
     setCurrentPaymentId(null)
     setShowQR(false)
@@ -264,11 +278,12 @@ export default function HomePage() {
     createInFlightRef.current = true
     try {
       const merchant = unifiedStore.getMerchantState()
-      const intentId = await acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, "")
-      const result = await createPayment(amountNum, "", intentId)
+      const intentId = await acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, createNote)
+      const result = await createPayment(amountNum, createNote, intentId)
 
       if (result.success && result.data) {
         await finishCreateIntent(intentId)
+        setSavedRequest(null)
         setCurrentPaymentId(result.data.id)
         setShowQR(true)
         hasShownSuccessRef.current = false
@@ -690,6 +705,18 @@ export default function HomePage() {
 
       {/* POS Terminal - Payment Input */}
       <div className="flex-1 flex flex-col px-4 py-6 pb-32 md:pb-6 safe-area-inset-bottom">
+        {savedRequest && !showQR && (
+          <Alert className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <p>{t("home.savedRequest", "An earlier request is saved. Restore its original amount before retrying; do not create a replacement.")}</p>
+              <p className="mt-1 break-all text-xs">{savedRequest.amount} Pi · {savedRequest.id}</p>
+              <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => {
+                setAmount(String(savedRequest.amount)); setDisplayAmount(String(savedRequest.amount)); setCreateNote(savedRequest.note)
+              }}>{t("home.restoreRequest", "Restore saved request")}</Button>
+            </AlertDescription>
+          </Alert>
+        )}
         {/* Amount Display */}
         <div className="text-center py-8">
           <div className="text-sm text-muted-foreground mb-2">{t("home.amount", "Amount")}</div>

@@ -8,6 +8,7 @@ import { SecurityGuard, InputValidator, rateLimiter, errorTracker, auditLogger }
 import { config } from "./config"
 import { isProcessingStatus, isTerminalState } from "./payment-status"
 import { getRetryDecision, shouldSuppressErrorCallback } from "./retry-decision"
+import { readCreatePaymentFailure } from "./create-payment-response"
 
 function generateUUID(): string {
   if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
@@ -125,11 +126,17 @@ export async function createPayment(amount: number, note: string, createIntentId
         unifiedStore.clearMerchantAuth()
         unifiedStore.updateWalletStatus({ isConnected: false })
         const authResult = await authenticateMerchant()
-        const refreshedToken = unifiedStore.getMerchantState().accessToken
+        const refreshedMerchant = unifiedStore.getMerchantState()
+        const refreshedToken = refreshedMerchant.accessToken
 
         if (!authResult.success || !refreshedToken) {
           const trackingId = errorTracker.logError(operation, "Reconnect wallet required.")
           return { success: false, error: "Reconnect wallet required.", trackingId }
+        }
+
+        if (refreshedMerchant.uid !== merchantUid || refreshedMerchant.merchantId !== merchantId) {
+          return {success:false,code:"CREATE_MERCHANT_CHANGED",
+            error:"The connected merchant changed. Your original request is retained; reconnect the original merchant before retrying."}
         }
 
         tokenUsed = refreshedToken
@@ -155,18 +162,7 @@ export async function createPayment(amount: number, note: string, createIntentId
     }
 
     if (!response.ok) {
-      let failure: { code?: string; paymentId?: string } = {}
-      try { failure = await response.json() } catch { /* preserve indeterminate request */ }
-      const code = typeof failure.code === "string" ? failure.code : "CREATE_RESULT_UNCERTAIN"
-      const paymentId = typeof failure.paymentId === "string" ? failure.paymentId : undefined
-      return {
-        success: false, code, paymentId,
-        error: code === "CREATE_INTENT_RECOVERY_REQUIRED"
-          ? `Payment ${paymentId || ""} already exists but needs recovery. Do not create another payment.`
-          : code === "CREATE_INTENT_CONFLICT"
-            ? "Payment request identity conflicts with existing data. Creation blocked."
-            : `Payment creation not confirmed (${code}). Retry the original request; do not start a new one.`,
-      }
+      return { success: false, ...await readCreatePaymentFailure(response) }
     }
 
     const contentType = response.headers.get("content-type")
