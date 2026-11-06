@@ -1,3 +1,4 @@
+import {admitInitialTestnetPrepared} from './r36-testnet-ingress'
 /** R36-GAP-01I: durable, fail-closed cross-payment wallet authority.
  * CANDIDATE ONLY: no automatic release; migration/backfill required before enabling.
  * This guard must be called for ALL financial submit writers before production use.
@@ -119,7 +120,6 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
 }
 
 export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
-  if (!matchesRecoveryClaim(input)) return false
   if (input.network !== 'Pi Testnet' ||
       !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !input.paymentId || input.paymentId.trim() !== input.paymentId ||
@@ -127,6 +127,7 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
       !['settlement', 'refund'].includes(input.operationKind) ||
       !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
       !/^[1-9][0-9]*$/.test(input.preparedSequence)) return false
+  if (!matchesRecoveryClaim(input) && !await admitInitialTestnetPrepared(input,tx)) return false
   // Fail closed before attempting any durable wallet authority mutation.
   // The optional transaction is mandatory for atomic prepare and uses the same DB client.
   if (!tx || !(await checkR36SchemaAdmission(tx))) {

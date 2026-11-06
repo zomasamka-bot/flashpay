@@ -1,3 +1,4 @@
+import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetInbound} from "@/lib/r36-testnet-ingress"
 import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
@@ -53,6 +54,9 @@ function buildDr11DurableRefundPendingResponse(input: {
  * Never overwrites stale payment state over newer checkpoint.
  */
 export async function POST(request: NextRequest) {
+  if (requiresTestnetIngress() && !testnetIngressEnabled())
+    return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
+
   const completeTimingStartedAt = Date.now()
   console.log("[Pi Complete] Request received at", new Date().toISOString())
 
@@ -142,6 +146,8 @@ export async function POST(request: NextRequest) {
     const rawPrePaymentId = piPayment.metadata?.paymentId
     if (typeof rawPrePaymentId !== "string" || rawPrePaymentId.length === 0 || rawPrePaymentId !== rawPrePaymentId.trim()) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
     const preFlashPaymentId = rawPrePaymentId
+    if (requiresTestnetIngress() && !await verifyTestnetInbound(piPayment))
+      return NextResponse.json({error:"Testnet payment admission mismatch",code:"TESTNET_INGRESS_HELD"},{status:503})
     const preStoredPayment = await redis.get(`payment:${preFlashPaymentId}`)
     if (!preStoredPayment) return NextResponse.json({ error: "Payment not found" }, { status: 404 })
     const prePayment: Payment = typeof preStoredPayment === "string" ? JSON.parse(preStoredPayment) : preStoredPayment

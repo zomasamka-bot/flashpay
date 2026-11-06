@@ -1,3 +1,4 @@
+import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetInbound} from "@/lib/r36-testnet-ingress"
 import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
@@ -35,6 +36,9 @@ interface PiPaymentDTO {
 // Security: Fetches canonical Pi payment, derives paymentId from canonical metadata, validates Redis record
 // Idempotent: Returns 200 for already-paid when piPaymentId matches identifier
 export async function POST(request: NextRequest) {
+  if (requiresTestnetIngress() && !testnetIngressEnabled())
+    return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
+
   const startMs = Date.now()
   console.log("[Pi Webhook] APPROVE called at", new Date().toISOString())
 
@@ -109,6 +113,8 @@ export async function POST(request: NextRequest) {
       })
     }
     const paymentId = rawPaymentId
+    if (requiresTestnetIngress() && !await verifyTestnetInbound(canonicalPayment))
+      return new Response(JSON.stringify({error:"Testnet payment admission mismatch",code:"TESTNET_INGRESS_HELD"}),{status:503,headers:{"Content-Type":"application/json"}})
 
     console.log("[Pi Webhook] Our Payment ID:", paymentId)
 

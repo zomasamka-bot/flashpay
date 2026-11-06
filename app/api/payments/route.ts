@@ -1,3 +1,4 @@
+import {requiresTestnetIngress,testnetIngressEnabled,reserveTestnetCreation} from "@/lib/r36-testnet-ingress"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Force dynamic rendering for this route
@@ -43,6 +44,9 @@ export async function OPTIONS() {
 
 // POST /api/payments - Create a new payment
 export async function POST(request: NextRequest) {
+  if (requiresTestnetIngress() && !testnetIngressEnabled())
+    return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
+
   const paymentTimingStartedAt = Date.now()
   let createLeaseKey: string | null = null
   let createLeaseOwner: string | null = null
@@ -194,6 +198,12 @@ export async function POST(request: NextRequest) {
 
     // Generate unique payment ID (Edge Runtime compatible)
     let paymentId = crypto.randomUUID()
+    if (requiresTestnetIngress()) {
+      const reserved = await reserveTestnetCreation({paymentId,createIntentId,merchantUid:verifiedMerchantUid,
+        merchantId:trustedMerchantId,amount,note:normalizedNote})
+      if (!reserved) return NextResponse.json({error:"Testnet trial budget or wallet admission unavailable",code:"TESTNET_INGRESS_HELD"},{status:503,headers:corsHeaders})
+      paymentId = reserved
+    }
     let durableCreatedAt = new Date().toISOString()
 
     // Create payment object with VERIFIED identity from Pi /v2/me
