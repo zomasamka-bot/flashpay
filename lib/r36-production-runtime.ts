@@ -1,4 +1,5 @@
 import postgres from 'postgres'
+import {checkR36RuntimeAcl} from './r36-runtime-acl'
 
 export const productionR36Host = 'ep-falling-bonus-albeetu0.c-3.eu-central-1.aws.neon.tech'
 export const productionR36Branch = 'br-tiny-mode-aliatv40'
@@ -27,6 +28,8 @@ export async function openProductionR36Runtime(runtimeUrl: string, primaryUrl: s
                          AND has_schema_privilege(r.oid,n.oid,'CREATE')) AS restricted
         FROM pg_roles r WHERE r.rolname=current_user`,[productionR36Branch])
       if (rows.length !== 1 || rows[0].identity_ok !== true || rows[0].restricted !== true) throw Error('R36_RUNTIME_IDENTITY')
+      if (!await checkR36RuntimeAcl({unsafe:async(query,values)=>tx.unsafe(query,values as never)}))
+        throw Error('R36_RUNTIME_ACL')
       return {value:await run(tx)}
     })
     return wrapped.value

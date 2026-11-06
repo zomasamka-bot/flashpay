@@ -1,4 +1,5 @@
 import {admitInitialTestnetPrepared} from './r36-testnet-ingress'
+import {checkR36RuntimeAcl} from './r36-runtime-acl'
 /** R36-GAP-01I: durable, fail-closed cross-payment wallet authority.
  * CANDIDATE ONLY: no automatic release; migration/backfill required before enabling.
  * This guard must be called for ALL financial submit writers before production use.
@@ -115,7 +116,8 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
        WHERE oid IS NOT NULL) AS cannot_issue`, [])
     return Array.isArray(certificate) && certificate.length === 1 &&
       (certificate[0] as {version?:number;cannot_issue?:boolean})?.version === 1 &&
-      (certificate[0] as {cannot_issue?:boolean})?.cannot_issue === true
+      (certificate[0] as {cannot_issue?:boolean})?.cannot_issue === true &&
+      await checkR36RuntimeAcl(db)
   } catch (error) { console.warn('[R36 READONLY DIAGNOSTIC] admission_query_exception', { code: (error as {code?:string})?.code ?? 'unknown' }); return false }
 }
 
