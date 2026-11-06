@@ -4,6 +4,7 @@
  * external prerequisites. Synthetic fixtures never establish real independence.
  */
 import {createHash,createPublicKey,verify} from 'node:crypto'
+import {numberToExactPositiveStroops} from './financial-amount-stroops'
 import {reviewR36EvidenceSnapshot} from './r36-evidence-snapshot'
 import {Transaction,TransactionBuilder} from '@stellar/stellar-sdk'
 import {consumeR36AdmissionCertificate,R36_ADMISSION_FIELDS,type R36CertificateDatabase,type R36CertificateResult} from './r36-certificate-consumer'
@@ -29,6 +30,15 @@ const evidenceFields=['schema','kind','policyDigest','subjectDigest','artifactDi
 const certificateFields=['schema','purpose','issuerId','keyId','policyDigest',...R36_ADMISSION_FIELDS,'issuedAt','expiresAt']
 const exact=(v:ObjectValue,keys:readonly string[])=>Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k))
 const amount=(v:unknown)=>{if(typeof v!=='string'||!/^(0|[1-9]\d*)(\.\d{1,7})?$/.test(v))throw Error('AMOUNT');const [a,b='']=v.split('.');return (BigInt(a)*BigInt(10000000)+BigInt(b.padEnd(7,'0'))).toString()}
+// Pi PaymentDTO uses a JSON number. Keep the signed artifact unchanged and
+// compare exact stroops using the original financial precision validator.
+// Existing canonical string artifacts remain valid; no rounding or coercion.
+const piAmount=(v:unknown)=>{
+ if(typeof v!=='number')return amount(v)
+ const value=numberToExactPositiveStroops(v)
+ if(value===null)throw Error('PI_AMOUNT')
+ return String(value)
+}
 const ids=(v:unknown):v is string[]=>Array.isArray(v)&&v.every(x=>typeof x==='string'&&/^[A-Za-z0-9_.:-]{1,128}$/.test(x))&&v.join('|')===[...new Set(v)].sort().join('|')
 
 /** Enforce the deadline even if an injected/provider implementation ignores AbortSignal. */
@@ -96,7 +106,7 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
       i.inboundAmountStroops!==b.amountStroops||BigInt(i.inboundAmountStroops)>BigInt(2000000))
       return fail('TESTNET_PILOT_SUBJECT_NOT_ENROLLED')
   }
-  if(pi.network!==b.network||pi.user_uid!==i.customerUid||pi.identifier!==b.piPaymentId||pi.direction!=='user_to_app'||pi.to_address!==b.sourceWallet||pi.from_address!==hi.sourceWallet||amount(pi.amount)!==i.inboundAmountStroops||!obj(pi.transaction)||pi.transaction.txid!==b.u2aTxid||pi.transaction.verified!==true||!obj(pi.status)||pi.status.developer_approved!==true||pi.status.transaction_verified!==true||pi.status.developer_completed!==true||pi.status.cancelled!==false||pi.status.user_cancelled!==false||hi.network!=='Pi Testnet'||hi.destinationWallet!==b.sourceWallet||hi.preparedHash!==b.u2aTxid||amount(hi.amount)!==i.inboundAmountStroops)return fail('PI_INBOUND_IDENTITY_OR_COMPLETION_MISMATCH')
+  if(pi.network!==b.network||pi.user_uid!==i.customerUid||pi.identifier!==b.piPaymentId||pi.direction!=='user_to_app'||pi.to_address!==b.sourceWallet||pi.from_address!==hi.sourceWallet||piAmount(pi.amount)!==i.inboundAmountStroops||!obj(pi.transaction)||pi.transaction.txid!==b.u2aTxid||pi.transaction.verified!==true||!obj(pi.status)||pi.status.developer_approved!==true||pi.status.transaction_verified!==true||pi.status.developer_completed!==true||pi.status.cancelled!==false||pi.status.user_cancelled!==false||hi.network!=='Pi Testnet'||hi.destinationWallet!==b.sourceWallet||hi.preparedHash!==b.u2aTxid||amount(hi.amount)!==i.inboundAmountStroops)return fail('PI_INBOUND_IDENTITY_OR_COMPLETION_MISMATCH')
   const inbound=verifyR36IndependentHorizonRecord(hi as R36HorizonProofInput,f.horizonRecord as R36HorizonRecord)
   if(inbound.outcome!=='PROVEN'||!inbound.ledger||BigInt(inbound.ledger)>BigInt(b.cutoffLedger as string))return fail('INBOUND_HORIZON_NOT_PROVEN')
   for(const body of [h,a,g])if(body.network!==b.network||body.sourceWallet!==b.sourceWallet||body.cutoffLedger!==b.cutoffLedger)return fail('HISTORY_ACCOUNTING_SCOPE_MISMATCH')
