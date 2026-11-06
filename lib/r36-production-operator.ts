@@ -18,7 +18,9 @@ type Config = {
   network: 'Pi Testnet'
   databaseUrl: string
   policyDigest: string
-  approvalId: string  // issuer nonce or signer idempotency key
+  // null is signer-only: serve already-approved requests for this one policy.
+  // It never enrolls a request or grants the signer approval privileges.
+  approvalId: string | null
   providers?: ProviderConfig
   service?: R36ServiceConfig
   signingKeyPem?: string
@@ -33,7 +35,8 @@ export function validateProductionConfig(input: unknown): Config {
     ...(c.mode === 'issuer' ? ['providers'] : ['service', 'signingKeyPem'])]
   if (Object.keys(c).length !== fields.length || !fields.every(f => Object.hasOwn(c, f))) throw Error('CONFIG_FIELDS')
   if (typeof c.policyDigest !== 'string' || !digest.test(c.policyDigest) ||
-      typeof c.approvalId !== 'string' || !digest.test(c.approvalId)) throw Error('APPROVAL_ID')
+      !(typeof c.approvalId === 'string' && digest.test(c.approvalId) ||
+        c.mode === 'signer' && c.approvalId === null)) throw Error('APPROVAL_ID')
   const url = new URL(c.databaseUrl)
   if (url.protocol !== 'postgresql:' || url.hostname !== databaseHost || (url.port && url.port !== '5432') ||
       url.pathname !== '/neondb' || url.username !== 'r36_' + c.mode || !url.password || url.search || url.hash) throw Error('DATABASE_TARGET')
@@ -82,6 +85,9 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
     FROM pg_roles r WHERE r.rolname=current_user`, [branchId, 'r36_'+c.mode])
   if (rows.length !== 1 || !['identity_ok','restricted','acl_ok','separation_ok'].every(k => rows[0][k] === true))
     throw Error('DATABASE_AUTHORITY')
+  // An idle policy-scoped signer has no request yet. Actual signing still needs
+  // a valid protected context, checked by scopeProductionSignerTransaction below.
+  if (c.mode === 'signer' && c.approvalId === null) return
   const sql = c.mode === 'issuer' ? 'SELECT public.r36_certificate_context($1) AS ctx' : 'SELECT r36_signing.context($1) AS ctx'
   const contextRows = await tx.unsafe(sql, [c.approvalId])
   const context = contextRows[0]?.ctx as {policy?:{policyDigest?:string};binding?:{network?:string;nonce?:string};policy_digest?:string;idempotency_key?:string} | null
@@ -90,6 +96,35 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
     ? context.binding?.network === 'Pi Testnet' && context.binding.nonce === c.approvalId && context.policy?.policyDigest === c.policyDigest
     : context.idempotency_key === c.approvalId && context.policy_digest === c.policyDigest
   if (!matches) throw Error('APPROVAL_SCOPE')
+}
+
+/** Constrain every signer transaction, including pooled reconnects and concurrent
+ * requests, to exact protected bytes under the configured policy. No caller SQL,
+ * request enrollment or cross-policy signing is available through this adapter. */
+export function scopeProductionSignerTransaction(tx: Tx, c: Pick<Config,'approvalId'|'policyDigest'>): Tx {
+  const policyDigest = c.policyDigest, approvalId = c.approvalId
+  if (!digest.test(policyDigest) || !(approvalId === null || typeof approvalId === 'string' && digest.test(approvalId)))
+    throw Error('SIGNING_CONFIGURATION')
+  let approved: string | null = null
+  return {unsafe: async (query, values) => {
+    const key = values?.[0]
+    if (typeof key !== 'string' || !digest.test(key) ||
+        (approvalId !== null && key !== approvalId)) throw Error('SIGNING_REQUEST_SCOPE')
+    if (query === 'SELECT r36_signing.context($1) AS context' && values?.length === 1) {
+      // A transaction may approve exactly one identity. Concurrent callers get
+      // independent adapters and PostgreSQL row locks, never shared mutable state.
+      if (approved !== null && approved !== key) throw Error('SIGNING_REQUEST_SCOPE')
+      const rows = await tx.unsafe(query, values)
+      const context = rows.length === 1 ? rows[0].context as Record<string,unknown> | null : null
+      if (!context || context.idempotency_key !== key || context.policy_digest !== policyDigest)
+        throw Error('APPROVAL_SCOPE')
+      approved = key
+      return rows
+    }
+    if (query === 'SELECT r36_signing.record($1,$2) AS signature' && values?.length === 2 && approved === key)
+      return tx.unsafe(query, values)
+    throw Error('SIGNING_QUERY_SCOPE')
+  }}
 }
 
 async function startProtectedService(server:ReturnType<typeof createR36OperatorService>, service:R36ServiceConfig, onClose:()=>void) {
@@ -126,10 +161,7 @@ export async function runProductionOperator(input: unknown) {
       const wrapped = await sql.begin(async inner => {
         const tx: Tx = {unsafe: async (query, values) => inner.unsafe(query, values as never)}
         await checkProductionTransaction(tx, c)
-        const scoped: Tx = c.mode === 'issuer' ? tx : {unsafe: async (query, values) => {
-          if (values?.[0] !== c.approvalId) throw Error('SIGNING_REQUEST_SCOPE')
-          return tx.unsafe(query, values)
-        }}
+        const scoped: Tx = c.mode === 'issuer' ? tx : scopeProductionSignerTransaction(tx,c)
         return {value: await run(scoped)}
       })
       return wrapped.value as T
@@ -137,13 +169,16 @@ export async function runProductionOperator(input: unknown) {
   }
   let listening = false
   try {
-    if (c.mode === 'issuer') return await certifyR36PreparedAdmission(db,c.approvalId,createR36HttpsPorts(c.providers!))
+    if (c.mode === 'issuer') {
+      if (c.approvalId === null) throw Error('APPROVAL_ID')
+      return await certifyR36PreparedAdmission(db,c.approvalId,createR36HttpsPorts(c.providers!))
+    }
     await db.begin(async () => undefined)
     const service = c.service!
     const server = createR36OperatorService(service,{kind:'signer',db,signingKeyPem:c.signingKeyPem!})
     await startProtectedService(server,service,()=>{void sql.end({timeout:2})})
     listening = true
-    return {outcome:'SIGNER_LISTENING',scope:'SINGLE_APPROVED_DIGEST'}
+    return {outcome:'SIGNER_LISTENING',scope:c.approvalId===null?'SINGLE_POLICY_APPROVED_REQUESTS':'SINGLE_APPROVED_DIGEST'}
   } finally { if (!listening) await sql.end({timeout:2}) }
 }
 
