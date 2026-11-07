@@ -6,7 +6,7 @@ import { isAbsolute } from 'node:path'
 import { lstat, realpath } from 'node:fs/promises'
 import { createR36HttpsPorts } from './r36-provider-transport'
 import { createR36OperatorService, type R36ServiceConfig } from './r36-operator-service'
-import { certifyR36PreparedAdmission } from './r36-trusted-certification-gate'
+import { certifyR36ProductionAdmission } from './r36-successor-registration'
 import type { R36CertificateDatabase } from './r36-certificate-consumer'
 
 import {productionR36Host as databaseHost, productionR36Branch as branchId} from './r36-production-runtime'
@@ -77,7 +77,7 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
            AND NOT (
              $2='r36_issuer' AND n.nspname='public' AND
                (f.proname,oidvectortypes(f.proargtypes)) IN
-                 (('r36_certificate_context','text'),('r36_record_certificate','text, text, jsonb, text'),('r36_revoke_certificate','text, text'))
+                 (('r36_certificate_context','text'),('r36_record_certificate','text, text, jsonb, text'),('r36_revoke_certificate','text, text'),('r36_register_successor_binding','text'))
              OR $2='r36_signer' AND n.nspname='r36_signing' AND
                (f.proname,oidvectortypes(f.proargtypes)) IN (('context','text'),('record','text, text'))
            )
@@ -172,11 +172,11 @@ export async function runProductionOperator(input: unknown) {
   try {
     if (c.mode === 'issuer') {
       const ports=createR36HttpsPorts(c.providers!)
-      if (c.approvalId !== null) return await certifyR36PreparedAdmission(db,c.approvalId,ports)
+      if (c.approvalId !== null) return await certifyR36ProductionAdmission(db,c.approvalId,ports)
       await db.begin(async () => undefined)
       const service=c.service!
       const server=createR36OperatorService(service,{kind:'issuer',issue:nonce=>
-        certifyR36PreparedAdmission(databaseFor(nonce),nonce,ports)})
+        certifyR36ProductionAdmission(databaseFor(nonce),nonce,ports)})
       await startProtectedService(server,service,()=>{void sql.end({timeout:2})})
       listening=true
       return {outcome:'ISSUER_LISTENING',scope:'SINGLE_POLICY_PROTECTED_REQUESTS'}
