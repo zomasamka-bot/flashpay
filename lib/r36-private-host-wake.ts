@@ -8,7 +8,8 @@ const origin='https://flashpay-r36-private-control-hazema-abo-rias-projects.verc
 // This is a wake capability, never a financial permission or a certificate.
 // No payment, wallet, XDR or credential may be supplied by the HTTP caller.
 export function createPrivateHostWake(ports:Ports){
- let pending:Promise<boolean>|null=null
+ let pending:Promise<boolean>|null=null,completionQueued=false
+ let pendingReason:Reason|null=null
  let freshUntil=0, freshPolicy=''
  async function wake(reason:Reason):Promise<boolean>{
   const env=ports.env()
@@ -34,8 +35,20 @@ export function createPrivateHostWake(ports:Ports){
   }catch{return false}
  }
  return async(reason:Reason)=>{
-  if(pending)return pending
-  pending=wake(reason);try{return await pending}finally{pending=null}
+  if(pending){
+   // A new checkpoint may commit after the earlier wake was sent. Joining that
+   // promise alone loses its progress signal. Coalesce exactly one follow-up;
+   // never overlap controllers or retry any financial request.
+   if(reason==='completion'&&pendingReason!=='completion')completionQueued=true
+   return pending
+  }
+  pendingReason=reason
+  pending=(async()=>{
+   let result=await wake(reason)
+   if(completionQueued){completionQueued=false;pendingReason='completion';result=await wake('completion')}
+   return result
+  })()
+  try{return await pending}finally{pending=null;pendingReason=null;completionQueued=false}
  }
 }
 export const ensurePrivateTrustHost=createPrivateHostWake({env:()=>process.env,send:(...args)=>fetch(...args),now:()=>Date.now()})

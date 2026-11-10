@@ -39,6 +39,9 @@ function currentOperations(fetcher:typeof fetch){
  * The independent financial reviewer and its total-history bounds remain intact.
  */
 export async function appendR36LiveHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:typeof fetch):Promise<R36ObservedHistory>{
+ return appendHistory(prefix,policy,fetcher,4)
+}
+async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:typeof fetch,operationWidth:number):Promise<R36ObservedHistory>{
  must(object(policy),'LIVE_HISTORY_POLICY')
  const paginated=policy.schema==='R36_HORIZON_PAGINATED_DELTA_V2'
  must(Object.keys(policy).sort().join(',')===(paginated?'maxNewTransactions,maxPages,schema':'maxNewTransactions,schema')&&
@@ -61,7 +64,7 @@ export async function appendR36LiveHistory(prefix:R36ObservedHistory,policy:unkn
   }
   // Four read-only requests at most. Persist nothing until the complete set and
   // unchanged account cutoff have been verified. Failures leave prefix intact.
-  const width=paginated?4:1
+  const width=paginated?operationWidth:1
   for(let offset=0;offset<page.length;offset+=width){
    const batch=page.slice(offset,offset+width)
    const operations=await Promise.all(batch.map(async t=>{
@@ -92,7 +95,14 @@ export async function appendR36LiveHistory(prefix:R36ObservedHistory,policy:unkn
 export async function appendR36LiveHistories(prefixes:R36ObservedHistory[],policy:unknown,fetcher:typeof fetch):Promise<R36ObservedHistory[]>{
  must(Array.isArray(prefixes)&&prefixes.length>0&&prefixes.length<=32,'LIVE_HISTORY_SCOPE')
  const out:R36ObservedHistory[]=[]
- for(const prefix of prefixes)out.push(await appendR36LiveHistory(prefix,policy,fetcher))
+ // Two independent wallet observations at most, each with two operation reads.
+ // The combined maximum remains four provider requests. Every wallet retains
+ // its own before/after consistency check and the final full inventory check.
+ for(let offset=0;offset<prefixes.length;offset+=2){
+  const group=prefixes.slice(offset,offset+2)
+  const results=await Promise.allSettled(group.map(prefix=>appendHistory(prefix,policy,fetcher,group.length===1?4:2)))
+  for(const result of results){if(result.status==='rejected')throw result.reason;out.push(result.value)}
+ }
  const inventory:Row[]=out[0].walletInventory.map(x=>{const matches=out.filter(h=>h.wallet===x.wallet);must(matches.length===1,'LIVE_HISTORY_SCOPE');return {...x,lastLedger:matches[0].cutoffLedger}})
  must(inventory.length===out.length&&new Set(inventory.map(x=>x.wallet)).size===out.length,'LIVE_HISTORY_SCOPE')
  for(const h of out)h.walletInventory=JSON.parse(JSON.stringify(inventory))

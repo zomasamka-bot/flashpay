@@ -64,11 +64,19 @@ export async function readR36LifecycleHead(db:R36ReadOnlySource,wallet:string){
 export async function readR36LiveSource(db:R36ReadOnlySource,mode:'diagnostic'|'service'):Promise<R36LiveSnapshot>{
  return checkedRead(db,mode,async(tx,s)=>{
   const data={} as R36LiveSnapshot['rows'];let size=0
-  for(const name of Object.keys(R36_SOURCE_QUERIES) as (keyof typeof R36_SOURCE_QUERIES)[]){
-   const value=await tx.unsafe(R36_SOURCE_QUERIES[name])
+  const names=Object.keys(R36_SOURCE_QUERIES) as (keyof typeof R36_SOURCE_QUERIES)[]
+  // Pipeline fixed independent SELECTs on the SAME checked physical snapshot.
+  // No pool expansion, SQL change, row coercion or identity/ACL bypass.
+  for(let offset=0;offset<names.length;offset+=4){
+   const group=names.slice(offset,offset+4)
+   const results=await Promise.allSettled(group.map(name=>tx.unsafe(R36_SOURCE_QUERIES[name])))
+   for(let index=0;index<group.length;index++){
+   const result=results[index];if(result.status==='rejected')throw result.reason
+   const name=group[index],value=result.value
    if(!Array.isArray(value)||value.length>20000||value.some(r=>!r||typeof r!=='object'||Array.isArray(r)))throw Error('SOURCE_ROWS_BOUNDED')
    size+=Buffer.byteLength(JSON.stringify(value));if(size>40_000_000)throw Error('SOURCE_BYTES_BOUNDED')
    data[name]=value
+   }
   }
   return {session:s,rows:data,custody:mode==='service'?'READONLY_SERVICE_NOT_CERTIFIED':'UNSIGNED_DIAGNOSTIC'}
  })

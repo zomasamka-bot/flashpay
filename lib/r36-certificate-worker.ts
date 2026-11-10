@@ -77,9 +77,21 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
     !Number.isSafeInteger(c.evidenceNotBefore)||Number(c.evidenceNotBefore)>issued))return fail('INVALID_RENEWAL_CONTEXT')
   const subject=hash(JSON.stringify(R36_ADMISSION_FIELDS.map(k=>b[k])))
   const artifacts={} as Record<Kind,ObjectValue>
+  // Fetch only pinned, immutable artifact bodies in bounded groups. Validate
+  // every original signature/scope below before any signing or durable receipt.
+  const observed=new Map<Kind,unknown>()
+  for(let offset=0;offset<R36_WORKER_KINDS.length;offset+=4){
+   const group=R36_WORKER_KINDS.slice(offset,offset+4)
+   if(group.some(kind=>typeof b[digestFields[kind]]!=='string'||!hex.test(b[digestFields[kind]] as string)))return fail('MISSING_EVIDENCE_DIGEST')
+   const results=await Promise.allSettled(group.map(kind=>bounded(signal=>ports.readEvidence(kind,b[digestFields[kind]] as string,signal,subject,renewal?Number(c.evidenceNotBefore):undefined))))
+   for(let index=0;index<group.length;index++){
+    const result=results[index];if(result.status==='rejected')throw result.reason
+    observed.set(group[index],result.value)
+   }
+  }
   for(const kind of R36_WORKER_KINDS){
    const expected=b[digestFields[kind]];if(typeof expected!=='string'||!hex.test(expected))return fail('MISSING_EVIDENCE_DIGEST')
-   const e=await bounded(signal=>ports.readEvidence(kind,expected,signal,subject,renewal?Number(c.evidenceNotBefore):undefined))
+   const e=observed.get(kind)
    if(!obj(e)||!exact(e,['text','manifest','signature'])||typeof e.text!=='string'||e.text.length>2_000_000||!obj(e.manifest)||typeof e.signature!=='string'||hash(e.text)!==expected)return fail('EVIDENCE_ARTIFACT_INVALID')
    const m=e.manifest
    if(!exact(m,evidenceFields)||!evidenceFields.every(k=>typeof m[k]==='string'&&/^[\x20-\x7e]{1,256}$/.test(m[k] as string))||m.schema!=='R36_INDEPENDENT_ARTIFACT_V1'||m.kind!==kind||m.policyDigest!==p.policyDigest||m.subjectDigest!==subject||m.artifactDigest!==expected||m.network!==b.network||m.sourceWallet!==b.sourceWallet||m.cutoffLedger!==b.cutoffLedger)return fail('EVIDENCE_SCOPE_MISMATCH')

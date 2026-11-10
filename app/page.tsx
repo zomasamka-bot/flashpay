@@ -20,6 +20,7 @@ import { CustomerPaymentView } from "@/components/customer-payment-view"
 import { useI18n } from "@/components/i18n-provider"
 import { LOCALE_METADATA, LOCALE_STORAGE_KEY, SUPPORTED_LOCALES, isAppLocale, type AppLocale } from "@/lib/i18n/config"
 import { unifiedStore } from "@/lib/unified-store"
+import {createMerchantActivityPrewarm} from "@/lib/merchant-activity-prewarm"
 
 export default function HomePage() {
   const router = useRouter()
@@ -43,13 +44,26 @@ export default function HomePage() {
   const merchantSetup = useMerchant()
   // Prepare on opening an authenticated merchant page, before the create click.
   // No payment identity, amount, wallet authority or QR is created here.
-  const preparedMerchantRef=useRef<string|null>(null)
+  const prepareMerchantRef=useRef<ReturnType<typeof createMerchantActivityPrewarm>|null>(null)
   useEffect(()=>{
-    const {uid,merchantId,accessToken}=merchantSetup
-    if(!uid||!merchantId||!accessToken||preparedMerchantRef.current===uid)return
-    preparedMerchantRef.current=uid
-    void fetch("/api/pi/verify-uid",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({uid,merchantId,accessToken}),cache:"no-store",redirect:"error"}).catch(()=>{})
+    prepareMerchantRef.current??=createMerchantActivityPrewarm((...args)=>fetch(...args))
+    const prepare=()=>{
+      if(document.visibilityState!=='visible'||/^#\/pay\//.test(window.location.hash))return
+      void prepareMerchantRef.current!(unifiedStore.getMerchantState())
+    }
+    prepare()
+    // No background timer or repeated idle polling. Returning to the merchant
+    // page or entering an amount refreshes only a throttled, verified hint.
+    window.addEventListener('focus',prepare)
+    window.addEventListener('pointerdown',prepare,{passive:true})
+    window.addEventListener('keydown',prepare)
+    document.addEventListener('visibilitychange',prepare)
+    return()=>{
+      window.removeEventListener('focus',prepare)
+      window.removeEventListener('pointerdown',prepare)
+      window.removeEventListener('keydown',prepare)
+      document.removeEventListener('visibilitychange',prepare)
+    }
   },[merchantSetup.uid,merchantSetup.merchantId,merchantSetup.accessToken])
   const [savedRequest, setSavedRequest] = useState<Awaited<ReturnType<typeof readSavedCreateIntent>>>(null)
   useEffect(() => {
