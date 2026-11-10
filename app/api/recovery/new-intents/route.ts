@@ -111,8 +111,13 @@ async function observe(request: NextRequest) {
       if(Number(counts.held)+Number(counts.pending)+Number(counts.terminal)===0)
         return NextResponse.json({scope:result.scope,mode:"admitted_new",dispatch:"no_unfinished_work",
           executorInvoked:false,financialOutcome:"not_invoked"},{headers:{"Cache-Control":"no-store"}})
+      const {resumeAdmittedRecovery} = await import("@/lib/r36-scoped-recovery")
+      // An exact, already spent and independently confirmed right must finish
+      // reconciliation even while the certificate producer is rotating. This
+      // selector cannot return a prepared/new submission or bypass XOR.
+      let dispatch=await resumeAdmittedRecovery(id??null,'confirmed')
       // Empty periodic wakes remain cheap. No rights or historical cursor change.
-      if(Number(counts.evidence_work)>0&&!await ensurePrivateTrustHost('recovery')) {
+      if(dispatch==='no_confirmed_right'&&Number(counts.evidence_work)>0&&!await ensurePrivateTrustHost('recovery')) {
         // The issuer may be waiting for this original terminal seal. Recording
         // verified completed facts is independent of issuing a new permission;
         // never enter an executor through this readiness-failure branch.
@@ -124,8 +129,7 @@ async function observe(request: NextRequest) {
             executorInvoked:false,financialOutcome:"not_invoked"},{headers:{"Cache-Control":"no-store"}})
         return NextResponse.json({error:'Private evidence service unavailable',dispatch:'evidence_service_held'},{status:503,headers:{'Cache-Control':'no-store'}})
       }
-      const {resumeAdmittedRecovery} = await import("@/lib/r36-scoped-recovery")
-      const dispatch = await resumeAdmittedRecovery(id ?? null)
+      if(dispatch==='no_confirmed_right')dispatch=await resumeAdmittedRecovery(id??null)
       const invoked = dispatch.endsWith("_invoked") || dispatch === "executor_held"
       const outcome = {scope:result.scope, mode:"admitted_new", dispatch, executorInvoked:invoked,
         financialOutcome:invoked ? "verify_durable_result" : "not_invoked"}

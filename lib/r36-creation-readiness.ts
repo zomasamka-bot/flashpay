@@ -9,5 +9,6 @@ export async function reserveWithCurrentEvidence(p:Ports):Promise<{id:string|nul
  if(current){p.prepare();return {id:current,path:'current'}}
  if(!await p.wake())return {id:null,path:'held'}
  const renewed=await p.reserve()
+ if(renewed)p.prepare()
  return {id:renewed,path:renewed?'renewed':'held'}
 }

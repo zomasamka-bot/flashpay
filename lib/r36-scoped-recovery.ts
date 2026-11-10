@@ -13,16 +13,16 @@ const refund = ['wallet_submission_started','wallet_submission_confirmed','payme
 
 // The request may narrow selection to one payment. It can never supply the
 // wallet, executor, hash, grant, budget, policy digest or historical cutover.
-export async function resumeAdmittedRecovery(subject:string|null) {
+export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'confirmed'='all') {
   const policy=process.env.R36_SCOPED_POLICY_DIGEST
   if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new' || !policy || !/^[0-9a-f]{64}$/.test(policy)) return 'configuration_held'
   const client=await getR36RestrictedClient()
   if(!client) return 'runtime_held'
   // A completed operation needs its immutable finality fact before the private
   // issuer can certify wallet turnover. This GET-only branch grants no right.
-  const terminal=await recordAdmittedTerminalSeal(subject,policy)
+  const terminal=mode==='all'?await recordAdmittedTerminalSeal(subject,policy):null
   if(terminal!==null)return terminal
-  const rows=await client.unsafe('SELECT public.r36_reserve_new_recovery($1,$2) AS right',[subject,policy])
+  const rows=mode==='all'?await client.unsafe('SELECT public.r36_reserve_new_recovery($1,$2) AS right',[subject,policy]):[{right:null}]
   if(rows.length!==1) throw Error('R36_SELECTION_UNAVAILABLE')
   let r:ScopedRecoveryRight|null=rows[0].right
   if(r===null) {
@@ -46,6 +46,7 @@ export async function resumeAdmittedRecovery(subject:string|null) {
       throw Error('R36_CONFIRMED_REFUND_SELECTION_MISMATCH')
   }
   if(r===null) {
+    if(mode==='confirmed')return 'no_confirmed_right'
     // A callback may die after Pi accepted the incoming transaction, before
     // either address binding or verified checkpoint committed. GET-only
     // observation restores that proof; it cannot approve, complete or send.

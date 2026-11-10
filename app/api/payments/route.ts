@@ -1,5 +1,6 @@
 import {requiresTestnetIngress,testnetIngressEnabled,reserveTestnetCreation,readOperationSettings} from "@/lib/r36-testnet-ingress"
 import { after, type NextRequest, NextResponse } from "next/server"
+import {observeIntakePolicy} from "@/lib/r36-intake-observation"
 import {reserveWithCurrentEvidence} from "@/lib/r36-creation-readiness"
 import {ensurePrivateTrustHost} from "@/lib/r36-private-host-wake"
 
@@ -217,7 +218,7 @@ export async function POST(request: NextRequest) {
       const input={paymentId,createIntentId,merchantUid:verifiedMerchantUid,
         merchantId:trustedMerchantId,amount,note:normalizedNote}
       const reservation=await reserveWithCurrentEvidence({
-        reserve:()=>reserveTestnetCreation(input),wake:()=>ensurePrivateTrustHost('creation'),
+        reserve:()=>reserveTestnetCreation(input),wake:()=>observeIntakePolicy(),
         prepare:()=>after(async()=>{await ensurePrivateTrustHost('creation')}),
       })
       console.info("[R36 create admission]", {phase:"reservation",path:reservation.path,admitted:Boolean(reservation.id),elapsedMs:Date.now()-admissionStartedAt})
