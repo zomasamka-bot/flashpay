@@ -183,7 +183,7 @@ export async function runProductionOperator(input: unknown) {
       const service=c.service!
       const server=createR36OperatorService(service,{kind:'issuer',issue:nonce=>
         certifyR36ProductionAdmission(databaseFor(nonce),nonce,ports),
-        lifecycle:createR36LifecycleHandler(databaseFor(null),c.policyDigest),
+        lifecycle:createR36LifecycleHandler(databaseFor(null),c.policyDigest,{readEvidence:ports.readEvidence}),
         observeOwnerRegistry:()=>databaseFor(null).begin(async tx=>{
           const rows=await tx.unsafe('SELECT public.r36_observe_owner_policy($1) AS observation',[c.policyDigest])
           return rows.length===1?rows[0].observation:null

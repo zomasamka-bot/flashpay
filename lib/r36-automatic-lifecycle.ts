@@ -90,10 +90,18 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
    const clearance={schema:'R36_BOUND_SUCCESSOR_CLEARANCE_V1',bindingDigest:ctx.bindingDigest,closureDigest:prior.proofDigest,successorNonce:binding.nonce,successorCertificateDigest:ctx.successorCertificateDigest}
    const r=await publishR36LifecycleJob({kind:'bound',context:ctx,cutoffLedger:prior.cutoffLedger,artifacts:{clearance},privateKeyPem:c.custodianPrivateKeyPem,jobDirectory:c.jobDirectory,request:{...request,action:'record_bound'}},{refresh:()=>context(request),submit:call})
    requireFact(['RECORDED','REPLAYED'].includes(String(r.outcome)),'AUTOMATIC_BOUND_NOT_RECORDED')
-   const registered=await ports.register(binding)
-   requireFact(['RECORDED','REPLAYED'].includes(registered.outcome)&&hex(registered.certificateDigest)&&registered.authorizesFinancialRelease===false&&registered.authorizesWalletActivation===false&&registered.authorizesRotation===false,'ORIGINAL_REGISTRATION_HELD')
+   // The issuer atomically completed the original certificate replay and exact
+   // successor binding. Do not restart the registrar's seven-artifact enrollment.
+   // Missing continuation (including an older issuer) fails closed, never falls
+   // back to treating a lifecycle proof as financial admission.
+   const registered=r.admission
+   requireFact(obj(registered)&&registered.outcome==='REPLAYED'&&registered.successorBinding==='REPLAYED'&&
+    registered.nonce===binding.nonce&&registered.originalCertificateDigest===ctx.successorCertificateDigest&&hex(registered.certificateDigest)&&
+    typeof registered.reason==='string'&&registered.authorizesFinancialRelease===false&&
+    registered.authorizesWalletActivation===false&&registered.authorizesRotation===false,'ORIGINAL_REGISTRATION_HELD')
    registeredStatus={status:'SUCCESSOR_ADMISSION_VERIFIED'}
-   return registered
+   return{outcome:'REPLAYED',reason:String(registered.reason),certificateDigest:String(registered.certificateDigest),
+    authorizesFinancialRelease:false,authorizesWalletActivation:false,authorizesRotation:false}
   }
  }
  return{prepare,register,beginCycle,cycleResult,registeredResult}
