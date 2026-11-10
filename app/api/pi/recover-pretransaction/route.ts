@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { requiresTestnetIngress, testnetIngressEnabled, verifyTestnetInbound } from "@/lib/r36-testnet-ingress"
 import { serverConfig } from "@/lib/server-config"
 import { ensureSettlementCheckpointTable, readSettlementU2APretransactionRecoveryCandidate, retireSettlementU2AApprovalAfterCanonicalCancellation, claimSettlementPiMutationAttempt } from "@/lib/db"
 
@@ -41,6 +42,8 @@ async function proveHorizonAbsence(pi:PiPayment, piPaymentId:string):Promise<Hor
 }
 
 export async function POST(request:NextRequest) {
+  if(requiresTestnetIngress()&&!testnetIngressEnabled())
+    return NextResponse.json({error:'Testnet financial admission unavailable',code:'TESTNET_INGRESS_HELD'},{status:503})
   try {
     const body=await request.json().catch(()=>null)
     const paymentId=typeof body?.paymentId==='string'?body.paymentId.trim():''
@@ -62,6 +65,8 @@ export async function POST(request:NextRequest) {
     if(!before.ok)return NextResponse.json({error:'Pi state unavailable',code:'U2A_PRETX_PI_READ_UNAVAILABLE'},{status:503})
     if(!exactPretransaction(before.pi,paymentId,piPaymentId,candidate.customerAmount) || before.pi.user_uid!==uid)
       return NextResponse.json({error:'Canonical Pi state does not permit pre-transaction recovery',code:'U2A_PRETX_CANONICAL_MISMATCH'},{status:409})
+    if(requiresTestnetIngress()&&!await verifyTestnetInbound(before.pi))
+      return NextResponse.json({error:'Testnet payment scope unavailable',code:'TESTNET_INGRESS_HELD'},{status:503})
     const horizonBefore=await proveHorizonAbsence(before.pi,piPaymentId)
     if(horizonBefore.outcome!=='ABSENT')return NextResponse.json({error:'Independent blockchain absence not proven',code:horizonBefore.outcome==='MOVEMENT_PRESENT'?'U2A_PRETX_HORIZON_MOVEMENT_PRESENT':'U2A_PRETX_HORIZON_INDETERMINATE'},{status:409})
 
@@ -80,6 +85,8 @@ export async function POST(request:NextRequest) {
     if(!exactPretransaction(after.pi,paymentId,piPaymentId,candidate.customerAmount) || after.pi.user_uid!==uid ||
        (after.pi.status?.cancelled!==true && after.pi.status?.user_cancelled!==true))
       return NextResponse.json({error:'Cancellation not safely proven',code:'U2A_PRETX_CANCEL_NOT_PROVEN'},{status:409})
+    if(requiresTestnetIngress()&&!await verifyTestnetInbound(after.pi))
+      return NextResponse.json({error:'Testnet payment scope unavailable',code:'TESTNET_INGRESS_HELD'},{status:503})
     const horizonAfter=await proveHorizonAbsence(after.pi,piPaymentId)
     if(horizonAfter.outcome!=='ABSENT')return NextResponse.json({error:'Post-cancel blockchain absence not proven',code:horizonAfter.outcome==='MOVEMENT_PRESENT'?'U2A_PRETX_HORIZON_MOVEMENT_PRESENT':'U2A_PRETX_HORIZON_INDETERMINATE'},{status:409})
 

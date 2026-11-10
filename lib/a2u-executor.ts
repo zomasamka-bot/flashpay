@@ -1,3 +1,6 @@
+import { prepareR36EvidenceCandidate } from "./r36-prepared-evidence"
+import { getPiSigningSeed } from "./pi-wallet-signing-config"
+import { r36PreparedEvidenceStore } from "./r36-prepared-evidence-store"
 import { claimPreparedWalletAuthority, claimFirstWalletSubmission, type WalletAuthorityClaim } from './financial-wallet-authority'
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
@@ -9,6 +12,7 @@ import * as StellarSDK from "@stellar/stellar-sdk"
 import { numberToExactPositiveStroops } from "@/lib/financial-amount-stroops"
 import { executeFinancialRecoverySettlementSubmitReplay } from "@/lib/financial-recovery-settlement-submit-replay-orchestration"
 import { proveA2UStage1HorizonAbsence } from "@/lib/a2u-stage1-retirement"
+import { readR36IndependentHorizonProof } from "@/lib/r36-independent-horizon-proof"
 
 /**
  * UNIFIED A2U EXECUTOR - Single source of truth for ALL A2U execution paths
@@ -974,20 +978,25 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   }
   const feeAsString = String(Math.floor(feeCharged))
   console.log("[A2U Stage2] Building transaction")
-  const builder = new StellarSDK.TransactionBuilder(sourceAccount, { fee: feeAsString, networkPassphrase: "Pi Testnet" })
   const exactAmountStroops = numberToExactPositiveStroops(amount)
   console.log("[DR41 STAGE2 DIAGNOSTIC] amount_canonicalized", { paymentId: ctx.paymentId, amount, stellarAmount: amount.toFixed(7), exactAmountStroops })
   if (exactAmountStroops === null) {
     console.error("[DR41 STAGE2 DIAGNOSTIC] amount_rejected", { paymentId: ctx.paymentId, amount, stellarAmount: amount.toFixed(7) })
     return { ok: false, error: "Settlement amount is not an exact positive stroop value", userFacingStatus: "error" }
   }
-  builder.addOperation(StellarSDK.Operation.payment({ destination: toAddress, asset: StellarSDK.Asset.native(), amount: amount.toFixed(7) }))
-  builder.addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0, 28)))
-  builder.setTimeout(StellarSDK.TimeoutInfinite)
-  const transaction = builder.build()
-  console.log("[DR41 STAGE2 DIAGNOSTIC] transaction_built", { paymentId: ctx.paymentId, sequence: transaction.sequence, operationCount: transaction.operations.length })
-  transaction.sign(appKeypair)
-  console.log("[DR41 STAGE2 DIAGNOSTIC] transaction_signed", { paymentId: ctx.paymentId, sequence: transaction.sequence })
+  // Persist the immutable signed intent for independent review BEFORE asking
+  // the original certificate-dependent claim. This grants no submission right.
+  const candidate = await prepareR36EvidenceCandidate({network:'Pi Testnet',sourceWallet:appPublicKey,
+    destinationWallet:toAddress,paymentId:ctx.paymentId,operationKind:'settlement',
+    operationId:a2uPaymentId,piPaymentId:a2uPaymentId,amountStroops:String(exactAmountStroops)},
+    sourceAccount.sequence,feeAsString,async()=>{
+      const t = new StellarSDK.TransactionBuilder(sourceAccount,{fee:feeAsString,networkPassphrase:'Pi Testnet'})
+        .addOperation(StellarSDK.Operation.payment({destination:toAddress,asset:StellarSDK.Asset.native(),amount:amount.toFixed(7)}))
+        .addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0,28))).setTimeout(StellarSDK.TimeoutInfinite).build()
+      t.sign(appKeypair);return t
+    },r36PreparedEvidenceStore,{recipientPublicKeyPem:process.env.FLASHPAY_R36_EVIDENCE_RECIPIENT_PUBLIC_KEY??'',sign:t=>{t.sign(appKeypair)}})
+  if(candidate.outcome!=='READY_FOR_ORIGINAL_GUARDS')return {ok:false,error:'Prepared evidence unavailable or changed; hold without resigning',userFacingStatus:'settlement_pending'}
+  const transaction=candidate.transaction
   const preparedEnvelopeXdr = transaction.toXDR()
   if (typeof preparedEnvelopeXdr !== "string" || !preparedEnvelopeXdr.trim() || preparedEnvelopeXdr !== preparedEnvelopeXdr.trim()) return { ok: false, error: "Prepared A2U envelope is invalid", userFacingStatus: "error" }
   const preparedHash = Buffer.from(transaction.hash()).toString("hex")
@@ -1102,11 +1111,11 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Payment has a prepared A2U transaction requiring reconciliation", userFacingStatus: "settlement_pending" }
     }
 
-    const piPrivateSeed = process.env.PI_PRIVATE_SEED
+    const piPrivateSeed = getPiSigningSeed()
     if (!piPrivateSeed) {
-      console.error("[A2U Stage2] ❌ PI_PRIVATE_SEED not configured - cannot sign Horizon transaction")
+      console.error("[A2U Stage2] Pi wallet signing configuration unavailable or invalid")
       // DO NOT set horizonSuccessFlag=true or persist a2uTxid on failure
-      return { ok: false, error: "PI_PRIVATE_SEED not configured - requires manual intervention", userFacingStatus: "settlement_pending" }
+      return { ok: false, error: "Pi wallet signing configuration unavailable or invalid", userFacingStatus: "settlement_pending" }
     }
 
     console.log("[A2U Stage2] Creating Stellar keypair")
@@ -1383,10 +1392,35 @@ async function ensureRecoveredHorizonDurability(
           value.status?.cancelled === false && value.status?.user_cancelled === false
       }
       let proof = await fetchA2UPayment(a2uPaymentId)
-      if (matchesCompletionProof(proof, false)) {
+      // Pi can leave transaction=null until /complete binds the accepted Horizon txid.
+      // This DTO proves identity only; the exact durable XDR must be proven on Horizon.
+      const unlinkedIncomplete = isReconciledPiA2UPayment(proof) && isPiA2UPayment(proof) &&
+        proof.identifier === d.a2uPaymentId && proof.network === "Pi Testnet" &&
+        proof.direction === "app_to_user" && proof.user_uid === d.merchantUid &&
+        proof.amount === d.merchantAmount && proof.from_address === d.a2uFromAddress &&
+        proof.to_address === d.a2uToAddress && proof.metadata?.paymentId === d.paymentId &&
+        proof.metadata?.type === "a2u_settlement" && proof.transaction === null &&
+        proof.status?.transaction_verified === false && proof.status?.developer_approved === true &&
+        proof.status?.developer_completed === false && proof.status?.cancelled === false &&
+        proof.status?.user_cancelled === false
+      if (matchesCompletionProof(proof, false) || unlinkedIncomplete) {
         // An unproven monotonic Redis completion flag cannot authorize a new mutation.
         if (ctx.payment.piCompleted === true) {
           return { ok: false, error: "Recovered Pi completion conflicts with independent incomplete evidence" }
+        }
+        if (unlinkedIncomplete) {
+          if (typeof d.preparedEnvelopeXdr !== "string" || numberToExactPositiveStroops(d.merchantAmount) === null) {
+            return { ok: false, error: "Recovered Pi completion prepared evidence invalid" }
+          }
+          const horizon = await readR36IndependentHorizonProof({
+            network: "Pi Testnet", preparedHash: d.preparedTxHash, preparedSequence: d.preparedSequence,
+            sourceWallet: d.a2uFromAddress, destinationWallet: d.a2uToAddress,
+            amount: d.merchantAmount.toFixed(7), envelopeXdr: d.preparedEnvelopeXdr,
+            expectedFeeStroops: String(d.horizonFeeStroops),
+          })
+          if (horizon.outcome !== "PROVEN") {
+            return { ok: false, error: "Recovered Pi completion independent Horizon proof unavailable or mismatched" }
+          }
         }
         // Existing durable one-shot claim authorizes only a previously unattempted completion.
         // A prior/ambiguous attempt is GET-only and fails closed until completion is proven.

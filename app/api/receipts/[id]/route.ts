@@ -1,3 +1,5 @@
+import {buildDurableSettlementReceipt} from "@/lib/durable-receipt"
+import {readRefundPresentation} from "@/lib/refund-presentation-reader"
 import { type NextRequest, NextResponse } from "next/server"
 import { getReceipt, getReceiptByU2AIdentifier, query } from "@/lib/db"
 import { buildPostgresHistoricalReceipt } from "@/lib/legacy-receipt"
@@ -140,7 +142,7 @@ function buildReceiptView(
 
 /** The historical receipt remains readable from durable PostgreSQL even when
  * the Redis payment projection is missing. This does not certify a FlashPay ID. */
-async function readHistoricalReceipt(transactionId: string, merchantUsername: string) {
+async function readHistoricalReceipt(transactionId: string, merchantUsername: string, merchantUid: string) {
   const rows = await query(`
     SELECT t.id AS "transactionId", t.merchant_id AS "transactionMerchantId",
            t.merchant_uid AS "transactionMerchantUid", t.payment_id AS "transactionPaymentId",
@@ -152,8 +154,8 @@ async function readHistoricalReceipt(transactionId: string, merchantUsername: st
            r.settlement_status AS "receiptSettlementStatus", r.timestamp AS "receiptTimestamp",
            r.payer_username AS "payerUsername"
     FROM transactions t INNER JOIN receipts r ON r.transaction_id = t.id
-    WHERE t.id = $1 AND t.merchant_id = $2 LIMIT 2
-  `, [transactionId, merchantUsername])
+    WHERE t.id::text = $1 AND t.merchant_id = $2 AND t.merchant_uid=$3 AND r.merchant_uid=$3 LIMIT 2
+  `, [transactionId, merchantUsername, merchantUid])
   if (Array.isArray(rows) && rows.length === 0) {
     return NextResponse.json({ error: "Receipt not found" }, { status: 404 })
   }
@@ -180,6 +182,41 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const verifiedMerchant = await authorizeFromHeader(request.headers.get("authorization"))
     if (!verifiedMerchant) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
+    // PostgreSQL first: exact application ID, or an existing transaction/receipt link.
+    // Filtering on the official UID prevents public QR identifiers becoming receipt authorization.
+    const durable = await query(`SELECT to_jsonb(s) AS checkpoint,to_jsonb(i) AS intent,
+      to_jsonb(t) AS transaction,to_jsonb(r) AS receipt,to_jsonb(f) AS refund
+      FROM public.settlement_checkpoints s
+      JOIN public.payment_create_intents i ON i.payment_id=s.payment_id
+      LEFT JOIN public.transactions t ON t.payment_id=s.u2a_identifier
+      LEFT JOIN public.receipts r ON r.transaction_id=t.id
+      LEFT JOIN public.refund_checkpoints f ON f.payment_id=s.payment_id
+      WHERE (s.payment_id=$1 OR t.id::text=$1 OR r.id::text=$1)
+      AND ((s.merchant_uid=$2 AND s.merchant_id=$3) OR s.payer_uid=$2) LIMIT 2`,[id,verifiedMerchant.uid,verifiedMerchant.username])
+    if(!Array.isArray(durable)||durable.length>1)
+      return NextResponse.json({error:"Receipt evidence conflict",code:"RECEIPT_EVIDENCE_UNAVAILABLE"},{status:503})
+    if(durable.length===1){
+      const row=durable[0] as {checkpoint:Record<string,any>;intent:Record<string,any>;receipt:unknown;transaction:unknown;refund:Record<string,any>|null},s=row.checkpoint
+      if(row.refund!==null){
+        if(row.transaction!==null||row.receipt!==null||s.stage!=='payment_identity')
+          return NextResponse.json({error:"Receipt evidence conflict",code:"RECEIPT_EVIDENCE_UNAVAILABLE"},{status:503})
+        const result=await readRefundPresentation(row.refund.refund_id)
+        if(result.outcome!=='FOUND'||result.presentation.paymentId!==s.payment_id||result.presentation.customerStatus!=='refund_completed'||result.presentation.amount!==Number(s.customer_amount)||
+          result.presentation.amount!==Number(row.intent.customer_amount)||!result.presentation.finalization.finalizedAt)
+          return NextResponse.json({error:"Refund receipt is not finalized yet",code:"RECEIPT_PENDING"},{status:404})
+        return NextResponse.json({flashPayPaymentId:s.payment_id,merchantName:s.merchant_id,customerName:null,
+          amount:Number(row.refund.amount),currency:'π',transactionType:'refund',status:'refunded',
+          occurredAt:result.presentation.finalization.finalizedAt,note:normalizeReceiptNote(row.intent.note)},
+          {headers:{"Cache-Control":"private, no-store"}})
+      }
+      // Names are presentation data. Bind the verified projection to the exact
+      // durable payer and U2A; never substitute the merchant's viewer identity.
+      const payerProjection=await loadCanonicalPayment(s.payment_id,s.merchant_id)
+      const view=buildDurableSettlementReceipt({...row,payerProjection},verifiedMerchant)
+      if(view)return NextResponse.json(view,{headers:{"Cache-Control":"private, no-store"}})
+      return NextResponse.json({error:s.stage==='db_finalized'?"Receipt evidence unavailable":"Receipt not finalized yet",
+        code:s.stage==='db_finalized'?"RECEIPT_EVIDENCE_UNAVAILABLE":"RECEIPT_PENDING"},{status:s.stage==='db_finalized'?503:404})
+    }
     // Normal K3/K4 path: user-facing FlashPay ID first.
     const canonicalPayment = await loadCanonicalPayment(id, verifiedMerchant.username)
     if (canonicalPayment) {
@@ -187,7 +224,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (!piPaymentId) return NextResponse.json({ error: "Receipt not available yet" }, { status: 404 })
       const receipt = await getReceiptByU2AIdentifier(piPaymentId)
       if (!receipt) return NextResponse.json({ error: "Receipt not found" }, { status: 404 })
-      if (receipt.merchant_id !== verifiedMerchant.username) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+      if ((receipt.merchant_id !== verifiedMerchant.username || receipt.merchant_uid !== verifiedMerchant.uid)) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
       const view = buildReceiptView(
         receipt,
         canonicalPayment,
@@ -203,23 +240,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     // Prefer the authenticated DB pair directly; Redis history chronology is
     // deliberately NOT a prerequisite for displaying a historical receipt.
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
-      return readHistoricalReceipt(id, verifiedMerchant.username)
+      return readHistoricalReceipt(id, verifiedMerchant.username, verifiedMerchant.uid)
     }
 
     // Legacy links/bookmarks may still contain the internal transaction ID.
     const legacyReceipt = await getReceipt(id)
     if (!legacyReceipt) return NextResponse.json({ error: "Receipt not found" }, { status: 404 })
-    if (legacyReceipt.merchant_id !== verifiedMerchant.username) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    if ((legacyReceipt.merchant_id !== verifiedMerchant.username || legacyReceipt.merchant_uid !== verifiedMerchant.uid)) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
     const flashPayPaymentId = await resolveLegacyFlashPayId(legacyReceipt, verifiedMerchant.username)
     if (!flashPayPaymentId) {
-      return readHistoricalReceipt(id, verifiedMerchant.username)
+      return readHistoricalReceipt(id, verifiedMerchant.username, verifiedMerchant.uid)
     }
     const canonicalLegacyPayment = await loadCanonicalPayment(flashPayPaymentId, verifiedMerchant.username)
     // A Pi/Redis history match is only a presentation hint. If the canonical
     // projection disappeared, retain the verified PostgreSQL receipt instead
     // of turning a durable historical receipt into a 503.
-    if (!canonicalLegacyPayment) return readHistoricalReceipt(id, verifiedMerchant.username)
+    if (!canonicalLegacyPayment) return readHistoricalReceipt(id, verifiedMerchant.username, verifiedMerchant.uid)
     const view = buildReceiptView(
       legacyReceipt,
       canonicalLegacyPayment,

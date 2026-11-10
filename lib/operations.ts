@@ -1,4 +1,5 @@
 "use client"
+import {sendPaymentCreation} from "./payment-create-transport"
 
 import { unifiedStore } from "./unified-store"
 import { createPiPayment, authenticateMerchant } from "./pi-sdk"
@@ -110,16 +111,12 @@ export async function createPayment(amount: number, note: string, createIntentId
     // Do NOT send merchantId or merchantUid - server will verify from /v2/me call.
     // The server will call Pi /v2/me with the accessToken to derive verified username and UID.
     let tokenUsed = accessToken
-    let response = await fetch(`${config.appUrl}/api/payments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
+    let response = await sendPaymentCreation(`${config.appUrl}/api/payments`, JSON.stringify({ 
         amount, 
         note,
         accessToken: tokenUsed,
         createIntentId: stableCreateIntentId,
-      }),
-    })
+      }))
 
     if (response.status === 401) {
       try {
@@ -140,16 +137,12 @@ export async function createPayment(amount: number, note: string, createIntentId
         }
 
         tokenUsed = refreshedToken
-        response = await fetch(`${config.appUrl}/api/payments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        response = await sendPaymentCreation(`${config.appUrl}/api/payments`, JSON.stringify({
             amount,
             note,
             accessToken: tokenUsed,
             createIntentId: stableCreateIntentId,
-          }),
-        })
+          }))
 
         if (response.status === 401) {
           const trackingId = errorTracker.logError(operation, "Reconnect wallet required.")

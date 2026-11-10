@@ -15,6 +15,9 @@ export async function verifyMerchantFromPiToken(accessToken?: string): Promise<{
   try {
     const response = await fetch("https://api.minepi.com/v2/me", {
       method: "GET",
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(10000),
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",

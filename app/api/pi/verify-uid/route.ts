@@ -1,8 +1,10 @@
-import { type NextRequest, NextResponse } from "next/server"
+import { after, type NextRequest, NextResponse } from "next/server"
+import {prewarmVerifiedSession} from "@/lib/r36-auth-prewarm"
 import { redis } from "@/lib/redis"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+export const maxDuration = 60
 
 interface VerifyUidRequest {
   uid: string
@@ -62,6 +64,10 @@ export async function POST(request: NextRequest) {
       }),
       { ex: 3600 }
     )
+
+    // Preparation runs only after official identity verification and successful projection.
+    // It never creates a payment or changes the original admission decision.
+    after(prewarmVerifiedSession)
 
     return NextResponse.json(
       {

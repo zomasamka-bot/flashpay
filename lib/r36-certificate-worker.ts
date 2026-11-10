@@ -1,3 +1,4 @@
+import {generalOperationPolicy} from "./r36-operation-policy"
 /** NOT_FOR_DEPLOY. Privileged isolated verifier worker; never a runtime/public route.
  * It has no embedded key, credential, evidence URL, signer, activation or financial POST.
  * Protected policy enrollment and genuinely independent evidence/signing services remain
@@ -6,6 +7,7 @@
 import {createHash,createPublicKey,verify} from 'node:crypto'
 import {numberToExactPositiveStroops} from './financial-amount-stroops'
 import {reviewR36EvidenceSnapshot} from './r36-evidence-snapshot'
+import {assertR36ExecutionScopePolicy} from './r36-wallet-execution-scope'
 import {Transaction,TransactionBuilder} from '@stellar/stellar-sdk'
 import {consumeR36AdmissionCertificate,R36_ADMISSION_FIELDS,type R36CertificateDatabase,type R36CertificateResult} from './r36-certificate-consumer'
 import {verifyR36IndependentHorizonRecord,type R36HorizonProofInput,type R36HorizonRecord} from './r36-independent-horizon-proof'
@@ -15,7 +17,7 @@ type Kind=typeof R36_WORKER_KINDS[number]
 type ObjectValue=Record<string,unknown>
 export type R36WorkerPorts={
  /** Must read the approved immutable artifact by digest, never caller-selected URLs. */
- readEvidence(kind:Kind,digest:string,signal:AbortSignal,subjectDigest:string):Promise<unknown>;
+ readEvidence(kind:Kind,digest:string,signal:AbortSignal,subjectDigest:string,evidenceNotBefore?:number):Promise<unknown>;
  /** Independently controlled signer MUST persist idempotencyKey before acknowledging.
   * The same key/bytes must return the same signed result after crashes, never reissue. */
  signOnce(request:{issuerId:string;keyId:string;policyDigest:string;idempotencyKey:string;bytesBase64:string},signal:AbortSignal):Promise<{signature:string;payloadDigest:string;keyId:string;idempotencyKey:string}>;
@@ -66,21 +68,25 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   // This is a policy-bound identity assertion. The enrollment approver must establish
   // actual organizational independence; distinct strings alone do not establish it.
   const replay=c.receipt!==null&&c.receipt!==undefined
-  if(replay&&profile.recoveryPilot===undefined)return consumeR36AdmissionCertificate({begin:fn=>fn(tx)},c.receipt)
+  if(replay&&profile.recoveryPilot===undefined&&profile.generalOperation===undefined)return consumeR36AdmissionCertificate({begin:fn=>fn(tx)},c.receipt)
   if(typeof p.validUntil!=='number'||typeof p.maxAgeSeconds!=='number'||typeof p.validFrom!=='number')return fail('INVALID_WORKER_VALIDITY')
   const issued=c.requestCreatedAt,expires=Math.min(p.validUntil,issued+p.maxAgeSeconds)
   if(![now,issued,expires].every(Number.isSafeInteger)||issued<p.validFrom||issued>now||expires<=now)return fail('WORKER_REQUEST_EXPIRED')
+  const renewal=c.renewalGeneration!==undefined
+  if(renewal&&(!Number.isSafeInteger(c.renewalGeneration)||Number(c.renewalGeneration)<1||
+    !Number.isSafeInteger(c.evidenceNotBefore)||Number(c.evidenceNotBefore)>issued))return fail('INVALID_RENEWAL_CONTEXT')
   const subject=hash(JSON.stringify(R36_ADMISSION_FIELDS.map(k=>b[k])))
   const artifacts={} as Record<Kind,ObjectValue>
   for(const kind of R36_WORKER_KINDS){
    const expected=b[digestFields[kind]];if(typeof expected!=='string'||!hex.test(expected))return fail('MISSING_EVIDENCE_DIGEST')
-   const e=await bounded(signal=>ports.readEvidence(kind,expected,signal,subject))
+   const e=await bounded(signal=>ports.readEvidence(kind,expected,signal,subject,renewal?Number(c.evidenceNotBefore):undefined))
    if(!obj(e)||!exact(e,['text','manifest','signature'])||typeof e.text!=='string'||e.text.length>2_000_000||!obj(e.manifest)||typeof e.signature!=='string'||hash(e.text)!==expected)return fail('EVIDENCE_ARTIFACT_INVALID')
    const m=e.manifest
    if(!exact(m,evidenceFields)||!evidenceFields.every(k=>typeof m[k]==='string'&&/^[\x20-\x7e]{1,256}$/.test(m[k] as string))||m.schema!=='R36_INDEPENDENT_ARTIFACT_V1'||m.kind!==kind||m.policyDigest!==p.policyDigest||m.subjectDigest!==subject||m.artifactDigest!==expected||m.network!==b.network||m.sourceWallet!==b.sourceWallet||m.cutoffLedger!==b.cutoffLedger)return fail('EVIDENCE_SCOPE_MISMATCH')
    const roots=profile.authorities.filter(x=>obj(x)&&x.kind===kind&&x.issuerId===m.issuerId&&x.keyId===m.keyId)
    if(roots.length!==1||!obj(roots[0]))return fail('EVIDENCE_AUTHORITY_NOT_APPROVED')
    const root=roots[0],start=Number(m.issuedAt),end=Number(m.expiresAt)
+   if(renewal&&start<Number(c.evidenceNotBefore))return fail('RENEWAL_FRESH_EVIDENCE_REQUIRED')
    if(root.revoked!==false||!str(root.operatorId)||root.operatorId===profile.runtimeOperatorId||root.operatorId===profile.migrationOperatorId||typeof root.validFrom!=='number'||typeof root.validUntil!=='number'||typeof root.revocationCheckedAt!=='number'||typeof root.revocationValidUntil!=='number'||![start,end,root.validFrom,root.validUntil,root.revocationCheckedAt,root.revocationValidUntil].every(Number.isSafeInteger)||start<root.validFrom||start>now||end<expires||end>root.validUntil||root.revocationCheckedAt<start||root.revocationCheckedAt>now||now>=root.revocationValidUntil)return fail('EVIDENCE_AUTHORITY_NOT_CURRENT')
    if(typeof root.publicKeyPem!=='string'||typeof root.publicKeySpkiSha256!=='string')return fail('EVIDENCE_KEY_MISSING')
    const key=createPublicKey(root.publicKeyPem),sig=Buffer.from(e.signature,'base64')
@@ -98,6 +104,13 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   const pi=f.piRecord,hi=f.horizonInput
   // Only an explicitly enrolled trial policy may certify these test wallets.
   // Use the signed inbound record, not the requester or a Redis projection.
+  if (profile.generalOperation !== undefined) {
+    const general=generalOperationPolicy(profile)
+    if(!general || b.sourceWallet!==general.sourceWallet || i.inboundAmountStroops!==b.amountStroops ||
+      BigInt(i.inboundAmountStroops)>general.maxAmountStroops) return fail('GENERAL_OPERATION_POLICY_MISMATCH')
+    // Signed canonical Pi/Horizon identity and original accounting/XDR checks below
+    // remain mandatory. A /me login or an intake row alone cannot issue a certificate.
+  }
   if (profile.recoveryPilot !== undefined) {
     const pilot=profile.recoveryPilot
     if(!obj(pilot)||pilot.schema!=='FLASHPAY_TESTNET_NEW_RIGHTS_V1'||!Array.isArray(pilot.wallets)||
@@ -115,6 +128,7 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   if(x.schema!=='R36_HISTORICAL_EXCEPTIONS_V1'||!ids(x.ids)||typeof x.recordsDigest!=='string'||!hex.test(x.recordsDigest)||s.schema!=='R36_EXCEPTION_ISOLATION_V1'||!ids(s.exceptionIds)||JSON.stringify(s.exceptionIds)!==JSON.stringify(x.ids)||s.currentRightsDigest!==a.currentRightsDigest||s.disposition!=='ISOLATED_NO_CURRENT_RIGHTS_IMPACT'||typeof s.evidenceDigest!=='string'||!hex.test(s.evidenceDigest))return fail('EXCEPTION_RIGHTS_ISOLATION_MISSING')
   if(g.schema!=='R36_WALLET_CLEARANCE_V1'||g.authorityDisposition!=='CLEARED_FOR_BOUND_INTENT'||g.currentRightsDigest!==a.currentRightsDigest||!['walletHistoryDigest','accountingDigest','exceptionsDigest','exceptionIsolationDigest'].every(k=>g[k]===b[k]))return fail('WALLET_CLEARANCE_MISMATCH')
   const snapshotReview=reviewR36EvidenceSnapshot(b,artifacts)
+  assertR36ExecutionScopePolicy(profile,artifacts,String(b.sourceWallet))
   if(snapshotReview.outcome!=='VERIFIED_SNAPSHOT')return fail('SNAPSHOT_'+snapshotReview.reason)
   if(replay)return consumeR36AdmissionCertificate({begin:fn=>fn(tx)},c.receipt)
   const manifest={schema:'R36_ADMISSION_CERTIFICATE_V1',purpose:'INITIAL_PREPARED_ADMISSION',issuerId:p.issuerId,keyId:p.keyId,policyDigest:p.policyDigest,...b,issuedAt:String(issued),expiresAt:String(expires)} as Record<string,unknown>

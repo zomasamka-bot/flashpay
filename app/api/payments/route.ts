@@ -1,9 +1,12 @@
-import {requiresTestnetIngress,testnetIngressEnabled,reserveTestnetCreation} from "@/lib/r36-testnet-ingress"
-import { type NextRequest, NextResponse } from "next/server"
+import {requiresTestnetIngress,testnetIngressEnabled,reserveTestnetCreation,readOperationSettings} from "@/lib/r36-testnet-ingress"
+import { after, type NextRequest, NextResponse } from "next/server"
+import {reserveWithCurrentEvidence} from "@/lib/r36-creation-readiness"
+import {ensurePrivateTrustHost} from "@/lib/r36-private-host-wake"
 
 // Force dynamic rendering for this route
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+export const maxDuration = 60
 
 import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "@/lib/redis"
 import type { Payment } from "@/lib/types"
@@ -133,7 +136,7 @@ export async function POST(request: NextRequest) {
     
     const piMeTimingStartedAt = Date.now()
     const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
-      method: "GET",
+      method: "GET",cache:"no-store",redirect:"error",signal:AbortSignal.timeout(10000),
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
@@ -158,6 +161,10 @@ export async function POST(request: NextRequest) {
     if (verifiedMerchantUid.length === 0 || trustedMerchantId.length === 0) {
       return NextResponse.json({ error: "Verified merchant identity invalid" }, { status: 502, headers: corsHeaders })
     }
+    // /me proves the app-local identity and granted scopes. Pi does not return
+    // wallet_address here; the canonical A2U DTO later binds the destination.
+    // Never promote a client SDK address into server financial evidence.
+    const merchantWalletConsent = Array.isArray(verifiedUser.credentials?.scopes) && verifiedUser.credentials.scopes.includes("wallet_address")
     
     // Cold-start prerequisite: classify must not query absent tables.
     // Both initializers are idempotent; failure is fail-closed, not NEW.
@@ -199,10 +206,23 @@ export async function POST(request: NextRequest) {
     // Generate unique payment ID (Edge Runtime compatible)
     let paymentId = crypto.randomUUID()
     if (requiresTestnetIngress()) {
-      const reserved = await reserveTestnetCreation({paymentId,createIntentId,merchantUid:verifiedMerchantUid,
-        merchantId:trustedMerchantId,amount,note:normalizedNote})
-      if (!reserved) return NextResponse.json({error:"Testnet trial budget or wallet admission unavailable",code:"TESTNET_INGRESS_HELD"},{status:503,headers:corsHeaders})
-      paymentId = reserved
+      // Keep official identity, wallet consent and the original SQL admission.
+      // A valid durable policy does not require waiting for a cold worker boot.
+      const settings = !merchantWalletConsent ? await readOperationSettings() : null
+      if (!merchantWalletConsent && !settings) return NextResponse.json({error:"Payment policy unavailable",code:"PAYMENT_ADMISSION_UNAVAILABLE"},{status:503,headers:corsHeaders})
+      if (!merchantWalletConsent && settings?.mode === 'general') {
+        return NextResponse.json({error:"Pi receiving-wallet permission is required. Your saved request is unchanged.",code:"PI_WALLET_PERMISSION_REQUIRED"},{status:403,headers:corsHeaders})
+      }
+      const admissionStartedAt=Date.now()
+      const input={paymentId,createIntentId,merchantUid:verifiedMerchantUid,
+        merchantId:trustedMerchantId,amount,note:normalizedNote}
+      const reservation=await reserveWithCurrentEvidence({
+        reserve:()=>reserveTestnetCreation(input),wake:()=>ensurePrivateTrustHost('creation'),
+        prepare:()=>after(async()=>{await ensurePrivateTrustHost('creation')}),
+      })
+      console.info("[R36 create admission]", {phase:"reservation",path:reservation.path,admitted:Boolean(reservation.id),elapsedMs:Date.now()-admissionStartedAt})
+      if (!reservation.id) return NextResponse.json({error:"Payment admission temporarily unavailable; your saved request is unchanged",code:"PAYMENT_ADMISSION_UNAVAILABLE"},{status:503,headers:corsHeaders})
+      paymentId = reservation.id
     }
     let durableCreatedAt = new Date().toISOString()
 

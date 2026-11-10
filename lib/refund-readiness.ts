@@ -1,4 +1,5 @@
 import "server-only"
+import { getPiSigningSeed } from "@/lib/pi-wallet-signing-config"
 
 import { Keypair } from "@stellar/stellar-sdk"
 import { getRefundSchemaDiagnostics, verifyRefundAccountingSchema, verifyRefundTables } from "@/lib/refund-checkpoint-store"
@@ -76,7 +77,7 @@ export async function getRefundReadiness(): Promise<RefundReadiness> {
     testnet_horizon_read: false,
   }
 
-  const seed = process.env.PI_PRIVATE_SEED
+  const seed = getPiSigningSeed()
   if (seed) {
     try { Keypair.fromSecret(seed); checks.pi_private_seed = true } catch { checks.pi_private_seed = false }
   }

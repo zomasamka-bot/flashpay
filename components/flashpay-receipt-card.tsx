@@ -1,5 +1,7 @@
 "use client"
 
+import {formatReceiptAmount} from "@/lib/receipt-presentation"
+
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -317,7 +319,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       </CardHeader>
       <CardContent className="space-y-5 pt-6">
         <div className="text-center border-b pb-5">
-          <div className="text-4xl font-bold">{receipt.amount.toFixed(2)} {receipt.currency}</div>
+          <div className="text-4xl font-bold">{formatReceiptAmount(receipt.amount)} {receipt.currency}</div>
         </div>
 
         <div className="grid grid-cols-2 gap-4 rounded-lg bg-muted p-4">

@@ -355,6 +355,7 @@ export async function recordDr11RefundCertificationHold(params:{paymentId:string
         WHERE payment_id=${params.paymentId} AND stage='payment_identity' AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
           AND customer_amount=${params.customerAmount} AND merchant_amount=${params.customerAmount} AND app_commission=0
           AND certification_hold IS NULL AND a2u_payment_id IS NULL AND prepared_tx_hash IS NULL AND a2u_txid IS NULL
+          AND NOT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId})
         RETURNING certification_hold,certification_hold_expires_at`
       if(updated.length===1)return[{recorded:true,certification_hold:updated[0].certification_hold}]
       return await tx`SELECT stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,certification_hold,certification_hold_at,certification_hold_expires_at,
@@ -1364,7 +1365,7 @@ export type SettlementDurableCheckpointRead =
       createdAt:string; paidAt:string|null; payerUid?:string; u2aVerifiedAt?:string; a2uCreateAttemptedAt?:string;
       u2aIdentifier:string; u2aTxid:string; a2uPaymentId:string; a2uFromAddress:string; a2uToAddress:string;
       preparedEnvelopeXdr?:string; preparedTxHash?:string; preparedSequence?:string;
-      a2uTxid?:string; horizonFeeStroops?:number
+      a2uTxid?:string; horizonFeeStroops?:number; horizonConfirmedAt?:string; dbFinalizedAt?:string
     }}
   | { outcome: 'ABSENT' }
   | { outcome: 'INDETERMINATE'; error:string }
@@ -1426,7 +1427,10 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
       if(!Number.isSafeInteger(fee)||fee<0)return{outcome:'INDETERMINATE',error:'Settlement durable Horizon fee invalid'}
     }
     if(['pi_completed','db_finalized'].includes(String(stage))&&r.pi_completed_at==null)return{outcome:'INDETERMINATE',error:'Settlement durable Pi finality invalid'}
-    if(stage==='db_finalized'&&(r.db_finalized_at==null||r.accounting_valid!==true))return{outcome:'INDETERMINATE',error:'Settlement durable DB finality or accounting evidence invalid'}
+    const horizonConfirmedAt=iso(r.horizon_confirmed_at),dbFinalizedAt=iso(r.db_finalized_at)
+    if(moved&&horizonConfirmedAt===null)return{outcome:'INDETERMINATE',error:'Settlement durable Horizon timestamp invalid'}
+    if(stage==='db_finalized'&&(dbFinalizedAt===null||horizonConfirmedAt===null||
+      Date.parse(dbFinalizedAt)<Date.parse(horizonConfirmedAt)||r.accounting_valid!==true))return{outcome:'INDETERMINATE',error:'Settlement durable DB finality or accounting evidence invalid'}
     return{outcome:'FOUND',checkpoint:{
       paymentId,version,stage:stage as any,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,
       customerAmount:ca,merchantAmount:ma,createdAt,paidAt,
@@ -1434,7 +1438,8 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
       ...(iso(r.a2u_create_attempted_at)!==null?{a2uCreateAttemptedAt:iso(r.a2u_create_attempted_at)!}:{}),u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,
       a2uPaymentId:r.a2u_payment_id as string,a2uFromAddress:r.a2u_from_address as string,a2uToAddress:r.a2u_to_address as string,
       ...(advanced?{preparedEnvelopeXdr:r.prepared_envelope_xdr as string,preparedTxHash:r.prepared_tx_hash as string,preparedSequence:String(r.prepared_sequence)}:{}),
-      ...(moved?{a2uTxid:r.a2u_txid as string,horizonFeeStroops:fee}:{}),
+      ...(moved?{a2uTxid:r.a2u_txid as string,horizonFeeStroops:fee,horizonConfirmedAt:horizonConfirmedAt!}:{}),
+      ...(stage==='db_finalized'?{dbFinalizedAt:dbFinalizedAt!}:{}),
     }}
   }catch(e){console.error('[DB] Settlement durable read uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement durable read uncertain'}}
 }

@@ -1,3 +1,6 @@
+import { prepareR36EvidenceCandidate } from "./r36-prepared-evidence"
+import { getPiSigningSeed } from "./pi-wallet-signing-config"
+import { r36PreparedEvidenceStore } from "./r36-prepared-evidence-store"
 import { verifyRefundOriginalCustomerBinding } from './refund-original-customer-binding'
 import { verifyPreparedWalletAuthority, claimFirstWalletSubmission } from "./financial-wallet-authority"
 import "server-only"
@@ -170,7 +173,7 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
 
 export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBlockchainSubmitResult> {
   if (!isExactInput(input) || input.payment.status.transaction_verified !== false || input.payment.status.developer_completed !== false) return { outcome: "FAILED", code: "invalid_input", message: "Refund input is not an eligible unsent Testnet refund" }
-  const seed = process.env.PI_PRIVATE_SEED
+  const seed = getPiSigningSeed()
   if (!seed) return { outcome: "FAILED", code: "configuration", message: "Refund signing configuration is unavailable" }
 
   let keypair: Keypair
@@ -196,20 +199,17 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
   const refundStellarAmount = refundAmountStroops === null ? null : exactPositiveStroopsToStellarAmount(refundAmountStroops)
   if (refundAmountStroops === null || refundStellarAmount === null) return { outcome: "FAILED", code: "invalid_input", message: "Refund amount is not an exact positive stroop amount" }
 
-  let transaction: ReturnType<TransactionBuilder["build"]>
-  try {
-    transaction = new TransactionBuilder(source, {
-      fee: baseFee.toString(),
-      networkPassphrase: input.payment.network,
-    })
-      .addOperation(Operation.payment({ destination: input.payment.to_address, asset: Asset.native(), amount: refundStellarAmount }))
-      .addMemo(Memo.text(input.payment.identifier))
-      .setTimeout(TimeoutInfinite)
-      .build()
-    transaction.sign(keypair)
-  } catch (error) {
-    return { outcome: "FAILED", code: "build_failed", message: error instanceof Error ? error.message : "Refund transaction build failed" }
-  }
+  const candidate = await prepareR36EvidenceCandidate({network:'Pi Testnet',sourceWallet:input.payment.from_address,
+    destinationWallet:input.payment.to_address,paymentId:input.checkpoint.paymentId,operationKind:'refund',
+    operationId:input.checkpoint.refundId,piPaymentId:input.payment.identifier,amountStroops:String(refundAmountStroops)},
+    source.sequence,baseFee.toString(),async()=>{
+      const t = new TransactionBuilder(source,{fee:baseFee.toString(),networkPassphrase:input.payment.network})
+        .addOperation(Operation.payment({destination:input.payment.to_address,asset:Asset.native(),amount:refundStellarAmount}))
+        .addMemo(Memo.text(input.payment.identifier)).setTimeout(TimeoutInfinite).build()
+      t.sign(keypair);return t
+    },r36PreparedEvidenceStore,{recipientPublicKeyPem:process.env.FLASHPAY_R36_EVIDENCE_RECIPIENT_PUBLIC_KEY??'',sign:t=>{t.sign(keypair)}})
+  if(candidate.outcome!=='READY_FOR_ORIGINAL_GUARDS')return {outcome:'FAILED',code:'submit_failed',message:'Prepared evidence unavailable or changed; hold without resigning'}
+  const transaction=candidate.transaction
 
   const envelopeXdr = transaction.toXDR()
   const preparedHash = Buffer.from(transaction.hash()).toString("hex")

@@ -40,7 +40,15 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
   const created=TransactionBuilder.fromXDR(genesis.envelopeXdr,'Pi Testnet')
   requireProof(created instanceof Transaction&&created.toXDR()===genesis.envelopeXdr&&Buffer.from(created.hash()).toString('hex')===genesis.hash&&created.operations.length===1,'GENESIS_XDR')
   const creation=created.operations[0]
-  requireProof(creation.type==='createAccount'&&creation.source===undefined&&creation.destination===history.wallet&&created.source!==history.wallet,'GENESIS_OPERATION')
+  requireProof(creation.type==='createAccount'&&creation.destination===history.wallet&&created.source!==history.wallet,'GENESIS_OPERATION')
+  if(creation.source!==undefined){
+   // The fee payer and funder may differ in an original Pi faucet transaction.
+   // Accept only with both original Horizon records bound to this exact XDR.
+   const r=genesis.sourceRecord,o=genesis.operationRecord
+   requireProof(wallet(creation.source)&&creation.source!==history.wallet&&object(r)&&object(o),'GENESIS_FUNDER_EVIDENCE_REQUIRED')
+   requireProof(r.hash===genesis.hash&&r.successful===true&&String(r.ledger)===genesis.ledger&&r.source_account===created.source&&String(r.source_account_sequence)===created.sequence&&r.envelope_xdr===genesis.envelopeXdr&&r.result_xdr===genesis.resultXdr&&String(r.fee_charged)===genesis.feeStroops,'GENESIS_TRANSACTION_BINDING')
+   requireProof(uint(o.id)&&BigInt(o.id)/BigInt(4294967296)===BigInt(genesis.ledger)&&o.type==='create_account'&&o.transaction_hash===genesis.hash&&o.transaction_successful===true&&o.source_account===creation.source&&o.funder===creation.source&&o.account===history.wallet&&stroops(o.starting_balance)===stroops(creation.startingBalance),'GENESIS_FUNDER_BINDING')
+  }
   const gr=xdr.TransactionResult.fromXDR(genesis.resultXdr,'base64')
   const gres=gr.result as unknown as Row
   requireProof(gr.toXDR('base64')===genesis.resultXdr&&gr.feeCharged.toString()===genesis.feeStroops&&gres.type==='txSuccess'&&decodedList(gres.results)&&gres.results.length===1,'GENESIS_RESULT')
@@ -130,8 +138,20 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
  * All four collections are covered by their corresponding authenticated artifacts;
  * the caller cannot satisfy coverage by listing a wallet or a digest alone. */
 export function reviewR36EvidenceSnapshot(binding:Row,artifacts:Record<string,Row>):R36SnapshotReview{
+ return reviewAllWalletSnapshots(binding,artifacts,true)
+}
+
+/** Initial scope only: an original funded account with no later movements.
+ * This is not transaction admission, financial clearance or wallet activation. */
+export function reviewR36WalletBootstrapSnapshot(binding:Row,artifacts:Record<string,Row>):R36SnapshotReview{
+ const h=artifacts.wallet_history?.snapshot,a=artifacts.accounting?.snapshot
+ if(!object(h)||!object(a)||!Array.isArray(h.transactions)||h.transactions.length!==0||!Array.isArray(h.walletInventory)||h.walletInventory.length!==1||!Array.isArray(a.entries)||a.entries.length!==0||!Array.isArray(a.openObligations)||a.openObligations.length!==0)return {outcome:'BLOCKED',reason:'BOOTSTRAP_MUST_HAVE_NO_PRIOR_MOVEMENTS',authorizesFinancialRelease:false}
+ return reviewAllWalletSnapshots(binding,artifacts,false)
+}
+
+function reviewAllWalletSnapshots(binding:Row,artifacts:Record<string,Row>,bindIntent:boolean):R36SnapshotReview{
  try{
-  const primary=reviewWallet(binding,artifacts,true);if(primary.outcome!=='VERIFIED_SNAPSHOT')return primary
+  const primary=reviewWallet(binding,artifacts,bindIntent);if(primary.outcome!=='VERIFIED_SNAPSHOT')return primary
   const h=artifacts.wallet_history,inventory=(h.snapshot as Row).walletInventory as Row[]
   const others=inventory.filter(w=>w.wallet!==binding.sourceWallet),kinds=['wallet_history','accounting','exceptions','exception_isolation']
   const grouped:Record<string,Row[]>={}
@@ -148,4 +168,29 @@ export function reviewR36EvidenceSnapshot(binding:Row,artifacts:Record<string,Ro
   }
   return{outcome:'VERIFIED_SNAPSHOT',reason:'ALL_ATTESTED_WALLET_SCOPES_REVIEWED',reviewDigest:r36SnapshotDigest(reviewed.map(r=>r.reviewDigest)),transactions:reviewed.reduce((n,r)=>n+(r.transactions??0),0),accountingEntries:reviewed.reduce((n,r)=>n+(r.accountingEntries??0),0),isolatedExceptions:reviewed.reduce((n,r)=>n+(r.isolatedExceptions??0),0),authorizesFinancialRelease:false}
  }catch(e){return{outcome:'BLOCKED',reason:e instanceof Error?e.message:'WALLET_SCOPE_REVIEW_FAILED',authorizesFinancialRelease:false}}
+}
+
+/** Terminal review is a separate purpose: it requires the completed outflow to be
+ * present and accounted, rather than treating it as a not-yet-submitted intent.
+ * It never authorizes a successor. Every wallet/snapshot/XOR/isolation check above
+ * still applies, including unresolved global obligations.
+ */
+export function reviewR36TerminalSnapshot(binding:Row,artifacts:Record<string,Row>):R36SnapshotReview{
+ try{
+  const result=reviewAllWalletSnapshots(binding,artifacts,false)
+  if(result.outcome!=='VERIFIED_SNAPSHOT')return result
+  const history=artifacts.wallet_history.snapshot as Row,accounting=artifacts.accounting.snapshot as Row
+  requireProof(uint(binding.preparedSequence)&&history.closingSequence===binding.preparedSequence,'TERMINAL_WALLET_SEQUENCE')
+  const txs=(history.transactions as Row[]).filter(t=>object(t.input)&&t.input.preparedHash===binding.preparedHash)
+  requireProof(txs.length===1&&object(txs[0].input)&&object(txs[0].record),'TERMINAL_OUTFLOW_MISSING')
+  const t=txs[0],i=t.input as Row,r=t.record as Row
+  requireProof(i.sourceWallet===binding.sourceWallet&&i.preparedSequence===binding.preparedSequence&&r.successful===true&&
+   stroops(i.amount).toString()===binding.amountStroops&&i.expectedFeeStroops===binding.feeStroops,'TERMINAL_OUTFLOW_MISMATCH')
+  const entries=(accounting.entries as Row[]).filter(e=>e.paymentId===binding.paymentId)
+  requireProof(entries.length===1&&entries[0].operationId===binding.operationId&&entries[0].kind===binding.operationKind&&
+   entries[0].transactionHash===binding.preparedHash&&entries[0].horizonOperationId===t.operationId&&
+   entries[0].amountStroops===binding.amountStroops&&entries[0].destinationWallet===i.destinationWallet&&
+   entries[0].receiptId===binding.receiptId&&entries[0].entryId===binding.entryId,'TERMINAL_ACCOUNTING_IDENTITY')
+  return {...result,reason:'COMPLETE_TERMINAL_HISTORY_AND_ACCOUNTING_NO_SUCCESSOR_AUTHORITY'}
+ }catch(e){return{outcome:'BLOCKED',reason:e instanceof Error?e.message:'TERMINAL_REVIEW_FAILED',authorizesFinancialRelease:false}}
 }

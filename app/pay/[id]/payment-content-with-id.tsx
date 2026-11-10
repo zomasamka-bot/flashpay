@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
 import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/operations"
 import { getPaymentUrl } from "@/lib/router"
-import { unifiedStore } from "@/lib/unified-store"
+import { unifiedStore, useUnifiedStore } from "@/lib/unified-store"
 import type { Payment, RefundPresentation } from "@/lib/types"
 import { useI18n } from "@/components/i18n-provider"
 import { isAppLocale } from "@/lib/i18n/config"
@@ -48,6 +48,23 @@ export default function PaymentContentWithId({
   const refundAbortRef = useRef<AbortController | null>(null)
   const receiptIdentityRef = useRef<{ accessToken: string; uid: string; username: string } | null>(null)
   const [customerReceiptName, setCustomerReceiptName] = useState<string | null>(null)
+  const accountStore = useUnifiedStore()
+  const account = accountStore.getMerchantState()
+  const receiptAccessToken = receiptIdentityRef.current?.accessToken ?? account?.accessToken ?? null
+
+  useEffect(() => {
+    if(payment?.status!=="settled_to_merchant" || !receiptAccessToken)return
+    const controller=new AbortController()
+    void fetch(`/api/receipts/${encodeURIComponent(paymentId)}`,{
+      headers:{Authorization:`Bearer ${receiptAccessToken}`},cache:"no-store",signal:controller.signal,
+    }).then(async response=>{
+      if(!response.ok)return
+      const receipt=await response.json()
+      if(receipt.flashPayPaymentId===paymentId && receipt.status==="successful" &&
+        typeof receipt.customerName==="string" && receipt.customerName.trim())setCustomerReceiptName(receipt.customerName)
+    }).catch(()=>{})
+    return ()=>controller.abort()
+  },[paymentId,payment?.status,receiptAccessToken])
 
   const persistReceiptIdentity = async () => {
     const identity = receiptIdentityRef.current
@@ -321,6 +338,11 @@ export default function PaymentContentWithId({
             refundAccessTokenRef.current = null
             refundFlowActiveRef.current = false
           }
+        } else {
+          // A completed HTTP read without verifiable evidence is not still
+          // loading. Keep polling, but never retain a misleading status card.
+          setRefundPresentation(undefined)
+          setRefundViewStatus("indeterminate")
         }
         } finally {
           inFlight = false
@@ -654,7 +676,7 @@ export default function PaymentContentWithId({
         </div>
 
         {isPaid ? (
-          <FlashPayReceiptCard accessToken={receiptIdentityRef.current?.accessToken ?? null} receipt={{
+          <FlashPayReceiptCard accessToken={receiptAccessToken} receipt={{
             flashPayPaymentId: paymentId,
             merchantName: payment.merchantId,
             customerName: customerReceiptName,

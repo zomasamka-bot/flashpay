@@ -1,3 +1,4 @@
+import {formatReceiptAmount} from "@/lib/receipt-presentation"
 import type { FlashPayReceiptView } from "@/lib/types"
 
 const PAGE_WIDTH_PX = 1240
@@ -190,7 +191,7 @@ function createReceiptCanvas(receipt: FlashPayReceiptView, options: ReceiptPdfOp
   ctx.fillStyle = "#111827"
   ctx.font = "700 92px Arial, Helvetica, sans-serif"
   ctx.textAlign = "center"
-  ctx.fillText(`${receipt.amount.toFixed(2)} ${receipt.currency}`, PAGE_WIDTH_PX / 2, 410)
+  ctx.fillText(`${formatReceiptAmount(receipt.amount)} ${receipt.currency}`, PAGE_WIDTH_PX / 2, 410)
 
   ctx.beginPath()
   ctx.moveTo(margin, 475)

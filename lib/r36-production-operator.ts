@@ -7,6 +7,7 @@ import { lstat, realpath } from 'node:fs/promises'
 import { createR36HttpsPorts } from './r36-provider-transport'
 import { createR36OperatorService, type R36ServiceConfig } from './r36-operator-service'
 import { certifyR36ProductionAdmission } from './r36-successor-registration'
+import { createR36LifecycleHandler } from './r36-lifecycle-service'
 import type { R36CertificateDatabase } from './r36-certificate-consumer'
 
 import {productionR36Host as databaseHost, productionR36Branch as branchId} from './r36-production-runtime'
@@ -77,7 +78,10 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
            AND NOT (
              $2='r36_issuer' AND n.nspname='public' AND
                (f.proname,oidvectortypes(f.proargtypes)) IN
-                 (('r36_certificate_context','text'),('r36_record_certificate','text, text, jsonb, text'),('r36_revoke_certificate','text, text'),('r36_register_successor_binding','text'))
+                 (('r36_certificate_context','text'),('r36_record_certificate','text, text, jsonb, text'),('r36_revoke_certificate','text, text'),('r36_register_successor_binding','text'),
+                  ('r36_terminal_review_context','text, text, text'),('r36_record_prior_closure','text, text, text, text, text, bigint, bigint'),
+                  ('r36_bound_lifecycle_context','text, text'),('r36_record_bound_lifecycle','text, text, text, text, bigint, bigint'),('r36_revoke_prior_closure','text, text'),
+                  ('r36_lifecycle_job_receipt','text, text, text, text, text, text'),('r36_observe_owner_policy','text'),('r36_bind_initial_clearance','text'))
              OR $2='r36_signer' AND n.nspname='r36_signing' AND
                (f.proname,oidvectortypes(f.proargtypes)) IN (('context','text'),('record','text, text'))
            )
@@ -176,7 +180,12 @@ export async function runProductionOperator(input: unknown) {
       await db.begin(async () => undefined)
       const service=c.service!
       const server=createR36OperatorService(service,{kind:'issuer',issue:nonce=>
-        certifyR36ProductionAdmission(databaseFor(nonce),nonce,ports)})
+        certifyR36ProductionAdmission(databaseFor(nonce),nonce,ports),
+        lifecycle:createR36LifecycleHandler(databaseFor(null),c.policyDigest),
+        observeOwnerRegistry:()=>databaseFor(null).begin(async tx=>{
+          const rows=await tx.unsafe('SELECT public.r36_observe_owner_policy($1) AS observation',[c.policyDigest])
+          return rows.length===1?rows[0].observation:null
+        })})
       await startProtectedService(server,service,()=>{void sql.end({timeout:2})})
       listening=true
       return {outcome:'ISSUER_LISTENING',scope:'SINGLE_POLICY_PROTECTED_REQUESTS'}

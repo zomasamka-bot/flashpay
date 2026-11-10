@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { authorizeFromHeader } from "@/lib/merchant-auth"
+import { GET as readAuthorizedReceipt } from "../receipts/[id]/route"
 import { redis, isRedisConfigured } from "@/lib/redis"
 
 export const dynamic = "force-dynamic"
@@ -7,30 +7,6 @@ export const runtime = "nodejs"
 
 const MAX_PDF_BYTES = 512 * 1024
 const RECEIPT_FILE_TTL_SECONDS = 60 * 60
-
-function parsePayment(raw: unknown): Record<string, unknown> | null {
-  if (!raw) return null
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw)
-      return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
-    } catch {
-      return null
-    }
-  }
-  return typeof raw === "object" ? raw as Record<string, unknown> : null
-}
-
-function isAuthorizedForPayment(payment: Record<string, unknown>, uid: string, username: string): boolean {
-  const merchantUid = typeof payment.merchantUid === "string" ? payment.merchantUid : null
-  const merchantId = typeof payment.merchantId === "string" ? payment.merchantId : null
-  const payerUid = typeof payment.payerUid === "string" ? payment.payerUid : null
-  const payerUidSource = payment.payerUidSource
-
-  const merchantAuthorized = merchantUid ? merchantUid === uid : merchantId === username
-  const payerAuthorized = payerUidSource === "verified_u2a" && payerUid === uid
-  return merchantAuthorized || payerAuthorized
-}
 
 function isGeneratedReceiptPdf(bytes: Uint8Array): boolean {
   if (bytes.byteLength < 512 || bytes.byteLength > MAX_PDF_BYTES) return false
@@ -69,9 +45,6 @@ function isGeneratedReceiptPdf(bytes: Uint8Array): boolean {
 export async function POST(request: NextRequest) {
   if (!isRedisConfigured) return NextResponse.json({ error: "Receipt sharing unavailable" }, { status: 503 })
 
-  const verified = await authorizeFromHeader(request.headers.get("authorization"))
-  if (!verified) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
   const paymentId = request.headers.get("x-flashpay-payment-id")?.trim() ?? ""
   if (!/^[0-9a-fA-F-]{36}$/.test(paymentId)) {
     return NextResponse.json({ error: "Invalid FlashPay ID" }, { status: 400 })
@@ -80,13 +53,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "PDF required" }, { status: 415 })
   }
 
-  const rawPayment = await redis.get(`payment:${paymentId}`)
-  const payment = parsePayment(rawPayment)
-  if (!payment) return NextResponse.json({ error: "Payment not found" }, { status: 404 })
-  if (payment.id !== paymentId) return NextResponse.json({ error: "Payment identity conflict" }, { status: 409 })
-  if (!isAuthorizedForPayment(payment, verified.uid, verified.username)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-  }
+  // Reuse the exact durable receipt identity/financial checks used by viewing.
+  // Redis stores only the temporary shared file, never authorization or money.
+  const authorized=await readAuthorizedReceipt(request,{params:Promise.resolve({id:paymentId})})
+  if(authorized.status!==200)return authorized
+  const receipt=await authorized.json()
+  if(receipt.flashPayPaymentId!==paymentId)
+    return NextResponse.json({error:"Receipt identity unavailable"},{status:409})
 
   const body = new Uint8Array(await request.arrayBuffer())
   if (!isGeneratedReceiptPdf(body)) {

@@ -300,6 +300,7 @@ export interface TransactionRow {
 }
 
 export interface ReceiptRow {
+  merchant_uid?: string
   receipt_id?: string
   id?: string
   transaction_id: string

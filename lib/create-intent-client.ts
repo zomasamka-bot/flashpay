@@ -50,23 +50,6 @@ export async function readSavedCreateIntent(merchantUid: string, merchantId: str
   })
 }
 
-async function checkCreationAvailability(amount: number) {
-  let body: unknown
-  try {
-    const response = await fetch('/api/control/availability', {cache:'no-store',redirect:'error',signal:AbortSignal.timeout(10000)})
-    if (!response.ok) throw new Error('UNAVAILABLE')
-    body = await response.json()
-  } catch { throw new Error('Payment availability could not be verified. Your saved request is unchanged; try again later.') }
-  const v = body as {available?:unknown;creation?:{canRequest?:unknown;maxTrialAmountPi?:unknown}} | null
-  if (!v || v.available !== true || v.creation?.canRequest !== true)
-    throw new Error('Payment creation is temporarily held. Your saved request is unchanged; try again after financial admission is enabled.')
-  const max = v.creation.maxTrialAmountPi
-  if (max !== null && (typeof max !== 'number' || !Number.isFinite(max) || max <= 0))
-    throw new Error('Payment limit could not be verified. Your saved request is unchanged.')
-  if (typeof max === 'number' && amount > max)
-    throw new Error(`The Testnet trial limit is ${max} Pi. Any earlier saved request remains unchanged; do not replace an unresolved request.`)
-}
-
 // localStorage's read-then-write is not a cross-tab compare-and-swap. The
 // exclusive origin-scoped Web Lock serializes identity acquisition and release.
 // Without this primitive, fail closed rather than mint independent identities.
@@ -81,9 +64,8 @@ export async function acquireCreateIntent(merchantUid: string, merchantId: strin
   if (!merchantUid || !merchantId || !Number.isFinite(amount) || amount <= 0 || typeof note !== "string") {
     throw new Error("Merchant identity or payment amount unavailable")
   }
-  // Read-only hint before allocating a browser identity. A later server/WAF
-  // change is still handled with the same durable identity, never a new one.
-  await checkCreationAvailability(amount)
+  // The authenticated server POST remains the sole financial admission gate.
+  // Persist the same intent before sending; do not add a redundant advisory GET.
   return withIntentLock(() => {
     assertCurrentEpoch()
     // Storage failure is indeterminate: do not create a new durable identity.
@@ -95,12 +77,12 @@ export async function acquireCreateIntent(merchantUid: string, merchantId: strin
           typeof pending.merchantId !== "string" || typeof pending.amount !== "number" || typeof pending.note !== "string") {
         throw new Error("Pending payment record is invalid; creation blocked")
       }
+      if (pending.completed === true) {
+        throw new Error("Previous payment request completed. Select Next Customer to begin a separate payment.")
+      }
       if (pending.merchantUid !== merchantUid || pending.merchantId !== merchantId ||
           pending.amount !== amount || pending.note !== note) {
         throw new Error("An earlier payment request is unresolved. Reopen it with the original merchant and amount; do not create another request yet.")
-      }
-      if (pending.completed === true) {
-        throw new Error("Previous payment request completed. Select Next Customer to begin a separate payment.")
       }
       if (pending.completed !== undefined && pending.completed !== false) {
         throw new Error("Pending payment completion marker invalid; creation blocked")

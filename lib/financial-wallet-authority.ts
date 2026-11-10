@@ -269,6 +269,17 @@ export async function recordWalletFinalitySeal(input: WalletAuthorityClaim & {
       [input.network,input.sourceWallet,input.paymentId,input.operationKind,
        input.operationId,input.preparedHash,input.preparedSequence,
        input.horizonLedger,input.horizonFeeStroops,input.evidenceDigest,input.verifiedBy])
-    return Array.isArray(rows) && rows.length === 1 && (rows[0] as {prepared_tx_hash: string})?.prepared_tx_hash === input.preparedHash
+    if (Array.isArray(rows) && rows.length === 1 && (rows[0] as {prepared_tx_hash: string})?.prepared_tx_hash === input.preparedHash) return true
+    // A crash after commit or a concurrent recorder may have already inserted
+    // this exact immutable fact. A different fact is never overwritten.
+    const existing = await query(`SELECT 1 AS exact FROM financial_wallet_finality_seals
+      WHERE network=$1 AND source_wallet=$2 AND owner_payment_id=$3
+        AND operation_kind=$4 AND owner_operation_id=$5 AND prepared_tx_hash=$6
+        AND prepared_sequence=$7 AND horizon_ledger=$8 AND horizon_fee_stroops=$9
+        AND evidence_digest=$10 AND verified_by=$11`,
+      [input.network,input.sourceWallet,input.paymentId,input.operationKind,input.operationId,
+       input.preparedHash,input.preparedSequence,input.horizonLedger,input.horizonFeeStroops,
+       input.evidenceDigest,input.verifiedBy])
+    return Array.isArray(existing) && existing.length === 1 && (existing[0] as {exact:number}).exact === 1
   } catch { return false }
 }

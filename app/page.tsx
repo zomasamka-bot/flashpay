@@ -7,7 +7,7 @@ import { ArrowLeft, Check, Wallet, AlertCircle, Share2, Copy, DollarSign, X, Ale
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
-import { createPayment } from "@/lib/operations"
+import { createPayment, getPaymentFromServer } from "@/lib/operations"
 import { acquireCreateIntent, finishCreateIntent, beginNextCustomerIntent, readSavedCreateIntent } from "@/lib/create-intent-client"
 import { config } from "@/lib/config"
 import { authenticateMerchant } from "@/lib/pi-sdk"
@@ -31,24 +31,58 @@ export default function HomePage() {
 
   const [amount, setAmount] = useState("")
   const [createNote, setCreateNote] = useState("")
+  const enteredRequestRef = useRef({amount, note:createNote})
+  enteredRequestRef.current={amount,note:createNote}
   const [displayAmount, setDisplayAmount] = useState("0.00")
   const [currentPaymentId, setCurrentPaymentId] = useState<string | null>(null)
   const [showQR, setShowQR] = useState(false)
   const [redirecting, setRedirecting] = useState(false)
   const hasShownSuccessRef = useRef(false)
   const createInFlightRef = useRef(false)
+  const [isCreating, setIsCreating] = useState(false)
   const merchantSetup = useMerchant()
+  // Prepare on opening an authenticated merchant page, before the create click.
+  // No payment identity, amount, wallet authority or QR is created here.
+  const preparedMerchantRef=useRef<string|null>(null)
+  useEffect(()=>{
+    const {uid,merchantId,accessToken}=merchantSetup
+    if(!uid||!merchantId||!accessToken||preparedMerchantRef.current===uid)return
+    preparedMerchantRef.current=uid
+    void fetch("/api/pi/verify-uid",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({uid,merchantId,accessToken}),cache:"no-store",redirect:"error"}).catch(()=>{})
+  },[merchantSetup.uid,merchantSetup.merchantId,merchantSetup.accessToken])
   const [savedRequest, setSavedRequest] = useState<Awaited<ReturnType<typeof readSavedCreateIntent>>>(null)
   useEffect(() => {
     let current = true
     const merchant = unifiedStore.getMerchantState()
     setSavedRequest(null)
     if (!merchant.uid || !merchant.merchantId) { setSavedRequest(null); return }
-    void readSavedCreateIntent(merchant.uid,merchant.merchantId).then(value => {
-      if (current) setSavedRequest(value && !value.completed ? value : null)
+    void readSavedCreateIntent(merchant.uid,merchant.merchantId).then(async value => {
+      if (!current || !value) return
+      if (!value.completed) setSavedRequest(value)
+      if (!merchant.accessToken) return
+      try {
+        const response=await fetch(`/api/payments/create-intent?intentId=${encodeURIComponent(value.id)}`,{
+          headers:{Authorization:`Bearer ${merchant.accessToken}`},cache:"no-store",redirect:"error"})
+        if(!response.ok)return
+        const resolved=await response.json()
+        if(resolved.resolution!=="FOUND"||resolved.intentId!==value.id||resolved.merchantUid!==value.merchantUid||
+          resolved.merchantId!==value.merchantId||resolved.amount!==value.amount||resolved.note!==value.note)return
+        const original=await getPaymentFromServer(resolved.paymentId,true)
+        if(!current||createInFlightRef.current||!original||original.merchantId!==value.merchantId||original.amount!==value.amount)return
+        await finishCreateIntent(value.id)
+        if(!current||createInFlightRef.current)return
+        setSavedRequest(null)
+        // Recover the original QR, never create another request on page load.
+        if(!["settled_to_merchant","refunded","cancelled","failed"].includes(original.status) &&
+          (enteredRequestRef.current.amount==="" || (Number(enteredRequestRef.current.amount)===value.amount && enteredRequestRef.current.note===value.note))){
+          setAmount(String(original.amount));setDisplayAmount(String(original.amount));setCreateNote(value.note)
+          setCurrentPaymentId(original.id);setShowQR(true)
+        }
+      } catch { /* Uncertain identity is retained for an explicit same-intent retry. */ }
     }).catch(() => { if (current) setSavedRequest(null) })
     return () => { current = false }
-  }, [merchantSetup.uid, merchantSetup.merchantId])
+  }, [merchantSetup.uid, merchantSetup.merchantId, merchantSetup.accessToken])
   const [isConnecting, setIsConnecting] = useState(false)
   const [sdkInitStatus, setSdkInitStatus] = useState<"loading" | "ready" | "error">("loading")
   const [sdkError, setSdkError] = useState<string | null>(null)
@@ -276,8 +310,13 @@ export default function HomePage() {
 
     if (createInFlightRef.current) return
     createInFlightRef.current = true
+    setIsCreating(true)
     try {
       const merchant = unifiedStore.getMerchantState()
+      // This fresh button action may advance an acknowledged request. In-flight
+      // and cross-tab epoch guards still prevent a queued click becoming a new one.
+      const previous=await readSavedCreateIntent(merchant.uid || "",merchant.merchantId)
+      if(previous?.completed)await beginNextCustomerIntent()
       const intentId = await acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, createNote)
       const result = await createPayment(amountNum, createNote, intentId)
 
@@ -302,6 +341,7 @@ export default function HomePage() {
       })
     } finally {
       createInFlightRef.current = false
+      setIsCreating(false)
     }
   }
 
@@ -798,12 +838,13 @@ export default function HomePage() {
         {/* Generate QR Button */}
         <Button
           onClick={handleGenerateQR}
-          disabled={!amount || Number.parseFloat(amount) <= 0 || !merchantSetup.isSetupComplete}
+          disabled={isCreating || !amount || Number.parseFloat(amount) <= 0 || !merchantSetup.isSetupComplete}
+          aria-busy={isCreating}
           className="w-full h-16 text-xl gap-2"
           size="lg"
         >
           <Check className="h-6 w-6" />
-          {t("home.generateQr", "Generate QR Code")}
+          {isCreating ? "Preparing your request…" : t("home.generateQr", "Generate QR Code")}
         </Button>
 
         {/* Explicitly retire only an acknowledged payment identity after reload. */}

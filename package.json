@@ -3,13 +3,18 @@
   "version": "0.1.4",
   "private": true,
   "scripts": {
+    "r36:production-registrar": "node .r36-build/r36-registration-operator.js",
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
     "start": "next start",
     "r36:build": "tsc -p tsconfig.r36.json",
     "r36:operator": "node .r36-build/r36-operator-cli.js",
-    "r36:production-operator": "node .r36-build/r36-production-operator.js"
+    "r36:production-operator": "node .r36-build/r36-production-operator.js",
+    "r36:collect-inbound": "node .r36-build/r36-inbound-evidence-cli.js",
+    "r36:lifecycle-job": "node .r36-build/r36-wallet-lifecycle-cli.js",
+    "r36:produce-live-evidence": "node .r36-build/r36-live-evidence-cli.js",
+    "r36:publish-live-evidence": "node .r36-build/r36-evidence-publication-cli.js"
   },
   "overrides": {
     "react": "^19",

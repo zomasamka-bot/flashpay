@@ -1,4 +1,6 @@
 import {currentRecoveryRight} from './r36-recovery-scope'
+import { readPiA2UQueueAdmission } from './pi-a2u-queue-admission'
+import { claimRejectedRefundCreateRecovery } from './refund-rejected-create-recovery'
 import { verifyRefundOriginalCustomerBinding } from './refund-original-customer-binding'
 import { redis, isRedisConfigured } from './redis'
 import {
@@ -325,6 +327,9 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
     return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: reconciliation.payment.identifier }
   }
   if (checkpoint.stage === 'wallet_submission_started' && (checkpoint.refundPaymentId || checkpoint.refundTxid)) return { outcome: 'blocked', reason: 'submission_outcome_uncertain' }
+  // Check app-wide provider readiness before consuming create authority. An
+  // empty list alone never re-arms an already consumed attempt.
+  if (await readPiA2UQueueAdmission() !== 'EMPTY') return { outcome: 'blocked', reason: 'refund_provider_queue_held' }
   if (checkpoint.stage !== 'wallet_submission_started' && checkpoint.stage !== 'intent_created') return { outcome: 'blocked', reason: 'invalid_stage' }
   if (checkpoint.stage === 'intent_created') {
     const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'refund_create' } }
@@ -333,7 +338,10 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
     checkpoint = attempt.checkpoint
   }
   const createAttempt = await claimRefundCreateAttempt({ refundId, paymentId: checkpoint.paymentId, idempotencyKey: checkpoint.idempotencyKey })
-  if (createAttempt.outcome !== 'RECORDED') return { outcome: 'blocked', reason: createAttempt.outcome === 'INDETERMINATE' ? 'refund_create_attempt_uncertain' : 'refund_create_reconcile_only' }
+  if (createAttempt.outcome !== 'RECORDED') {
+    if (createAttempt.outcome !== 'REPLAYED' || !await claimRejectedRefundCreateRecovery({refundId,paymentId:checkpoint.paymentId,idempotencyKey:checkpoint.idempotencyKey}))
+      return { outcome: 'blocked', reason: createAttempt.outcome === 'INDETERMINATE' ? 'refund_create_attempt_uncertain' : 'refund_create_reconcile_only' }
+  }
   const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
   console.warn('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false, body: await response?.clone().json().catch(() => null) })
   const reconcileAfterUncertainty = async (): Promise<RefundExecutionResult> => {

@@ -19,3 +19,10 @@ export function normalizeReceiptName(value: unknown): string | null {
   if (!trimmed || trimmed.toLowerCase() === "customer") return null
   return trimmed
 }
+
+/** Preserve all seven ledger decimal places while retaining the familiar .00 display. */
+export function formatReceiptAmount(amount:number):string {
+ if(!Number.isFinite(amount)||amount<0)return '—'
+ const [whole,fraction]=amount.toFixed(7).split('.')
+ return whole+'.'+fraction.replace(/0+$/, '').padEnd(2,'0')
+}

@@ -1,4 +1,5 @@
-import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetInbound} from "@/lib/r36-testnet-ingress"
+import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetApproval} from "@/lib/r36-testnet-ingress"
+import { readPiA2UQueueAdmission } from "@/lib/pi-a2u-queue-admission"
 import { type NextRequest } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
 import { serverConfig } from "@/lib/server-config"
@@ -113,8 +114,14 @@ export async function POST(request: NextRequest) {
       })
     }
     const paymentId = rawPaymentId
-    if (requiresTestnetIngress() && !await verifyTestnetInbound(canonicalPayment))
+    if (requiresTestnetIngress() && !await verifyTestnetApproval(canonicalPayment))
       return new Response(JSON.stringify({error:"Testnet payment admission mismatch",code:"TESTNET_INGRESS_HELD"}),{status:503,headers:{"Content-Type":"application/json"}})
+
+    // Recheck just before first approval, not only at SDK start. Already-approved
+    // or transacted retries keep the original reconciliation path available.
+    if (requiresTestnetIngress() && canonicalPayment.status?.developer_approved === false &&
+        await readPiA2UQueueAdmission() !== 'EMPTY')
+      return new Response(JSON.stringify({error:"Pi outgoing payment readiness unavailable",code:"PI_A2U_PROVIDER_HELD"}),{status:503,headers:{"Content-Type":"application/json"}})
 
     console.log("[Pi Webhook] Our Payment ID:", paymentId)
 

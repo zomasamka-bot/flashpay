@@ -1,9 +1,11 @@
 import { timingSafeEqual } from "node:crypto"
-import { NextRequest, NextResponse } from "next/server"
+import { after, NextRequest, NextResponse } from "next/server"
 import { query } from "@/lib/db"
+import {ensurePrivateTrustHost} from "@/lib/r36-private-host-wake"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+export const maxDuration = 300
 
 // The cutover was sampled on the production database. Neither QStash nor an
 // event caller can move the boundary. The four holds are defense in depth.
@@ -29,8 +31,9 @@ async function observe(request: NextRequest) {
       (id !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))) {
     return NextResponse.json({ error: "Invalid recovery scope" }, { status: 400 })
   }
-  // Read all new intents on periodic wake. A retry or a fresh process starts
-  // from durable state without a mutable cursor, clearing keys, or dispatching.
+  // Poll unfinished work only. A final checkpoint alone is insufficient: a
+  // missing finality seal or refund presentation remains recoverable work.
+  // This filter grants no authority; original selectors still authorize work.
   const rows = await query(`
     WITH scoped AS (
       SELECT i.payment_id, i.merchant_id, i.merchant_uid, i.customer_amount
@@ -38,6 +41,38 @@ async function observe(request: NextRequest) {
       WHERE i.created_at > $1::timestamptz AND i.created_at <= statement_timestamp()
         AND ($2::text IS NULL OR i.payment_id = $2)
         AND encode(sha256(convert_to(i.payment_id,'UTF8')),'hex') <> ALL($3::text[])
+        AND NOT EXISTS (
+          SELECT 1 FROM public.settlement_checkpoints done
+          WHERE done.payment_id=i.payment_id AND done.merchant_id=i.merchant_id
+            AND done.merchant_uid=i.merchant_uid AND done.customer_amount=i.customer_amount
+            AND done.merchant_amount=i.customer_amount AND done.app_commission=0
+            AND done.stage='db_finalized' AND done.pi_completed_at IS NOT NULL
+            AND done.db_finalized_at IS NOT NULL AND done.horizon_confirmed_at IS NOT NULL
+            AND done.a2u_txid=done.prepared_tx_hash
+            AND NOT EXISTS(SELECT 1 FROM public.refund_checkpoints conflict WHERE conflict.payment_id=i.payment_id)
+            AND EXISTS(SELECT 1 FROM public.financial_wallet_finality_seals seal
+              WHERE seal.network='Pi Testnet' AND seal.source_wallet=done.a2u_from_address
+                AND seal.owner_payment_id=i.payment_id AND seal.operation_kind='settlement'
+                AND seal.owner_operation_id=done.a2u_payment_id AND seal.prepared_tx_hash=done.prepared_tx_hash
+                AND seal.prepared_sequence=done.prepared_sequence::text)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM public.refund_checkpoints done
+          JOIN public.settlement_checkpoints identity ON identity.payment_id=done.payment_id
+          WHERE done.payment_id=i.payment_id AND done.status='completed' AND done.stage='audit_recorded'
+            AND identity.stage='payment_identity' AND identity.merchant_id=i.merchant_id
+            AND identity.merchant_uid=i.merchant_uid AND identity.customer_amount=i.customer_amount
+            AND identity.merchant_amount=i.customer_amount AND identity.app_commission=0
+            AND done.amount=i.customer_amount AND done.payer_uid=identity.payer_uid
+            AND EXISTS(SELECT 1 FROM public.financial_wallet_finality_seals seal
+              WHERE seal.network='Pi Testnet' AND seal.owner_payment_id=i.payment_id
+                AND seal.operation_kind='refund' AND seal.owner_operation_id=done.refund_id
+                AND seal.prepared_tx_hash=done.refund_txid)
+            AND EXISTS(SELECT 1 FROM public.refund_audit_events proof
+              WHERE proof.refund_id=done.refund_id AND proof.payment_id=i.payment_id
+                AND proof.idempotency_key=done.idempotency_key
+                AND proof.event_type='refund_presentation_proof_recorded')
+        )
     ), classified AS (
       SELECT CASE
         WHEN c.payment_id IS NULL OR c.merchant_id IS DISTINCT FROM i.merchant_id OR c.merchant_uid IS DISTINCT FROM i.merchant_uid
@@ -50,18 +85,22 @@ async function observe(request: NextRequest) {
         WHEN r.payment_id IS NOT NULL AND c.stage <> 'payment_identity' THEN 'held'
         WHEN c.stage='db_finalized' OR r.status='completed' THEN 'terminal_checkpoint'
         ELSE 'pending'
-      END AS state
+      END AS state,
+      ((c.u2a_verified_at IS NOT NULL AND c.stage <> 'db_finalized') OR
+       (c.u2a_approval_attempted_at IS NOT NULL AND c.u2a_verified_at IS NULL AND c.stage='payment_identity') OR c.stage='db_finalized' OR
+       (r.payment_id IS NOT NULL AND r.status <> 'manual_review_required')) AS evidence_work
       FROM scoped i LEFT JOIN public.settlement_checkpoints c USING (payment_id)
       LEFT JOIN public.refund_checkpoints r USING (payment_id)
     )
     SELECT current_setting('neon.branch_id',true) AS branch,
       count(*) FILTER (WHERE state='held')::int AS held,
       count(*) FILTER (WHERE state='pending')::int AS pending,
-      count(*) FILTER (WHERE state='terminal_checkpoint')::int AS terminal
+      count(*) FILTER (WHERE state='terminal_checkpoint')::int AS terminal,
+      count(*) FILTER (WHERE evidence_work)::int AS evidence_work
     FROM classified`, [cutover, id ?? null, historicalHolds])
-  const counts = rows?.[0] as {branch?: string; held?: number; pending?: number; terminal?: number} | undefined
+  const counts = rows?.[0] as {branch?: string; held?: number; pending?: number; terminal?: number;evidence_work?:number} | undefined
   if (rows?.length !== 1 || counts?.branch !== "br-tiny-mode-aliatv40" ||
-      ![counts.held, counts.pending, counts.terminal].every(n => Number.isSafeInteger(n) && Number(n) >= 0)) {
+      ![counts.held, counts.pending, counts.terminal,counts.evidence_work].every(n => Number.isSafeInteger(n) && Number(n) >= 0)) {
     return NextResponse.json({ error: "Recovery observation unavailable" }, { status: 503 })
   }
   const result = { mode: "observe_only", scope: id ? "one" : "since_cutover", held: counts.held,
@@ -69,12 +108,45 @@ async function observe(request: NextRequest) {
   console.info("[Recovery new intents]", result)
   if (process.env.FLASHPAY_RECOVERY_SCOPE === "admitted_new") {
     try {
+      if(Number(counts.held)+Number(counts.pending)+Number(counts.terminal)===0)
+        return NextResponse.json({scope:result.scope,mode:"admitted_new",dispatch:"no_unfinished_work",
+          executorInvoked:false,financialOutcome:"not_invoked"},{headers:{"Cache-Control":"no-store"}})
+      // Empty periodic wakes remain cheap. No rights or historical cursor change.
+      if(Number(counts.evidence_work)>0&&!await ensurePrivateTrustHost('recovery')) {
+        // The issuer may be waiting for this original terminal seal. Recording
+        // verified completed facts is independent of issuing a new permission;
+        // never enter an executor through this readiness-failure branch.
+        const {recordAdmittedTerminalSeal}=await import("@/lib/r36-terminal-seal")
+        const policy=process.env.R36_SCOPED_POLICY_DIGEST
+        const terminal=policy?await recordAdmittedTerminalSeal(id??null,policy):null
+        if(terminal==='terminal_seal_recorded'||terminal==='terminal_presentation_recorded')
+          return NextResponse.json({scope:result.scope,mode:"admitted_new",dispatch:terminal,
+            executorInvoked:false,financialOutcome:"not_invoked"},{headers:{"Cache-Control":"no-store"}})
+        return NextResponse.json({error:'Private evidence service unavailable',dispatch:'evidence_service_held'},{status:503,headers:{'Cache-Control':'no-store'}})
+      }
       const {resumeAdmittedRecovery} = await import("@/lib/r36-scoped-recovery")
       const dispatch = await resumeAdmittedRecovery(id ?? null)
       const invoked = dispatch.endsWith("_invoked") || dispatch === "executor_held"
       const outcome = {scope:result.scope, mode:"admitted_new", dispatch, executorInvoked:invoked,
         financialOutcome:invoked ? "verify_durable_result" : "not_invoked"}
       console.info("[Recovery admitted right]", outcome)
+      if(dispatch==='settlement_invoked')after(async()=>{
+        try{
+          const {continueConfirmedSettlement,claimConfirmedFollowup}=await import("@/lib/r36-confirmed-followup")
+          const followup=await continueConfirmedSettlement({env:process.env,claim:claimConfirmedFollowup,send:fetch,select:async()=>{
+            const unfinished=await query(`SELECT s.payment_id FROM public.settlement_checkpoints s
+              JOIN public.payment_create_intents i USING(payment_id)
+              WHERE i.created_at>$1::timestamptz AND ($2::text IS NULL OR s.payment_id=$2)
+                AND encode(sha256(convert_to(s.payment_id,'UTF8')),'hex')<>ALL($3::text[])
+                AND s.stage IN ('horizon_confirmed','pi_completed')
+                AND s.horizon_confirmed_at IS NOT NULL AND s.a2u_txid=s.prepared_tx_hash
+                AND NOT EXISTS(SELECT 1 FROM public.refund_checkpoints r WHERE r.payment_id=s.payment_id)
+              ORDER BY s.horizon_confirmed_at LIMIT 1`,[cutover,id??null,historicalHolds])
+            return unfinished?.length===1?String((unfinished[0] as {payment_id:string}).payment_id):null
+          }})
+          console.info("[Recovery confirmed followup]",{status:followup})
+        }catch{console.warn("[Recovery confirmed followup]",{status:"unavailable_original_guards_preserved"})}
+      })
       const unavailable = dispatch === "configuration_held" || dispatch === "runtime_held"
       return NextResponse.json(outcome, {status:unavailable ? 503 : 200, headers:{"Cache-Control":"no-store"}})
     } catch {

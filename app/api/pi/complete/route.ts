@@ -1,3 +1,4 @@
+import {originalRefundCertificationEnabled} from "@/lib/r36-operation-policy"
 import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetInbound} from "@/lib/r36-testnet-ingress"
 import { after, type NextRequest, NextResponse } from "next/server"
 import { redis, isRedisConfigured } from "@/lib/redis"
@@ -314,7 +315,10 @@ export async function POST(request: NextRequest) {
     // U2A completion to Settlement; the 0.10 amount is certification scope, not a
     // general customer refund rule. Build evidence enforces hold -> completed ->
     // Refund authority ordering and the exact production/Testnet/0.10 scope.
-    const dr11ExactIdentity = process.env.VERCEL_ENV === "production" && finalPiPayment.network === "Pi Testnet" && finalPiPayment.amount === 0.1
+    const previousCertificationHold=await readDr11RefundCertificationHold(preFlashPaymentId)
+    if(previousCertificationHold.outcome==='INDETERMINATE')return NextResponse.json({error:'Certification recovery unavailable'},{status:503})
+    const dr11ExactIdentity = originalRefundCertificationEnabled(finalPiPayment.network,finalPiPayment.amount) ||
+      (previousCertificationHold.outcome==='HELD' && finalPiPayment.network==='Pi Testnet' && finalPiPayment.amount===0.1)
     if (dr11ExactIdentity) {
       const autoRefundHold = await recordDr11RefundCertificationHold({
         paymentId: preFlashPaymentId,

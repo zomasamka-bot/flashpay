@@ -16,13 +16,13 @@ export async function checkR36RuntimeAcl(db: {
         ('r36_independent_u2a_attestations'),('r36_certificate_policies'),
         ('r36_certificate_requests'),('r36_certificate_receipts'),('r36_certificate_revocations'),
         ('r36_recovery_trial_reservations'),('r36_testnet_ingress_reservations'),
-        ('r36_wallet_successor_requests')),
+        ('r36_wallet_successor_requests'),('r36_prepared_evidence_candidates'),('r36_payment_intake')),
       objects AS (SELECT to_regclass('public.' || name) AS oid FROM required),
       helpers(signature) AS (VALUES
         ('public.r36_claim_bound_successor(text,text,text,text,text,text,text)'),
         ('public.r36_terminal_ingress_clearance(text,text,text)')),
       functions AS (SELECT to_regprocedure(signature) AS oid FROM helpers)
-      SELECT count(*)=16 AND bool_and(c.oid IS NOT NULL AND c.relkind IN ('r','p'))
+      SELECT count(*)=18 AND bool_and(c.oid IS NOT NULL AND c.relkind IN ('r','p'))
         AND NOT coalesce(bool_or(CASE WHEN c.oid IS NULL THEN true ELSE
           has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
           OR has_any_column_privilege(current_user,c.oid,'INSERT,UPDATE,REFERENCES')
