@@ -110,7 +110,7 @@ export async function runRegistrationOperator(input:unknown){
  // Every driver connection/reconnect requires TLS and verifies CA + hostname;
  // no caller-supplied SSL option or plaintext/prefer fallback is accepted.
  const sql=postgres({host:productionR36Host,port:5432,database:'neondb',username:'r36_registrar',password:decodeURIComponent(u.password),
-  ssl:{rejectUnauthorized:true,servername:productionR36Host,minVersion:'TLSv1.2'},prepare:false,max:1,idle_timeout:10,connect_timeout:8,onnotice:()=>{}})
+  ssl:{rejectUnauthorized:true,servername:productionR36Host,minVersion:'TLSv1.2'},prepare:false,max:1,idle_timeout:30,connect_timeout:8,onnotice:()=>{}})
  let listening=false
  try{
   const databaseFor=(nonce:string):R36CertificateDatabase=>({begin:async fn=>{

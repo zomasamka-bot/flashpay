@@ -158,7 +158,9 @@ export async function runProductionOperator(input: unknown) {
   const url = new URL(c.databaseUrl)
   const sql = postgres({host:databaseHost, database:'neondb', port:5432, username:url.username,
     password:decodeURIComponent(url.password), ssl:{rejectUnauthorized:true,servername:databaseHost},
-    prepare:false, max:1, idle_timeout:10, connect_timeout:8, onnotice:()=>{}})
+    // Retain the single TLS connection across the existing 15s reader interval.
+    // Identity, ACL and request scope are still checked in every transaction.
+    prepare:false, max:1, idle_timeout:30, connect_timeout:8, onnotice:()=>{}})
   const databaseFor = (approvalId:string|null):R36CertificateDatabase => ({
     async begin<T>(run: (tx: Tx)=>Promise<T>): Promise<T> {
       // postgres.js adapts arrays of results. Wrap T to preserve its type.

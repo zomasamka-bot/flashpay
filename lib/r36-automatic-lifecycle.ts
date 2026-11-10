@@ -47,12 +47,19 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
    if(successor)requireFact(successor.sourceWallet===wallet&&hex(successor.nonce),'AUTOMATIC_SUCCESSOR_IDENTITY')
    const request={action:'prior_context',wallet,paymentId:a.owner_payment_id,...(successor?{nonce:successor.nonce}:{})},ctx=await context(request)
    if(!successor&&prior&&prior.context.contextDigest===ctx.contextDigest&&prior.expiresAt>Math.floor(Date.now()/1000)+15)return{status:'PRIOR_CLOSURE_CURRENT',proofDigest:prior.proofDigest}
-   const snapshot=await readR36LiveSource(db,'service'),as=snapshot.rows.authorities.filter(x=>x.network==='Pi Testnet'&&x.source_wallet===wallet)
+   const f=await facts(profile)
+   // Independent read-only acquisitions may overlap. Nothing is published or
+   // accepted until every source succeeds and the original joint review passes.
+   const [snapshot,histories,outboundPi]=await Promise.all([
+    readR36LiveSource(db,'service'),
+    appendR36LiveHistories(f.histories as Parameters<typeof appendR36LiveHistories>[0],profile.liveHistoryPolicy,ports.fetcher),
+    piRecord((ctx.terminal as Row).piPaymentId)
+   ])
+   const as=snapshot.rows.authorities.filter(x=>x.network==='Pi Testnet'&&x.source_wallet===wallet)
    requireFact(as.length===1&&Object.keys(a).every(k=>as[0][k]===a[k]),'AUTOMATIC_AUTHORITY_CHANGED')
    const completed=a.operation_kind==='settlement'?snapshot.rows.settlements.some(s=>s.payment_id===a.owner_payment_id&&s.stage==='db_finalized'):snapshot.rows.refunds.some(r=>r.payment_id===a.owner_payment_id&&r.refund_id===a.owner_operation_id&&r.status==='completed'&&r.stage==='audit_recorded')
    requireFact(completed,'AUTOMATIC_TERMINAL_CHANGED')
-   const f=await facts(profile),histories=await appendR36LiveHistories(f.histories as Parameters<typeof appendR36LiveHistories>[0],profile.liveHistoryPolicy,ports.fetcher)
-   const made=produceR36TerminalEvidence({context:ctx,snapshot,histories,outboundPi:await piRecord((ctx.terminal as Row).piPaymentId),exceptions:f.exceptions as {records:Row[];isolation:Row[]},executionScopeDigest:profile.executionScopeDigest as string})
+   const made=produceR36TerminalEvidence({context:ctx,snapshot,histories,outboundPi,exceptions:f.exceptions as {records:Row[];isolation:Row[]},executionScopeDigest:profile.executionScopeDigest as string})
    requireFact(made.outcome==='UNSIGNED_TERMINAL_REQUIRES_CUSTODIAN'&&made.artifacts,'AUTOMATIC_TERMINAL_EVIDENCE_'+('reason'in made?made.reason:'MISSING'))
    const r=await publishR36LifecycleJob({kind:'prior',context:ctx,cutoffLedger:String(made.cutoffLedger),artifacts:made.artifacts!,privateKeyPem:c.custodianPrivateKeyPem,jobDirectory:c.jobDirectory,request:{...request,action:'record_prior'}},{refresh:()=>context(request),submit:call})
    requireFact(['RECORDED','REPLAYED'].includes(String(r.outcome))&&hex(r.proofDigest),'AUTOMATIC_PRIOR_NOT_RECORDED')
@@ -65,6 +72,9 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
  }
  let registeredStatus:Row|undefined
  function beginCycle(){registeredStatus=undefined}
+ // Observation for the scheduler only. It exists only after the exact original
+ // registrar/issuer path succeeds in THIS cycle; it grants no financial right.
+ function registeredResult(){return registeredStatus?{...registeredStatus}:undefined}
  function cycleResult(fallback:Row){
   // A later, original registrar success may resolve this cycle's earlier
   // unbound-successor observation. Never suppress another evidence failure.
@@ -86,5 +96,5 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
    return registered
   }
  }
- return{prepare,register,beginCycle,cycleResult}
+ return{prepare,register,beginCycle,cycleResult,registeredResult}
 }
