@@ -134,6 +134,14 @@ async function observe(request: NextRequest) {
       const outcome = {scope:result.scope, mode:"admitted_new", dispatch, executorInvoked:invoked,
         financialOutcome:invoked ? "verify_durable_result" : "not_invoked"}
       console.info("[Recovery admitted right]", outcome)
+      // The external /complete wake may prepare XDR before the private producer
+      // observes it. Notify that existing reader immediately after progress;
+      // original SQL/issuer guards still decide whether anything is executable.
+      if(['preparation_invoked','inbound_observation_invoked','refund_invoked',
+          'refund_finalization_invoked','refund_projection_invoked','terminal_seal_recorded',
+          'terminal_presentation_recorded'].includes(dispatch))after(async()=>{
+        await ensurePrivateTrustHost('completion')
+      })
       if(dispatch==='settlement_invoked')after(async()=>{
         try{
           const {continueConfirmedSettlement,claimConfirmedFollowup}=await import("@/lib/r36-confirmed-followup")

@@ -4,5 +4,8 @@
       "path": "/api/recovery/new-intents",
       "schedule": "0 21 * * *"
     }
+  ],
+  "regions": [
+    "fra1"
   ]
 }

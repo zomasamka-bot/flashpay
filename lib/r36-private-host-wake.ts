@@ -16,7 +16,9 @@ export function createPrivateHostWake(ports:Ports){
   if(env.R36_HOST_MODE!=='vercel_on_demand'||env.VERCEL_ENV!=='production'||env.R36_HOST_ORIGIN!==origin)return false
   const key=env.R36_HOST_WAKE_SECRET,policy=env.R36_SCOPED_POLICY_DIGEST
   if(!key||!/^[A-Za-z0-9_-]{64}$/.test(key)||!policy||!/^[0-9a-f]{64}$/.test(policy))return false
-  if(ports.now()<freshUntil&&freshPolicy===policy)return true
+  // Completed checkpoint progress must reach the producer even inside the
+  // short readiness cache. This is an operational wake, never a cached right.
+  if(reason!=='completion'&&ports.now()<freshUntil&&freshPolicy===policy)return true
   try{
    const protection=env.R36_HOST_DEPLOYMENT_BYPASS;if(!protection||protection.length<32||protection.length>512||!/^[A-Za-z0-9_-]+$/.test(protection))return false
    const body=JSON.stringify({schema:'R36_PRIVATE_WAKE_V1',reason}),stamp=String(ports.now())
