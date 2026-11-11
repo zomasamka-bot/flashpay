@@ -78,7 +78,7 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
  function cycleResult(fallback:Row){
   // A later, original registrar success may resolve this cycle's earlier
   // unbound-successor observation. Never suppress another evidence failure.
-  return fallback.status==='AUTOMATIC_LIFECYCLE_HELD'&&fallback.reason==='AUTOMATIC_TERMINAL_EVIDENCE_UNRESOLVED_SETTLEMENT_RIGHT'&&registeredStatus?registeredStatus:fallback
+  return fallback.status==='AUTOMATIC_LIFECYCLE_HELD'&&(fallback.reason==='AUTOMATIC_TERMINAL_EVIDENCE_UNRESOLVED_SETTLEMENT_RIGHT'||fallback.reason==='AUTOMATIC_TERMINAL_EVIDENCE_UNRESOLVED_REFUND_RIGHT_NOT_ISOLATED')&&registeredStatus?registeredStatus:fallback
  }
  async function register(binding:Row):Promise<R36CertificateResult>{
   try{const r=await ports.register(binding);requireFact(['RECORDED','REPLAYED'].includes(r.outcome)&&hex(r.certificateDigest)&&r.authorizesFinancialRelease===false&&r.authorizesWalletActivation===false&&r.authorizesRotation===false,'ORIGINAL_REGISTRATION_HELD');registeredStatus={status:'SUCCESSOR_ADMISSION_VERIFIED'};return r}catch(first){

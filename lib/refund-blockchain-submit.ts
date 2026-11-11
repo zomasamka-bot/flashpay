@@ -171,7 +171,9 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
   }
 }
 
-export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBlockchainSubmitResult> {
+export async function submitRefundBlockchainOnce(input: Input, mode: "execute" | "evidence_only" = "execute"): Promise<RefundBlockchainSubmitResult | { outcome: "EVIDENCE_PREPARED" }> {
+  if (mode !== "execute" && mode !== "evidence_only") return { outcome: "FAILED", code: "invalid_input", message: "Invalid refund preparation mode" }
+  if (mode === "evidence_only" && !await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund preparation ownership lost" }
   if (!isExactInput(input) || input.payment.status.transaction_verified !== false || input.payment.status.developer_completed !== false) return { outcome: "FAILED", code: "invalid_input", message: "Refund input is not an eligible unsent Testnet refund" }
   const seed = getPiSigningSeed()
   if (!seed) return { outcome: "FAILED", code: "configuration", message: "Refund signing configuration is unavailable" }
@@ -209,6 +211,9 @@ export async function submitRefundBlockchainOnce(input: Input): Promise<RefundBl
       t.sign(keypair);return t
     },r36PreparedEvidenceStore,{recipientPublicKeyPem:process.env.FLASHPAY_R36_EVIDENCE_RECIPIENT_PUBLIC_KEY??'',sign:t=>{t.sign(keypair)}})
   if(candidate.outcome!=='READY_FOR_ORIGINAL_GUARDS')return {outcome:'FAILED',code:'submit_failed',message:'Prepared evidence unavailable or changed; hold without resigning'}
+  // Evidence is encrypted staging only: no prepared authority, send attempt,
+  // accounting or Horizon POST is allowed through the preparation-only path.
+  if(mode==='evidence_only')return {outcome:'EVIDENCE_PREPARED'}
   const transaction=candidate.transaction
 
   const envelopeXdr = transaction.toXDR()

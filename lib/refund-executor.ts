@@ -426,7 +426,9 @@ export async function readRefundPreparedReplayUnderExistingOwner(refundId: strin
   }
 }
 
-export async function executeRefundBlockchain(refundId: string, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<RefundExecutionResult> {
+export async function executeRefundBlockchain(refundId: string, refundAuthority?: { paymentId: string; refundId: string } | null, mode: 'execute' | 'evidence_only' = 'execute'): Promise<RefundExecutionResult> {
+  if(mode!=='execute'&&mode!=='evidence_only')return {outcome:'blocked',reason:'invalid_stage'}
+  if(mode==='evidence_only'&&currentRecoveryRight())return {outcome:'blocked',reason:'preflight_failed'}
   if (!isRedisConfigured || !serverConfig.piApiKey) return { outcome: 'blocked', reason: 'unavailable' }
   let checkpoint = await getRefundCheckpointAuthoritative(refundId)
   if (!checkpoint || checkpoint.stage !== 'wallet_submission_started' || checkpoint.status !== 'pending' || !checkpoint.refundPaymentId) return { outcome: 'blocked', reason: 'invalid_stage' }
@@ -469,12 +471,13 @@ export async function executeRefundBlockchain(refundId: string, refundAuthority?
     return { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId }
   }
   const evidence = await import('./refund-blockchain-evidence').then(({ verifyRefundBlockchainEvidence }) => verifyRefundBlockchainEvidence({ checkpoint, payment: refundPayment }))
-  if (evidence.outcome === 'VERIFIED_TX') return persistRecoveredConfirmation(evidence.txid)
+  if (evidence.outcome === 'VERIFIED_TX') return mode==='evidence_only'?{outcome:'blocked',reason:'already_confirmed'}:persistRecoveredConfirmation(evidence.txid)
   const claim = await readRefundBlockchainSubmissionClaimState(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId)
   if (claim.state === 'uncertain') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   const prepared = claim.state === 'present' ? await readRefundPreparedSubmitState(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, refundPaymentId) : null
   if (prepared?.state === 'uncertain') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
   if (prepared?.state === 'present') {
+    if(mode==='evidence_only')return {outcome:'blocked',reason:'already_prepared'}
     const preparedEvidence = await import('./refund-blockchain-submit').then(({ readRefundPreparedRecoveryEvidence }) => readRefundPreparedRecoveryEvidence({ checkpoint: prepared.checkpoint, payment: refundPayment }))
     if (preparedEvidence.outcome === 'VERIFIED') return persistRecoveredConfirmation(prepared.preparedHash)
     if (preparedEvidence.outcome !== 'PREPARED_IS_NEXT') return { outcome: 'blocked', reason: 'blockchain_uncertain' }
@@ -498,7 +501,8 @@ export async function executeRefundBlockchain(refundId: string, refundAuthority?
   try {
     const claim = await beginRefundBlockchainSubmissionClaim(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, checkpoint.refundPaymentId)
     if (!claim) return { outcome: 'blocked', reason: 'blockchain_claim_conflict' }
-    const submission = await import('./refund-blockchain-submit').then(({ submitRefundBlockchainOnce }) => submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment, verifyOwned: walletLock.verifyOwned }))
+    const submission = await import('./refund-blockchain-submit').then(({ submitRefundBlockchainOnce }) => submitRefundBlockchainOnce({ checkpoint: claim.checkpoint, payment: refundPayment, verifyOwned: walletLock.verifyOwned },mode))
+    if(submission.outcome==='EVIDENCE_PREPARED')return {outcome:'blocked',reason:'prepared_evidence_only'}
     if (submission.outcome !== 'CONFIRMED_TX') {
       if (submission.code === 'submit_failed') return { outcome: 'blocked', reason: submission.code }
       const failureIntent = await readPiWalletIntent(refundPayment.from_address)

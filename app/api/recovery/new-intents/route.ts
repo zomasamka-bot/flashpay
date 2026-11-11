@@ -105,7 +105,7 @@ async function observe(request: NextRequest) {
   }
   const result = { mode: "observe_only", scope: id ? "one" : "since_cutover", held: counts.held,
     pending: counts.pending, terminalCheckpoints: counts.terminal, financialDispatch: false }
-  console.info("[Recovery new intents]", result)
+  console.info("[Recovery new intents]", {...result,phase:"observation",configuredMode:process.env.FLASHPAY_RECOVERY_SCOPE})
   if (process.env.FLASHPAY_RECOVERY_SCOPE === "admitted_new") {
     try {
       if(Number(counts.held)+Number(counts.pending)+Number(counts.terminal)===0)
@@ -127,6 +127,14 @@ async function observe(request: NextRequest) {
         console.info('[R36 READY HANDOFF]',{scope:id?'one':'since_cutover',result:admitted,
           durationMs:Math.round(performance.now()-started)})
         if(admitted!=='no_ready_admitted_right')dispatch=admitted
+      }
+      // An unissued refund needs its encrypted XDR candidate BEFORE the evidence
+      // service can prove the successor. This mode cannot acquire financial
+      // authority or send; all original selectors and execution guards remain.
+      if(dispatch==='no_confirmed_right'&&Number(counts.evidence_work)>0){
+        const {preparePendingRefundEvidence}=await import("@/lib/r36-scoped-recovery")
+        const prepared=await preparePendingRefundEvidence(id??null)
+        console.info('[Recovery refund evidence]',{scope:result.scope,result:prepared,financialDispatch:false})
       }
       // Empty periodic wakes remain cheap. No rights or historical cursor change.
       if(dispatch==='no_confirmed_right'&&Number(counts.evidence_work)>0&&!await ensurePrivateTrustHost('recovery')) {
@@ -173,7 +181,9 @@ async function observe(request: NextRequest) {
       })
       const unavailable = dispatch === "configuration_held" || dispatch === "runtime_held"
       return NextResponse.json(outcome, {status:unavailable ? 503 : 200, headers:{"Cache-Control":"no-store"}})
-    } catch {
+    } catch (error) {
+      const code=error instanceof Error&&/^[A-Z0-9_]{1,96}$/.test(error.message)?error.message:'RECOVERY_DEPENDENCY_UNAVAILABLE'
+      console.warn('[Recovery unavailable]',{scope:result.scope,code,financialOutcome:'verify_durable_result'})
       return NextResponse.json({error:"Scoped recovery unavailable"}, {status:503})
     }
   }

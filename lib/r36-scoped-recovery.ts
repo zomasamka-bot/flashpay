@@ -112,3 +112,22 @@ export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'con
     return result.state==='blocked'||result.result.outcome!=='success'?'executor_held':'refund_finalization_invoked'
   })
 }
+
+// Break only the operational readiness cycle. The ORIGINAL SQL selector must
+// approve this exact unsent refund for preparation. No scoped send right is
+// manufactured, and the executor's explicit mode returns before authority/POST.
+export async function preparePendingRefundEvidence(subject:string|null) {
+  const policy=process.env.R36_SCOPED_POLICY_DIGEST
+  if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new'||!policy||!/^[0-9a-f]{64}$/.test(policy)||currentRecoveryRight())return 'preparation_held'
+  const client=await getR36RestrictedClient()
+  if(!client)return 'preparation_held'
+  const rows=await client.unsafe('SELECT public.r36_next_testnet_preparation($1,$2) AS candidate',[subject,policy])
+  if(rows.length!==1)throw Error('R36_PREPARATION_SELECTION_UNAVAILABLE')
+  const c=rows[0].candidate
+  if(c===null||c?.kind!=='refund')return 'no_pending_refund_evidence'
+  if(c.phase!=='preparation_only'||c.stage!=='wallet_submission_started'||c.piCreated!==true)return 'no_pending_refund_evidence'
+  if(typeof c.id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(c.id)||
+    (subject!==null&&c.id!==subject)||typeof c.op!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(c.op))throw Error('R36_PREPARATION_SELECTION_MISMATCH')
+  const result=await executeRefundBlockchain(c.op,{paymentId:c.id,refundId:c.op},'evidence_only')
+  return result.outcome==='blocked'&&result.reason==='prepared_evidence_only'?'refund_evidence_prepared':'refund_evidence_held'
+}
