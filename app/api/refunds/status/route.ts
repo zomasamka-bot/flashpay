@@ -1,40 +1,4 @@
-import "server-only"
-
-import { timingSafeEqual } from "crypto"
-import { NextResponse } from "next/server"
-import { readRefundPresentation } from "@/lib/refund-presentation-reader"
-import { serverConfig } from "@/lib/server-config"
-
+// KERNEL-1: original guarded handlers; no host financial decisions.
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
-
-export async function GET(request: Request) {
-  const supplied = request.headers.get("x-refund-internal-secret")
-  if (!serverConfig.refundInternalSecret || !supplied) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } })
-  }
-  const expectedBuffer = Buffer.from(serverConfig.refundInternalSecret)
-  const suppliedBuffer = Buffer.from(supplied)
-  if (expectedBuffer.length !== suppliedBuffer.length || timingSafeEqual(expectedBuffer, suppliedBuffer) !== true) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } })
-  }
-
-  const refundId = new URL(request.url).searchParams.get("refundId")
-  if (typeof refundId !== "string" || refundId.trim().length === 0) {
-    return NextResponse.json({ error: "Invalid refundId" }, { status: 400, headers: { "Cache-Control": "no-store" } })
-  }
-
-  const result = await readRefundPresentation(refundId, undefined, undefined, undefined, "record")
-  console.info("REFUND_PRESENTATION_READ", { refundId, result })
-  if (result.outcome === "NOT_FOUND") {
-    return NextResponse.json({ error: "Not found" }, { status: 404, headers: { "Cache-Control": "no-store" } })
-  }
-  if (result.outcome === "INDETERMINATE") {
-    return NextResponse.json({ error: "Refund status unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } })
-  }
-
-  return NextResponse.json({ outcome: "FOUND", presentation: result.presentation }, {
-    status: 200,
-    headers: { "Cache-Control": "no-store" },
-  })
-}
+export { GET } from "@flashpay/financial-kernel/handlers/refunds/status/route"

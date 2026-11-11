@@ -3,18 +3,18 @@
   "version": "0.1.4",
   "private": true,
   "scripts": {
-    "r36:production-registrar": "node .r36-build/r36-registration-operator.js",
+    "r36:production-registrar": "node node_modules/@flashpay/financial-kernel/dist/lib/r36-registration-operator.js",
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
     "start": "next start",
-    "r36:build": "tsc -p tsconfig.r36.json",
-    "r36:operator": "node .r36-build/r36-operator-cli.js",
-    "r36:production-operator": "node .r36-build/r36-production-operator.js",
-    "r36:collect-inbound": "node .r36-build/r36-inbound-evidence-cli.js",
-    "r36:lifecycle-job": "node .r36-build/r36-wallet-lifecycle-cli.js",
-    "r36:produce-live-evidence": "node .r36-build/r36-live-evidence-cli.js",
-    "r36:publish-live-evidence": "node .r36-build/r36-evidence-publication-cli.js"
+    "r36:build": "node tools/verify-kernel.cjs",
+    "r36:operator": "node node_modules/@flashpay/financial-kernel/dist/lib/r36-operator-cli.js",
+    "r36:production-operator": "node node_modules/@flashpay/financial-kernel/dist/lib/r36-production-operator.js",
+    "r36:collect-inbound": "node node_modules/@flashpay/financial-kernel/dist/lib/r36-inbound-evidence-cli.js",
+    "r36:lifecycle-job": "node node_modules/@flashpay/financial-kernel/dist/lib/r36-wallet-lifecycle-cli.js",
+    "r36:produce-live-evidence": "node node_modules/@flashpay/financial-kernel/dist/lib/r36-live-evidence-cli.js",
+    "r36:publish-live-evidence": "node node_modules/@flashpay/financial-kernel/dist/lib/r36-evidence-publication-cli.js"
   },
   "overrides": {
     "react": "^19",
@@ -78,7 +78,8 @@
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
-    "vaul": "0.9.9"
+    "vaul": "0.9.9",
+    "@flashpay/financial-kernel": "file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.9",

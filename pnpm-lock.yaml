@@ -12,6 +12,9 @@ importers:
 
   .:
     dependencies:
+      '@flashpay/financial-kernel':
+        specifier: file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz
+        version: file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz(next@15.5.28(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@hookform/resolvers':
         specifier: ^3.10.0
         version: 3.10.0(react-hook-form@7.89.0(@types/react@19.3.0)(react@19.3.0))
@@ -236,6 +239,15 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@flashpay/financial-kernel@file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz':
+    resolution: {integrity: sha512-uRgFaoLxs/URunEnHlLgf7krxJOmc5f2CiraIsaOz7EvdyOVTl+cplD1mRPFeOLY9xMp5GyNXKjGZ5flG6om6w==, tarball: file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz}
+    version: 0.1.0-kernel.3
+    engines: {node: 24.x}
+    peerDependencies:
+      next: 15.5.28
+      react: ^19
+      react-dom: ^19
 
   '@floating-ui/core@1.8.0':
     resolution: {integrity: sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ==}
@@ -2193,6 +2205,21 @@ snapshots:
   '@exodus/bytes@1.16.0(@noble/hashes@2.4.0)':
     optionalDependencies:
       '@noble/hashes': 2.4.0
+
+  '@flashpay/financial-kernel@file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz(next@15.5.28(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+    dependencies:
+      '@stellar/stellar-sdk': 17.1.0
+      '@upstash/redis': 1.36.2
+      next: 15.5.28(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      postgres: 3.4.9
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+      redis: 5.11.0
+      server-only: 0.0.1
+    transitivePeerDependencies:
+      - '@node-rs/xxhash'
+      - debug
+      - supports-color
 
   '@floating-ui/core@1.8.0':
     dependencies:

@@ -1,0 +1,1 @@
+const fs=require('fs'),p=require.resolve('@flashpay/financial-kernel/package.json'),path=require('path');for(const n of ['r36-operator-cli','r36-automatic-lifecycle','r36-certificate-worker','r36-registration-operator'])if(!fs.existsSync(path.join(path.dirname(p),'dist/lib',n+'.js')))throw Error('KERNEL_WORKER_MISSING');console.log('PINNED_KERNEL_WORKERS_PRESENT');
