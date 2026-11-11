@@ -116,6 +116,18 @@ async function observe(request: NextRequest) {
       // reconciliation even while the certificate producer is rotating. This
       // selector cannot return a prepared/new submission or bypass XOR.
       let dispatch=await resumeAdmittedRecovery(id??null,'confirmed')
+      // Operational host readiness is not a financial authority. First ask the
+      // SAME SQL selector for this already admitted right; it rechecks current
+      // policy, revocation, identity, wallet ownership, XOR and the reservation.
+      // The unchanged executor still claims One-Shot at use. Missing authority
+      // follows the original host/evidence path below, never a new permission.
+      if(dispatch==='no_confirmed_right'){
+        const started=performance.now()
+        const admitted=await resumeAdmittedRecovery(id??null,'admitted')
+        console.info('[R36 READY HANDOFF]',{scope:id?'one':'since_cutover',result:admitted,
+          durationMs:Math.round(performance.now()-started)})
+        if(admitted!=='no_ready_admitted_right')dispatch=admitted
+      }
       // Empty periodic wakes remain cheap. No rights or historical cursor change.
       if(dispatch==='no_confirmed_right'&&Number(counts.evidence_work)>0&&!await ensurePrivateTrustHost('recovery')) {
         // The issuer may be waiting for this original terminal seal. Recording

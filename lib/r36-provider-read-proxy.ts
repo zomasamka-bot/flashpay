@@ -36,11 +36,18 @@ export function createR36ReadProxy(c:R36ServiceConfig,piKey:string,fetcher:typeo
    const socket=req.socket as TLSSocket,peer=socket.getPeerCertificate();if(!socket.authorized||!peer.raw||!c.clientPins.includes(sha(new X509Certificate(peer.raw).publicKey.export({type:'spki',format:'der'})))){send(403,{error:'READ_PROXY_CLIENT'});return}
    if(req.method!=='POST'||req.url!=='/r36/v1/provider-read'||!String(req.headers['content-type']).startsWith('application/json')){send(404,{error:'READ_PROXY_ROUTE'});return}
    let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>1024)throw Error('READ_PROXY_SIZE')}
-   const target=r36ReadTarget(JSON.parse(raw)),r=await fetcher(target.url,{method:'GET',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(8000),headers:target.pi?{Authorization:'Key '+piKey}:{accept:'application/json'}})
-   if(r.redirected||!r.body||![200,404,429,500,502,503,504].includes(r.status))throw Error('READ_PROXY_STATUS')
+   const target=r36ReadTarget(JSON.parse(raw));let r:Response
+   try{r=await fetcher(target.url,{method:'GET',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(8000),headers:target.pi?{Authorization:'Key '+piKey}:{accept:'application/json'}})}catch(e){throw Error(e instanceof Error&&['TimeoutError','AbortError'].includes(e.name)?'READ_PROXY_UPSTREAM_TIMEOUT':'READ_PROXY_UPSTREAM_IO')}
+   if(r.redirected||!r.body)throw Error('READ_PROXY_UPSTREAM_RESPONSE')
+   if(![200,404,429,500,502,503,504].includes(r.status))throw Error('READ_PROXY_UPSTREAM_STATUS_'+r.status)
    const reader=r.body.getReader(),chunks:Uint8Array[]=[];let size=0;try{for(;;){const x=await reader.read();if(x.done)break;size+=x.value.length;if(size>2_000_000)throw Error('READ_PROXY_RESPONSE_SIZE');chunks.push(x.value)}}finally{await reader.cancel().catch(()=>{})}
-   const text=Buffer.concat(chunks).toString('utf8');JSON.parse(text);send(200,{status:r.status,text})
-  }catch{send(422,{error:'READ_PROXY_REJECTED'})}
+   const text=Buffer.concat(chunks).toString('utf8');try{JSON.parse(text)}catch{throw Error('READ_PROXY_UPSTREAM_NON_JSON')}send(200,{status:r.status,text})
+  }catch(e){
+   // Fixed private diagnostic codes only: never provider bodies, paths, keys,
+   // headers or messages from an upstream service. Rejection stays fail-closed.
+   const reason=e instanceof Error&&/^READ_PROXY_[A-Z0-9_]{1,64}$/.test(e.message)?e.message:'READ_PROXY_REJECTED'
+   send(422,{error:'READ_PROXY_REJECTED',reason})
+  }
  });server.requestTimeout=10000;server.headersTimeout=10000;server.setTimeout(12000,s=>s.destroy());return server
 }
 export function createR36ReadProxyFetch(c:R36ProviderEndpoint):typeof fetch{
@@ -48,11 +55,18 @@ export function createR36ReadProxyFetch(c:R36ProviderEndpoint):typeof fetch{
  const adapter=async(input:URL|string|Request,init?:RequestInit):Promise<Response>=>{
   if(input instanceof Request||init?.method&&init.method!=='GET')throw Error('READ_PROXY_GET_ONLY');const u=new URL(String(input));const provider=u.origin==='https://api.minepi.com'?'pi':u.origin==='https://api.testnet.minepi.com'?'horizon':null
   if(!provider||u.username||u.password||u.hash)throw Error('READ_PROXY_FIXED_PROVIDER');const payload={provider,path:u.pathname+u.search};r36ReadTarget(payload)
-  return new Promise((resolve,reject)=>{const data=Buffer.from(JSON.stringify(payload));let finished=false;let timer:ReturnType<typeof setTimeout>
-   const done=(error?:Error,value?:Response)=>{if(finished)return;finished=true;clearTimeout(timer);init?.signal?.removeEventListener('abort',abort);if(error)reject(Error('READ_PROXY_UNAVAILABLE'));else resolve(value!)}
+  const deadline=performance.now()+10000
+  const readOnce=():Promise<Response>=>new Promise((resolve,reject)=>{const remaining=Math.ceil(deadline-performance.now());if(remaining<=0||init?.signal?.aborted){reject(Error('READ_PROXY_ABORT'));return}const data=Buffer.from(JSON.stringify(payload));let finished=false;let timer:ReturnType<typeof setTimeout>
+   const done=(error?:Error,value?:Response)=>{if(finished)return;finished=true;clearTimeout(timer);init?.signal?.removeEventListener('abort',abort);if(error)reject(Error(/^READ_PROXY_[A-Z0-9_]{1,64}$/.test(error.message)?error.message:'READ_PROXY_UNAVAILABLE'));else resolve(value!)}
    const request=https.request(new URL('/r36/v1/provider-read',origin),{method:'POST',agent:false,ca:c.caPem,cert:c.clientCertPem,key:c.clientKeyPem,rejectUnauthorized:true,minVersion:'TLSv1.3',checkServerIdentity:(h,p)=>checkServerIdentity(h,p)||(sha(new X509Certificate(p.raw).publicKey.export({type:'spki',format:'der'}))===c.serverSpkiSha256?undefined:Error('READ_PROXY_PIN')),headers:{'content-type':'application/json','content-length':data.length}},res=>{
-    if(res.statusCode!==200){res.destroy();done(Error('READ_PROXY_STATUS'));return}let text='';res.on('data',b=>{text+=b;if(Buffer.byteLength(text)>4_000_000){res.destroy();done(Error('READ_PROXY_SIZE'))}});res.on('error',()=>done(Error('READ_PROXY_RESPONSE')));res.on('end',()=>{try{const v=JSON.parse(text);if(!v||Object.keys(v).sort().join(',')!=='status,text'||!Number.isInteger(v.status)||typeof v.text!=='string'||Buffer.byteLength(v.text)>2_000_000)throw Error('READ_PROXY_RESPONSE');done(undefined,new Response(v.text,{status:v.status,headers:{'content-type':'application/json'}}))}catch{done(Error('READ_PROXY_RESPONSE'))}})
-   });const abort=()=>{request.destroy();done(Error('READ_PROXY_ABORT'))};timer=setTimeout(abort,10000);request.on('error',()=>done(Error('READ_PROXY_IO')));init?.signal?.addEventListener('abort',abort,{once:true});if(init?.signal?.aborted){abort();return}request.end(data)
+    if(res.statusCode!==200){let raw='';res.on('data',b=>{raw+=b;if(Buffer.byteLength(raw)>1024){res.destroy();done(Error('READ_PROXY_STATUS'))}});res.on('error',()=>done(Error('READ_PROXY_REJECTED_RESPONSE')));res.on('end',()=>{let reason='READ_PROXY_STATUS';try{const v=JSON.parse(raw);if(v?.error==='READ_PROXY_REJECTED'&&typeof v.reason==='string'&&/^READ_PROXY_[A-Z0-9_]{1,64}$/.test(v.reason))reason=v.reason}catch{}done(Error(reason))});return}let text='';res.on('data',b=>{text+=b;if(Buffer.byteLength(text)>4_000_000){res.destroy();done(Error('READ_PROXY_SIZE'))}});res.on('error',()=>done(Error('READ_PROXY_RESPONSE_STREAM')));res.on('end',()=>{try{let v;try{v=JSON.parse(text)}catch{throw Error('READ_PROXY_ENVELOPE_JSON')}if(!v||Object.keys(v).sort().join(',')!=='status,text'||!Number.isInteger(v.status)||typeof v.text!=='string'||Buffer.byteLength(v.text)>2_000_000)throw Error('READ_PROXY_ENVELOPE_SHAPE');done(undefined,new Response(v.text,{status:v.status,headers:{'content-type':'application/json'}}))}catch(e){done(e instanceof Error&&/^READ_PROXY_[A-Z0-9_]+$/.test(e.message)?e:Error('READ_PROXY_ENVELOPE_STATUS'))}})
+   });const abort=()=>{request.destroy();done(Error('READ_PROXY_ABORT'))};timer=setTimeout(abort,remaining);request.on('error',(e:NodeJS.ErrnoException)=>done(Error(e.code==='ECONNRESET'?'READ_PROXY_CONNECTION_RESET':'READ_PROXY_IO')));init?.signal?.addEventListener('abort',abort,{once:true});if(init?.signal?.aborted){abort();return}request.end(data)
   })
+  // Only a disconnected READ may retry once. Never replay financial calls,
+  // accept partial evidence, retry validation failures or extend the deadline.
+  try{return await readOnce()}catch(e){
+   if(!(e instanceof Error)||!['READ_PROXY_RESPONSE_STREAM','READ_PROXY_CONNECTION_RESET'].includes(e.message)||init?.signal?.aborted||performance.now()>=deadline)throw e
+   return readOnce()
+  }
  };return adapter as typeof fetch
 }

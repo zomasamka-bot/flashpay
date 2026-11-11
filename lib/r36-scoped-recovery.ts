@@ -13,7 +13,7 @@ const refund = ['wallet_submission_started','wallet_submission_confirmed','payme
 
 // The request may narrow selection to one payment. It can never supply the
 // wallet, executor, hash, grant, budget, policy digest or historical cutover.
-export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'confirmed'='all') {
+export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'confirmed'|'admitted'='all') {
   const policy=process.env.R36_SCOPED_POLICY_DIGEST
   if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new' || !policy || !/^[0-9a-f]{64}$/.test(policy)) return 'configuration_held'
   const client=await getR36RestrictedClient()
@@ -22,9 +22,13 @@ export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'con
   // issuer can certify wallet turnover. This GET-only branch grants no right.
   const terminal=mode==='all'?await recordAdmittedTerminalSeal(subject,policy):null
   if(terminal!==null)return terminal
-  const rows=mode==='all'?await client.unsafe('SELECT public.r36_reserve_new_recovery($1,$2) AS right',[subject,policy]):[{right:null}]
+  const rows=mode!=='confirmed'?await client.unsafe('SELECT public.r36_reserve_new_recovery($1,$2) AS right',[subject,policy]):[{right:null}]
   if(rows.length!==1) throw Error('R36_SELECTION_UNAVAILABLE')
   let r:ScopedRecoveryRight|null=rows[0].right
+  // Fast handoff only for an ALREADY committed right returned by the original
+  // protected selector. A certificate alone cannot enter this branch. No
+  // preparation, observation, enrollment or fallback authority is created here.
+  if(mode==='admitted'&&r===null)return 'no_ready_admitted_right'
   if(r===null) {
     // An expired initial admission cannot authorize another send. An exact
     // already-consumed, Horizon-confirmed right may finish Pi/DB reconciliation.
