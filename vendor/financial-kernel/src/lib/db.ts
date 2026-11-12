@@ -3062,3 +3062,46 @@ export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
     return 'INDETERMINATE'
   }
 }
+
+// Temporary trace observation only: runs AFTER the financial transaction ends.
+// PostgreSQL enforces read-only and a 1200ms statement deadline. No diagnostic
+// exception, query text or parameter values are logged or used for admission.
+export async function readPreparedTraceObservation(input: import('./financial-wallet-authority').WalletAuthorityClaim): Promise<unknown[]|null> {
+ try {
+  const client=await getPostgresClient();if(!client)return null
+  return await client.begin(async(tx:any)=>{
+   await tx`SET TRANSACTION READ ONLY`
+   await tx`SET LOCAL statement_timeout = '1200ms'`
+   return await tx.unsafe(`
+   WITH p AS (SELECT * FROM r36_certificate_policies WHERE policy_digest=$8),
+   r AS (SELECT * FROM r36_testnet_ingress_reservations WHERE payment_id=$3 AND policy_digest=$8),
+   s AS (SELECT * FROM settlement_checkpoints WHERE payment_id=$3),
+   q AS (SELECT * FROM r36_certificate_requests WHERE policy_digest=$8
+     AND binding->>'network'=$1 AND binding->>'sourceWallet'=$2 AND binding->>'paymentId'=$3
+     AND binding->>'operationKind'=$4 AND binding->>'operationId'=$5
+     AND binding->>'preparedHash'=$6 AND binding->>'preparedSequence'=$7 LIMIT 2),
+   c AS (SELECT c.*,q.binding FROM r36_certificate_receipts c JOIN q USING(nonce)),
+   n AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS seconds)
+   SELECT
+    EXISTS(SELECT 1 FROM p) AS policy_present,
+    EXISTS(SELECT 1 FROM p WHERE enabled AND NOT revoked) AS policy_enabled,
+    EXISTS(SELECT 1 FROM p,n WHERE n.seconds>=valid_from AND n.seconds<valid_until AND n.seconds<revocation_valid_until AND revocation_checked_at<=n.seconds) AS policy_time_valid,
+    EXISTS(SELECT 1 FROM financial_wallet_activation WHERE network=$1 AND source_wallet=$2 AND state='enabled') AS wallet_enabled,
+    EXISTS(SELECT 1 FROM r) AS reservation_present,
+    EXISTS(SELECT 1 FROM r WHERE retired_by_payment_id IS NULL AND payer_uid IS NOT NULL AND source_wallet=$2) AS reservation_active_bound,
+    EXISTS(SELECT 1 FROM r JOIN payment_create_intents i ON i.payment_id=r.payment_id WHERE i.merchant_uid=r.merchant_uid AND i.merchant_id=r.merchant_id AND i.customer_amount*10000000=r.amount_stroops) AS creation_identity_matches,
+    (SELECT count(*)::int FROM q) AS exact_request_count,
+    (SELECT count(*)::int FROM c) AS receipt_count,
+    EXISTS(SELECT 1 FROM c,n WHERE issued_at<=n.seconds AND expires_at>n.seconds) AS original_receipt_time_valid,
+    EXISTS(SELECT 1 FROM c JOIN r36_admission_renewal_receipts x USING(nonce)) AS renewal_present,
+    EXISTS(SELECT 1 FROM c JOIN r36_certificate_revocations x USING(payload_digest)) AS certificate_revoked,
+    EXISTS(SELECT 1 FROM c,p,n WHERE p.revocation_checked_at>=c.issued_at AND p.revocation_checked_at<=n.seconds AND p.revocation_valid_until>n.seconds) AS revocation_window_valid,
+    EXISTS(SELECT 1 FROM c JOIN financial_wallet_activation g ON g.network=$1 AND g.source_wallet=$2 WHERE g.state='enabled' AND g.clearance_digest=c.binding->>'clearanceDigest') AS clearance_matches,
+    EXISTS(SELECT 1 FROM c JOIN r36_independent_u2a_attestations t ON t.network=$1 AND t.source_wallet=$2 AND t.payment_id=$3 AND t.operation_kind=$4 AND t.operation_id=$5 AND t.prepared_tx_hash=$6 AND t.prepared_sequence=$7 WHERE t.status='verified' AND t.proof_digest=c.payload_digest AND t.pi_payment_id=c.binding->>'piPaymentId' AND t.u2a_txid=c.binding->>'u2aTxid') AS attestation_matches,
+    EXISTS(SELECT 1 FROM c,p WHERE c.manifest=c.binding||jsonb_build_object('schema','R36_ADMISSION_CERTIFICATE_V1','purpose','INITIAL_PREPARED_ADMISSION','issuerId',p.issuer_id,'keyId',p.key_id,'policyDigest',p.policy_digest,'issuedAt',c.issued_at::text,'expiresAt',c.expires_at::text)) AS manifest_matches,
+    EXISTS(SELECT 1 FROM c,r,s WHERE c.binding->>'amountStroops'=r.amount_stroops::text AND c.binding->>'destinationWallet'=CASE WHEN $4='settlement' THEN r.merchant_wallet ELSE r.payer_wallet END AND c.binding->>'piPaymentId'=s.u2a_identifier AND c.binding->>'u2aTxid'=s.u2a_txid AND s.u2a_completed_at IS NOT NULL AND s.payer_uid=r.payer_uid AND s.merchant_uid=r.merchant_uid AND s.merchant_id=r.merchant_id AND s.customer_amount*10000000=r.amount_stroops) AS inbound_binding_matches,
+    EXISTS(SELECT 1 FROM financial_wallet_authorities WHERE network=$1 AND source_wallet=$2 AND owner_payment_id<>$3) AS other_wallet_owner_present
+  `,[input.network,input.sourceWallet,input.paymentId,input.operationKind,input.operationId,input.preparedHash,input.preparedSequence,process.env.R36_SCOPED_POLICY_DIGEST??''])
+  })
+ }catch{return null}
+}

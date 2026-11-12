@@ -1,3 +1,4 @@
+import {withPreparedTrace,preparedTraceEvent,preparedTraceError,tracePreparedScope} from './r36-prepared-trace'
 import {admitInitialTestnetPrepared} from './r36-testnet-ingress'
 import {checkR36RuntimeAcl} from './r36-runtime-acl'
 /** R36-GAP-01I: durable, fail-closed cross-payment wallet authority.
@@ -122,17 +123,24 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
 }
 
 export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
+  return withPreparedTrace(input,()=>claimPreparedWalletAuthorityTraced(input,tx))
+}
+
+async function claimPreparedWalletAuthorityTraced(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
   if (input.network !== 'Pi Testnet' ||
       !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !input.paymentId || input.paymentId.trim() !== input.paymentId ||
       !input.operationId || input.operationId.trim() !== input.operationId ||
       !['settlement', 'refund'].includes(input.operationKind) ||
       !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
-      !/^[1-9][0-9]*$/.test(input.preparedSequence)) return false
-  if (!matchesRecoveryClaim(input) && !await admitInitialTestnetPrepared(input,tx)) return false
+      !/^[1-9][0-9]*$/.test(input.preparedSequence)) {preparedTraceEvent('input_rejected');return false}
+  const scopeMatched=matchesRecoveryClaim(input)
+  tracePreparedScope(input,scopeMatched)
+  if (!scopeMatched && !await admitInitialTestnetPrepared(input,tx)) {preparedTraceEvent('initial_admission_rejected');return false}
   // Fail closed before attempting any durable wallet authority mutation.
   // The optional transaction is mandatory for atomic prepare and uses the same DB client.
   if (!tx || !(await checkR36SchemaAdmission(tx))) {
+    preparedTraceEvent('schema_admission_rejected',{hasTransaction:!!tx})
     console.warn('[R36 READONLY DIAGNOSTIC] claim_admission_denied', { paymentId: input.paymentId, operationKind: input.operationKind, hasTransaction: !!tx })
     return false
   }
@@ -149,8 +157,10 @@ export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, 
        input.operationId,input.preparedHash,input.preparedSequence])
     const admitted = Array.isArray(rows) && rows.length === 1 && (rows[0] as { admitted?: boolean })?.admitted === true
     if (!admitted) console.warn('[R36 READONLY DIAGNOSTIC] claim_function_denied', { paymentId: input.paymentId, operationKind: input.operationKind, rowCount: Array.isArray(rows) ? rows.length : null })
+    preparedTraceEvent(admitted?'authority_admitted':'authority_sql_rejected',{rowCount:Array.isArray(rows)?rows.length:null})
     return admitted
   } catch (error) {
+    preparedTraceError('authority_sql_exception',error)
     console.warn('[R36 READONLY DIAGNOSTIC] claim_function_exception', { paymentId: input.paymentId, operationKind: input.operationKind, code: (error as {code?:string})?.code ?? 'unknown' })
     return false
   }

@@ -1,3 +1,4 @@
+import {preparedTraceEvent,preparedTraceError} from './r36-prepared-trace'
 import 'server-only'
 import {createHash} from 'node:crypto'
 import {currentRecoveryRight} from './r36-recovery-scope'
@@ -87,12 +88,16 @@ export async function verifyTestnetApproval(payment:unknown) {
 // subsequently obtain the durable selector's scoped right before first send.
 export async function admitInitialTestnetPrepared(input:WalletAuthorityClaim, tx?:{unsafe:(sql:string,values:unknown[])=>Promise<unknown[]>}) {
   const policy=process.env.R36_SCOPED_POLICY_DIGEST
-  if(!tx || !testnetIngressEnabled() || currentRecoveryRight() || !policy || !/^[0-9a-f]{64}$/.test(policy)) return false
+  if(!tx || !testnetIngressEnabled() || currentRecoveryRight() || !policy || !/^[0-9a-f]{64}$/.test(policy)) {
+    preparedTraceEvent('initial_precondition_rejected',{hasTransaction:!!tx,ingressEnabled:testnetIngressEnabled(),scopedRightPresent:!!currentRecoveryRight(),policyConfigured:!!policy&&/^[0-9a-f]{64}$/.test(policy)});return false
+  }
   try {
     const rows=await tx.unsafe('SELECT public.r36_prepare_testnet_ingress($1,$2,$3::text::jsonb) AS admission',
       ['prepared',policy,JSON.stringify(input)])
-    return rows.length===1 && (rows[0] as {admission?:{paymentId?:string}})?.admission?.paymentId===input.paymentId
-  } catch { return false }
+    const admitted=rows.length===1 && (rows[0] as {admission?:{paymentId?:string}})?.admission?.paymentId===input.paymentId
+    preparedTraceEvent(admitted?'initial_sql_admitted':'initial_sql_rejected',{rowCount:rows.length,admissionPresent:rows.length===1&&!!(rows[0] as {admission?:unknown})?.admission})
+    return admitted
+  } catch(error) {preparedTraceError('initial_sql_exception',error);return false}
 }
 
 export async function readOperationSettings():Promise<{mode:'general'|'pilot';maxAmountPi:number}|null>{

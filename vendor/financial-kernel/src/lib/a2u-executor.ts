@@ -1,3 +1,4 @@
+import {withPreparedTrace,observePreparedRefusal} from './r36-prepared-trace'
 import { prepareR36EvidenceCandidate } from "./r36-prepared-evidence"
 import { getPiSigningSeed } from "./pi-wallet-signing-config"
 import { r36PreparedEvidenceStore } from "./r36-prepared-evidence-store"
@@ -1010,7 +1011,9 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
   // R36: claim and prepared evidence must share ONE PostgreSQL transaction.
   // Redis is updated only AFTER this transaction commits successfully.
-  const durablePrepared = await withAtomicSettlementPreparedAuthority(ctx.paymentId, async (tx) => {
+  const traceInput:WalletAuthorityClaim={network:'Pi Testnet',sourceWallet:appPublicKey,paymentId:ctx.paymentId,operationKind:'settlement',operationId:a2uPaymentId,preparedHash,preparedSequence}
+  const durablePrepared = await withPreparedTrace(traceInput,async()=>{
+   const result = await withAtomicSettlementPreparedAuthority(ctx.paymentId, async (tx) => {
     const owned = await claimPreparedWalletAuthority({network:'Pi Testnet', sourceWallet:appPublicKey,
       paymentId:ctx.paymentId, operationKind:'settlement', operationId:a2uPaymentId,
       preparedHash, preparedSequence}, tx)
@@ -1024,6 +1027,9 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
     if (checkpoint.outcome !== 'RECORDED' && checkpoint.outcome !== 'REPLAYED')
       throw Object.assign(new Error('R36 prepared checkpoint rejected; rolling back wallet authority'), {code:'R36_PREPARED_CHECKPOINT_REJECTED'})
     return checkpoint
+  })
+   if(result===null)await observePreparedRefusal(traceInput)
+   return result
   })
   console.log("[DR41 STAGE2 DIAGNOSTIC] durable_prepared_outcome", { paymentId: ctx.paymentId, outcome: durablePrepared?.outcome, preparedHash, preparedSequence })
   // A re-entered fresh path must NOT turn an earlier PREPARED identity into
