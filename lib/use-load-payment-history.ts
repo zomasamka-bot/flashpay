@@ -2,12 +2,12 @@ import { useEffect, useState } from "react"
 import { unifiedStore } from "./unified-store"
 import { config } from "./config"
 import { CoreLogger } from "./core"
-import type { Payment } from "./types"
 
 /**
- * Hook to load persistent payment history on app mount
- * Reads verified indexed history and a PostgreSQL-backed accounting summary.
- * Automatically loads payment history for the current merchant
+ * Home needs the existing PostgreSQL accounting summary, not certification of
+ * every historical request's original creation time. Receipt/history pages use
+ * their own authenticated read models. Never turn transaction IDs or later
+ * accounting timestamps into application payment identities in the local store.
  */
 export function useLoadPaymentHistory() {
   const [summary, setSummary] = useState<{ total: number; settledTransactions: number } | null>(null)
@@ -24,19 +24,17 @@ export function useLoadPaymentHistory() {
       try {
         const merchantId = unifiedStore.getMerchantState().merchantId
         
-        if (!merchantId) {
-          CoreLogger.info("useLoadPaymentHistory: No merchant ID yet, skipping")
+        if (!merchantId || !unifiedStore.getMerchantState().accessToken) {
           return
         }
-
-        CoreLogger.info("useLoadPaymentHistory: Loading payment history for merchant:", merchantId)
 
         const merchantState = unifiedStore.getMerchantState()
         const accessToken = merchantState.accessToken
 
         const response = await fetch(
-          `${config.appUrl}/api/payments/history?merchantId=${encodeURIComponent(merchantId)}&limit=100`,
+          `${config.appUrl}/api/merchant/payments?merchantId=${encodeURIComponent(merchantId)}&limit=1`,
           {
+            cache: "no-store",
             headers: {
               'Authorization': accessToken ? `Bearer ${accessToken}` : '',
             },
@@ -56,47 +54,17 @@ export function useLoadPaymentHistory() {
         }
 
         if (!response.ok) {
-          CoreLogger.error("useLoadPaymentHistory: Failed to fetch history, status:", response.status)
+          CoreLogger.error("useLoadPaymentHistory: Accounting summary unavailable, status:", response.status)
           return
         }
 
         const data = await response.json()
         if (!current()) return
-        const balance = data?.balance
-        if (!balance || balance.source !== "postgres" || balance.scope !== "all_time_settled" ||
-            typeof balance.total !== "number" || !Number.isFinite(balance.total) || balance.total < 0 ||
-            !Number.isSafeInteger(balance.settledTransactions) || balance.settledTransactions < 0) return
-        setSummary({ total: balance.total, settledTransactions: balance.settledTransactions })
-        
-        if (data.payments && Array.isArray(data.payments)) {
-          CoreLogger.info(
-            "useLoadPaymentHistory: Loaded",
-            data.payments.length,
-            "payments from",
-            data.source || "unknown"
-          )
-
-          // Load payments into the unified store
-          for (const payment of data.payments) {
-            const paymentObj: Payment = {
-              id: payment.id,
-              merchantId: payment.merchantId,
-              amount: payment.amount,
-              note: payment.note || "",
-              status: payment.status as any,
-              createdAt: typeof payment.createdAt === "string" ? payment.createdAt : new Date(payment.createdAt).toISOString(),
-              paidAt: payment.paidAt ? (typeof payment.paidAt === "string" ? payment.paidAt : new Date(payment.paidAt).toISOString()) : undefined,
-              accessToken: payment.accessToken || "",
-              u2aTxid: (payment as any).u2aTxid,
-              a2uTxid: (payment as any).a2uTxid,
-            }
-            
-            // Use existing addPayment method to add to store
-            unifiedStore.addPayment(paymentObj)
-          }
-
-          CoreLogger.info("useLoadPaymentHistory: Payment history loaded successfully")
-        }
+        const balance = data?.summary
+        if (!balance || typeof balance.total_settled_amount !== "number" ||
+            !Number.isFinite(balance.total_settled_amount) || balance.total_settled_amount < 0 ||
+            !Number.isSafeInteger(balance.settled_transactions) || balance.settled_transactions < 0) return
+        setSummary({ total: balance.total_settled_amount, settledTransactions: balance.settled_transactions })
       } catch (error) {
         CoreLogger.error("useLoadPaymentHistory: Error loading payment history:", error)
       }
