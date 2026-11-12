@@ -182,7 +182,11 @@ async function runAutomaticRefundCheckpointStep(checkpoint: RefundCheckpoint, re
     await clearAutomaticRefundDeferral(checkpoint.refundId)
     return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "success" }
   }
-  if (!thrown && reason === "wallet_drain_not_selected") return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason }
+  // A consumed create attempt belongs to its original in-flight/reconciliation
+  // path. This competing observer must not defer the same checkpoint while the
+  // owner is persisting its verified Pi identity. Reconciliation remains GET-only
+  // under the original One-Shot guard; neither a new create nor a reset is allowed.
+  if (!thrown && (reason === "wallet_drain_not_selected" || reason === "refund_create_reconcile_only")) return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason }
   if (!thrown && reason === "refund_cancelled") {
     const manualReview = await markAutomaticRefundManualReview(checkpoint.refundId, checkpoint.stage)
     if (manualReview && manualReview.refundId === checkpoint.refundId && manualReview.paymentId === checkpoint.paymentId && manualReview.stage === checkpoint.stage && manualReview.status === "manual_review_required") {
