@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto'
+import {assertActiveNetworkConfiguration} from './lib/active-financial-contract'
 /** This configuration pins deployment identity. It never grants a financial right.
  * One process/database/Redis/wallet per application. No runtime tenant switching.
  */
@@ -37,6 +38,7 @@ export function verifyDatabaseUrl(value:string,role?:string):void {
 }
 export function verifyEnvironment():void {
  const p=deployment()
+ assertActiveNetworkConfiguration(p.network,process.env.NEXT_PUBLIC_PI_NETWORK)
  for(const [key,expected] of [['UPSTASH_REDIS_REST_URL',p.redisOrigin],['R36_HOST_ORIGIN',p.trustOrigin],['NEXT_PUBLIC_APP_URL',p.publicOrigin],['PI_ACTIVE_WALLET_ADDRESS',p.sourceWallet]]) {
   const actual=process.env[key];if(actual&&actual!==expected)throw Error('KERNEL_ENVIRONMENT_IDENTITY:'+key)
  }

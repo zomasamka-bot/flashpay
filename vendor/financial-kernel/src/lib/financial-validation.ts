@@ -1,4 +1,5 @@
 import { Payment } from "./types"
+import { isLegacyZeroCommission } from './active-financial-contract'
 
 export interface ValidatedFinancialData {
   piPaymentId: string
@@ -90,6 +91,10 @@ export function validateFinancialData(payment: Payment):
   }
 
   // STEP 6: Validate appNetImpact (must be finite, can be negative if app subsidizes)
+  if (!isLegacyZeroCommission(payment.customerAmount, payment.merchantAmount, payment.appCommission)) {
+    return { success: false, error: 'Active financial contract mismatch' }
+  }
+
   if (
     typeof payment.appNetImpact !== "number" ||
     !Number.isFinite(payment.appNetImpact)
