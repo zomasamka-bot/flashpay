@@ -11,11 +11,12 @@ export async function prewarmAfterVerifiedLogin(ports:Ports):Promise<void>{
 }
 export const prewarmVerifiedSession=async()=>{
  // The registry observation lasts at most 120s. Its lightweight refresh must
- // not inherit the separate 180s host-start throttle. Redis grants no authority.
- await prewarmAfterVerifiedLogin({env:process.env,
+ // not inherit a host-start throttle as long as the host's own renewal window.
+ // Both preparations remain bounded by verified activity, never an idle timer.
+ await Promise.all([prewarmAfterVerifiedLogin({env:process.env,
   claim:()=>redis.set('flashpay:r36:verified-intake-prewarm:v1','1',{nx:true,ex:60}),
-  wake:()=>observeIntakePolicy()})
- await prewarmAfterVerifiedLogin({env:process.env,
-  claim:()=>redis.set('flashpay:r36:verified-login-prewarm:v1','1',{nx:true,ex:180}),
-  wake:()=>ensurePrivateTrustHost('creation')})
+  wake:()=>observeIntakePolicy()}),
+ prewarmAfterVerifiedLogin({env:process.env,
+  claim:()=>redis.set('flashpay:r36:verified-login-prewarm:v2','1',{nx:true,ex:60}),
+  wake:()=>ensurePrivateTrustHost('creation')})])
 }

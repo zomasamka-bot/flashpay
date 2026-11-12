@@ -10,6 +10,14 @@ export async function POST(request: NextRequest) {
   if (requiresTestnetIngress() && !testnetIngressEnabled())
     return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
 
+  // Timing contains no identity, bearer token, lease or payment payload.
+  // Observability must never change the result of an original guard.
+  const measure = async <T,>(phase: string, work: () => Promise<T>): Promise<T> => {
+    const at = Date.now()
+    try { return await work() } finally {
+      try { console.info('[Payment start timing]', { phase, durationMs: Date.now() - at }) } catch {}
+    }
+  }
   try {
     const body = await request.json()
     const paymentId = typeof body?.paymentId === "string" ? body.paymentId.trim() : ""
@@ -20,11 +28,11 @@ export async function POST(request: NextRequest) {
     // PRE-DR118 D-1: no caller may reserve the durable two-minute start lease
     // from knowledge of a public paymentId alone. Prove a live Pi identity first.
     // The bearer token is verification-only and is never persisted in the lease/checkpoint.
-    const identity = await fetch("https://api.minepi.com/v2/me", {
+    const identity = await measure('pi_identity', () => fetch("https://api.minepi.com/v2/me", {
       method: "GET",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
       cache: "no-store",redirect:"error",signal:AbortSignal.timeout(10000),
-    })
+    }))
     if (!identity.ok) {
       if (identity.status === 401 || identity.status === 403)
         return NextResponse.json({ error: "Pi authentication rejected", code: "U2A_START_AUTH_REJECTED" }, { status: 401 })
@@ -34,13 +42,13 @@ export async function POST(request: NextRequest) {
     const verifiedUid = typeof verified?.uid === "string" ? verified.uid.trim() : ""
     if (!verifiedUid) return NextResponse.json({ error: "Pi authentication invalid", code: "U2A_START_AUTH_INVALID" }, { status: 401 })
 
-    if (requiresTestnetIngress() && await readPiA2UQueueAdmission() !== 'EMPTY')
+    if (requiresTestnetIngress() && await measure('provider_queue', readPiA2UQueueAdmission) !== 'EMPTY')
       return NextResponse.json({error:"Pi outgoing payment readiness unavailable. No new Pi payment was created.",code:"PI_A2U_PROVIDER_HELD"},{status:503})
     // UID is authenticated now; the source wallet is bound only from the
     // canonical verified U2A transaction, before completion/outgoing admission.
-    if (requiresTestnetIngress() && !await bindTestnetPayer(paymentId,verifiedUid))
+    if (requiresTestnetIngress() && !await measure('host_and_payer_binding', () => bindTestnetPayer(paymentId,verifiedUid)))
       return NextResponse.json({error:"Testnet payer or budget admission unavailable",code:"TESTNET_INGRESS_HELD"},{status:503})
-    const lease = await acquireSettlementU2AStartLease(paymentId)
+    const lease = await measure('start_lease', () => acquireSettlementU2AStartLease(paymentId))
     if (lease.outcome === "ACQUIRED") return NextResponse.json({ success: true, startLeaseToken: lease.token, expiresAt: lease.expiresAt })
     if (lease.outcome === "BLOCKED") return NextResponse.json({ error: "Payment already initiated", code: "U2A_START_BLOCKED" }, { status: 409 })
     return NextResponse.json({ error: "Payment start authority unavailable", code: "U2A_START_INDETERMINATE" }, { status: 503 })
