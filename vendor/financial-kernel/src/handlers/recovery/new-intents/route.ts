@@ -1,3 +1,4 @@
+import {financialNetwork} from '../../../lib/financial-network'
 import {deployment} from '../../../deployment'
 import { timingSafeEqual } from "node:crypto"
 import { after, NextRequest, NextResponse } from "next/server"
@@ -41,13 +42,13 @@ async function observe(request: NextRequest) {
           SELECT 1 FROM public.settlement_checkpoints done
           WHERE done.payment_id=i.payment_id AND done.merchant_id=i.merchant_id
             AND done.merchant_uid=i.merchant_uid AND done.customer_amount=i.customer_amount
-            AND done.merchant_amount=i.customer_amount AND done.app_commission=0
+            AND done.merchant_amount+done.app_commission=i.customer_amount
             AND done.stage='db_finalized' AND done.pi_completed_at IS NOT NULL
             AND done.db_finalized_at IS NOT NULL AND done.horizon_confirmed_at IS NOT NULL
             AND done.a2u_txid=done.prepared_tx_hash
             AND NOT EXISTS(SELECT 1 FROM public.refund_checkpoints conflict WHERE conflict.payment_id=i.payment_id)
             AND EXISTS(SELECT 1 FROM public.financial_wallet_finality_seals seal
-              WHERE seal.network='Pi Testnet' AND seal.source_wallet=done.a2u_from_address
+              WHERE seal.network='${financialNetwork()}' AND seal.source_wallet=done.a2u_from_address
                 AND seal.owner_payment_id=i.payment_id AND seal.operation_kind='settlement'
                 AND seal.owner_operation_id=done.a2u_payment_id AND seal.prepared_tx_hash=done.prepared_tx_hash
                 AND seal.prepared_sequence=done.prepared_sequence::text)
@@ -58,10 +59,10 @@ async function observe(request: NextRequest) {
           WHERE done.payment_id=i.payment_id AND done.status='completed' AND done.stage='audit_recorded'
             AND identity.stage='payment_identity' AND identity.merchant_id=i.merchant_id
             AND identity.merchant_uid=i.merchant_uid AND identity.customer_amount=i.customer_amount
-            AND identity.merchant_amount=i.customer_amount AND identity.app_commission=0
+            AND identity.merchant_amount+identity.app_commission=i.customer_amount
             AND done.amount=i.customer_amount AND done.payer_uid=identity.payer_uid
             AND EXISTS(SELECT 1 FROM public.financial_wallet_finality_seals seal
-              WHERE seal.network='Pi Testnet' AND seal.owner_payment_id=i.payment_id
+              WHERE seal.network='${financialNetwork()}' AND seal.owner_payment_id=i.payment_id
                 AND seal.operation_kind='refund' AND seal.owner_operation_id=done.refund_id
                 AND seal.prepared_tx_hash=done.refund_txid)
             AND EXISTS(SELECT 1 FROM public.refund_audit_events proof
@@ -72,7 +73,7 @@ async function observe(request: NextRequest) {
     ), classified AS (
       SELECT CASE
         WHEN c.payment_id IS NULL OR c.merchant_id IS DISTINCT FROM i.merchant_id OR c.merchant_uid IS DISTINCT FROM i.merchant_uid
-          OR c.customer_amount IS DISTINCT FROM i.customer_amount OR c.merchant_amount IS DISTINCT FROM i.customer_amount OR c.app_commission IS DISTINCT FROM 0
+          OR c.customer_amount IS DISTINCT FROM i.customer_amount OR (c.merchant_amount+c.app_commission) IS DISTINCT FROM i.customer_amount
           OR i.customer_amount <= 0 OR (r.payment_id IS NOT NULL AND r.amount <> i.customer_amount)
           THEN 'held'
         WHEN r.status = 'manual_review_required' OR r.stage = 'wallet_submission_started'

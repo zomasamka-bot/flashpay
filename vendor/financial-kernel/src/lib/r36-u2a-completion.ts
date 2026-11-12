@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import {originalRefundCertificationEnabled} from "./r36-operation-policy"
 import 'server-only'
 import {getDurableU2AIngressAuthoritative,readDr11RefundCertificationHold,verifySettlementRefundAuthorityExclusion,
@@ -19,7 +20,7 @@ export async function reconcileScopedU2ACompletion(paymentId:string) {
   const d=durable.checkpoint
   // Preserve the original /api/pi/complete production certification contract.
   // A completed U2A alone must never publish a 0.10 Pi settlement candidate.
-  const refundCertification=hold.outcome==='HELD' || originalRefundCertificationEnabled('Pi Testnet',d.customerAmount)
+  const refundCertification=hold.outcome==='HELD' || originalRefundCertificationEnabled(financialNetwork(),d.customerAmount)
   if(hold.outcome==='HELD' && !refundCertification) return 'executor_held'
   if(d.completedAt!==null && !refundCertification) return 'u2a_completion_invoked'
   const record=(x:unknown):Record<string,unknown>|null=>x!==null&&typeof x==='object'&&!Array.isArray(x)?x as Record<string,unknown>:null
@@ -30,7 +31,7 @@ export async function reconcileScopedU2ACompletion(paymentId:string) {
         cache:'no-store',redirect:'error',signal:AbortSignal.timeout(12000)})
       if(!response.ok) return null
       const p=record(await response.json()),s=record(p?.status),t=record(p?.transaction),m=record(p?.metadata)
-      if(!p||!s||!t||p.network!=='Pi Testnet'||p.direction!=='user_to_app'||p.identifier!==d.u2aIdentifier||
+      if(!p||!s||!t||p.network!==financialNetwork()||p.direction!=='user_to_app'||p.identifier!==d.u2aIdentifier||
         p.amount!==d.customerAmount||p.user_uid!==d.payerUid||m?.paymentId!==paymentId||t.txid!==d.u2aTxid||t.verified!==true||
         s.developer_approved!==true||s.transaction_verified!==true||s.cancelled===true||s.user_cancelled===true||
         !await verifyTestnetInbound(p)) return null

@@ -3,19 +3,20 @@ import {assertActiveNetworkConfiguration} from './lib/active-financial-contract'
 /** This configuration pins deployment identity. It never grants a financial right.
  * One process/database/Redis/wallet per application. No runtime tenant switching.
  */
-export type KernelDeployment = Readonly<{
- schema:'KERNEL_DEPLOYMENT_V1'; applicationId:string; piApplicationId:string;
- network:'Pi Testnet'; databaseHost:string; databaseName:string; databaseBranch:string;
+type CommonDeployment = Readonly<{
+ applicationId:string; piApplicationId:string; databaseHost:string; databaseName:string; databaseBranch:string;
  publicOrigin:string; trustOrigin:string; redisOrigin:string; sourceWallet:string;
  recoveryCutover:string; historicalHolds:readonly string[];
 }>
+export type KernelDeployment = CommonDeployment & (Readonly<{schema:'KERNEL_DEPLOYMENT_V1';network:'Pi Testnet'}> | Readonly<{schema:'KERNEL_DEPLOYMENT_V2';network:'Pi Testnet'|'Pi Network';incomingWallet:string}>)
 const fields=['schema','applicationId','piApplicationId','network','databaseHost','databaseName','databaseBranch','publicOrigin','trustOrigin','redisOrigin','sourceWallet','recoveryCutover','historicalHolds'].sort().join(',')
 const digest=(s:string)=>createHash('sha256').update(s).digest('hex')
 function origin(v:unknown):boolean {try {const u=new URL(String(v));return u.protocol==='https:'&&!u.username&&!u.password&&!u.search&&!u.hash&&u.origin===v}catch{return false}}
 export function validateDeployment(raw:string,expectedSha256:string):KernelDeployment {
  if(raw.length>16384||!/^[a-f0-9]{64}$/.test(expectedSha256)||digest(raw)!==expectedSha256)throw Error('KERNEL_PROFILE_DIGEST')
  const p=JSON.parse(raw)
- if(!p||typeof p!=='object'||Object.keys(p).sort().join(',')!==fields||p.schema!=='KERNEL_DEPLOYMENT_V1'||p.network!=='Pi Testnet')throw Error('KERNEL_PROFILE_FIELDS')
+ if(!p||typeof p!=='object'||Object.keys(p).sort().join(',')!==(p.schema==='KERNEL_DEPLOYMENT_V2'?(fields+',incomingWallet').split(',').sort().join(','):fields)||
+ !(p.schema==='KERNEL_DEPLOYMENT_V1'&&p.network==='Pi Testnet'||p.schema==='KERNEL_DEPLOYMENT_V2'&&['Pi Testnet','Pi Network'].includes(p.network)&&/^G[A-Z2-7]{55}$/.test(p.incomingWallet)&&(p.network!=='Pi Network'||p.incomingWallet!==p.sourceWallet)))throw Error('KERNEL_PROFILE_FIELDS')
  if(!/^[a-z][a-z0-9-]{2,79}$/.test(p.applicationId)||!/^[a-z][a-z0-9-]{2,127}$/.test(p.piApplicationId)||
  !/^[a-z0-9][a-z0-9.-]{0,252}$/.test(p.databaseHost)||p.databaseHost.includes('..')||p.databaseHost.includes('-pooler.')||
  !/^[a-z][a-z0-9_]{0,62}$/.test(p.databaseName)||!/^[a-z][a-z0-9-]{2,127}$/.test(p.databaseBranch)||
@@ -50,4 +51,9 @@ export async function verifyDatabaseBinding(db:{unsafe(query:string,values:never
  current_setting('neon.branch_id',true) AS branch FROM public.kernel_deployment_identity WHERE singleton=true`,[] as never)
  const r=rows.length===1?rows[0] as Record<string,unknown>:null
  if(!r||r.application_id!==p.applicationId||r.profile_sha256!==process.env.KERNEL_DEPLOYMENT_SHA256||r.database!==p.databaseName||r.branch!==p.databaseBranch)throw Error('KERNEL_DATABASE_BINDING')
+ if(p.schema==='KERNEL_DEPLOYMENT_V2'){
+  const bindings=await db.unsafe('SELECT application_id,network,incoming_wallet,outgoing_wallet FROM public.kernel_financial_network WHERE singleton=true',[] as never)
+  const b=bindings.length===1?bindings[0] as Record<string,unknown>:null
+  if(!b||b.application_id!==p.applicationId||b.network!==p.network||b.incoming_wallet!==p.incomingWallet||b.outgoing_wallet!==p.sourceWallet)throw Error('KERNEL_FINANCIAL_NETWORK_BINDING')
+ }
 }

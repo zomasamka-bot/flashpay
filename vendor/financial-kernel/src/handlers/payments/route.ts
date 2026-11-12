@@ -282,6 +282,7 @@ export async function POST(request: NextRequest) {
     durableCreatedAt = durableIdentity.createdAt
     payment.id = paymentId
     payment.createdAt = durableCreatedAt
+    if(durableIdentity.financialContract)payment.financialContract=durableIdentity.financialContract
 
     async function respondToDurableReplay() {
       // Never recreate an absent or advanced financial projection as pending.

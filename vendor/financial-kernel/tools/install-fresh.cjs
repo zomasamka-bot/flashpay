@@ -16,7 +16,9 @@ async function install(){
   if(role.length)throw Error('DEDICATED_EMPTY_ROLE_NAMESPACE_REQUIRED');
   if(!(await tx.unsafe("SELECT 1 FROM pg_roles WHERE rolname='neondb_owner'")).length)throw Error('SCHEMA_OWNER_REQUIRED');
   for(const name of ['roles.sql','fresh-schema.sql'])await tx.unsafe(fs.readFileSync(path.join(__dirname,'../sql',name),'utf8'));
-  await tx.unsafe(`INSERT INTO public.kernel_deployment_identity(singleton,application_id,profile_sha256,database_branch,recovery_cutover,historical_holds,kernel_version) VALUES(true,$1,$2,$3,$4,$5,$6)`,[p.applicationId,process.env.KERNEL_DEPLOYMENT_SHA256,p.databaseBranch,p.recoveryCutover,p.historicalHolds,require('../package.json').version]);
+  await tx.unsafe(`INSERT INTO public.kernel_deployment_identity(singleton,application_id,profile_sha256,database_branch,recovery_cutover,historical_holds,kernel_version) VALUES(true,$1,$2,$3,$4,$5,$6)`,[p.applicationId,process.env.KERNEL_DEPLOYMENT_SHA256,p.databaseBranch,p.recoveryCutover,p.historicalHolds,'0.1.0-kernel.1']);
+  // kernel_version is the persisted identity-schema revision, not the release package.
+  if(p.schema==='KERNEL_DEPLOYMENT_V2')await tx.unsafe('INSERT INTO public.kernel_financial_network(singleton,application_id,network,incoming_wallet,outgoing_wallet) VALUES(true,$1,$2,$3,$4)',[p.applicationId,p.network,p.incomingWallet,p.sourceWallet]);
   await verifyDatabaseBinding(tx);
  });console.log(JSON.stringify({status:'FRESH_SCHEMA_BOUND',applicationId:p.applicationId,kernelVersion:require('../package.json').version,credentialsCreated:false,financialActivation:false}));
  }finally{await sql.end({timeout:2})}

@@ -1,3 +1,5 @@
+import {financialIncomingWallet} from './financial-network'
+import {financialNetwork} from './financial-network'
 /** NOT_FOR_DEPLOY. Full, deterministic review of independently signed artifact bodies.
  * Invoke only AFTER the worker authenticates each artifact against the protected policy.
  * This validates the supplied certified scope, never invents missing history or rights.
@@ -37,7 +39,7 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
   requireProof(range.firstLedger===h.genesisLedger&&range.lastLedger===history.cutoffLedger,'WALLET_INVENTORY_RANGE')
   const genesis=history.genesis
   requireProof(genesis.ledger===h.genesisLedger&&uint(genesis.ledger)&&Number.isSafeInteger(Number(genesis.ledger))&&Number(genesis.ledger)>0&&hex(genesis.hash)&&typeof genesis.envelopeXdr==='string'&&typeof genesis.resultXdr==='string'&&uint(genesis.feeStroops),'GENESIS_REQUIRED')
-  const created=TransactionBuilder.fromXDR(genesis.envelopeXdr,'Pi Testnet')
+  const created=TransactionBuilder.fromXDR(genesis.envelopeXdr,financialNetwork())
   requireProof(created instanceof Transaction&&created.toXDR()===genesis.envelopeXdr&&Buffer.from(created.hash()).toString('hex')===genesis.hash&&created.operations.length===1,'GENESIS_XDR')
   const creation=created.operations[0]
   requireProof(creation.type==='createAccount'&&creation.destination===history.wallet&&created.source!==history.wallet,'GENESIS_OPERATION')
@@ -58,14 +60,14 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
   for(const t of history.transactions){
    requireProof(object(t.input)&&object(t.record)&&uint(t.operationId)&&t.operationId!=='0','TRANSACTION_SHAPE')
    const i=t.input,r=t.record
-   requireProof(i.network==='Pi Testnet'&&hex(i.preparedHash)&&typeof i.envelopeXdr==='string'&&uint(i.preparedSequence)&&wallet(i.sourceWallet)&&wallet(i.destinationWallet)&&uint(i.expectedFeeStroops),'TRANSACTION_INPUT')
+   requireProof(i.network===financialNetwork()&&hex(i.preparedHash)&&typeof i.envelopeXdr==='string'&&uint(i.preparedSequence)&&wallet(i.sourceWallet)&&wallet(i.destinationWallet)&&uint(i.expectedFeeStroops),'TRANSACTION_INPUT')
    requireProof(!seen.has(i.preparedHash)&&!opIds.has(t.operationId),'DUPLICATE_NETWORK_RECORD');seen.add(i.preparedHash);opIds.add(t.operationId)
    const ledger=String(r.ledger)
    requireProof(uint(ledger)&&BigInt(ledger)>=lastLedger&&BigInt(ledger)<=BigInt(history.cutoffLedger),'TRANSACTION_LEDGER_ORDER');lastLedger=BigInt(ledger)
    // Horizon operation ID: high 32 bits identify the containing ledger.
    requireProof(BigInt(t.operationId)/BigInt(4294967296)===BigInt(ledger),'OPERATION_LEDGER_MISMATCH')
    requireProof(i.sourceWallet===history.wallet||i.destinationWallet===history.wallet,'FOREIGN_WALLET_RECORD')
-   const parsed=TransactionBuilder.fromXDR(i.envelopeXdr,'Pi Testnet')
+   const parsed=TransactionBuilder.fromXDR(i.envelopeXdr,financialNetwork())
    requireProof(parsed instanceof Transaction&&parsed.toXDR()===i.envelopeXdr&&Buffer.from(parsed.hash()).toString('hex')===i.preparedHash&&parsed.source===i.sourceWallet&&parsed.sequence===i.preparedSequence&&parsed.operations.length===1,'HISTORY_XDR_IDENTITY')
    const op=parsed.operations[0]
    requireProof(op.type==='payment'&&op.source===undefined&&op.asset.isNative()&&op.destination===i.destinationWallet&&stroops(op.amount)===stroops(i.amount),'HISTORY_OPERATION')
@@ -86,14 +88,16 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
    }
    requireProof(balance>=BigInt(0),'NEGATIVE_HISTORY_BALANCE')
   }
-  if(bindIntent)requireProof(seen.has(String(binding.u2aTxid))&&!seen.has(String(binding.preparedHash))&&uint(binding.preparedSequence)&&BigInt(binding.preparedSequence)===sequence+BigInt(1),'PREPARED_OR_INBOUND_HISTORY_BINDING')
+  if(bindIntent)requireProof((financialIncomingWallet()!==binding.sourceWallet||seen.has(String(binding.u2aTxid)))&&!seen.has(String(binding.preparedHash))&&uint(binding.preparedSequence)&&BigInt(binding.preparedSequence)===sequence+BigInt(1),'PREPARED_OR_INBOUND_HISTORY_BINDING')
   if(bindIntent){
-   const finality=artifacts.inbound_finality,intent=artifacts.intent,t=history.transactions.find(t=>object(t.input)&&t.input.preparedHash===binding.u2aTxid)
+   const incoming=financialIncomingWallet()===binding.sourceWallet?history:(artifacts.wallet_history.relatedWallets as Row[]|undefined)?.find(h=>h.sourceWallet===financialIncomingWallet())?.snapshot as Row|undefined
+   requireProof(object(incoming)&&Array.isArray(incoming.transactions),'INCOMING_WALLET_HISTORY_REQUIRED')
+   const finality=artifacts.inbound_finality,intent=artifacts.intent,t=(incoming.transactions as Row[]).find(t=>object(t.input)&&t.input.preparedHash===binding.u2aTxid)
    requireProof(object(finality)&&object(finality.horizonInput)&&object(finality.horizonRecord)&&t&&object(t.input)&&object(t.record)&&t.record.successful===true,'INBOUND_HISTORY_FINALITY_MISSING')
    for(const field of ['hash','successful','ledger','fee_charged','source_account','source_account_sequence','envelope_xdr','result_xdr'])requireProof(String(t.record[field])===String(finality.horizonRecord[field]),'INBOUND_HISTORY_FINALITY_CONFLICT')
    for(const field of ['network','preparedHash','preparedSequence','sourceWallet','destinationWallet','envelopeXdr','expectedFeeStroops'])requireProof(String(t.input[field])===String(finality.horizonInput[field]),'INBOUND_HISTORY_IDENTITY_CONFLICT')
    requireProof(stroops(t.input.amount)===stroops(finality.horizonInput.amount)&&object(intent)&&typeof intent.envelopeXdr==='string'&&uint(binding.amountStroops),'INBOUND_HISTORY_AMOUNT_CONFLICT')
-   const prepared=TransactionBuilder.fromXDR(intent.envelopeXdr,'Pi Testnet')
+   const prepared=TransactionBuilder.fromXDR(intent.envelopeXdr,financialNetwork())
    requireProof(prepared instanceof Transaction&&uint(prepared.fee)&&BigInt(binding.amountStroops)+BigInt(prepared.fee)<=balance,'PREPARED_EXCEEDS_PROVEN_BALANCE')
   }
   requireProof(uint(history.closingBalanceStroops)&&BigInt(history.closingBalanceStroops)===balance&&uint(history.closingSequence)&&BigInt(history.closingSequence)===sequence,'CLOSING_ACCOUNT_MISMATCH')

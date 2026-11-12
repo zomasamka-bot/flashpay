@@ -1,3 +1,6 @@
+import {financialHorizonOrigin} from './financial-network'
+import {financialIncomingWallet} from './financial-network'
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 /** Private evidence-service input adapter. No public route, DB mutation, signing,
  * financial POST or retries. Its output is an unsigned observation, not approval.
  * Expected identity must be supplied by the protected original-intent reader.
@@ -9,7 +12,7 @@ import {verifyR36IndependentHorizonRecord,type R36HorizonProofInput} from './r36
 
 type Row=Record<string,unknown>
 export type R36InboundExpected=Readonly<{
- network:'Pi Testnet';paymentId:string;customerUid:string;piPaymentId:string;
+ network:FinancialNetwork;paymentId:string;customerUid:string;piPaymentId:string;
  u2aTxid:string;sourceWallet:string;payerWallet:string;amountStroops:string;
  finalityPolicyDigest:string;cutoffLedger:string;
 }>
@@ -31,7 +34,7 @@ const fields=['network','paymentId','customerUid','piPaymentId','u2aTxid','sourc
  * the fixed Pi API origin, never to Horizon or a URL returned by a provider. */
 export async function collectR36InboundEvidence(expected:R36InboundExpected,piApiKey:string,fetcher:typeof fetch=fetch):Promise<R36InboundObservation>{
  if(!object(expected)||Object.keys(expected).length!==fields.length||!fields.every(k=>Object.hasOwn(expected,k))||
-  expected.network!=='Pi Testnet'||!id(expected.paymentId)||!id(expected.customerUid)||!id(expected.piPaymentId)||
+  expected.network!==financialNetwork()||!id(expected.paymentId)||!id(expected.customerUid)||!id(expected.piPaymentId)||
   !hex(expected.u2aTxid)||!hex(expected.finalityPolicyDigest)||!wallet(expected.sourceWallet)||!wallet(expected.payerWallet)||
   expected.sourceWallet===expected.payerWallet||!uint(expected.amountStroops)||!Number.isSafeInteger(Number(expected.amountStroops))||
   !uint(expected.cutoffLedger)||BigInt(expected.cutoffLedger)>BigInt(2147483647)||typeof piApiKey!=='string'||!piApiKey||/[\r\n]/.test(piApiKey))return blocked('INVALID_PROTECTED_EXPECTATION')
@@ -58,25 +61,25 @@ export async function collectR36InboundEvidence(expected:R36InboundExpected,piAp
   const pi=await read('https://api.minepi.com/v2/payments/'+encodeURIComponent(b.piPaymentId),true)
   const amount=typeof pi.amount==='number'?numberToExactPositiveStroops(pi.amount):stellarAmountToExactPositiveStroops(pi.amount)
   if(pi.identifier!==b.piPaymentId||pi.network!==b.network||pi.direction!=='user_to_app'||pi.user_uid!==b.customerUid||
-   pi.from_address!==b.payerWallet||pi.to_address!==b.sourceWallet||amount===null||String(amount)!==b.amountStroops||
+   pi.from_address!==b.payerWallet||pi.to_address!==financialIncomingWallet()||amount===null||String(amount)!==b.amountStroops||
    !object(pi.metadata)||pi.metadata.paymentId!==b.paymentId||!object(pi.status)||!object(pi.transaction)||
    pi.transaction.txid!==b.u2aTxid||pi.transaction.verified!==true||pi.status.developer_approved!==true||
    pi.status.transaction_verified!==true||pi.status.developer_completed!==true||pi.status.cancelled!==false||pi.status.user_cancelled!==false)
     return blocked('PI_ORIGINAL_IDENTITY_OR_COMPLETION_MISMATCH')
-  const h=await read('https://api.testnet.minepi.com/transactions/'+b.u2aTxid)
+  const h=await read((financialHorizonOrigin()+'/transactions/')+b.u2aTxid)
   if(typeof h.envelope_xdr!=='string'||!uint(String(h.ledger))||BigInt(String(h.ledger))>BigInt(b.cutoffLedger)||
    !/^(0|[1-9][0-9]*)$/.test(String(h.fee_charged)))return blocked('HORIZON_SCOPE_MISMATCH')
-  const tx=TransactionBuilder.fromXDR(h.envelope_xdr,'Pi Testnet')
+  const tx=TransactionBuilder.fromXDR(h.envelope_xdr,financialNetwork())
   if(!(tx instanceof Transaction))return blocked('HORIZON_TRANSACTION_TYPE')
-  const input:R36HorizonProofInput={network:'Pi Testnet',preparedHash:b.u2aTxid,preparedSequence:tx.sequence,
-   sourceWallet:b.payerWallet,destinationWallet:b.sourceWallet,amount:exactPositiveStroopsToStellarAmount(Number(b.amountStroops))!,
+  const input:R36HorizonProofInput={network:financialNetwork(),preparedHash:b.u2aTxid,preparedSequence:tx.sequence,
+   sourceWallet:b.payerWallet,destinationWallet:financialIncomingWallet(),amount:exactPositiveStroopsToStellarAmount(Number(b.amountStroops))!,
    envelopeXdr:h.envelope_xdr,expectedFeeStroops:String(h.fee_charged)}
   const proof=verifyR36IndependentHorizonRecord(input,h)
   if(proof.outcome!=='PROVEN')return blocked('HORIZON_'+proof.reason)
-  const ledger=await read('https://api.testnet.minepi.com/ledgers/'+String(h.ledger))
+  const ledger=await read((financialHorizonOrigin()+'/ledgers/')+String(h.ledger))
   if(String(ledger.sequence)!==String(h.ledger)||!hex(ledger.hash)||typeof ledger.closed_at!=='string'||
    !Number.isFinite(Date.parse(ledger.closed_at))||Date.parse(ledger.closed_at)>Date.now())return blocked('LEDGER_IDENTITY_OR_CLOSURE_MISMATCH')
-  const cutoff=String(h.ledger)===b.cutoffLedger?ledger:await read('https://api.testnet.minepi.com/ledgers/'+b.cutoffLedger)
+  const cutoff=String(h.ledger)===b.cutoffLedger?ledger:await read((financialHorizonOrigin()+'/ledgers/')+b.cutoffLedger)
   if(String(cutoff.sequence)!==b.cutoffLedger||!hex(cutoff.hash)||typeof cutoff.closed_at!=='string'||
    !Number.isFinite(Date.parse(cutoff.closed_at))||Date.parse(cutoff.closed_at)<Date.parse(ledger.closed_at)||Date.parse(cutoff.closed_at)>Date.now())return blocked('CUTOFF_IDENTITY_OR_CLOSURE_MISMATCH')
   // Whitelist returned fields: bearer/API keys and arbitrary provider metadata

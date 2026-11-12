@@ -1,5 +1,6 @@
 "use client"
 
+import {publicNetworkLabel} from "@/lib/public-network"
 import { Badge } from "@/components/ui/badge"
 import { usePathname } from "next/navigation"
 
@@ -11,7 +12,7 @@ export function TestnetIndicator() {
   return (
     <div className="fixed top-2 right-2 z-50">
       <Badge variant="secondary" className="bg-secondary/80 backdrop-blur-sm">
-        Testnet
+        {publicNetworkLabel}
       </Badge>
     </div>
   )

@@ -1,3 +1,4 @@
+import {financialHorizonOrigin} from './financial-network'
 /** Separate provider process: the private producer has no Internet route.
  * This small mTLS bridge can send only bounded GETs to fixed Pi Testnet sources.
  * The Pi key stays here; callers cannot supply headers, URLs, methods or redirects.
@@ -12,7 +13,7 @@ export function r36ReadTarget(input:unknown):{url:string;pi:boolean}{
  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).sort().join(',')!=='path,provider')throw Error('READ_PROXY_FIELDS')
  const q=input as {path:unknown;provider:unknown}
  if(typeof q.path!=='string'||q.path.length>512||!q.path.startsWith('/')||/[\s%\\#]/.test(q.path)||q.path.includes('..'))throw Error('READ_PROXY_PATH')
- const origin=q.provider==='pi'?'https://api.minepi.com':q.provider==='horizon'?'https://api.testnet.minepi.com':null
+ const origin=q.provider==='pi'?'https://api.minepi.com':q.provider==='horizon'?financialHorizonOrigin():null
  if(!origin)throw Error('READ_PROXY_PROVIDER');const u=new URL(q.path,origin);if(u.origin!==origin)throw Error('READ_PROXY_ORIGIN')
  if(q.provider==='pi'){
   if(u.search||!/^\/v2\/payments\/[A-Za-z0-9_-]{1,128}$/.test(u.pathname))throw Error('READ_PROXY_PI_ROUTE')
@@ -53,7 +54,7 @@ export function createR36ReadProxy(c:R36ServiceConfig,piKey:string,fetcher:typeo
 export function createR36ReadProxyFetch(c:R36ProviderEndpoint):typeof fetch{
  const origin=new URL(c.origin);if(origin.protocol!=='https:'||origin.hostname!=='r36-provider.internal'||origin.pathname!=='/'||origin.username||origin.password||origin.search||origin.hash||!/^[0-9a-f]{64}$/.test(c.serverSpkiSha256))throw Error('READ_PROXY_FIXED_PRIVATE_ENDPOINT')
  const adapter=async(input:URL|string|Request,init?:RequestInit):Promise<Response>=>{
-  if(input instanceof Request||init?.method&&init.method!=='GET')throw Error('READ_PROXY_GET_ONLY');const u=new URL(String(input));const provider=u.origin==='https://api.minepi.com'?'pi':u.origin==='https://api.testnet.minepi.com'?'horizon':null
+  if(input instanceof Request||init?.method&&init.method!=='GET')throw Error('READ_PROXY_GET_ONLY');const u=new URL(String(input));const provider=u.origin==='https://api.minepi.com'?'pi':u.origin===financialHorizonOrigin()?'horizon':null
   if(!provider||u.username||u.password||u.hash)throw Error('READ_PROXY_FIXED_PROVIDER');const payload={provider,path:u.pathname+u.search};r36ReadTarget(payload)
   const deadline=performance.now()+10000
   const readOnce=():Promise<Response>=>new Promise((resolve,reject)=>{const remaining=Math.ceil(deadline-performance.now());if(remaining<=0||init?.signal?.aborted){reject(Error('READ_PROXY_ABORT'));return}const data=Buffer.from(JSON.stringify(payload));let finished=false;let timer:ReturnType<typeof setTimeout>

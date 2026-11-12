@@ -1,3 +1,7 @@
+import {validateMerchantFeeQuote} from './merchant-fee-contract'
+import {financialIncomingWallet} from './financial-network'
+import {deployment} from '../deployment'
+import {financialNetwork} from './financial-network'
 import {generalOperationPolicy} from "./r36-operation-policy"
 /** NOT_FOR_DEPLOY. Privileged isolated verifier worker; never a runtime/public route.
  * It has no embedded key, credential, evidence URL, signer, activation or financial POST.
@@ -61,7 +65,7 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   const c=rows.length===1?rows[0].context:null
   if(!obj(c)||!obj(c.binding)||!obj(c.policy)||typeof c.nowSeconds!=='number'||typeof c.requestCreatedAt!=='number')return fail('WORKER_CONTEXT_UNAVAILABLE')
   const b=c.binding,p=c.policy,profile=p.workerProfile,now=c.nowSeconds
-  if(!exact(b,R36_ADMISSION_FIELDS)||!R36_ADMISSION_FIELDS.every(k=>str(b[k]))||b.nonce!==nonce||b.network!=='Pi Testnet')return fail('INVALID_PROTECTED_BINDING')
+  if(!exact(b,R36_ADMISSION_FIELDS)||!R36_ADMISSION_FIELDS.every(k=>str(b[k]))||b.nonce!==nonce||b.network!==financialNetwork())return fail('INVALID_PROTECTED_BINDING')
   if(!obj(profile)||profile.schema!=='R36_INDEPENDENT_WORKER_PROFILE_V1'||profile.approvalDigest!==p.approvalRecordDigest||!str(profile.approvalDigest)||!hex.test(profile.approvalDigest)||!str(profile.finalityPolicyDigest)||!hex.test(profile.finalityPolicyDigest)||!Array.isArray(profile.authorities))return fail('INDEPENDENT_WORKER_NOT_ENROLLED')
   const operators=[profile.issuerOperatorId,profile.runtimeOperatorId,profile.migrationOperatorId]
   if(!operators.every(x=>typeof x==='string'&&/^[A-Za-z0-9_.:-]{1,128}$/.test(x))||new Set(operators).size!==3||profile.issuerId!==p.issuerId||profile.keyId!==p.keyId)return fail('ISSUER_IDENTITY_NOT_SEPARATE')
@@ -107,8 +111,14 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   }
   const i=artifacts.intent,f=artifacts.inbound_finality,h=artifacts.wallet_history,a=artifacts.accounting,x=artifacts.exceptions,s=artifacts.exception_isolation,g=artifacts.clearance
   const identity=['network','sourceWallet','paymentId','operationKind','operationId','preparedHash','preparedSequence','piPaymentId','u2aTxid','destinationWallet','amountStroops']
-  if(typeof i.customerUid!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(i.customerUid)||i.schema!=='R36_ORIGINAL_INTENT_V1'||!identity.every(k=>i[k]===b[k])||typeof i.envelopeXdr!=='string'||hash(i.envelopeXdr)!==b.envelopeXdrTextSha256||typeof i.inboundAmountStroops!=='string'||!/^[1-9]\d*$/.test(i.inboundAmountStroops))return fail('ORIGINAL_INTENT_MISMATCH')
-  const prepared=TransactionBuilder.fromXDR(i.envelopeXdr,'Pi Testnet')
+  if(typeof i.customerUid!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(i.customerUid)||!['R36_ORIGINAL_INTENT_V1','R36_ORIGINAL_INTENT_V2'].includes(String(i.schema))||!identity.every(k=>i[k]===b[k])||typeof i.envelopeXdr!=='string'||hash(i.envelopeXdr)!==b.envelopeXdrTextSha256||typeof i.inboundAmountStroops!=='string'||!/^[1-9]\d*$/.test(i.inboundAmountStroops))return fail('ORIGINAL_INTENT_MISMATCH')
+  let quoteAmountMatches=i.inboundAmountStroops===b.amountStroops
+  if(i.schema==='R36_ORIGINAL_INTENT_V2'){
+   const quote=validateMerchantFeeQuote(i.financialContract)
+   quoteAmountMatches=quote.paymentId===b.paymentId&&quote.merchantUid===i.merchantUid&&quote.policy.network===b.network&&quote.policy.applicationId===deployment().applicationId&&quote.grossStroops===i.inboundAmountStroops&&(b.operationKind==='settlement'?quote.merchantNetStroops:quote.grossStroops)===b.amountStroops
+   if(!quoteAmountMatches)return fail('FINANCIAL_POLICY_INTENT_MISMATCH')
+  }else if(i.financialContract!==undefined)return fail('FINANCIAL_POLICY_INTENT_VERSION')
+  const prepared=TransactionBuilder.fromXDR(i.envelopeXdr,financialNetwork())
   if(!(prepared instanceof Transaction)||prepared.toXDR()!==i.envelopeXdr||Buffer.from(prepared.hash()).toString('hex')!==b.preparedHash||prepared.source!==b.sourceWallet||prepared.sequence!==b.preparedSequence||prepared.operations.length!==1)return fail('PREPARED_XDR_MISMATCH')
   const op=prepared.operations[0]
   if(op.type!=='payment'||op.source!==undefined||!op.asset.isNative()||op.destination!==b.destinationWallet||amount(op.amount)!==b.amountStroops)return fail('PREPARED_OPERATION_MISMATCH')
@@ -118,20 +128,20 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   // Use the signed inbound record, not the requester or a Redis projection.
   if (profile.generalOperation !== undefined) {
     const general=generalOperationPolicy(profile)
-    if(!general || b.sourceWallet!==general.sourceWallet || i.inboundAmountStroops!==b.amountStroops ||
+    if(!general || b.sourceWallet!==general.sourceWallet || !quoteAmountMatches ||
       BigInt(i.inboundAmountStroops)>general.maxAmountStroops) return fail('GENERAL_OPERATION_POLICY_MISMATCH')
     // Signed canonical Pi/Horizon identity and original accounting/XDR checks below
     // remain mandatory. A /me login or an intake row alone cannot issue a certificate.
   }
   if (profile.recoveryPilot !== undefined) {
     const pilot=profile.recoveryPilot
-    if(!obj(pilot)||pilot.schema!=='FLASHPAY_TESTNET_NEW_RIGHTS_V1'||!Array.isArray(pilot.wallets)||
+    if(financialNetwork()!=='Pi Testnet'||!obj(pilot)||pilot.schema!=='FLASHPAY_TESTNET_NEW_RIGHTS_V1'||!Array.isArray(pilot.wallets)||
       !Array.isArray(pilot.payerUids)||!pilot.payerUids.includes(i.customerUid)||
       !pilot.wallets.includes(b.sourceWallet)||!pilot.wallets.includes(b.destinationWallet)||!pilot.wallets.includes(hi.sourceWallet)||
-      i.inboundAmountStroops!==b.amountStroops||BigInt(i.inboundAmountStroops)>BigInt(2000000))
+      !quoteAmountMatches||BigInt(i.inboundAmountStroops)>BigInt(2000000))
       return fail('TESTNET_PILOT_SUBJECT_NOT_ENROLLED')
   }
-  if(pi.network!==b.network||pi.user_uid!==i.customerUid||pi.identifier!==b.piPaymentId||pi.direction!=='user_to_app'||pi.to_address!==b.sourceWallet||pi.from_address!==hi.sourceWallet||piAmount(pi.amount)!==i.inboundAmountStroops||!obj(pi.transaction)||pi.transaction.txid!==b.u2aTxid||pi.transaction.verified!==true||!obj(pi.status)||pi.status.developer_approved!==true||pi.status.transaction_verified!==true||pi.status.developer_completed!==true||pi.status.cancelled!==false||pi.status.user_cancelled!==false||hi.network!=='Pi Testnet'||hi.destinationWallet!==b.sourceWallet||hi.preparedHash!==b.u2aTxid||amount(hi.amount)!==i.inboundAmountStroops)return fail('PI_INBOUND_IDENTITY_OR_COMPLETION_MISMATCH')
+  if(pi.network!==b.network||pi.user_uid!==i.customerUid||pi.identifier!==b.piPaymentId||pi.direction!=='user_to_app'||pi.to_address!==financialIncomingWallet()||pi.from_address!==hi.sourceWallet||piAmount(pi.amount)!==i.inboundAmountStroops||!obj(pi.transaction)||pi.transaction.txid!==b.u2aTxid||pi.transaction.verified!==true||!obj(pi.status)||pi.status.developer_approved!==true||pi.status.transaction_verified!==true||pi.status.developer_completed!==true||pi.status.cancelled!==false||pi.status.user_cancelled!==false||hi.network!==financialNetwork()||hi.destinationWallet!==financialIncomingWallet()||hi.preparedHash!==b.u2aTxid||amount(hi.amount)!==i.inboundAmountStroops)return fail('PI_INBOUND_IDENTITY_OR_COMPLETION_MISMATCH')
   const inbound=verifyR36IndependentHorizonRecord(hi as R36HorizonProofInput,f.horizonRecord as R36HorizonRecord)
   if(inbound.outcome!=='PROVEN'||!inbound.ledger||BigInt(inbound.ledger)>BigInt(b.cutoffLedger as string))return fail('INBOUND_HORIZON_NOT_PROVEN')
   for(const body of [h,a,g])if(body.network!==b.network||body.sourceWallet!==b.sourceWallet||body.cutoffLedger!==b.cutoffLedger)return fail('HISTORY_ACCOUNTING_SCOPE_MISMATCH')

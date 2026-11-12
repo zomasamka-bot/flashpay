@@ -10,12 +10,12 @@ export const financialPresentationIntegrityCTE = `presentation_integrity AS (
       AND r.settlement_status='settled_to_merchant' AND (
         t.id IS NULL OR r.merchant_id IS DISTINCT FROM t.merchant_id
         OR r.merchant_uid IS DISTINCT FROM t.merchant_uid OR r.amount IS DISTINCT FROM t.amount
-        OR r.customer_amount IS DISTINCT FROM t.amount OR r.merchant_amount IS DISTINCT FROM t.amount
-        OR r.app_commission IS DISTINCT FROM 0 OR r.horizon_fee_charged IS NULL
-        OR r.horizon_fee_charged < 0 OR r.app_net_impact IS DISTINCT FROM -r.horizon_fee_charged
+        OR r.customer_amount IS DISTINCT FROM (t.amount+r.app_commission) OR r.merchant_amount IS DISTINCT FROM t.amount
+        OR r.app_commission IS NULL OR r.app_commission<0 OR (s.payment_id IS NULL AND r.app_commission<>0) OR r.horizon_fee_charged IS NULL
+        OR r.horizon_fee_charged < 0 OR r.app_net_impact IS DISTINCT FROM (r.app_commission-r.horizon_fee_charged)
         OR (s.payment_id IS NOT NULL AND (
           s.stage <> 'db_finalized' OR s.merchant_id IS DISTINCT FROM t.merchant_id
-          OR s.merchant_uid IS DISTINCT FROM t.merchant_uid OR s.customer_amount IS DISTINCT FROM t.amount
+          OR s.merchant_uid IS DISTINCT FROM t.merchant_uid OR s.customer_amount IS DISTINCT FROM r.customer_amount OR s.merchant_amount IS DISTINCT FROM t.amount OR s.app_commission IS DISTINCT FROM r.app_commission
           OR s.u2a_identifier IS DISTINCT FROM r.u2a_identifier OR s.u2a_txid IS DISTINCT FROM r.u2a_txid
           OR s.a2u_payment_id IS DISTINCT FROM r.a2u_identifier OR s.a2u_txid IS DISTINCT FROM r.a2u_txid
           OR s.prepared_tx_hash IS DISTINCT FROM r.txid

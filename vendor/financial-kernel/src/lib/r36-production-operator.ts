@@ -1,3 +1,4 @@
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 import {deployment} from '../deployment'
 // Dedicated Pi Testnet operator. Run the issuer and signer as separate services.
 // Neither a Next.js route nor the B2 launcher can select this production target.
@@ -17,7 +18,7 @@ type Mode = 'issuer' | 'signer'
 type ProviderConfig = Parameters<typeof createR36HttpsPorts>[0]
 type Config = {
   mode: Mode
-  network: 'Pi Testnet'
+  network: FinancialNetwork
   databaseUrl: string
   policyDigest: string
   // null selects a persistent service for already-approved requests in one policy.
@@ -32,7 +33,7 @@ type Tx = Parameters<Parameters<R36CertificateDatabase['begin']>[0]>[0]
 export function validateProductionConfig(input: unknown): Config {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) throw Error('CONFIG_REQUIRED')
   const c = input as Config
-  if (c.network !== 'Pi Testnet' || (c.mode !== 'issuer' && c.mode !== 'signer')) throw Error('OPERATOR_TARGET')
+  if (c.network !== financialNetwork() || (c.mode !== 'issuer' && c.mode !== 'signer')) throw Error('OPERATOR_TARGET')
   const fields = ['mode', 'network', 'databaseUrl', 'policyDigest', 'approvalId',
     ...(c.mode === 'issuer' ? ['providers', ...(c.approvalId === null ? ['service'] : [])] : ['service', 'signingKeyPem'])]
   if (Object.keys(c).length !== fields.length || !fields.every(f => Object.hasOwn(c, f))) throw Error('CONFIG_FIELDS')
@@ -98,7 +99,7 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
   const context = contextRows[0]?.ctx as {policy?:{policyDigest?:string};binding?:{network?:string;nonce?:string};policy_digest?:string;idempotency_key?:string} | null
   if (contextRows.length !== 1 || !context) throw Error('APPROVAL_UNAVAILABLE')
   const matches = c.mode === 'issuer'
-    ? context.binding?.network === 'Pi Testnet' && context.binding.nonce === c.approvalId && context.policy?.policyDigest === c.policyDigest
+    ? context.binding?.network === financialNetwork() && context.binding.nonce === c.approvalId && context.policy?.policyDigest === c.policyDigest
     : context.idempotency_key === c.approvalId && context.policy_digest === c.policyDigest
   if (!matches) throw Error('APPROVAL_SCOPE')
 }
@@ -146,7 +147,7 @@ export async function runProductionOperator(input: unknown) {
   if (input && typeof input==='object' && 'mode' in input && input.mode==='evidence') {
     const c=input as {mode:'evidence';network?:string;service?:R36ServiceConfig;directory?:string}
     const svc=c.service, directory=c.directory
-    if (Object.keys(c).sort().join()!=='directory,mode,network,service' || c.network!=='Pi Testnet' ||
+    if (Object.keys(c).sort().join()!=='directory,mode,network,service' || c.network!==financialNetwork() ||
         !svc || !['127.0.0.1','::1'].includes(svc.host) || !Number.isInteger(svc.port) || svc.port<1 || svc.port>65535 ||
         typeof directory!=='string' || !isAbsolute(directory) || await realpath(directory)!==directory ||
         !(await lstat(directory)).isDirectory()) throw Error('EVIDENCE_CONFIGURATION')

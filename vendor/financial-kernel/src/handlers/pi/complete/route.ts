@@ -1,3 +1,4 @@
+import {financialNetwork} from '../../../lib/financial-network'
 import {originalRefundCertificationEnabled} from "../../../lib/r36-operation-policy"
 import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetInbound} from "../../../lib/r36-testnet-ingress"
 import { after, type NextRequest, NextResponse } from "next/server"
@@ -113,7 +114,7 @@ export async function POST(request: NextRequest) {
 
     // DR-24: never let a Mainnet/unknown Pi payment enter the Testnet-only
     // durable ingress + settlement kernel. Network mismatch is a hard boundary.
-    if (piPayment.network !== "Pi Testnet") {
+    if (piPayment.network !== financialNetwork()) {
       console.error("[DR-24 NETWORK BOUNDARY] completion Pi network mismatch", { observedNetwork: typeof piPayment.network === "string" ? piPayment.network : "invalid" })
       return NextResponse.json({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }, { status: 409 })
     }
@@ -253,7 +254,7 @@ export async function POST(request: NextRequest) {
       if (typeof refetchedFlashPaymentId !== "string" || refetchedFlashPaymentId.length === 0 || refetchedFlashPaymentId !== refetchedFlashPaymentId.trim() || refetchedFlashPaymentId !== preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
 
       // Validate identifier, network, direction, amount, txid, non-cancelled, developer_completed after refetch
-      if (finalPiPayment.network !== "Pi Testnet") {
+      if (finalPiPayment.network !== financialNetwork()) {
         console.error("[DR-24 NETWORK BOUNDARY] refetched completion network mismatch", { paymentId: preFlashPaymentId, observedNetwork: typeof finalPiPayment.network === "string" ? finalPiPayment.network : "invalid" })
         return NextResponse.json({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }, { status: 409 })
       }
@@ -293,7 +294,7 @@ export async function POST(request: NextRequest) {
     const finalPayerUid = typeof finalPiPayment.user_uid === "string" && finalPiPayment.user_uid.length > 0 && finalPiPayment.user_uid === finalPiPayment.user_uid.trim() ? finalPiPayment.user_uid : ""
     if (
       finalPiPayment.identifier !== piPaymentId ||
-      finalPiPayment.network !== "Pi Testnet" ||
+      finalPiPayment.network !== financialNetwork() ||
       finalPiPayment.direction !== "user_to_app" ||
       finalPiPayment.metadata?.paymentId !== preFlashPaymentId ||
       finalPiPayment.status?.developer_approved !== true ||
@@ -318,7 +319,7 @@ export async function POST(request: NextRequest) {
     const previousCertificationHold=await readDr11RefundCertificationHold(preFlashPaymentId)
     if(previousCertificationHold.outcome==='INDETERMINATE')return NextResponse.json({error:'Certification recovery unavailable'},{status:503})
     const dr11ExactIdentity = originalRefundCertificationEnabled(finalPiPayment.network,finalPiPayment.amount) ||
-      (previousCertificationHold.outcome==='HELD' && finalPiPayment.network==='Pi Testnet' && finalPiPayment.amount===0.1)
+      (previousCertificationHold.outcome==='HELD' && finalPiPayment.network===financialNetwork() && finalPiPayment.amount===0.1)
     if (dr11ExactIdentity) {
       const autoRefundHold = await recordDr11RefundCertificationHold({
         paymentId: preFlashPaymentId,

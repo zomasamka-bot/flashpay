@@ -1,3 +1,4 @@
+import {type FinancialNetwork,financialNetwork,financialHorizonOrigin} from './financial-network'
 /** R36 independent Horizon evidence check. READ-ONLY, never authorizes rotation.
  * The result is diagnostic evidence, NOT a durable approval. The caller must
  * independently verify PostgreSQL accounting and historical wallet inventory.
@@ -6,7 +7,7 @@ import { Asset, Transaction, TransactionBuilder } from '@stellar/stellar-sdk'
 import { verifyR36TransactionResultXdr } from './r36-transaction-result-evidence'
 
 export type R36HorizonProofInput = Readonly<{
-  network: 'Pi Testnet'; preparedHash: string; preparedSequence: string;
+  network: FinancialNetwork; preparedHash: string; preparedSequence: string;
   sourceWallet: string; destinationWallet: string; amount: string;
   envelopeXdr: string; expectedFeeStroops: string;
 }>
@@ -27,7 +28,7 @@ const decimal = (value: unknown): string | null => {
   return stroops > BigInt(0) ? stroops.toString() : null
 }
 export function verifyR36IndependentHorizonRecord(input: R36HorizonProofInput, record: R36HorizonRecord): R36ProofResult {
-  if (input.network !== 'Pi Testnet' || !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
+  if (input.network !== financialNetwork() || !/^[0-9a-f]{64}$/.test(input.preparedHash) ||
       !/^[1-9]\d*$/.test(input.preparedSequence) || !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !/^G[A-Z2-7]{55}$/.test(input.destinationWallet) || !/^(0|[1-9]\d*)$/.test(input.expectedFeeStroops) ||
       decimal(input.amount) === null || !input.envelopeXdr) return blocked('INVALID_INPUT')
@@ -61,7 +62,7 @@ export async function readR36IndependentHorizonProof(
 ): Promise<R36ProofResult> {
   if (!/^[0-9a-f]{64}$/.test(input.preparedHash)) return blocked('INVALID_HASH')
   try {
-    const response = await fetcher(`https://api.testnet.minepi.com/transactions/${input.preparedHash}`, {
+    const response = await fetcher(`${financialHorizonOrigin()}/transactions/${input.preparedHash}`, {
       method: 'GET', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(8000),
     })
     if (!response.ok) return blocked('HORIZON_UNAVAILABLE_OR_NOT_FOUND')

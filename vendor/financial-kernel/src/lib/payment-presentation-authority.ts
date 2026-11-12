@@ -24,7 +24,7 @@ export async function verifyFinalPaymentPresentation(payment: Record<string, unk
       if (d.paymentId !== id || d.merchantId !== payment.merchantId || d.merchantUid !== payment.merchantUid ||
           d.customerAmount !== payment.amount || (payment.customerAmount != null && d.customerAmount !== payment.customerAmount) ||
           (payment.merchantAmount != null && d.merchantAmount !== payment.merchantAmount) ||
-          (payment.appCommission != null && payment.appCommission !== 0) ||
+          (payment.appCommission != null && payment.appCommission !== d.appCommission) ||
           d.u2aIdentifier !== payment.piPaymentId || d.u2aTxid !== payment.u2aTxid || d.a2uTxid !== payment.a2uTxid ||
           (payment.a2uPaymentId != null && d.a2uPaymentId !== payment.a2uPaymentId)) return false
     } else {

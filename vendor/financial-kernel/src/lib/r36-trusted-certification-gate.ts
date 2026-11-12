@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** R36 certification preflight, quarantined. Never issues approvals or changes financial state.
  * Evidence must be independently obtained; caller assertions cannot grant authorization.
  * History/accounting inputs are deliberately NOT accepted as booleans.
@@ -45,7 +46,7 @@ export async function preflightR36TrustedCertification(db:Db, input:R36HorizonPr
 }
 /** Immutable audit correlation only; never a certificate or permission. */
 export function r36EvidenceCorrelationId(network:string,wallet:string,hash:string):string|null {
-  if(network!=='Pi Testnet'|| !/^G[A-Z2-7]{55}$/.test(wallet)|| !/^[0-9a-f]{64}$/.test(hash))return null
+  if(network!==financialNetwork()|| !/^G[A-Z2-7]{55}$/.test(wallet)|| !/^[0-9a-f]{64}$/.test(hash))return null
   return createHash('sha256').update(JSON.stringify([network,wallet,hash])).digest('hex')
 }
 

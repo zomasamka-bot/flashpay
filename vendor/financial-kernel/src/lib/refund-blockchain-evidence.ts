@@ -1,3 +1,4 @@
+import {financialHorizonOrigin,financialNetwork} from './financial-network'
 import "server-only"
 
 import type { RefundCheckpoint } from "./types"
@@ -15,7 +16,7 @@ type Input = {
   payment: RefundPiPayment
 }
 
-const HORIZON_BASE = "https://api.testnet.minepi.com"
+const HORIZON_BASE = financialHorizonOrigin()
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -107,7 +108,7 @@ export async function verifyRefundBlockchainEvidence(input: Input): Promise<Refu
   if (!blockchainEvidenceStage || !blockchainEvidenceStatus ||
     !checkpoint.refundPaymentId || checkpoint.refundPaymentId !== payment.identifier || checkpoint.paymentId !== payment.metadata.paymentId ||
     checkpoint.payerUid !== payment.user_uid || checkpoint.amount !== payment.amount || numberToExactPositiveStroops(checkpoint.amount) === null || numberToExactPositiveStroops(payment.amount) === null ||
-    payment.network !== "Pi Testnet" || payment.direction !== "app_to_user" ||
+    payment.network !== financialNetwork() || payment.direction !== "app_to_user" ||
     payment.status.cancelled || payment.status.user_cancelled) return { outcome: "INDETERMINATE" }
 
   const transaction = payment.transaction

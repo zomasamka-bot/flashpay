@@ -1,3 +1,5 @@
+import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
+import {financialNetwork,financialHorizonOrigin} from './financial-network'
 import {withPreparedTrace,observePreparedRefusal} from './r36-prepared-trace'
 import { prepareR36EvidenceCandidate } from "./r36-prepared-evidence"
 import { getPiSigningSeed } from "./pi-wallet-signing-config"
@@ -235,7 +237,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       let refundPendingFromConfirmedNone = false
       if (!failClosedStage1 && !retryable && typeof ctx.customerAmount === "number" && Number.isFinite(ctx.customerAmount) && ctx.customerAmount > 0 &&
         typeof ctx.merchantUid === "string" && ctx.merchantUid.trim().length > 0) {
-        const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+        const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, settlementTarget(ctx.payment), ctx.merchantUid)
         if (reconciliation.outcome === "FOUND" && reconciliation.dto) {
           if (!isPiA2UPayment(reconciliation.dto)) {
             failedPayment = { ...failedPayment, settlementFailureState: "held", refundStatus: "manual_review_required", status: "paid_to_app" }
@@ -288,7 +290,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       }
       // Preserve the existing Redis checkpoint first. Then require the exact same
       // Stage1 identity to become durable in PostgreSQL before Stage2 can execute.
-      ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage1Updates)
+      ctx.payment = await persistCheckpointMerged(ctx.paymentId, {...stage1Updates,...(ctx.payment.financialContract?{financialContract:ctx.payment.financialContract}:{})})
       const durableStage1 = await recordSettlementA2UCreatedCheckpoint({
         paymentId: ctx.paymentId,
         merchantId: ctx.payment.merchantId,
@@ -321,7 +323,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
     // Normalize and check amount match exactly
     const fetchedAmount = Number(fetchedPayment.amount)
-    if (!Number.isFinite(fetchedAmount) || fetchedAmount !== ctx.customerAmount) {
+    if (!Number.isFinite(fetchedAmount) || fetchedAmount !== settlementTarget(ctx.payment)) {
       return { ok: false, status: "error", error: "A2U amount mismatch" }
     }
     if (!fetchedPayment.from_address || !fetchedPayment.to_address) {
@@ -334,7 +336,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     // Check if payment is cancelled
     if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true || fetchedPayment.cancelled === true || fetchedPayment.rejected === true) {
       const metadata = isRecord(fetchedPayment.metadata) ? fetchedPayment.metadata : null
-      const exactCancelledIdentity = fetchedPayment.identifier === a2uPaymentId && fetchedPayment.network === "Pi Testnet" && fetchedPayment.direction === "app_to_user" && fetchedPayment.amount === ctx.customerAmount && fetchedPayment.user_uid === ctx.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === ctx.paymentId && typeof fetchedPayment.txid !== "string" && typeof fetchedPayment.transaction_id !== "string" && typeof fetchedPayment.transaction?.txid !== "string" && fetchedPayment.transaction?.verified !== true && fetchedPayment.status?.transaction_verified !== true && fetchedPayment.status?.developer_completed !== true
+      const exactCancelledIdentity = fetchedPayment.identifier === a2uPaymentId && fetchedPayment.network === financialNetwork() && fetchedPayment.direction === "app_to_user" && fetchedPayment.amount === settlementTarget(ctx.payment) && fetchedPayment.user_uid === ctx.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === ctx.paymentId && typeof fetchedPayment.txid !== "string" && typeof fetchedPayment.transaction_id !== "string" && typeof fetchedPayment.transaction?.txid !== "string" && fetchedPayment.transaction?.verified !== true && fetchedPayment.status?.transaction_verified !== true && fetchedPayment.status?.developer_completed !== true
       if (!exactCancelledIdentity) return { ok:false,status:"settlement_pending",error:"Cancelled A2U identity/progression is not safe to retire" }
       const horizon = await proveA2UStage1HorizonAbsence(fetchedPayment as unknown as Record<string,unknown>, a2uPaymentId)
       if (horizon.outcome !== "ABSENT") return { ok:false,status:"settlement_pending",error:"Cancelled A2U Horizon absence not proven" }
@@ -552,10 +554,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
 
     // Calculate appNetImpact from verified persisted values
-    const calculatedAppNetImpact = ctx.payment.customerAmount - ctx.payment.merchantAmount - ctx.payment.horizonFeeCharged
+    const calculatedAppNetImpact = netImpact(ctx.payment.customerAmount, ctx.payment.merchantAmount, ctx.payment.horizonFeeCharged, ctx.payment.financialContract)
     
     // Set appCommission per FlashPay business rule: no commission charged at this stage (authoritative = 0)
-    const appCommissionValue = 0
+    const appCommissionValue = contractCommission(ctx.payment)
 
     // Persist accounting checkpoint
     const accountingUpdates = {
@@ -583,11 +585,11 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     const canonicalA2UPaymentId = typeof ctx.payment.a2uPaymentId === "string" && ctx.payment.a2uPaymentId.trim() !== "" && ctx.payment.a2uPaymentId === ctx.payment.a2uPaymentId.trim()
     const accountingComplete =
       typeof ctx.payment.customerAmount === "number" && Number.isFinite(ctx.payment.customerAmount) && ctx.payment.customerAmount > 0 &&
-      typeof ctx.payment.merchantAmount === "number" && Number.isFinite(ctx.payment.merchantAmount) && ctx.payment.merchantAmount === ctx.payment.customerAmount &&
+      typeof ctx.payment.merchantAmount === "number" && Number.isFinite(ctx.payment.merchantAmount) && ctx.payment.merchantAmount === settlementTarget(ctx.payment) &&
       typeof ctx.payment.horizonFeeCharged === "number" && Number.isFinite(ctx.payment.horizonFeeCharged) && ctx.payment.horizonFeeCharged >= 0 &&
-      ctx.payment.appCommission === 0 &&
+      ctx.payment.appCommission === contractCommission(ctx.payment) &&
       typeof ctx.payment.appNetImpact === "number" && Number.isFinite(ctx.payment.appNetImpact) &&
-      ctx.payment.appNetImpact === ctx.payment.customerAmount - ctx.payment.merchantAmount - ctx.payment.horizonFeeCharged
+      ctx.payment.appNetImpact === netImpact(ctx.payment.customerAmount, ctx.payment.merchantAmount, ctx.payment.horizonFeeCharged, ctx.payment.financialContract)
     if (!canonicalA2UTxid || !canonicalA2UPaymentId || ctx.payment.horizonSuccessFlag !== true || !accountingComplete) {
       return { ok: false, status: "settlement_pending", error: "Pi-complete DB deferral checkpoint could not be verified" }
     }
@@ -771,7 +773,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     // Create A2U payment
     const requestBody = {
       payment: {
-        amount: ctx.customerAmount,
+        amount: settlementTarget(ctx.payment),
         memo: `FlashPay settlement for ${ctx.paymentId}`,
         metadata: {
           paymentId: ctx.paymentId,
@@ -809,7 +811,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
           // server-side identity binding has been proved.
           const fetchResult = await fetchA2UPayment(ongoingPaymentId)
           const metadata = fetchResult && isRecord(fetchResult.metadata) ? fetchResult.metadata : null
-          const exactOngoingIdentity = Boolean(fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === ctx.customerAmount && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid && fetchResult.identifier === ongoingPaymentId && typeof fetchResult.txid !== "string" && typeof fetchResult.transaction_id !== "string" && fetchResult.completed !== true && fetchResult.cancelled !== true && fetchResult.rejected !== true && typeof fetchResult.transaction?.txid !== "string" && fetchResult.transaction?.verified !== true && fetchResult.status?.transaction_verified !== true && fetchResult.status?.developer_completed !== true && fetchResult.status?.cancelled !== true && fetchResult.status?.user_cancelled !== true)
+          const exactOngoingIdentity = Boolean(fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === settlementTarget(ctx.payment) && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid && fetchResult.identifier === ongoingPaymentId && typeof fetchResult.txid !== "string" && typeof fetchResult.transaction_id !== "string" && fetchResult.completed !== true && fetchResult.cancelled !== true && fetchResult.rejected !== true && typeof fetchResult.transaction?.txid !== "string" && fetchResult.transaction?.verified !== true && fetchResult.status?.transaction_verified !== true && fetchResult.status?.developer_completed !== true && fetchResult.status?.cancelled !== true && fetchResult.status?.user_cancelled !== true)
           if (exactOngoingIdentity) {
             const observation = await recordSettlementA2UOngoingObservation(ctx.paymentId, ongoingPaymentId)
             if (observation !== "RECORDED" && observation !== "REPLAYED") return {ok:false,error:"Pi ongoing A2U identifier could not be durably captured",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_ongoing_identifier_capture_unproven"}
@@ -838,7 +840,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
           : "A2U creation failed"
       const ambiguous = responseStatusRetryable(createResponse.status) || codeIsTooManyPayments(errorData, errorText)
       if (ambiguous) {
-        const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+        const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, settlementTarget(ctx.payment), ctx.merchantUid)
         if (reconciled.outcome === "FOUND") {
           const dto = reconciled.dto
           if (dto === undefined || !isReconciledPiA2UPayment(dto) || !isPiA2UPayment(dto)) {
@@ -889,7 +891,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     try {
       responseData = await createResponse.json()
     } catch {
-      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, settlementTarget(ctx.payment), ctx.merchantUid)
       if (reconciliation.outcome === "FOUND") {
         const dto = reconciliation.dto
         const tx = isRecord(dto?.transaction) ? dto.transaction : null
@@ -904,7 +906,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
       console.error("[DR-22 FINANCIAL EVENT]", { event: "a2u_create_invalid_dto", paymentId: ctx.paymentId, stage: "pi_create_response", responseType: responseData === null ? "null" : Array.isArray(responseData) ? "array" : typeof responseData, failClosed: true })
-      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+      const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, settlementTarget(ctx.payment), ctx.merchantUid)
       if (reconciliation.outcome === "FOUND") {
         const dto = reconciliation.dto
         const tx = isRecord(dto?.transaction) ? dto.transaction : null
@@ -927,7 +929,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     const md = isRecord(responseData.metadata) ? responseData.metadata : null
     const tx = isRecord(responseData.transaction) ? responseData.transaction : null
     const st = isRecord(responseData.status) ? responseData.status : null
-    if (typeof responseData.identifier !== "string" || responseData.identifier.trim() === "" || responseData.identifier !== responseData.identifier.trim() || responseData.amount !== ctx.customerAmount || responseData.direction !== "app_to_user" || responseData.user_uid !== ctx.merchantUid || md?.paymentId !== ctx.paymentId || md?.type !== "a2u_settlement" || typeof responseData.txid === "string" || typeof responseData.transaction_id === "string" || typeof tx?.txid === "string" || responseData.completed === true || responseData.cancelled === true || responseData.rejected === true || tx?.verified === true || st?.transaction_verified === true || st?.developer_completed === true || st?.cancelled === true || st?.user_cancelled === true) {
+    if (typeof responseData.identifier !== "string" || responseData.identifier.trim() === "" || responseData.identifier !== responseData.identifier.trim() || responseData.amount !== settlementTarget(ctx.payment) || responseData.direction !== "app_to_user" || responseData.user_uid !== ctx.merchantUid || md?.paymentId !== ctx.paymentId || md?.type !== "a2u_settlement" || typeof responseData.txid === "string" || typeof responseData.transaction_id === "string" || typeof tx?.txid === "string" || responseData.completed === true || responseData.cancelled === true || responseData.rejected === true || tx?.verified === true || st?.transaction_verified === true || st?.developer_completed === true || st?.cancelled === true || st?.user_cancelled === true) {
       return {ok:false,error:"A2U binding failed",userFacingStatus:"manual_review_required",retryable:false,errorCode:"invalid_dto_create_response_binding"}
     }
     
@@ -942,7 +944,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     }
   } catch (error) {
     console.error("[A2U Stage1] Exception:", error)
-    const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, ctx.customerAmount, ctx.merchantUid)
+    const reconciled = await reconcileIncompleteA2UPayment(ctx.paymentId, settlementTarget(ctx.payment), ctx.merchantUid)
     if (reconciled.outcome === "FOUND") {
       const dto = reconciled.dto
       const tx = isRecord(dto?.transaction) ? dto.transaction : null
@@ -992,11 +994,11 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   }
   // Persist the immutable signed intent for independent review BEFORE asking
   // the original certificate-dependent claim. This grants no submission right.
-  const candidate = await prepareR36EvidenceCandidate({network:'Pi Testnet',sourceWallet:appPublicKey,
+  const candidate = await prepareR36EvidenceCandidate({network:financialNetwork(),sourceWallet:appPublicKey,
     destinationWallet:toAddress,paymentId:ctx.paymentId,operationKind:'settlement',
     operationId:a2uPaymentId,piPaymentId:a2uPaymentId,amountStroops:String(exactAmountStroops)},
     sourceAccount.sequence,feeAsString,async()=>{
-      const t = new StellarSDK.TransactionBuilder(sourceAccount,{fee:feeAsString,networkPassphrase:'Pi Testnet'})
+      const t = new StellarSDK.TransactionBuilder(sourceAccount,{fee:feeAsString,networkPassphrase:financialNetwork()})
         .addOperation(StellarSDK.Operation.payment({destination:toAddress,asset:StellarSDK.Asset.native(),amount:amount.toFixed(7)}))
         .addMemo(StellarSDK.Memo.text(a2uPaymentId.substring(0,28))).setTimeout(StellarSDK.TimeoutInfinite).build()
       t.sign(appKeypair);return t
@@ -1011,10 +1013,10 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
   // R36: claim and prepared evidence must share ONE PostgreSQL transaction.
   // Redis is updated only AFTER this transaction commits successfully.
-  const traceInput:WalletAuthorityClaim={network:'Pi Testnet',sourceWallet:appPublicKey,paymentId:ctx.paymentId,operationKind:'settlement',operationId:a2uPaymentId,preparedHash,preparedSequence}
+  const traceInput:WalletAuthorityClaim={network:financialNetwork(),sourceWallet:appPublicKey,paymentId:ctx.paymentId,operationKind:'settlement',operationId:a2uPaymentId,preparedHash,preparedSequence}
   const durablePrepared = await withPreparedTrace(traceInput,async()=>{
    const result = await withAtomicSettlementPreparedAuthority(ctx.paymentId, async (tx) => {
-    const owned = await claimPreparedWalletAuthority({network:'Pi Testnet', sourceWallet:appPublicKey,
+    const owned = await claimPreparedWalletAuthority({network:financialNetwork(), sourceWallet:appPublicKey,
       paymentId:ctx.paymentId, operationKind:'settlement', operationId:a2uPaymentId,
       preparedHash, preparedSequence}, tx)
     if (!owned) throw Object.assign(new Error('R36 wallet authority unavailable or occupied'), {code:'R36_PREPARED_AUTHORITY_NOT_ADMITTED'})
@@ -1146,7 +1148,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     if (!walletLock) return { ok: false, error: "Pi wallet submit lock unavailable", userFacingStatus: "settlement_pending" }
 
     console.log("[A2U Stage2] Connecting to Horizon")
-    const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
+    const horizonServer = new StellarSDK.Horizon.Server(financialHorizonOrigin(), { allowHttp: false })
     const prepared = await prepareStage2UnderHeldWalletLock(ctx, appKeypair, appPublicKey, horizonServer, toAddress, amount, a2uPaymentId)
     if (!prepared.ok) {
       console.error("[DR41 STAGE2 DIAGNOSTIC] prepare_failed", { paymentId: ctx.paymentId, error: prepared.error, userFacingStatus: prepared.userFacingStatus })
@@ -1171,7 +1173,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     let reconciledSubmitFeeStroops: number | null = null
     try {
       moved = await moveStage2UnderHeldWalletLock(horizonServer, transaction, preparedHash, () => walletLock!.verifyOwned(), {
-        network: 'Pi Testnet', sourceWallet: appPublicKey,
+        network: financialNetwork(), sourceWallet: appPublicKey,
         paymentId: ctx.paymentId, operationKind: 'settlement', operationId: a2uPaymentId,
         preparedHash, preparedSequence: transaction.sequence,
       })
@@ -1317,7 +1319,7 @@ async function ensureRecoveredHorizonDurability(
     d.merchantId !== ctx.payment.merchantId ||
     d.merchantUid !== ctx.merchantUid ||
     d.customerAmount !== ctx.customerAmount ||
-    d.merchantAmount !== ctx.customerAmount ||
+    d.merchantAmount !== settlementTarget(ctx.payment) ||
     d.a2uPaymentId !== a2uPaymentId ||
     d.a2uFromAddress !== ctx.payment.a2uFromAddress ||
     d.a2uToAddress !== ctx.payment.a2uToAddress
@@ -1334,7 +1336,7 @@ async function ensureRecoveredHorizonDurability(
       return { ok: false, error: "Recovered Horizon prepared authority mismatch" }
     }
     try {
-      const horizonServer = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
+      const horizonServer = new StellarSDK.Horizon.Server(financialHorizonOrigin(), { allowHttp: false })
       const transactionRecord = await horizonServer.transactions().transaction(a2uTxid).call()
       const record = transactionRecord as unknown as Record<string, unknown>
       if (record.hash !== a2uTxid || record.successful !== true) {
@@ -1405,7 +1407,7 @@ async function ensureRecoveredHorizonDurability(
     if (d.stage === "horizon_confirmed") {
       const matchesCompletionProof = (value: unknown, completed: boolean): boolean => {
         if (!isReconciledPiA2UPayment(value) || !isPiA2UPayment(value)) return false
-        return value.identifier === d.a2uPaymentId && value.network === "Pi Testnet" &&
+        return value.identifier === d.a2uPaymentId && value.network === financialNetwork() &&
           value.direction === "app_to_user" && value.user_uid === d.merchantUid &&
           value.amount === d.merchantAmount && value.from_address === d.a2uFromAddress &&
           value.to_address === d.a2uToAddress && value.metadata?.paymentId === d.paymentId &&
@@ -1418,7 +1420,7 @@ async function ensureRecoveredHorizonDurability(
       // Pi can leave transaction=null until /complete binds the accepted Horizon txid.
       // This DTO proves identity only; the exact durable XDR must be proven on Horizon.
       const unlinkedIncomplete = isReconciledPiA2UPayment(proof) && isPiA2UPayment(proof) &&
-        proof.identifier === d.a2uPaymentId && proof.network === "Pi Testnet" &&
+        proof.identifier === d.a2uPaymentId && proof.network === financialNetwork() &&
         proof.direction === "app_to_user" && proof.user_uid === d.merchantUid &&
         proof.amount === d.merchantAmount && proof.from_address === d.a2uFromAddress &&
         proof.to_address === d.a2uToAddress && proof.metadata?.paymentId === d.paymentId &&
@@ -1436,7 +1438,7 @@ async function ensureRecoveredHorizonDurability(
             return { ok: false, error: "Recovered Pi completion prepared evidence invalid" }
           }
           const horizon = await readR36IndependentHorizonProof({
-            network: "Pi Testnet", preparedHash: d.preparedTxHash, preparedSequence: d.preparedSequence,
+            network: financialNetwork(), preparedHash: d.preparedTxHash, preparedSequence: d.preparedSequence,
             sourceWallet: d.a2uFromAddress, destinationWallet: d.a2uToAddress,
             amount: d.merchantAmount.toFixed(7), envelopeXdr: d.preparedEnvelopeXdr,
             expectedFeeStroops: String(d.horizonFeeStroops),
@@ -1510,7 +1512,7 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
     const md = isRecord(value.metadata) ? value.metadata : null
     const tx = isRecord(value.transaction) ? value.transaction : null
     const st = isRecord(value.status) ? value.status : null
-    return value.identifier === a2uPaymentId && value.amount === ctx.customerAmount && value.direction === "app_to_user" && value.user_uid === ctx.merchantUid && md?.paymentId === ctx.paymentId && md?.type === "a2u_settlement" && tx?.txid === txidFromHorizon && tx?.verified === true && st?.transaction_verified === true && st?.developer_completed === true && st?.cancelled !== true && st?.user_cancelled !== true
+    return value.identifier === a2uPaymentId && value.amount === settlementTarget(ctx.payment) && value.direction === "app_to_user" && value.user_uid === ctx.merchantUid && md?.paymentId === ctx.paymentId && md?.type === "a2u_settlement" && tx?.txid === txidFromHorizon && tx?.verified === true && st?.transaction_verified === true && st?.developer_completed === true && st?.cancelled !== true && st?.user_cancelled !== true
   }
 
   const refetchCompleted = async (): Promise<boolean> => verifyCompletedDto(await fetchA2UPayment(a2uPaymentId))
@@ -1803,6 +1805,10 @@ export async function persistCheckpointMerged(
     // Every server checkpoint write scrubs any historical bearer instead of propagating or accepting one.
     merged.accessToken = ""
     if (updates.amount !== undefined) merged.amount = updates.amount
+    if (updates.financialContract !== undefined) {
+      if(latest.financialContract && JSON.stringify(latest.financialContract)!==JSON.stringify(updates.financialContract))throw Error('FINANCIAL_CONTRACT_PROJECTION_CONFLICT')
+      merged.financialContract=updates.financialContract
+    }
     if (updates.customerAmount !== undefined) merged.customerAmount = updates.customerAmount
     if (updates.merchantAmount !== undefined) merged.merchantAmount = updates.merchantAmount
     if (updates.horizonFeeCharged !== undefined) merged.horizonFeeCharged = updates.horizonFeeCharged

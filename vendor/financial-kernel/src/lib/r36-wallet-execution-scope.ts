@@ -1,3 +1,4 @@
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 /** A new-wallet accounting boundary, not disposition of historical rights.
  * Protected enrollment pins the complete opening records and genesis evidence.
  * Any opening-row drift, missing hold, overlap or unapproved scope fails closed.
@@ -14,11 +15,11 @@ function must(v:unknown,why:string):asserts v{if(!v)throw Error(why)}
 function units(v:unknown):bigint{must(typeof v==='string'&&/^(0|[1-9][0-9]*)(\.[0-9]{1,18})?$/.test(v),'SCOPE_AMOUNT');const[a,b='']=v.split('.');must(/^0*$/.test(b.slice(7)),'SCOPE_PRECISION');return BigInt(a)*BigInt(10000000)+BigInt(b.slice(0,7).padEnd(7,'0'))}
 const pi=(n:bigint)=>`${n/BigInt(10000000)}.${(n%BigInt(10000000)).toString().padStart(7,'0')}`
 const keys={intents:['payment_id'],settlements:['payment_id'],refunds:['refund_id'],transactions:['id'],receipts:['id'],refundAccounting:['refund_id'],refundAudit:['event_id'],authorities:['network','source_wallet'],authorityHistory:['network','source_wallet','prepared_tx_hash']} as const
-export type R36ExecutionScope={schema:'R36_NEW_WALLET_EXECUTION_SCOPE_V1';network:'Pi Testnet';sourceWallet:string;genesisHash:string;genesisClosedAt:string;capturedAt:string;accountAtOpening:Row;genesisLedgerRecord:Row;baseline:Record<string,Row[]>;legacyHolds:Row[];bootstrap:Record<string,Row>;oldRightsDisposition:'DEFERRED_PRESERVED_NO_RESEND';oldRightsFinanciallyCleared:false}
+export type R36ExecutionScope={schema:'R36_NEW_WALLET_EXECUTION_SCOPE_V1'|'R36_CLEAN_NETWORK_EXECUTION_SCOPE_V2';network:FinancialNetwork;sourceWallet:string;genesisHash:string;genesisClosedAt:string;capturedAt:string;accountAtOpening:Row;genesisLedgerRecord:Row;baseline:Record<string,Row[]>;legacyHolds:Row[];bootstrap:Record<string,Row>;oldRightsDisposition:'DEFERRED_PRESERVED_NO_RESEND';oldRightsFinanciallyCleared:false}
 export function parseR36ExecutionScope(text:unknown,digest:unknown,wallet:unknown):R36ExecutionScope{
  must(typeof text==='string'&&Buffer.byteLength(text)<=2_000_000&&hex(digest)&&sha(text)===digest,'SCOPE_PROTECTED_DIGEST')
  const s=JSON.parse(text) as R36ExecutionScope
- must(object(s)&&s.schema==='R36_NEW_WALLET_EXECUTION_SCOPE_V1'&&s.network==='Pi Testnet'&&s.sourceWallet===wallet&&typeof wallet==='string'&&/^G[A-Z2-7]{55}$/.test(wallet)&&hex(s.genesisHash)&&s.oldRightsDisposition==='DEFERRED_PRESERVED_NO_RESEND'&&s.oldRightsFinanciallyCleared===false&&object(s.baseline)&&Array.isArray(s.legacyHolds)&&s.legacyHolds.length>0&&object(s.bootstrap),'SCOPE_CONTRACT')
+ must(object(s)&&['R36_NEW_WALLET_EXECUTION_SCOPE_V1','R36_CLEAN_NETWORK_EXECUTION_SCOPE_V2'].includes(s.schema)&&s.network===financialNetwork()&&s.sourceWallet===wallet&&typeof wallet==='string'&&/^G[A-Z2-7]{55}$/.test(wallet)&&hex(s.genesisHash)&&s.oldRightsDisposition==='DEFERRED_PRESERVED_NO_RESEND'&&s.oldRightsFinanciallyCleared===false&&object(s.baseline)&&Array.isArray(s.legacyHolds)&&object(s.bootstrap),'SCOPE_CONTRACT')
  const birth=Date.parse(s.genesisClosedAt),at=Date.parse(s.capturedAt);must(Number.isFinite(birth)&&Number.isFinite(at)&&birth<=at,'SCOPE_CLOCK')
  must(object(s.bootstrap.wallet_history)&&object(s.bootstrap.wallet_history.snapshot)&&object(s.bootstrap.wallet_history.snapshot.genesis)&&s.bootstrap.wallet_history.snapshot.genesis.hash===s.genesisHash,'SCOPE_GENESIS')
  must(reviewR36WalletBootstrapSnapshot({network:s.network,sourceWallet:s.sourceWallet,cutoffLedger:s.bootstrap.wallet_history.cutoffLedger},s.bootstrap).outcome==='VERIFIED_SNAPSHOT','SCOPE_BOOTSTRAP_NOT_PROVEN')
@@ -27,11 +28,12 @@ export function parseR36ExecutionScope(text:unknown,digest:unknown,wallet:unknow
  must(Array.isArray(account.balances)&&account.balances.length===1&&object(account.balances[0])&&account.balances[0].asset_type==='native'&&units(account.balances[0].balance).toString()===history.closingBalanceStroops&&units(account.balances[0].buying_liabilities)===BigInt(0)&&units(account.balances[0].selling_liabilities)===BigInt(0),'SCOPE_ENCUMBERED_OPENING_BALANCE')
  must(object(ledger)&&String(ledger.sequence)===genesis.ledger&&ledger.hash===history.cutoffHash&&ledger.closed_at===s.genesisClosedAt,'SCOPE_ORIGINAL_GENESIS_LEDGER')
  for(const k of [...Object.keys(keys),'merchantBalances'])must(Array.isArray(s.baseline[k])&&s.baseline[k].length<=20000&&s.baseline[k].every(object),'SCOPE_BASELINE_ROWS')
+ must(s.schema==='R36_NEW_WALLET_EXECUTION_SCOPE_V1'?s.legacyHolds.length>0:s.legacyHolds.length===0&&Object.values(s.baseline).every(rows=>rows.length===0),'SCOPE_CLEAN_NETWORK_REQUIRES_EMPTY_ORIGINAL_LEDGER')
  must(!s.baseline.settlements.some(r=>r.a2u_from_address===wallet)&&!s.baseline.authorities.some(r=>r.source_wallet===wallet)&&!s.baseline.authorityHistory.some(r=>r.source_wallet===wallet),'SCOPE_INHERITED_WALLET')
- const created=TransactionBuilder.fromXDR(String(genesis.envelopeXdr),'Pi Testnet'),oldWallets=new Set(s.baseline.settlements.map(r=>r.a2u_from_address).filter(x=>typeof x==='string'))
+ const created=TransactionBuilder.fromXDR(String(genesis.envelopeXdr),financialNetwork()),oldWallets=new Set(s.baseline.settlements.map(r=>r.a2u_from_address).filter(x=>typeof x==='string'))
  must(created instanceof Transaction&&created.operations.length===1&&created.operations[0].type==='createAccount'&&!oldWallets.has(created.source)&&!oldWallets.has(created.operations[0].source??created.source),'SCOPE_OLD_WALLET_FUNDED_NEW_SCOPE')
  const seen=new Set<string>()
- for(const h of s.legacyHolds){must(typeof h.payment_id==='string'&&!seen.has(h.payment_id)&&h.network==='Pi Testnet'&&h.state==='HELD_UNRESOLVED_NO_RESEND'&&h.authorizes_new_rights===false&&hex(h.original_snapshot_sha256)&&typeof h.held_at==='string'&&Date.parse(h.held_at)<birth,'SCOPE_DURABLE_HOLD');seen.add(h.payment_id)}
+ for(const h of s.legacyHolds){must(typeof h.payment_id==='string'&&!seen.has(h.payment_id)&&h.network===financialNetwork()&&h.state==='HELD_UNRESOLVED_NO_RESEND'&&h.authorizes_new_rights===false&&hex(h.original_snapshot_sha256)&&typeof h.held_at==='string'&&Date.parse(h.held_at)<birth,'SCOPE_DURABLE_HOLD');seen.add(h.payment_id)}
  must(s.baseline.refunds.filter(r=>['pending','manual_review_required'].includes(String(r.status))).every(r=>s.legacyHolds.some(h=>h.kind==='refund'&&h.payment_id===r.payment_id)),'SCOPE_UNHELD_REFUND')
  must(s.baseline.settlements.filter(r=>['a2u_created','prepared','horizon_confirmed','pi_completed'].includes(String(r.stage))).every(r=>r.a2u_from_address!==wallet&&s.legacyHolds.some(h=>h.kind==='settlement'&&h.payment_id===r.payment_id)),'SCOPE_UNHELD_SETTLEMENT')
  return s

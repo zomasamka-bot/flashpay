@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** NOT_FOR_DEPLOY. Dedicated trusted-verifier worker interface, never an app route.
  * No issuer identity/key is provisioned by this module. Policy and immutable expected
  * intent must be installed independently in protected PostgreSQL tables. A runtime
@@ -44,7 +45,7 @@ export async function consumeR36AdmissionCertificate(db:R36CertificateDatabase, 
     if (!fields.every(k=>typeof m[k]==='string' && /^[\x20-\x7e]{1,256}$/.test(m[k] as string))) return result('BLOCKED','INVALID_FIELD')
     const manifest=m as Record<typeof fields[number],string>
     if (manifest.schema!=='R36_ADMISSION_CERTIFICATE_V1' || manifest.purpose!=='INITIAL_PREPARED_ADMISSION' ||
-        manifest.network!=='Pi Testnet' || !hex.test(manifest.nonce) || !hex.test(manifest.policyDigest) ||
+        manifest.network!==financialNetwork() || !hex.test(manifest.nonce) || !hex.test(manifest.policyDigest) ||
         !/^(0|[1-9][0-9]*)$/.test(manifest.issuedAt) || !/^[1-9][0-9]*$/.test(manifest.expiresAt)) return result('BLOCKED','INVALID_CERTIFICATE_SCOPE')
     if (!/^G[A-Z2-7]{55}$/.test(manifest.sourceWallet)||!/^G[A-Z2-7]{55}$/.test(manifest.destinationWallet)||
         !['settlement','refund'].includes(manifest.operationKind)||

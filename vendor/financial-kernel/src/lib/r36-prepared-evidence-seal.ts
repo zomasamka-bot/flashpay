@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** Confidentiality boundary for a pre-admission signed envelope. Database readers
  * receive only its unsigned body and authenticated ciphertext, never a spendable
  * envelope. This encryption key is separate from all financial signing keys. */
@@ -6,7 +7,7 @@ import {Transaction,TransactionBuilder,Keypair} from '@stellar/stellar-sdk'
 export type R36EnvelopeSeal={schema:'R36_ENVELOPE_SEALED_V1';recipientSpkiSha256:string;wrappedKey:string;iv:string;tag:string;ciphertext:string}
 const sha=(v:string|Uint8Array)=>createHash('sha256').update(v).digest('hex')
 export function unsignedR36Envelope(t:Transaction):string{
- const copy=TransactionBuilder.fromXDR(t.toXDR(),'Pi Testnet');if(!(copy instanceof Transaction))throw Error('SEALED_TRANSACTION_TYPE')
+ const copy=TransactionBuilder.fromXDR(t.toXDR(),financialNetwork());if(!(copy instanceof Transaction))throw Error('SEALED_TRANSACTION_TYPE')
  copy.signatures.splice(0,copy.signatures.length);return copy.toXDR()
 }
 function context(unsigned:string,signedHash:string):Buffer{return Buffer.from('FLASHpay:R36:SEALED_PREPARED:V1\n'+sha(unsigned)+'\n'+signedHash)}
@@ -31,6 +32,6 @@ export function openR36Envelope(c:{envelopeXdr:string;signedEnvelopeSha256:strin
  if(iv.length!==12||tag.length!==16)throw Error('SEALED_LENGTH')
  const key=privateDecrypt({key:k,padding:constants.RSA_PKCS1_OAEP_PADDING,oaepHash:'sha256'},wrapped)
  try{if(key.length!==32)throw Error('SEALED_KEY_LENGTH');const dec=createDecipheriv('aes-256-gcm',key,iv);dec.setAAD(context(c.envelopeXdr,c.signedEnvelopeSha256));dec.setAuthTag(tag);const text=Buffer.concat([dec.update(ciphertext),dec.final()]).toString('utf8');
- const t=TransactionBuilder.fromXDR(text,'Pi Testnet');if(!(t instanceof Transaction))throw Error('SEALED_TRANSACTION_TYPE');verifyR36SignedEnvelope(t,c.envelopeXdr,c.signedEnvelopeSha256);return text
+ const t=TransactionBuilder.fromXDR(text,financialNetwork());if(!(t instanceof Transaction))throw Error('SEALED_TRANSACTION_TYPE');verifyR36SignedEnvelope(t,c.envelopeXdr,c.signedEnvelopeSha256);return text
  }finally{key.fill(0)}
 }

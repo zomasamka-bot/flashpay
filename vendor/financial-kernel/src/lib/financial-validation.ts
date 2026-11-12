@@ -1,3 +1,4 @@
+import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
 import { Payment } from "./types"
 import { isLegacyZeroCommission } from './active-financial-contract'
 
@@ -34,6 +35,7 @@ export function validateFinancialData(payment: Payment):
   | { success: true; data: ValidatedFinancialData }
   | { success: false; error: string } {
   
+  if(payment.financialContract && !paymentFinancialAmountsMatch(payment))return {success:false,error:'Financial policy quote mismatch'}
   // STEP 1: Validate ALL required identifiers (no fallbacks)
   if (!payment.piPaymentId || typeof payment.piPaymentId !== "string") {
     return { success: false, error: "Missing piPaymentId" }
@@ -67,7 +69,7 @@ export function validateFinancialData(payment: Payment):
   if (
     typeof payment.merchantAmount !== "number" ||
     !Number.isFinite(payment.merchantAmount) ||
-    payment.merchantAmount <= 0 || payment.merchantAmount !== payment.customerAmount
+    payment.merchantAmount <= 0 || payment.merchantAmount !== settlementTarget(payment)
   ) {
     return { success: false, error: `Invalid merchantAmount: ${payment.merchantAmount}` }
   }
@@ -85,13 +87,13 @@ export function validateFinancialData(payment: Payment):
   if (
     typeof payment.appCommission !== "number" ||
     !Number.isFinite(payment.appCommission) ||
-    payment.appCommission !== 0
+    payment.appCommission !== contractCommission(payment)
   ) {
     return { success: false, error: `Invalid appCommission: ${payment.appCommission}` }
   }
 
   // STEP 6: Validate appNetImpact (must be finite, can be negative if app subsidizes)
-  if (!isLegacyZeroCommission(payment.customerAmount, payment.merchantAmount, payment.appCommission)) {
+  if (!paymentFinancialAmountsMatch(payment)) {
     return { success: false, error: 'Active financial contract mismatch' }
   }
 
@@ -105,7 +107,7 @@ export function validateFinancialData(payment: Payment):
   // STEP 7: Verify appNetImpact calculation exactly
   // CRITICAL: appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
   // No tolerance is allowed
-  const calculatedNetImpact = payment.customerAmount - payment.merchantAmount - (payment.horizonFeeCharged ?? 0)
+  const calculatedNetImpact = netImpact(payment.customerAmount,payment.merchantAmount,payment.horizonFeeCharged,payment.financialContract)
   const tolerance = 0
   const difference = Math.abs(calculatedNetImpact - payment.appNetImpact)
   

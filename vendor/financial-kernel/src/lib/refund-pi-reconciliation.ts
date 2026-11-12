@@ -1,3 +1,4 @@
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 import "server-only"
 
 import { serverConfig } from "./server-config"
@@ -29,7 +30,7 @@ export type RefundPiPayment = {
   to_address: string
   direction: "app_to_user"
   created_at: string
-  network: "Pi Testnet"
+  network: FinancialNetwork
   status: {
     developer_approved: boolean
     transaction_verified: boolean
@@ -69,7 +70,7 @@ function validatePayment(value: unknown, input: RefundPiReconciliationInput): Re
   if (!isRecord(value) || typeof value.identifier !== "string" || value.identifier.length === 0 ||
     typeof value.user_uid !== "string" || typeof value.amount !== "number" || !Number.isFinite(value.amount) || value.amount !== input.amount ||
     typeof value.memo !== "string" || typeof value.from_address !== "string" || typeof value.to_address !== "string" ||
-    typeof value.created_at !== "string" || value.direction !== "app_to_user" || value.network !== "Pi Testnet" || value.user_uid !== input.payerUid ||
+    typeof value.created_at !== "string" || value.direction !== "app_to_user" || value.network !== financialNetwork() || value.user_uid !== input.payerUid ||
     !isRecord(value.status) || typeof value.status.developer_approved !== "boolean" || typeof value.status.transaction_verified !== "boolean" || typeof value.status.developer_completed !== "boolean" ||
     typeof value.status.cancelled !== "boolean" || typeof value.status.user_cancelled !== "boolean") return null
   const metadata = exactMetadata(value.metadata, input)
@@ -82,7 +83,7 @@ function validatePayment(value: unknown, input: RefundPiReconciliationInput): Re
   return {
     identifier: value.identifier, user_uid: input.payerUid, amount: value.amount, memo: value.memo,
     metadata, from_address: value.from_address, to_address: value.to_address, direction: "app_to_user",
-    created_at: value.created_at, network: "Pi Testnet", status: {
+    created_at: value.created_at, network: financialNetwork(), status: {
       developer_approved: value.status.developer_approved,
       transaction_verified: value.status.transaction_verified,
       developer_completed: value.status.developer_completed,

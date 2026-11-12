@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import 'server-only'
 
 import { query } from './db'
@@ -231,10 +232,10 @@ function validateRefundPresentationProofRow(
   const details = row.details
   const keys = Object.keys(details)
   if (keys.length !== 7 || keys.some((key) => !['refundPaymentId', 'refundTxid', 'transactionAt', 'network', 'piTransactionVerified', 'piDeveloperCompleted', 'horizonSuccessful'].includes(key))) return { outcome: 'INDETERMINATE' }
-  if (details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.network !== 'Pi Testnet' || details.piTransactionVerified !== true || details.piDeveloperCompleted !== true || details.horizonSuccessful !== true || typeof details.transactionAt !== 'string') return { outcome: 'INDETERMINATE' }
+  if (details.refundPaymentId !== refundPaymentId || details.refundTxid !== refundTxid || details.network !== financialNetwork() || details.piTransactionVerified !== true || details.piDeveloperCompleted !== true || details.horizonSuccessful !== true || typeof details.transactionAt !== 'string') return { outcome: 'INDETERMINATE' }
   const transactionAt = normalizeRefundBlockchainTransactionAt(details.transactionAt)
   if (!transactionAt) return { outcome: 'INDETERMINATE' }
-  return { outcome: 'FOUND', proof: { refundPaymentId, refundTxid, transactionAt, network: 'Pi Testnet', piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true } }
+  return { outcome: 'FOUND', proof: { refundPaymentId, refundTxid, transactionAt, network: financialNetwork(), piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true } }
 }
 
 export async function readRefundPresentationProofs(
@@ -320,7 +321,7 @@ export async function recordRefundPresentationProof(
     typeof checkpoint.refundPaymentId !== 'string' || checkpoint.refundPaymentId.length === 0 || checkpoint.refundPaymentId !== checkpoint.refundPaymentId.trim() ||
     typeof checkpoint.refundTxid !== 'string' || checkpoint.refundTxid.length === 0 || checkpoint.refundTxid !== checkpoint.refundTxid.trim() ||
     blockchain.outcome !== 'CONFIRMED' ||
-    blockchain.network !== 'Pi Testnet' ||
+    blockchain.network !== financialNetwork() ||
     blockchain.piTransactionVerified !== true ||
     blockchain.piDeveloperCompleted !== true ||
     blockchain.horizonSuccessful !== true
@@ -340,7 +341,7 @@ export async function recordRefundPresentationProof(
     const persistence = await readRefundPresentationPersistence(checkpoint)
     if (persistence.outcome !== 'FOUND' || Object.values(persistence.timestamps).some((value) => value === null)) return false
     const eventId = `refund:${refundId}:presentation_proof`
-    const details = { refundPaymentId, refundTxid, transactionAt, network: 'Pi Testnet', piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true }
+    const details = { refundPaymentId, refundTxid, transactionAt, network: financialNetwork(), piTransactionVerified: true, piDeveloperCompleted: true, horizonSuccessful: true }
     const inserted = await query(`INSERT INTO refund_audit_events (event_id, refund_id, payment_id, event_type, actor_type, idempotency_key, created_at, details) VALUES ($1,$2,$3,'refund_presentation_proof_recorded','system',$4,NOW(),$5::jsonb) ON CONFLICT (event_id) DO NOTHING RETURNING event_id`, [eventId, refundId, paymentId, idempotencyKey, details])
     if (!Array.isArray(inserted) || inserted.length > 1) return false
     const readback = await readRefundPresentationProof(checkpoint)

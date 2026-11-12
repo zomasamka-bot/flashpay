@@ -1,3 +1,4 @@
+import {financialHorizonOrigin} from './financial-network'
 import "server-only"
 
 import { getRefundCheckpointAuthoritative } from "./refund-checkpoint-store"
@@ -8,7 +9,7 @@ export type RefundFeeEvidenceResult =
   | { outcome: "VERIFIED_FEE"; horizonFeeStroops: number }
   | { outcome: "INDETERMINATE" }
 
-const HORIZON_BASE = "https://api.testnet.minepi.com"
+const HORIZON_BASE = financialHorizonOrigin()
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)

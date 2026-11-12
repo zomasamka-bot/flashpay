@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** Private collector -> immutable signed artifacts -> registrar handoff.
  * Technical publication is not a policy enrollment or independent certification.
  * Only the existing registrar/issuer may accept it under their live DB policy.
@@ -60,7 +61,7 @@ async function storeBundle(file:string,b:Bundle):Promise<Bundle>{
 }
 function validate(b:Bundle,candidate:string,p:R36PublicationPolicy,sourceRowsDigest:string,now:number){
  current(p,now);must(b.schema==='R36_IMMUTABLE_PUBLICATION_V1'&&b.candidateDigest===candidate&&b.policyDigest===p.policyDigest&&b.policySnapshotDigest===policyIdentity(p)&&b.sourceRowsDigest===sourceRowsDigest,'PUBLICATION_FROZEN_SOURCE_CONFLICT')
- must(Object.keys(b.binding).length===R36_ADMISSION_FIELDS.length&&R36_ADMISSION_FIELDS.every(k=>typeof b.binding[k]==='string')&&b.binding.nonce===r36PublicationNonce(candidate,p.policyDigest)&&b.binding.network==='Pi Testnet','PUBLICATION_BINDING')
+ must(Object.keys(b.binding).length===R36_ADMISSION_FIELDS.length&&R36_ADMISSION_FIELDS.every(k=>typeof b.binding[k]==='string')&&b.binding.nonce===r36PublicationNonce(candidate,p.policyDigest)&&b.binding.network===financialNetwork(),'PUBLICATION_BINDING')
  const subject=sha(JSON.stringify(R36_ADMISSION_FIELDS.map(k=>b.binding[k]))),bodies:Record<string,Row>={}
  for(const kind of R36_WORKER_KINDS){const e=b.artifacts[kind],r=rootFor(p,kind,now),m=e?.manifest;must(m&&Object.keys(m).length===fields.length&&fields.every(k=>typeof m[k]==='string')&&m.schema==='R36_INDEPENDENT_ARTIFACT_V1'&&m.kind===kind&&m.policyDigest===p.policyDigest&&m.subjectDigest===subject&&m.issuerId===r.issuerId&&m.keyId===r.keyId&&m.network===b.binding.network&&m.sourceWallet===b.binding.sourceWallet&&m.cutoffLedger===b.binding.cutoffLedger,'PUBLICATION_MANIFEST')
   const start=Number(m.issuedAt),end=Number(m.expiresAt);must([start,end].every(Number.isSafeInteger)&&start>=Math.max(p.validFrom,r.validFrom)&&start<=now&&end>now&&end<=Math.min(p.validUntil,r.validUntil)&&start<=Math.min(p.revocationCheckedAt,r.revocationCheckedAt),'PUBLICATION_ARTIFACT_EXPIRED')

@@ -1,4 +1,5 @@
 'use server'
+import {financialAmountsMatch,financialContractFromRow,netImpact,type MerchantFeeQuote} from './payment-financial-contract'
 import {verifyDatabaseUrl,verifyDatabaseBinding} from '../deployment'
 
 
@@ -279,7 +280,7 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
       if (inserted.length === 1) return [{ ...inserted[0], inserted: true }]
 
       return await tx`
-        SELECT version, stage, merchant_id, merchant_uid,
+        SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version, stage, merchant_id, merchant_uid,
                customer_amount, merchant_amount, app_commission
         FROM settlement_checkpoints
         WHERE payment_id = ${params.paymentId}
@@ -317,7 +318,7 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
       row.merchant_uid !== params.merchantUid ||
       storedCustomerAmount !== params.customerAmount ||
       storedMerchantAmount !== params.customerAmount ||
-      storedAppCommission !== 0
+      !financialAmountsMatch(storedCustomerAmount,storedMerchantAmount,storedAppCommission,row.financial_contract)
     ) {
       return { outcome: 'CONFLICT', error: 'Settlement payment identity durable identity/accounting mismatch' }
     }
@@ -342,7 +343,7 @@ export async function recordDr11RefundCertificationHold(params:{paymentId:string
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId},0))`
       const updated=await tx`UPDATE settlement_checkpoints SET certification_hold='dr11_refund',certification_hold_at=NOW(),certification_hold_expires_at=NOW()+INTERVAL '15 minutes',updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND stage='payment_identity' AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
-          AND customer_amount=${params.customerAmount} AND merchant_amount=${params.customerAmount} AND app_commission=0
+          AND customer_amount=${params.customerAmount} AND customer_amount=merchant_amount+app_commission
           AND certification_hold IS NULL AND a2u_payment_id IS NULL AND prepared_tx_hash IS NULL AND a2u_txid IS NULL
           AND NOT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId})
         RETURNING certification_hold,certification_hold_expires_at`
@@ -532,7 +533,7 @@ export async function recordSettlementU2AApprovalClaimFromStartLease(params: {
           u2a_approval_guard_version='fin7_v1',u2a_approval_attempted_at=NULL,
           u2a_start_lease_token=NULL,u2a_start_lease_expires_at=NULL,updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
-          AND customer_amount=${params.customerAmount} AND app_commission=0 AND stage='payment_identity'
+          AND customer_amount=${params.customerAmount} AND customer_amount=merchant_amount+app_commission AND stage='payment_identity'
           AND u2a_approval_identifier IS NULL AND u2a_identifier IS NULL AND u2a_txid IS NULL
           AND u2a_start_lease_token=${params.startLeaseToken} AND u2a_start_lease_expires_at>NOW()
         RETURNING version`
@@ -566,7 +567,7 @@ export async function claimSettlementU2AApprovalAttempt(params: {
         UPDATE settlement_checkpoints SET
           version=version+1,u2a_approval_attempted_at=NOW(),updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
-          AND customer_amount=${params.customerAmount} AND merchant_amount=${params.customerAmount} AND app_commission=0
+          AND customer_amount=${params.customerAmount} AND customer_amount=merchant_amount+app_commission
           AND stage='payment_identity' AND u2a_approval_identifier=${params.u2aIdentifier}
           AND u2a_approval_claimed_at IS NOT NULL AND u2a_approval_guard_version='fin7_v1' AND u2a_approval_attempted_at IS NULL
           AND u2a_identifier IS NULL AND u2a_txid IS NULL AND payer_uid IS NULL
@@ -575,7 +576,7 @@ export async function claimSettlementU2AApprovalAttempt(params: {
         RETURNING version`
       if (recorded.length === 1) return { outcome: 'RECORDED' as const, version: Number(recorded[0].version) }
       const existing = await tx`
-        SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+        SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
                u2a_approval_identifier,u2a_approval_claimed_at,u2a_approval_guard_version,u2a_approval_attempted_at,u2a_identifier
         FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
       if (existing.length !== 1) return { outcome: 'CONFLICT' as const, error: 'U2A approval attempt authority absent or ambiguous' }
@@ -587,7 +588,7 @@ export async function claimSettlementU2AApprovalAttempt(params: {
         ac = normalizePostgresNumeric(row.app_commission, 'settlement.app_commission')
       } catch { return { outcome: 'CONFLICT' as const, error: 'U2A approval attempt accounting invalid' } }
       const version = Number(row.version)
-      if (!Number.isSafeInteger(version) || version < 1 || row.stage !== 'payment_identity' || row.merchant_id !== params.merchantId || row.merchant_uid !== params.merchantUid || ca !== params.customerAmount || ma !== params.customerAmount || ac !== 0 || row.u2a_approval_identifier !== params.u2aIdentifier || row.u2a_approval_claimed_at == null || row.u2a_approval_guard_version !== 'fin7_v1' || row.u2a_approval_attempted_at == null || row.u2a_identifier != null)
+      if (!Number.isSafeInteger(version) || version < 1 || row.stage !== 'payment_identity' || row.merchant_id !== params.merchantId || row.merchant_uid !== params.merchantUid || ca !== params.customerAmount || !financialAmountsMatch(ca,ma,ac,row.financial_contract) || row.u2a_approval_identifier !== params.u2aIdentifier || row.u2a_approval_claimed_at == null || row.u2a_approval_guard_version !== 'fin7_v1' || row.u2a_approval_attempted_at == null || row.u2a_identifier != null)
         return { outcome: 'CONFLICT' as const, error: 'U2A approval attempt durable authority conflict' }
       return { outcome: 'REPLAYED' as const, version }
     })
@@ -644,8 +645,7 @@ export async function recordSettlementU2AApprovalClaim(params: {
           AND merchant_id=${params.merchantId}
           AND merchant_uid=${params.merchantUid}
           AND customer_amount=${params.customerAmount}
-          AND merchant_amount=${params.customerAmount}
-          AND app_commission=0
+          AND customer_amount=merchant_amount+app_commission
           AND u2a_approval_identifier IS NULL
           AND u2a_approval_claimed_at IS NULL
           AND u2a_identifier IS NULL
@@ -669,7 +669,7 @@ export async function recordSettlementU2AApprovalClaim(params: {
       if (recorded.length === 1) return [{ ...recorded[0], recorded: true }]
 
       return await tx`
-        SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+        SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
                u2a_approval_identifier,u2a_approval_claimed_at,u2a_identifier
         FROM settlement_checkpoints
         WHERE payment_id=${params.paymentId}
@@ -701,7 +701,7 @@ export async function recordSettlementU2AApprovalClaim(params: {
       !replayStage ||
       row.merchant_id !== params.merchantId ||
       row.merchant_uid !== params.merchantUid ||
-      ca !== params.customerAmount || ma !== params.customerAmount || ac !== 0 ||
+      ca !== params.customerAmount || !financialAmountsMatch(ca,ma,ac,row.financial_contract) ||
       row.u2a_approval_identifier !== params.u2aIdentifier ||
       row.u2a_approval_claimed_at == null ||
       (row.u2a_identifier != null && row.u2a_identifier !== params.u2aIdentifier) ||
@@ -814,8 +814,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
           AND merchant_id=${params.merchantId}
           AND merchant_uid=${params.merchantUid}
           AND customer_amount=${params.customerAmount}
-          AND merchant_amount=${params.customerAmount}
-          AND app_commission=0
+          AND customer_amount=merchant_amount+app_commission
           AND (u2a_approval_identifier IS NULL OR u2a_approval_identifier=${params.u2aIdentifier})
           AND u2a_identifier IS NULL
           AND u2a_txid IS NULL
@@ -850,8 +849,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
           AND merchant_id=${params.merchantId}
           AND merchant_uid=${params.merchantUid}
           AND customer_amount=${params.customerAmount}
-          AND merchant_amount=${params.customerAmount}
-          AND app_commission=0
+          AND customer_amount=merchant_amount+app_commission
           AND u2a_identifier=${params.u2aIdentifier}
           AND u2a_txid=${params.u2aTxid}
           AND payer_uid IS NULL
@@ -877,7 +875,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
       if (inserted.length === 1) return [{ ...inserted[0], recorded: true }]
 
       return await tx`
-        SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+        SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
                u2a_approval_identifier,u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at
         FROM settlement_checkpoints
         WHERE payment_id=${params.paymentId}
@@ -901,7 +899,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
     } catch { return { outcome: 'CONFLICT', error: 'Settlement U2A verified durable accounting invalid' } }
     if (
       !['payment_identity','a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized'].includes(String(row.stage)) ||
-      row.merchant_id!==params.merchantId || row.merchant_uid!==params.merchantUid || ca!==params.customerAmount || ma!==params.customerAmount || ac!==0 ||
+      row.merchant_id!==params.merchantId || row.merchant_uid!==params.merchantUid || ca!==params.customerAmount || !financialAmountsMatch(ca,ma,ac,row.financial_contract) ||
       (row.u2a_approval_identifier!=null && row.u2a_approval_identifier!==params.u2aIdentifier) ||
       row.u2a_identifier!==params.u2aIdentifier || row.u2a_txid!==params.u2aTxid || row.payer_uid!==params.payerUid || row.u2a_verified_at==null
     ) return { outcome: 'CONFLICT', error: 'Settlement U2A verified durable identity mismatch' }
@@ -943,14 +941,14 @@ export async function recordSettlementU2ACompletedCheckpoint(params: {
         WHERE payment_id=${params.paymentId}
           AND stage IN ('payment_identity','a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized')
           AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
-          AND customer_amount=${params.customerAmount} AND merchant_amount=${params.customerAmount} AND app_commission=0
+          AND customer_amount=${params.customerAmount} AND customer_amount=merchant_amount+app_commission
           AND u2a_identifier=${params.u2aIdentifier} AND u2a_txid=${params.u2aTxid}
           AND payer_uid=${params.payerUid} AND u2a_verified_at IS NOT NULL AND u2a_completed_at IS NULL
         RETURNING version
       `
       if(updated.length===1)return[{...updated[0],recorded:true}]
       return await tx`
-        SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+        SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
                u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at
         FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE
       `
@@ -963,7 +961,7 @@ export async function recordSettlementU2ACompletedCheckpoint(params: {
     try{ca=normalizePostgresNumeric(row.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(row.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(row.app_commission,'settlement.app_commission')}
     catch{return{outcome:'CONFLICT',error:'Settlement U2A completed durable accounting invalid'}}
     if(!['payment_identity','a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized'].includes(String(row.stage))||
-      row.merchant_id!==params.merchantId||row.merchant_uid!==params.merchantUid||ca!==params.customerAmount||ma!==params.customerAmount||ac!==0||
+      row.merchant_id!==params.merchantId||row.merchant_uid!==params.merchantUid||ca!==params.customerAmount||!financialAmountsMatch(ca,ma,ac,row.financial_contract)||
       row.u2a_identifier!==params.u2aIdentifier||row.u2a_txid!==params.u2aTxid||row.payer_uid!==params.payerUid||row.u2a_verified_at==null||row.u2a_completed_at==null)
       return{outcome:'CONFLICT',error:'Settlement U2A completed durable identity mismatch'}
     return{outcome:'REPLAYED',version}
@@ -972,7 +970,7 @@ export async function recordSettlementU2ACompletedCheckpoint(params: {
 
 export type DurableU2AIngressRead =
   | { outcome:'FOUND'; checkpoint:{
-      paymentId:string; version:number; merchantId:string; merchantUid:string; customerAmount:number;
+      paymentId:string; version:number; merchantId:string; merchantUid:string; customerAmount:number; financialContract?:MerchantFeeQuote;
       u2aIdentifier:string; u2aTxid:string; payerUid:string;
       createdAt:string; verifiedAt:string; completedAt:string|null;
     }}
@@ -993,7 +991,7 @@ export async function getDurableU2AIngressAuthoritative(paymentId:string):Promis
     const client=await getPostgresClient()
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
-      SELECT payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+      SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
              u2a_identifier,u2a_txid,payer_uid,u2a_verified_at,u2a_completed_at,created_at,
              a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,
              a2u_txid,horizon_fee_stroops,horizon_confirmed_at,pi_completed_at,db_finalized_at
@@ -1016,13 +1014,13 @@ export async function getDurableU2AIngressAuthoritative(paymentId:string):Promis
     catch{return{outcome:'INDETERMINATE',error:'Durable U2A ingress accounting invalid'}}
     const createdAt=iso(r.created_at),verifiedAt=iso(r.u2a_verified_at),completedAt=r.u2a_completed_at==null?null:iso(r.u2a_completed_at)
     if(!Number.isSafeInteger(version)||version<2||!text(r.payment_id)||r.payment_id!==paymentId||!text(r.merchant_id)||!text(r.merchant_uid)||
-      ca<=0||ma!==ca||ac!==0||!text(r.u2a_identifier)||typeof r.u2a_txid!=='string'||!/^[0-9a-f]{64}$/.test(r.u2a_txid)||
+      !financialAmountsMatch(ca,ma,ac,r.financial_contract)||!text(r.u2a_identifier)||typeof r.u2a_txid!=='string'||!/^[0-9a-f]{64}$/.test(r.u2a_txid)||
       !text(r.payer_uid)||createdAt===null||verifiedAt===null||(r.u2a_completed_at!=null&&completedAt===null)||
       r.a2u_payment_id!=null||r.a2u_from_address!=null||r.a2u_to_address!=null||r.prepared_envelope_xdr!=null||r.prepared_tx_hash!=null||
       r.prepared_sequence!=null||r.a2u_txid!=null||r.horizon_fee_stroops!=null||r.horizon_confirmed_at!=null||r.pi_completed_at!=null||r.db_finalized_at!=null)
       return{outcome:'INDETERMINATE',error:'Durable U2A ingress authority invalid'}
     if(completedAt!==null&&version<3)return{outcome:'INDETERMINATE',error:'Durable U2A completed version invalid'}
-    return{outcome:'FOUND',checkpoint:{paymentId,version,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,customerAmount:ca,
+    return{outcome:'FOUND',checkpoint:{paymentId,version,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,customerAmount:ca,...(financialContractFromRow(r)?{financialContract:financialContractFromRow(r)}:{}),
       u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,payerUid:r.payer_uid as string,createdAt,verifiedAt,completedAt}}
   }catch(error){console.error('[DB] Durable U2A ingress read uncertain:',error);return{outcome:'INDETERMINATE',error:'Durable U2A ingress read uncertain'}}
 }
@@ -1129,8 +1127,7 @@ export async function claimSettlementA2UCreateAttempt(params: {
           AND a2u_create_attempted_at IS NULL
           AND merchant_uid=${params.merchantUid}
           AND customer_amount=${params.customerAmount}
-          AND merchant_amount=${params.customerAmount}
-          AND app_commission=0
+          AND customer_amount=merchant_amount+app_commission
           AND u2a_identifier=${params.u2aIdentifier}
           AND u2a_txid=${params.u2aTxid}
           AND payer_uid=${params.payerUid}
@@ -1199,7 +1196,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     params.customerAmount <= 0 ||
     typeof params.merchantAmount !== 'number' ||
     !Number.isFinite(params.merchantAmount) ||
-    params.merchantAmount !== params.customerAmount
+    (params.merchantAmount <= 0 || params.merchantAmount > params.customerAmount)
   ) {
     return { outcome: 'CONFLICT', error: 'Settlement Stage1 checkpoint input is invalid' }
   }
@@ -1241,7 +1238,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
           AND merchant_uid = ${params.merchantUid}
           AND customer_amount = ${params.customerAmount}
           AND merchant_amount = ${params.merchantAmount}
-          AND app_commission = 0
+          AND app_commission = customer_amount-merchant_amount
           AND u2a_identifier = ${params.u2aIdentifier}
           AND u2a_txid = ${params.u2aTxid}
           AND payer_uid IS NOT NULL
@@ -1271,12 +1268,12 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
           u2a_identifier, u2a_txid,
           a2u_payment_id, a2u_from_address, a2u_to_address
         )
-        VALUES (
+        SELECT
           ${params.paymentId}, 1, 'a2u_created', ${params.merchantId}, ${params.merchantUid},
           ${params.customerAmount}, ${params.merchantAmount}, 0,
           ${params.u2aIdentifier}, ${params.u2aTxid},
           ${params.a2uPaymentId}, ${params.a2uFromAddress}, ${params.a2uToAddress}
-        )
+        WHERE NOT EXISTS (SELECT 1 FROM settlement_checkpoints WHERE payment_id=${params.paymentId})
         ON CONFLICT DO NOTHING
         RETURNING version
       `
@@ -1285,7 +1282,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       // Replay is accepted only when every durable identity/accounting field is exact.
       // A later stage is intentionally accepted only if it carries this exact Stage1 identity.
       return await tx`
-        SELECT version, stage, merchant_id, merchant_uid,
+        SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version, stage, merchant_id, merchant_uid,
                customer_amount, merchant_amount, app_commission,
                u2a_identifier, u2a_txid,
                a2u_payment_id, a2u_from_address, a2u_to_address,
@@ -1331,7 +1328,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       row.merchant_uid !== params.merchantUid ||
       storedCustomerAmount !== params.customerAmount ||
       storedMerchantAmount !== params.merchantAmount ||
-      storedAppCommission !== 0 ||
+      !financialAmountsMatch(storedCustomerAmount,storedMerchantAmount,storedAppCommission,row.financial_contract) ||
       row.u2a_identifier !== params.u2aIdentifier ||
       row.u2a_txid !== params.u2aTxid ||
       row.a2u_payment_id !== params.a2uPaymentId ||
@@ -1350,7 +1347,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
 export type SettlementDurableCheckpointRead =
   | { outcome: 'FOUND'; checkpoint: {
       paymentId:string; version:number; stage:'a2u_created'|'prepared'|'horizon_confirmed'|'pi_completed'|'db_finalized';
-      merchantId:string; merchantUid:string; customerAmount:number; merchantAmount:number;
+      merchantId:string; merchantUid:string; customerAmount:number; merchantAmount:number; appCommission:number; financialContract?:MerchantFeeQuote;
       createdAt:string; paidAt:string|null; payerUid?:string; u2aVerifiedAt?:string; a2uCreateAttemptedAt?:string;
       u2aIdentifier:string; u2aTxid:string; a2uPaymentId:string; a2uFromAddress:string; a2uToAddress:string;
       preparedEnvelopeXdr?:string; preparedTxHash?:string; preparedSequence?:string;
@@ -1366,7 +1363,7 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
     const client=await getPostgresClient()
     if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client`
-      SELECT payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+      SELECT to_jsonb(s)->'financial_contract' AS financial_contract,payment_id,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
         created_at,u2a_completed_at,payer_uid,u2a_verified_at,a2u_create_attempted_at,u2a_identifier,u2a_txid,a2u_payment_id,a2u_from_address,a2u_to_address,
         prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid,horizon_fee_stroops,
         horizon_confirmed_at,pi_completed_at,db_finalized_at,
@@ -1376,8 +1373,8 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
             AND t.amount=s.merchant_amount AND t.status='completed' AND t.currency='π'
             AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid AND r.currency='π'
             AND r.amount=s.merchant_amount AND r.customer_amount=s.customer_amount AND r.merchant_amount=s.merchant_amount
-            AND r.app_commission=0 AND r.horizon_fee_charged=s.horizon_fee_stroops::numeric/10000000
-            AND r.app_net_impact=-s.horizon_fee_stroops::numeric/10000000 AND r.settlement_status='settled_to_merchant'
+            AND r.app_commission=s.app_commission AND r.horizon_fee_charged=s.horizon_fee_stroops::numeric/10000000
+            AND r.app_net_impact=s.app_commission-s.horizon_fee_stroops::numeric/10000000 AND r.settlement_status='settled_to_merchant'
             AND r.u2a_identifier=s.u2a_identifier AND r.u2a_txid=s.u2a_txid
             AND r.a2u_identifier=s.a2u_payment_id AND r.a2u_txid=s.a2u_txid AND r.txid=s.a2u_txid
         ) ELSE TRUE END AS accounting_valid
@@ -1398,7 +1395,7 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
     try{ca=normalizePostgresNumeric(r.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'settlement.app_commission')}
     catch{return{outcome:'INDETERMINATE',error:'Settlement durable accounting invalid'}}
     if(!Number.isSafeInteger(version)||version<1||!['a2u_created','prepared','horizon_confirmed','pi_completed','db_finalized'].includes(String(stage))||
-      !text(r.payment_id)||r.payment_id!==paymentId||!text(r.merchant_id)||!text(r.merchant_uid)||ca<=0||ma!==ca||ac!==0||
+      !text(r.payment_id)||r.payment_id!==paymentId||!text(r.merchant_id)||!text(r.merchant_uid)||!financialAmountsMatch(ca,ma,ac,r.financial_contract)||
       createdAt===null||(r.u2a_completed_at!=null&&paidAt===null)||
       !text(r.u2a_identifier)||typeof r.u2a_txid!=='string'||!/^[0-9a-f]{64}$/.test(r.u2a_txid)||
       !text(r.a2u_payment_id)||!text(r.a2u_from_address)||!text(r.a2u_to_address))
@@ -1422,7 +1419,7 @@ export async function getSettlementCheckpointAuthoritative(paymentId:string):Pro
       Date.parse(dbFinalizedAt)<Date.parse(horizonConfirmedAt)||r.accounting_valid!==true))return{outcome:'INDETERMINATE',error:'Settlement durable DB finality or accounting evidence invalid'}
     return{outcome:'FOUND',checkpoint:{
       paymentId,version,stage:stage as any,merchantId:r.merchant_id as string,merchantUid:r.merchant_uid as string,
-      customerAmount:ca,merchantAmount:ma,createdAt,paidAt,
+      customerAmount:ca,...(financialContractFromRow(r)?{financialContract:financialContractFromRow(r)}:{}),merchantAmount:ma,appCommission:ac,createdAt,paidAt,
       ...(text(r.payer_uid)&&iso(r.u2a_verified_at)!==null?{payerUid:r.payer_uid as string,u2aVerifiedAt:iso(r.u2a_verified_at)!}:{}),
       ...(iso(r.a2u_create_attempted_at)!==null?{a2uCreateAttemptedAt:iso(r.a2u_create_attempted_at)!}:{}),u2aIdentifier:r.u2a_identifier as string,u2aTxid:r.u2a_txid as string,
       a2uPaymentId:r.a2u_payment_id as string,a2uFromAddress:r.a2u_from_address as string,a2uToAddress:r.a2u_to_address as string,
@@ -1628,7 +1625,7 @@ export async function recordSettlementPreparedCheckpoint(params: {
   if(!params.paymentId||!params.merchantId||!params.merchantUid||!params.a2uPaymentId||!params.a2uFromAddress||!params.a2uToAddress||
      !params.preparedEnvelopeXdr||params.preparedEnvelopeXdr!==params.preparedEnvelopeXdr.trim()||
      !/^[0-9a-f]{64}$/.test(params.preparedTxHash)||!/^[1-9][0-9]*$/.test(params.preparedSequence)||
-     !Number.isFinite(params.customerAmount)||params.customerAmount<=0||!Number.isFinite(params.merchantAmount)||params.merchantAmount!==params.customerAmount)
+     !Number.isFinite(params.customerAmount)||params.customerAmount<=0||!Number.isFinite(params.merchantAmount)||(params.merchantAmount<=0||params.merchantAmount>params.customerAmount))
     return {outcome:'CONFLICT',error:'Settlement prepared checkpoint input is invalid'}
   try{
     const client=transactionClient ? null : await getR36RestrictedClient();if(!client && !transactionClient)return{outcome:'INDETERMINATE',error:'R36 restricted PostgreSQL unavailable'}
@@ -1638,7 +1635,7 @@ export async function recordSettlementPreparedCheckpoint(params: {
         ${params.a2uPaymentId},${params.a2uFromAddress},${params.a2uToAddress},${params.preparedEnvelopeXdr},
         ${params.preparedTxHash},${params.preparedSequence})`
       if(a.length===1)return a
-      return await tx`SELECT version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
+      return await tx`SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version,stage,merchant_id,merchant_uid,customer_amount,merchant_amount,app_commission,
         a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid
         FROM settlement_checkpoints WHERE payment_id=${params.paymentId} OR a2u_payment_id=${params.a2uPaymentId} OR prepared_tx_hash=${params.preparedTxHash}`
     };
@@ -1648,7 +1645,7 @@ export async function recordSettlementPreparedCheckpoint(params: {
     if(r.advanced===true)return{outcome:'RECORDED',version:v}
     let ca,ma,ac;try{ca=normalizePostgresNumeric(r.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'settlement.app_commission')}catch{return{outcome:'CONFLICT',error:'Settlement prepared durable accounting invalid'}}
     if(!(typeof r.stage==='string'&&['prepared','horizon_confirmed','pi_completed','db_finalized'].includes(r.stage))||
-      r.merchant_id!==params.merchantId||r.merchant_uid!==params.merchantUid||ca!==params.customerAmount||ma!==params.merchantAmount||ac!==0||
+      r.merchant_id!==params.merchantId||r.merchant_uid!==params.merchantUid||ca!==params.customerAmount||ma!==params.merchantAmount||!financialAmountsMatch(ca,ma,ac,r.financial_contract)||
       r.a2u_payment_id!==params.a2uPaymentId||r.a2u_from_address!==params.a2uFromAddress||r.a2u_to_address!==params.a2uToAddress||
       r.prepared_envelope_xdr!==params.preparedEnvelopeXdr||r.prepared_tx_hash!==params.preparedTxHash||String(r.prepared_sequence)!==params.preparedSequence)
       return{outcome:'CONFLICT',error:'Settlement prepared durable identity mismatch'}
@@ -1709,6 +1706,12 @@ export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:st
 
 /** Convert a finite Pi fee to exact integer stroops without IEEE-754 multiplication noise.
  * Reject fractional stroops rather than silently rounding them into financial authority. */
+function commissionNetImpact(commission:number,fee:number):number {
+ const c=commission===0?0:numberToExactPositiveStroops(commission),f=fee===0?0:numberToExactPositiveStroops(fee)
+ if(c===null||f===null)throw Error('ACCOUNTING_COMMISSION_PRECISION')
+ return (c-f)/10000000
+}
+
 function exactHorizonFeeStroops(fee: number): number {
   if (!Number.isFinite(fee) || fee < 0) return NaN
   return fee === 0 ? 0 : numberToExactPositiveStroops(fee) ?? NaN
@@ -1720,7 +1723,7 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
 }):Promise<SettlementDurableAdvanceResult>{
   const feeStroops=exactHorizonFeeStroops(params.horizonFeeCharged)
   if(!params.paymentId||!params.u2aIdentifier||!/^[0-9a-f]{64}$/.test(params.u2aTxid)||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid)||!params.merchantId||!params.merchantUid||
-    numberToExactPositiveStroops(params.customerAmount)===null||params.merchantAmount!==params.customerAmount||params.appCommission!==0||
+    numberToExactPositiveStroops(params.customerAmount)===null||(params.merchantAmount<=0||params.merchantAmount>params.customerAmount)||params.appCommission<0||params.appCommission>params.customerAmount||
     !Number.isSafeInteger(feeStroops)||feeStroops<0)return{outcome:'CONFLICT',error:'Settlement DB-finality input invalid'}
   try{
     const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
@@ -1729,7 +1732,7 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
       const a=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='db_finalized',db_finalized_at=NOW(),updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND stage='pi_completed' AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
-        AND customer_amount=${params.customerAmount} AND merchant_amount=${params.merchantAmount} AND app_commission=0
+        AND customer_amount=${params.customerAmount} AND merchant_amount=${params.merchantAmount} AND app_commission=${params.appCommission}
         AND a2u_payment_id=${params.a2uPaymentId} AND a2u_txid=${params.a2uTxid} AND prepared_tx_hash=${params.a2uTxid}
         AND horizon_fee_stroops=${feeStroops} AND horizon_confirmed_at IS NOT NULL AND pi_completed_at IS NOT NULL AND db_finalized_at IS NULL
         AND NOT EXISTS(SELECT 1 FROM refund_checkpoints rf WHERE rf.payment_id=${params.paymentId})
@@ -1738,15 +1741,15 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
           AND t.amount=${params.merchantAmount} AND t.status='completed' AND t.currency='π'
           AND r.merchant_id=${params.merchantId} AND r.merchant_uid=${params.merchantUid} AND r.currency='π'
           AND r.amount=${params.merchantAmount} AND r.txid=${params.a2uTxid}
-          AND r.app_net_impact=${-params.horizonFeeCharged} AND r.settlement_status='settled_to_merchant'
+          AND r.app_net_impact=${commissionNetImpact(params.appCommission,params.horizonFeeCharged)} AND r.settlement_status='settled_to_merchant'
           AND r.u2a_identifier=${params.u2aIdentifier} AND r.u2a_txid=${params.u2aTxid}
           AND r.a2u_identifier=${params.a2uPaymentId} AND r.a2u_txid=${params.a2uTxid} AND r.customer_amount=${params.customerAmount} AND r.merchant_amount=${params.merchantAmount}
-          AND r.horizon_fee_charged=${params.horizonFeeCharged} AND r.app_commission=0)
+          AND r.horizon_fee_charged=${params.horizonFeeCharged} AND r.app_commission=${params.appCommission})
         RETURNING version,stage`
       if(a.length===1)return[{...a[0],advanced:true}]
       // R36: replay evidence must be read under the SAME advisory lock and
       // transaction snapshot as the checkpoint. No post-commit TOCTOU read.
-      return await tx`SELECT s.version,s.stage,s.merchant_id,s.merchant_uid,s.customer_amount,s.merchant_amount,s.app_commission,
+      return await tx`SELECT to_jsonb(s)->'financial_contract' AS financial_contract,s.version,s.stage,s.merchant_id,s.merchant_uid,s.customer_amount,s.merchant_amount,s.app_commission,
         s.a2u_payment_id,s.a2u_txid,s.prepared_tx_hash,s.horizon_fee_stroops,s.pi_completed_at,s.db_finalized_at,
         EXISTS(SELECT 1 FROM receipts rc JOIN transactions t ON t.id=rc.transaction_id
           WHERE t.payment_id=${params.u2aIdentifier} AND t.merchant_id=${params.merchantId}
@@ -1754,12 +1757,12 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
             AND t.status='completed' AND t.currency='π'
             AND rc.merchant_id=${params.merchantId} AND rc.merchant_uid=${params.merchantUid} AND rc.currency='π'
             AND rc.amount=${params.merchantAmount} AND rc.txid=${params.a2uTxid}
-            AND rc.app_net_impact=${-params.horizonFeeCharged} AND rc.settlement_status='settled_to_merchant'
+            AND rc.app_net_impact=${commissionNetImpact(params.appCommission,params.horizonFeeCharged)} AND rc.settlement_status='settled_to_merchant'
             AND rc.u2a_identifier=${params.u2aIdentifier}
             AND rc.u2a_txid=${params.u2aTxid} AND rc.a2u_identifier=${params.a2uPaymentId}
             AND rc.a2u_txid=${params.a2uTxid} AND rc.customer_amount=${params.customerAmount}
             AND rc.merchant_amount=${params.merchantAmount} AND rc.horizon_fee_charged=${params.horizonFeeCharged}
-            AND rc.app_commission=0) AS accounting_valid,
+            AND rc.app_commission=${params.appCommission}) AS accounting_valid,
         NOT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId}) AS xor_valid
         FROM settlement_checkpoints s
         WHERE s.payment_id=${params.paymentId} OR s.a2u_payment_id=${params.a2uPaymentId} OR s.a2u_txid=${params.a2uTxid}
@@ -1769,7 +1772,7 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
     const r=rows[0] as Record<string,unknown>,v=Number(r.version);if(!Number.isSafeInteger(v)||v<5)return{outcome:'CONFLICT',error:'Settlement DB-finality durable version invalid'}
     if(r.advanced===true)return{outcome:'RECORDED',version:v}
     let ca,ma,ac,fs;try{ca=normalizePostgresNumeric(r.customer_amount,'settlement.customer_amount');ma=normalizePostgresNumeric(r.merchant_amount,'settlement.merchant_amount');ac=normalizePostgresNumeric(r.app_commission,'settlement.app_commission');fs=normalizePostgresNumeric(r.horizon_fee_stroops,'settlement.horizon_fee_stroops')}catch{return{outcome:'CONFLICT',error:'Settlement DB-finality durable accounting invalid'}}
-    if(r.stage!=='db_finalized'||r.merchant_id!==params.merchantId||r.merchant_uid!==params.merchantUid||ca!==params.customerAmount||ma!==params.merchantAmount||ac!==0||
+    if(r.stage!=='db_finalized'||r.merchant_id!==params.merchantId||r.merchant_uid!==params.merchantUid||ca!==params.customerAmount||ma!==params.merchantAmount||!financialAmountsMatch(ca,ma,ac,r.financial_contract)||
       r.a2u_payment_id!==params.a2uPaymentId||r.a2u_txid!==params.a2uTxid||r.prepared_tx_hash!==params.a2uTxid||fs!==feeStroops||r.pi_completed_at==null||r.db_finalized_at==null)
       return{outcome:'CONFLICT',error:'Settlement DB-finality durable evidence mismatch'}
     if(r.accounting_valid!==true || r.xor_valid!==true)
@@ -2500,7 +2503,7 @@ export async function recordA2UTransactionAtomic(params: {
   // Calculate app net impact: what the app absorbs (may be negative if app bears fees)
   // appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
   // The merchant is credited ONLY with merchantAmount (actual blockchain transfer)
-  const appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
+  const appNetImpact = commissionNetImpact(appCommission,horizonFeeCharged)
   
   console.log('[DB] Accounting breakdown:')
   console.log('[DB]   - customerAmount:', customerAmount, '(what customer sent)')
@@ -2545,7 +2548,7 @@ export async function recordA2UTransactionAtomic(params: {
         // Never use Redis or a prior preflight as accounting authority.
         await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
         const authority = await tx`
-          SELECT s.payment_id, s.stage, s.version, s.merchant_id, s.merchant_uid,
+          SELECT to_jsonb(s)->'financial_contract' AS financial_contract,s.payment_id, s.stage, s.version, s.merchant_id, s.merchant_uid,
                  s.customer_amount, s.merchant_amount, s.app_commission,
                  s.u2a_identifier, s.u2a_txid, s.a2u_payment_id, s.a2u_txid,
                  s.prepared_tx_hash, s.horizon_fee_stroops,
@@ -2556,14 +2559,15 @@ export async function recordA2UTransactionAtomic(params: {
         `
         if (authority.length !== 1) throw new Error('G8_ACCOUNTING_AUTHORITY_ABSENT_OR_AMBIGUOUS')
         const a = authority[0]
+        financialContractFromRow(a)
         const feeStroops = exactHorizonFeeStroops(params.horizonFeeCharged)
         if (a.refund_active !== false || !['pi_completed', 'db_finalized'].includes(a.stage) ||
             !Number.isSafeInteger(Number(a.version)) || Number(a.version) < 4 ||
             a.merchant_id !== params.merchantId || a.merchant_uid !== params.merchantUid ||
             normalizePostgresNumeric(a.customer_amount, 'authority.customer_amount') !== customerAmount ||
             normalizePostgresNumeric(a.merchant_amount, 'authority.merchant_amount') !== merchantAmount ||
-            normalizePostgresNumeric(a.app_commission, 'authority.app_commission') !== 0 ||
-            customerAmount <= 0 || customerAmount !== merchantAmount || appCommission !== 0 ||
+            normalizePostgresNumeric(a.app_commission, 'authority.app_commission') !== appCommission ||
+            !financialAmountsMatch(customerAmount,merchantAmount,appCommission,a.financial_contract) ||
             a.u2a_identifier !== params.u2aIdentifier || a.u2a_txid !== params.u2aTxid ||
             a.a2u_payment_id !== params.a2uIdentifier || a.a2u_txid !== params.a2uTxid ||
             a.prepared_tx_hash !== params.a2uTxid ||
@@ -2911,7 +2915,7 @@ export async function classifyPaymentCreateIntentReplay(params: {
       SELECT i.payment_id, i.merchant_id, i.customer_amount, i.note,
              c.payment_id AS checkpoint_payment_id, c.merchant_uid AS checkpoint_merchant_uid,
              c.merchant_id AS checkpoint_merchant_id, c.customer_amount AS checkpoint_customer_amount,
-             c.merchant_amount, c.app_commission
+             c.merchant_amount, c.app_commission,to_jsonb(c)->'financial_contract' AS financial_contract
       FROM payment_create_intents i
       LEFT JOIN settlement_checkpoints c ON c.payment_id = i.payment_id
       WHERE i.merchant_uid = ${params.merchantUid} AND i.create_intent_id = ${params.createIntentId}
@@ -2923,7 +2927,7 @@ export async function classifyPaymentCreateIntentReplay(params: {
     if (!row.checkpoint_payment_id || row.checkpoint_merchant_uid !== params.merchantUid ||
         row.checkpoint_merchant_id !== params.merchantId ||
         Number(row.checkpoint_customer_amount) !== params.amount ||
-        Number(row.merchant_amount) !== params.amount || Number(row.app_commission) !== 0) return 'INDETERMINATE'
+        !financialAmountsMatch(params.amount,Number(row.merchant_amount),Number(row.app_commission),row.financial_contract)) return 'INDETERMINATE'
     return 'REPLAY'
   } catch (error) {
     console.error('[FIN100B] Create-intent replay classification unavailable', error)
@@ -2932,7 +2936,7 @@ export async function classifyPaymentCreateIntentReplay(params: {
 }
 
 export type PaymentCreateIntentResult =
-  | { outcome: 'CREATED' | 'REPLAYED'; paymentId: string; createdAt: string }
+  | { outcome: 'CREATED' | 'REPLAYED'; paymentId: string; createdAt: string;financialContract?:MerchantFeeQuote }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
 export async function recordPaymentCreateIntentAtomic(params: {
@@ -2948,7 +2952,7 @@ export async function recordPaymentCreateIntentAtomic(params: {
           (merchant_uid, create_intent_id, payment_id, merchant_id, customer_amount, note, created_at)
         VALUES (${params.merchantUid}, ${params.createIntentId}, ${params.paymentId},
                 ${params.merchantId}, ${params.amount}, ${params.note}, ${params.createdAt})
-        ON CONFLICT (merchant_uid, create_intent_id) DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING payment_id, created_at
       `
       if (inserted.length === 1) {
@@ -2960,10 +2964,10 @@ export async function recordPaymentCreateIntentAtomic(params: {
           ) VALUES (
             ${params.paymentId}, 1, 'payment_identity', ${params.merchantId}, ${params.merchantUid},
             ${params.amount}, ${params.amount}, 0, 'fin5_v1', 'fin7_v2'
-          ) RETURNING payment_id
+          ) RETURNING payment_id,merchant_uid,customer_amount,merchant_amount,app_commission,to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract
         `
         if (checkpoint.length !== 1) throw new Error('Financial identity checkpoint not inserted')
-        return { outcome: 'CREATED', paymentId: params.paymentId, createdAt: params.createdAt }
+        return { outcome: 'CREATED', paymentId: params.paymentId, createdAt: params.createdAt,...(financialContractFromRow(checkpoint[0])?{financialContract:financialContractFromRow(checkpoint[0])}:{}) }
       }
       const existing = await tx`
         SELECT payment_id, merchant_id, customer_amount, note, created_at
@@ -2977,17 +2981,16 @@ export async function recordPaymentCreateIntentAtomic(params: {
         return { outcome: 'CONFLICT', error: 'Create intent payload mismatch' }
       }
       const checkpoint = await tx`
-        SELECT payment_id, merchant_id, merchant_uid, customer_amount, merchant_amount, app_commission
+        SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,payment_id, merchant_id, merchant_uid, customer_amount, merchant_amount, app_commission
         FROM settlement_checkpoints WHERE payment_id = ${row.payment_id}
       `
       if (checkpoint.length !== 1 || checkpoint[0].merchant_id !== params.merchantId ||
           checkpoint[0].merchant_uid !== params.merchantUid ||
           Number(checkpoint[0].customer_amount) !== params.amount ||
-          Number(checkpoint[0].merchant_amount) !== params.amount ||
-          Number(checkpoint[0].app_commission) !== 0) {
+          !financialAmountsMatch(params.amount,Number(checkpoint[0].merchant_amount),Number(checkpoint[0].app_commission),checkpoint[0].financial_contract)) {
         return { outcome: 'CONFLICT', error: 'Durable checkpoint identity mismatch' }
       }
-      return { outcome: 'REPLAYED', paymentId: row.payment_id, createdAt: new Date(row.created_at).toISOString() }
+      return { outcome: 'REPLAYED', paymentId: row.payment_id, createdAt: new Date(row.created_at).toISOString(),...(financialContractFromRow(checkpoint[0])?{financialContract:financialContractFromRow(checkpoint[0])}:{}) }
     })
   } catch (error) {
     console.error('[FIN100B] Create-intent transaction indeterminate', error)
@@ -3025,7 +3028,7 @@ export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
           i.note !== params.note || new Date(i.created_at as string).toISOString() !== params.createdAt ||
           r.payment_id !== params.paymentId || r.merchant_uid !== params.merchantUid ||
           r.merchant_id !== params.merchantId || Number(r.customer_amount) !== params.amount ||
-          Number(r.merchant_amount) !== params.amount || Number(r.app_commission) !== 0 ||
+          !financialAmountsMatch(params.amount,Number(r.merchant_amount),Number(r.app_commission),r.financial_contract) ||
           r.stage !== 'payment_identity' || Number(r.version) !== 1 ||
           r.a2u_create_guard_version !== 'fin5_v1' || r.pi_mutation_guard_version !== 'fin7_v2') return 'CONFLICT' as const
       // Stage=payment_identity alone is NOT sufficient: Pi start/approval,

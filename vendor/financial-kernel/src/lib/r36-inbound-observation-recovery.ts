@@ -1,3 +1,4 @@
+import {financialIncomingWallet} from './financial-network'
 import 'server-only'
 import {getR36RestrictedClient,recordSettlementU2AVerifiedCheckpoint} from './db'
 import {serverConfig} from './server-config'
@@ -20,7 +21,7 @@ export async function observeUnrecordedInbound(subject:string|null,policy:string
   if(!r.ok)return false
   const p=await r.json()
   if(p?.identifier!==c.pi_payment_id||p?.metadata?.paymentId!==c.payment_id||p?.user_uid!==c.payer_uid||
-    p?.to_address!==c.source_wallet||typeof p?.amount!=='number'||p.amount!==Number(c.amount_stroops)/10000000||
+    p?.to_address!==financialIncomingWallet()||typeof p?.amount!=='number'||p.amount!==Number(c.amount_stroops)/10000000||
     !await verifyTestnetInbound(p))return false
   const recorded=await recordSettlementU2AVerifiedCheckpoint({paymentId:c.payment_id,merchantId:c.merchant_id,
    merchantUid:c.merchant_uid,customerAmount:p.amount,payerUid:c.payer_uid,u2aIdentifier:c.pi_payment_id,u2aTxid:p.transaction.txid})

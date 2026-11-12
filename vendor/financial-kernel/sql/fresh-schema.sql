@@ -1,3 +1,109 @@
+-- Additive preparation. Empty enrollment keeps the existing Testnet/zero contract.
+CREATE TABLE IF NOT EXISTS public.kernel_financial_network (
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), application_id text NOT NULL,
+ network text NOT NULL CHECK(network IN ('Pi Testnet','Pi Network')),
+ incoming_wallet text NOT NULL CHECK(incoming_wallet ~ '^G[A-Z2-7]{55}$'),
+ outgoing_wallet text NOT NULL CHECK(outgoing_wallet ~ '^G[A-Z2-7]{55}$'),
+ CHECK(network<>'Pi Network' OR incoming_wallet<>outgoing_wallet)
+);
+ALTER TABLE public.kernel_financial_network OWNER TO r36_owner;
+REVOKE ALL ON public.kernel_financial_network FROM PUBLIC,r36_runtime,r36_issuer,r36_signer;
+GRANT SELECT ON public.kernel_financial_network TO r36_runtime,r36_issuer,r36_evidence_reader,neondb_owner;
+CREATE OR REPLACE FUNCTION public.r36_network() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $$
+ SELECT coalesce((SELECT network FROM public.kernel_financial_network WHERE singleton),'Pi Testnet')
+$$;
+ALTER FUNCTION public.r36_network() OWNER TO r36_owner;
+CREATE OR REPLACE FUNCTION public.r36_incoming_wallet(p_outgoing text) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $$
+ SELECT CASE WHEN EXISTS(SELECT 1 FROM public.kernel_financial_network) THEN
+ (SELECT incoming_wallet FROM public.kernel_financial_network WHERE singleton AND outgoing_wallet=p_outgoing) ELSE p_outgoing END
+$$;
+ALTER FUNCTION public.r36_incoming_wallet(text) OWNER TO r36_owner;
+CREATE TABLE IF NOT EXISTS public.r36_financial_policy_versions (
+ policy_id text PRIMARY KEY, policy jsonb NOT NULL,
+ CHECK(jsonb_typeof(policy)='object' AND policy->>'schema'='MERCHANT_FEE_POLICY_V1'),
+ CHECK(policy ?& ARRAY['schema','id','applicationId','network','payer','basisPoints','rounding','networkFeePayer','refund']),
+ CHECK(policy - ARRAY['schema','id','applicationId','network','payer','basisPoints','rounding','networkFeePayer','refund']='{}'),
+ CHECK(NOT jsonb_path_exists(policy,'$.* ? (@ == null)')),
+ CHECK(policy->>'id'=policy_id AND policy->>'network' IN ('Pi Testnet','Pi Network')),
+ CHECK(policy->>'payer'='merchant' AND policy->>'rounding'='floor' AND policy->>'networkFeePayer'='application'),
+ CHECK(policy->>'refund'='full_customer_amount_no_earned_commission'),
+ CHECK(jsonb_typeof(policy->'basisPoints')='number' AND (policy->>'basisPoints') ~ '^(0|[1-9][0-9]{0,3})$')
+);
+CREATE TABLE IF NOT EXISTS public.r36_active_financial_policy (
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), policy_id text NOT NULL REFERENCES public.r36_financial_policy_versions(policy_id)
+);
+ALTER TABLE public.r36_financial_policy_versions OWNER TO r36_owner;
+ALTER TABLE public.r36_active_financial_policy OWNER TO r36_owner;
+REVOKE ALL ON public.r36_financial_policy_versions,public.r36_active_financial_policy FROM PUBLIC,r36_runtime,r36_issuer,r36_signer;
+GRANT SELECT ON public.r36_financial_policy_versions,public.r36_active_financial_policy TO r36_evidence_reader,neondb_owner;
+CREATE OR REPLACE FUNCTION public.r36_contract_valid(r jsonb) RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE q jsonb:=r->'financial_contract'; p jsonb; gross numeric; net numeric; fee numeric;
+BEGIN
+ gross:=(r->>'customer_amount')::numeric;net:=(r->>'merchant_amount')::numeric;fee:=(r->>'app_commission')::numeric;
+ IF q IS NULL OR q='null'::jsonb THEN RETURN coalesce(gross>0 AND fee=0 AND (net IS NULL OR net=gross),false); END IF;
+ IF jsonb_typeof(q) IS DISTINCT FROM 'object' OR NOT(q ?& ARRAY['schema','paymentId','merchantUid','policy','grossStroops','merchantNetStroops','commissionStroops']) OR q-ARRAY['schema','paymentId','merchantUid','policy','grossStroops','merchantNetStroops','commissionStroops']<>'{}' OR jsonb_path_exists(q,'$.* ? (@ == null)') OR q->>'schema' IS DISTINCT FROM 'MERCHANT_FEE_QUOTE_V1' OR q->>'paymentId' IS DISTINCT FROM r->>'payment_id'
+ OR q->>'merchantUid' IS DISTINCT FROM r->>'merchant_uid' OR q->'policy'->>'network' IS DISTINCT FROM public.r36_network()
+ OR NOT EXISTS(SELECT 1 FROM public.kernel_financial_network WHERE application_id=q->'policy'->>'applicationId') THEN RETURN false; END IF;
+ SELECT policy INTO p FROM public.r36_financial_policy_versions WHERE policy_id=q->'policy'->>'id';
+ IF p IS NULL OR p IS DISTINCT FROM q->'policy' THEN RETURN false; END IF;
+ RETURN coalesce(gross>0 AND net>0 AND fee>=0 AND gross=net+fee AND gross*10000000=trunc(gross*10000000)
+ AND gross*10000000 BETWEEN 1 AND 10000000000000 AND net*10000000=trunc(net*10000000)
+ AND fee*10000000=trunc(gross*10000000*(p->>'basisPoints')::numeric/10000)
+ AND q->>'grossStroops'=(gross*10000000)::bigint::text AND q->>'merchantNetStroops'=(net*10000000)::bigint::text
+ AND q->>'commissionStroops'=(fee*10000000)::bigint::text,false);
+EXCEPTION WHEN OTHERS THEN RETURN false;
+END $$;
+ALTER FUNCTION public.r36_contract_valid(jsonb) OWNER TO r36_owner;
+CREATE OR REPLACE FUNCTION public.r36_contract_snapshot_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE p jsonb; g bigint; f bigint; q jsonb;
+BEGIN
+ IF TG_OP='UPDATE' THEN
+  IF (NEW.financial_contract,NEW.customer_amount,NEW.merchant_amount,NEW.app_commission,NEW.merchant_uid,NEW.merchant_id,NEW.payment_id)
+    IS DISTINCT FROM (OLD.financial_contract,OLD.customer_amount,OLD.merchant_amount,OLD.app_commission,OLD.merchant_uid,OLD.merchant_id,OLD.payment_id)
+  THEN RAISE EXCEPTION 'FINANCIAL_CONTRACT_IMMUTABLE'; END IF;
+  RETURN NEW;
+ END IF;
+ SELECT v.policy INTO p FROM public.r36_active_financial_policy a JOIN public.r36_financial_policy_versions v USING(policy_id) WHERE a.singleton;
+ IF p IS NULL OR NEW.stage<>'payment_identity' OR NEW.version<>1 OR NEW.u2a_identifier IS NOT NULL OR NEW.u2a_txid IS NOT NULL THEN
+  IF NEW.financial_contract IS NOT NULL OR NEW.app_commission<>0 OR NEW.merchant_amount IS DISTINCT FROM NEW.customer_amount THEN RAISE EXCEPTION 'LEGACY_ZERO_CONTRACT_REQUIRED'; END IF;
+  RETURN NEW;
+ END IF;
+ IF NEW.customer_amount*10000000<>trunc(NEW.customer_amount*10000000) OR NEW.customer_amount<=0 OR NEW.customer_amount>1000000 THEN RAISE EXCEPTION 'FINANCIAL_CONTRACT_PRECISION'; END IF;
+ g:=(NEW.customer_amount*10000000)::bigint;f:=g*(p->>'basisPoints')::bigint/10000;
+ q:=jsonb_build_object('schema','MERCHANT_FEE_QUOTE_V1','paymentId',NEW.payment_id,'merchantUid',NEW.merchant_uid,'policy',p,
+ 'grossStroops',g::text,'merchantNetStroops',(g-f)::text,'commissionStroops',f::text);
+ IF NEW.financial_contract IS NOT NULL AND NEW.financial_contract IS DISTINCT FROM q THEN RAISE EXCEPTION 'CALLER_QUOTE_MISMATCH'; END IF;
+ NEW.financial_contract:=q;NEW.merchant_amount:=(g-f)::numeric/10000000;NEW.app_commission:=f::numeric/10000000;
+ IF NOT public.r36_contract_valid(to_jsonb(NEW)) THEN RAISE EXCEPTION 'FINANCIAL_CONTRACT_NOT_ENROLLED'; END IF;
+ RETURN NEW;
+END $$;
+ALTER FUNCTION public.r36_contract_snapshot_guard() OWNER TO r36_owner;
+CREATE OR REPLACE FUNCTION public.r36_contract_immutable() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $$
+BEGIN RAISE EXCEPTION 'FINANCIAL_POLICY_IMMUTABLE'; END $$;
+ALTER FUNCTION public.r36_contract_immutable() OWNER TO r36_owner;
+DROP TRIGGER IF EXISTS financial_policy_immutable ON public.r36_financial_policy_versions;
+CREATE TRIGGER financial_policy_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON public.r36_financial_policy_versions FOR EACH STATEMENT EXECUTE FUNCTION public.r36_contract_immutable();
+DROP TRIGGER IF EXISTS financial_network_immutable ON public.kernel_financial_network;
+CREATE TRIGGER financial_network_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON public.kernel_financial_network FOR EACH STATEMENT EXECUTE FUNCTION public.r36_contract_immutable();
+REVOKE ALL ON FUNCTION public.r36_contract_snapshot_guard(),public.r36_contract_immutable() FROM PUBLIC;
+CREATE OR REPLACE FUNCTION public.r36_contract_outgoing_stroops(p_payment text,p_kind text) RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE s jsonb;
+BEGIN
+ IF p_kind NOT IN ('settlement','refund') THEN RETURN NULL; END IF;
+ SELECT to_jsonb(c) INTO s FROM public.settlement_checkpoints c WHERE payment_id=p_payment;
+ IF s IS NULL OR NOT public.r36_contract_valid(s) THEN RETURN NULL; END IF;
+ RETURN ((CASE WHEN p_kind='settlement' THEN (s->>'merchant_amount')::numeric ELSE (s->>'customer_amount')::numeric END)*10000000)::bigint::text;
+END $$;
+ALTER FUNCTION public.r36_contract_outgoing_stroops(text,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_contract_outgoing_stroops(text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_contract_outgoing_stroops(text,text) TO r36_runtime,neondb_owner;
+
+REVOKE ALL ON FUNCTION public.r36_network(),public.r36_incoming_wallet(text),public.r36_contract_valid(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_network(),public.r36_incoming_wallet(text),public.r36_contract_valid(jsonb) TO neondb_owner,r36_runtime,r36_registrar_owner,r36_signer_owner;
+
+-- Login services keep their original exact-call ACL. Definer owners invoke these helpers.
+REVOKE ALL ON FUNCTION public.r36_network(),public.r36_incoming_wallet(text),public.r36_contract_valid(jsonb),public.r36_contract_outgoing_stroops(text,text) FROM r36_issuer,r36_signer,r36_registrar;
+
 CREATE TABLE public.kernel_deployment_identity (
  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
  application_id text NOT NULL CHECK (application_id ~ '^[a-z][a-z0-9-]{2,79}$'),
@@ -88,7 +194,7 @@ BEGIN
  IF session_user <> 'r36_runtime' OR p_payment IS NULL OR btrim(p_payment)='' OR
     p_hash !~ '^[0-9a-f]{64}$' OR p_seq !~ '^[1-9][0-9]{0,29}$' OR
     p_xdr IS NULL OR btrim(p_xdr)<>p_xdr OR p_xdr='' OR
-    p_customer IS NULL OR p_customer<=0 OR p_customer<>p_merchant_amount
+    p_customer IS NULL OR p_customer<=0 OR p_merchant_amount IS NULL OR p_merchant_amount<=0 OR p_merchant_amount>p_customer
  THEN RAISE EXCEPTION 'R36_SETTLEMENT_INPUT_OR_ROLE_REJECTED'; END IF;
  RETURN QUERY UPDATE public.settlement_checkpoints s SET
   version=s.version+1,stage='prepared',prepared_envelope_xdr=p_xdr,
@@ -96,7 +202,7 @@ BEGIN
  WHERE s.payment_id=p_payment AND s.stage='a2u_created' AND
  s.merchant_id=p_merchant AND s.merchant_uid=p_uid AND
  s.customer_amount=p_customer AND s.merchant_amount=p_merchant_amount AND
- s.app_commission=0 AND s.a2u_payment_id=p_a2u AND
+ public.r36_contract_valid(to_jsonb(s)) AND s.a2u_payment_id=p_a2u AND
  s.a2u_from_address=p_from AND s.a2u_to_address=p_to AND
  s.prepared_envelope_xdr IS NULL AND s.prepared_tx_hash IS NULL AND
  s.prepared_sequence IS NULL AND s.a2u_txid IS NULL AND
@@ -125,7 +231,7 @@ BEGIN
  ctx:=public.r36_certificate_context(p_nonce);
  IF ctx IS NULL THEN RETURN NULL; END IF;
  b:=ctx->'binding';p:=ctx->'policy';
- IF b->>'network' IS DISTINCT FROM 'Pi Testnet' OR b->>'nonce' IS DISTINCT FROM p_nonce
+ IF b->>'network' IS DISTINCT FROM public.r36_network() OR b->>'nonce' IS DISTINCT FROM p_nonce
  OR coalesce(b->>'clearanceDigest','') !~ '^[0-9a-f]{64}$' THEN RETURN NULL; END IF;
  SELECT * INTO receipt FROM public.r36_certificate_receipts WHERE nonce=p_nonce FOR SHARE;
  IF NOT FOUND OR receipt.verified_by<>'r36_issuer'
@@ -153,7 +259,7 @@ BEGIN
  SELECT * INTO ingress FROM public.r36_testnet_ingress_reservations WHERE payment_id=b->>'paymentId' FOR SHARE;
  IF NOT FOUND OR ingress.policy_digest<>scope.policy_digest OR ingress.source_wallet<>gate.source_wallet
  OR ingress.retired_by_payment_id IS NOT NULL OR ingress.payer_uid IS NULL OR ingress.payer_wallet IS NULL
- OR ingress.amount_stroops::text IS DISTINCT FROM b->>'amountStroops'
+ OR public.r36_contract_outgoing_stroops(ingress.payment_id,b->>'operationKind') IS DISTINCT FROM b->>'amountStroops'
  THEN RETURN NULL; END IF;
  IF EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts WHERE network=gate.network AND source_wallet=gate.source_wallet)
  OR EXISTS(SELECT 1 FROM public.financial_wallet_finality_seals WHERE network=gate.network AND source_wallet=gate.source_wallet)
@@ -238,7 +344,7 @@ DECLARE c jsonb; t jsonb; b jsonb; prior jsonb; a public.r36_prior_closure_recei
  prior=t->'prior';
  IF prior->>'owner_payment_id'=b->>'paymentId' OR prior->>'prepared_tx_hash'=b->>'preparedHash'
  OR (b->>'preparedSequence')::numeric<>(prior->>'prepared_sequence')::numeric+1 THEN RETURN NULL; END IF;
- expected=encode(sha256(convert_to(jsonb_build_array('R36_BOUND_SUCCESSOR_V1','Pi Testnet',a.source_wallet,
+ expected=encode(sha256(convert_to(jsonb_build_array('R36_BOUND_SUCCESSOR_V1',public.r36_network(),a.source_wallet,
  prior->>'owner_payment_id',prior->>'operation_kind',prior->>'owner_operation_id',prior->>'prepared_tx_hash',prior->>'prepared_sequence',
  b->>'paymentId',b->>'operationKind',b->>'operationId',b->>'preparedHash',b->>'preparedSequence',p_nonce)::text,'UTF8')),'hex');
  RETURN t||jsonb_build_object('boundRenewal',EXISTS(SELECT 1 FROM public.r36_lifecycle_approval_links WHERE successor_nonce=p_nonce),'bindingDigest',expected,'successorNonce',p_nonce,'successorCertificateDigest',receipt.payload_digest,
@@ -259,7 +365,7 @@ CREATE FUNCTION public.r36_certificate_allows(p_network text, p_wallet text, p_p
     AS $$
 DECLARE r record; now_s bigint;
 BEGIN
- IF session_user<>'r36_runtime' OR p_network IS DISTINCT FROM 'Pi Testnet' THEN RETURN false; END IF;
+ IF session_user<>'r36_runtime' OR p_network IS DISTINCT FROM public.r36_network() THEN RETURN false; END IF;
  SELECT p.*,q.nonce AS admission_nonce,q.binding,c.payload_digest,c.issued_at,c.expires_at,c.manifest INTO r
  FROM public.r36_certificate_policies p JOIN public.r36_certificate_requests q ON q.policy_digest=p.policy_digest
  JOIN public.r36_certificate_receipts c ON c.nonce=q.nonce
@@ -326,7 +432,7 @@ ALTER FUNCTION public.r36_certificate_context(p_nonce text) OWNER TO r36_owner;
 --
 
 CREATE FUNCTION public.r36_certificate_gate_version() RETURNS integer
-    LANGUAGE sql IMMUTABLE
+    LANGUAGE sql STABLE
     SET search_path TO 'pg_catalog'
     AS $$SELECT 1$$;
 
@@ -399,7 +505,7 @@ DECLARE old public.financial_wallet_authorities; seal public.financial_wallet_fi
  grant_row record; next_binding jsonb; now_at timestamptz; expected text;
 BEGIN
  IF session_user<>'r36_runtime' OR current_setting('transaction_isolation')<>'read committed'
- OR p_network IS DISTINCT FROM 'Pi Testnet' OR p_seq IS NULL OR p_seq !~ '^[1-9][0-9]{0,29}$'
+ OR p_network IS DISTINCT FROM public.r36_network() OR p_seq IS NULL OR p_seq !~ '^[1-9][0-9]{0,29}$'
  OR public.r36_certificate_allows(p_network,p_wallet,p_payment,p_kind,p_operation,p_hash,p_seq) IS DISTINCT FROM true
  THEN RETURN false; END IF;
  SELECT * INTO old FROM public.financial_wallet_authorities
@@ -432,11 +538,11 @@ BEGIN
     AND s.a2u_from_address=p_wallet AND s.a2u_payment_id=old.owner_operation_id
     AND s.a2u_txid=old.prepared_tx_hash AND s.prepared_tx_hash=old.prepared_tx_hash
     AND s.prepared_sequence=old.prepared_sequence::numeric AND s.horizon_fee_stroops=seal.horizon_fee_stroops::bigint
-    AND s.merchant_amount=s.customer_amount AND s.app_commission=0
+    AND public.r36_contract_valid(to_jsonb(s))
     AND t.merchant_id=s.merchant_id AND t.merchant_uid=s.merchant_uid AND t.status='completed' AND t.currency='π'
-    AND t.amount=s.customer_amount AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid
-    AND r.currency='π' AND r.amount=s.customer_amount AND r.customer_amount=s.customer_amount
-    AND r.merchant_amount=s.customer_amount AND r.app_commission=0 AND r.txid=s.a2u_txid
+    AND t.amount=s.merchant_amount AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid
+    AND r.currency='π' AND r.amount=s.merchant_amount AND r.customer_amount=s.customer_amount
+    AND r.merchant_amount=s.merchant_amount AND r.app_commission=s.app_commission AND r.txid=s.a2u_txid
     AND r.u2a_identifier=s.u2a_identifier AND r.u2a_txid=s.u2a_txid
     AND r.a2u_identifier=s.a2u_payment_id AND r.a2u_txid=s.a2u_txid
     AND r.horizon_fee_charged*10000000=s.horizon_fee_stroops AND r.app_net_impact=-r.horizon_fee_charged
@@ -532,7 +638,7 @@ CREATE FUNCTION public.r36_claim_first_submission(p_network text, p_wallet text,
 DECLARE admitted text;
 BEGIN
  IF NOT public.r36_certificate_allows(p_network,p_wallet,p_payment,p_kind,p_operation,p_hash,p_seq) THEN RETURN false; END IF;
- IF p_network <> 'Pi Testnet' OR p_wallet !~ '^G[A-Z2-7]{55}$'
+ IF p_network <> public.r36_network() OR p_wallet !~ '^G[A-Z2-7]{55}$'
     OR p_payment IS NULL OR btrim(p_payment) <> p_payment OR p_payment = ''
     OR p_operation IS NULL OR btrim(p_operation) <> p_operation OR p_operation = ''
     OR p_kind NOT IN ('settlement','refund')
@@ -584,7 +690,7 @@ CREATE FUNCTION public.r36_claim_prepared_authority(p_network text, p_wallet tex
 DECLARE admitted text;
 BEGIN
  IF NOT public.r36_certificate_allows(p_network,p_wallet,p_payment,p_kind,p_operation,p_hash,p_seq) THEN RETURN false; END IF;
- IF p_network IS DISTINCT FROM 'Pi Testnet' OR p_wallet IS NULL OR p_wallet !~ '^G[A-Z2-7]{55}$'
+ IF p_network IS DISTINCT FROM public.r36_network() OR p_wallet IS NULL OR p_wallet !~ '^G[A-Z2-7]{55}$'
     OR p_payment IS NULL OR p_payment='' OR btrim(p_payment)<>p_payment
     OR p_operation IS NULL OR p_operation='' OR btrim(p_operation)<>p_operation
     OR p_kind IS NULL OR p_kind NOT IN ('settlement','refund')
@@ -670,7 +776,7 @@ BEGIN
  OR has_any_column_privilege(session_user,'public.refund_rejected_create_attempts','INSERT,UPDATE') THEN RETURN 'HELD'; END IF;
  SELECT * INTO auth FROM public.refund_rejected_create_authorizations WHERE refund_id=p_refund FOR SHARE;
  IF NOT FOUND OR (auth.payment_id,auth.idempotency_key,auth.policy_digest) IS DISTINCT FROM (p_payment,p_key,p_policy)
- OR auth.network<>'Pi Testnet' OR auth.rejection_http_status<>400 OR auth.rejection_code<>'ongoing_payment_found'
+ OR auth.network<>public.r36_network() OR auth.rejection_http_status<>400 OR auth.rejection_code<>'ongoing_payment_found'
  OR clock_timestamp() NOT BETWEEN auth.authorized_at AND auth.expires_at THEN RETURN 'HELD'; END IF;
  SELECT * INTO policy FROM public.r36_certificate_policies WHERE policy_digest=p_policy FOR SHARE;
  IF NOT FOUND OR NOT policy.enabled OR policy.revoked
@@ -680,7 +786,7 @@ BEGIN
  IF NOT FOUND OR reservation.retired_by_payment_id IS NOT NULL
  OR (reservation.policy_digest,reservation.source_wallet,reservation.amount_stroops) IS DISTINCT FROM (p_policy,auth.source_wallet,auth.amount_stroops)
  OR reservation.payer_uid IS NULL OR reservation.payer_wallet IS NULL
- OR NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network='Pi Testnet' AND source_wallet=auth.source_wallet AND state='enabled' FOR SHARE) THEN RETURN 'HELD'; END IF;
+ OR NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network=public.r36_network() AND source_wallet=auth.source_wallet AND state='enabled' FOR SHARE) THEN RETURN 'HELD'; END IF;
  -- Existing writers serialize on the payment advisory lock already held.
  -- Read-only access deliberately avoids granting UPDATE on accounting tables.
  SELECT * INTO refund FROM public.refund_checkpoints WHERE refund_id=p_refund;
@@ -691,8 +797,8 @@ BEGIN
  SELECT * INTO settlement FROM public.settlement_checkpoints WHERE payment_id=p_payment;
  IF NOT FOUND OR settlement.stage<>'payment_identity' OR settlement.u2a_identifier IS NULL OR settlement.u2a_txid IS NULL
  OR settlement.u2a_verified_at IS NULL OR settlement.u2a_completed_at IS NULL
- OR (settlement.payer_uid,settlement.customer_amount*10000000,settlement.merchant_amount*10000000,settlement.app_commission)
- IS DISTINCT FROM (reservation.payer_uid,auth.amount_stroops::numeric,auth.amount_stroops::numeric,0::numeric)
+ OR (settlement.payer_uid,settlement.customer_amount*10000000)
+ IS DISTINCT FROM (reservation.payer_uid,auth.amount_stroops::numeric) OR NOT public.r36_contract_valid(to_jsonb(settlement))
  OR settlement.a2u_payment_id IS NOT NULL OR settlement.a2u_txid IS NOT NULL OR settlement.prepared_tx_hash IS NOT NULL
  OR settlement.db_finalized_at IS NOT NULL OR settlement.horizon_confirmed_at IS NOT NULL THEN RETURN 'HELD'; END IF;
  IF NOT EXISTS(SELECT 1 FROM public.refund_pi_create_attempts WHERE refund_id=p_refund AND payment_id=p_payment AND idempotency_key=p_key AND attempted_at=auth.original_attempted_at)
@@ -772,11 +878,11 @@ ALTER FUNCTION public.r36_execution_scope_immutable() OWNER TO r36_owner;
 --
 
 CREATE FUNCTION public.r36_general_policy(p jsonb) RETURNS boolean
-    LANGUAGE sql IMMUTABLE
+    LANGUAGE sql STABLE
     SET search_path TO 'pg_catalog', 'pg_temp'
     AS $_$
- SELECT coalesce(p->'generalOperation'->>'schema'='R36_GENERAL_TESTNET_V1'
- AND p->'generalOperation'->>'network'='Pi Testnet'
+ SELECT coalesce(p->'generalOperation'->>'schema'=ANY(ARRAY['R36_GENERAL_TESTNET_V1','R36_GENERAL_NETWORK_V2']) AND (public.r36_network()='Pi Testnet' OR p->'generalOperation'->>'schema'='R36_GENERAL_NETWORK_V2')
+ AND p->'generalOperation'->>'network'=public.r36_network()
  AND p->'generalOperation'->>'identitySource'='PI_V2_ME'
  AND p->'generalOperation'->>'sourceWallet' ~ '^G[A-Z2-7]{55}$'
  AND p->'generalOperation'->>'maxAmountStroops' ~ '^[1-9][0-9]{0,13}$'
@@ -811,7 +917,7 @@ BEGIN
  IF NOT FOUND THEN RETURN false; END IF;
  doc:=s.scope_text::jsonb;
  IF doc->>'schema' IS DISTINCT FROM 'R36_NEW_WALLET_EXECUTION_SCOPE_V1'
- OR doc->>'network' IS DISTINCT FROM 'Pi Testnet' OR doc->>'sourceWallet' IS DISTINCT FROM p_wallet
+ OR doc->>'network' IS DISTINCT FROM public.r36_network() OR doc->>'sourceWallet' IS DISTINCT FROM p_wallet
  OR doc->>'oldRightsDisposition' IS DISTINCT FROM 'DEFERRED_PRESERVED_NO_RESEND'
  OR doc->'oldRightsFinanciallyCleared' IS DISTINCT FROM 'false'::jsonb
  OR jsonb_typeof(doc->'legacyHolds') IS DISTINCT FROM 'array'
@@ -820,7 +926,7 @@ BEGIN
  THEN RETURN false; END IF;
  birth:=(doc->>'genesisClosedAt')::timestamptz;
  SELECT * INTO h FROM public.r36_legacy_right_holds WHERE payment_id=p_payment FOR SHARE;
- IF NOT FOUND OR h.kind<>'refund' OR h.network<>'Pi Testnet' OR h.state<>'HELD_UNRESOLVED_NO_RESEND'
+ IF NOT FOUND OR h.kind<>'refund' OR h.network<>public.r36_network() OR h.state<>'HELD_UNRESOLVED_NO_RESEND'
  OR h.authorizes_new_rights OR h.held_at>=birth OR birth>s.enrolled_at OR birth IS NULL
  THEN RETURN false; END IF;
  IF (SELECT count(*) FROM jsonb_array_elements(doc->'legacyHolds') x WHERE x->>'payment_id'=p_payment
@@ -982,8 +1088,8 @@ BEGIN
    =(b.merchant_uid,b.merchant_id,b.source_wallet,b.amount_stroops,b.payer_uid,b.create_intent_id,b.note_digest)
  AND (o.merchant_uid,o.merchant_id,o.create_intent_id,o.customer_amount*10000000)
    =(b.merchant_uid,b.merchant_id,b.create_intent_id,b.amount_stroops)
- AND (c.merchant_uid,c.merchant_id,c.customer_amount,c.merchant_amount,c.app_commission)
-   =(o.merchant_uid,o.merchant_id,o.customer_amount,o.customer_amount,0)
+ AND (c.merchant_uid,c.merchant_id,c.customer_amount)
+   =(o.merchant_uid,o.merchant_id,o.customer_amount) AND public.r36_contract_valid(to_jsonb(c))
  AND b.payer_uid IS NOT NULL AND c.stage='payment_identity' AND c.u2a_verified_at IS NULL
  AND c.u2a_approval_identifier IS NOT NULL AND c.u2a_approval_claimed_at IS NOT NULL AND c.u2a_approval_attempted_at IS NOT NULL
  AND c.u2a_identifier IS NULL AND c.u2a_txid IS NULL AND c.u2a_completed_at IS NULL
@@ -993,7 +1099,7 @@ BEGIN
  AND NOT EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts a WHERE a.owner_payment_id=b.payment_id)
  AND public.r36_general_policy(p.worker_profile) AND p.enabled AND NOT p.revoked
  AND extract(epoch FROM clock_timestamp()) BETWEEN p.valid_from AND least(p.valid_until,p.revocation_valid_until)-1
- AND EXISTS(SELECT 1 FROM public.financial_wallet_activation a WHERE a.network='Pi Testnet' AND a.source_wallet=b.source_wallet AND a.state='enabled')
+ AND EXISTS(SELECT 1 FROM public.financial_wallet_activation a WHERE a.network=public.r36_network() AND a.source_wallet=b.source_wallet AND a.state='enabled')
  ORDER BY o.created_at,b.payment_id LIMIT 1;
  IF NOT FOUND THEN RETURN NULL; END IF;
  RETURN to_jsonb(v);
@@ -1036,8 +1142,8 @@ BEGIN
    AND i.created_at<=statement_timestamp() AND b.reserved_at<=statement_timestamp()
    AND b.amount_stroops BETWEEN 1 AND public.r36_policy_max_amount(p.worker_profile) AND i.customer_amount*10000000=b.amount_stroops
    AND (i.merchant_id,i.merchant_uid)=(b.merchant_id,b.merchant_uid)
-   AND (s.merchant_id,s.merchant_uid,s.customer_amount,s.merchant_amount,s.app_commission)
-       =(i.merchant_id,i.merchant_uid,i.customer_amount,i.customer_amount,0)
+   AND (s.merchant_id,s.merchant_uid,s.customer_amount)
+       =(i.merchant_id,i.merchant_uid,i.customer_amount) AND public.r36_contract_valid(to_jsonb(s))
    AND s.version>=2 AND s.payer_uid=b.payer_uid AND s.u2a_identifier IS NOT NULL AND btrim(s.u2a_identifier)<>''
    AND s.u2a_txid ~ '^[0-9a-f]{64}$' AND s.u2a_verified_at IS NOT NULL
    AND ((s.u2a_completed_at IS NOT NULL AND s.version>=3 AND s.u2a_completed_at<=statement_timestamp())
@@ -1062,7 +1168,7 @@ BEGIN
    -- amount verifier. 'verify' does not write or reserve any additional budget.
    IF public.r36_prepare_testnet_ingress('verify',p_policy,jsonb_build_object(
      'paymentId',v.id,'payerUid',v.payer_uid,'fromAddress',v.payer_wallet,
-     'toAddress',v.wallet,'amountStroops',v.amount_stroops::text)) IS NULL THEN CONTINUE; END IF;
+     'toAddress',public.r36_incoming_wallet(v.wallet),'amountStroops',v.amount_stroops::text)) IS NULL THEN CONTINUE; END IF;
    RETURN jsonb_build_object('phase',CASE WHEN v.completion_missing THEN 'u2a_completion' WHEN v.certification_recovery THEN 'certification_recovery' ELSE 'preparation_only' END,'id',v.id,'kind',v.kind,'op',v.op,
      'stage',v.stage,'piCreated',v.pi_created);
  END LOOP;
@@ -1138,7 +1244,7 @@ DECLARE p public.r36_certificate_policies; BEGIN
  SELECT * INTO p FROM public.r36_certificate_policies WHERE policy_digest=p_policy;
  IF NOT FOUND OR NOT p.enabled OR p.revoked OR extract(epoch FROM clock_timestamp()) NOT BETWEEN p.valid_from AND least(p.valid_until,p.revocation_valid_until)-1
  OR public.r36_policy_max_amount(p.worker_profile)=0
- OR NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network='Pi Testnet' AND source_wallet=public.r36_policy_wallet(p.worker_profile) AND state='enabled') THEN RETURN NULL; END IF;
+ OR NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network=public.r36_network() AND source_wallet=public.r36_policy_wallet(p.worker_profile) AND state='enabled') THEN RETURN NULL; END IF;
  RETURN jsonb_build_object('mode',CASE WHEN public.r36_general_policy(p.worker_profile) THEN 'general' ELSE 'pilot' END,'maxAmountStroops',public.r36_policy_max_amount(p.worker_profile)::text);
 END $$;
 
@@ -1150,11 +1256,11 @@ ALTER FUNCTION public.r36_operation_settings(p_policy text) OWNER TO r36_owner;
 --
 
 CREATE FUNCTION public.r36_policy_max_amount(p jsonb) RETURNS bigint
-    LANGUAGE sql IMMUTABLE
+    LANGUAGE sql STABLE
     SET search_path TO 'pg_catalog', 'pg_temp'
     AS $$
  SELECT CASE WHEN public.r36_general_policy(p) THEN (p->'generalOperation'->>'maxAmountStroops')::bigint
- WHEN p->'recoveryPilot'->>'schema'='FLASHPAY_TESTNET_NEW_RIGHTS_V1' AND NOT(p ? 'generalOperation') THEN 2000000 ELSE 0 END
+ WHEN public.r36_network()='Pi Testnet' AND p->'recoveryPilot'->>'schema'='FLASHPAY_TESTNET_NEW_RIGHTS_V1' AND NOT(p ? 'generalOperation') THEN 2000000 ELSE 0 END
 $$;
 
 
@@ -1206,7 +1312,7 @@ CREATE FUNCTION public.r36_policy_subject(p jsonb, b public.r36_testnet_ingress_
  (i.wallet_contract='PI_PAYMENT_DTO_V1' AND i.payer_pi_payment_id IS NOT NULL AND i.payer_txid IS NOT NULL AND i.payer_wallet_proven_at<=statement_timestamp()
  AND (i.merchant_wallet IS NULL OR i.merchant_pi_payment_id IS NOT NULL)))
  AND i.identity_source='PI_V2_ME' AND i.identity_verified_at<=statement_timestamp() AND i.payer_verified_at<=statement_timestamp())
- ELSE p->'recoveryPilot'->>'schema'='FLASHPAY_TESTNET_NEW_RIGHTS_V1' AND NOT(p ? 'generalOperation')
+ ELSE public.r36_network()='Pi Testnet' AND p->'recoveryPilot'->>'schema'='FLASHPAY_TESTNET_NEW_RIGHTS_V1' AND NOT(p ? 'generalOperation')
  AND p->'recoveryPilot'->'wallets' @> jsonb_build_array(b.source_wallet,b.merchant_wallet,b.payer_wallet)
  AND p->'recoveryPilot'->'payerUids' @> jsonb_build_array(b.payer_uid)
  AND p->'recoveryPilot'->'ingress'->'merchants' @> jsonb_build_array(jsonb_build_object('uid',b.merchant_uid,'username',b.merchant_id,'wallet',b.merchant_wallet))
@@ -1221,7 +1327,7 @@ ALTER FUNCTION public.r36_policy_subject(p jsonb, b public.r36_testnet_ingress_r
 --
 
 CREATE FUNCTION public.r36_policy_wallet(p jsonb) RETURNS text
-    LANGUAGE sql IMMUTABLE
+    LANGUAGE sql STABLE
     SET search_path TO 'pg_catalog', 'pg_temp'
     AS $$
  SELECT CASE WHEN public.r36_general_policy(p) THEN p->'generalOperation'->>'sourceWallet' ELSE p->'recoveryPilot'->'ingress'->>'sourceWallet' END
@@ -1262,7 +1368,7 @@ BEGIN
  -- Recheck activation at every admission, including after an earlier reservation.
  -- A budget row must not outlive the operator's current wallet hold.
  IF NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation
-     WHERE network='Pi Testnet' AND source_wallet=wallet AND state='enabled'
+     WHERE network=public.r36_network() AND source_wallet=wallet AND state='enabled'
      AND clearance_digest ~ '^[0-9a-f]{64}$' FOR SHARE) THEN RETURN NULL; END IF;
 
  -- Intake does not acquire wallet authority or authorize any Pi payment.
@@ -1293,12 +1399,12 @@ BEGIN
   IF intake.wallet_contract IS DISTINCT FROM 'PI_PAYMENT_DTO_V1' OR (intake.payer_uid IS NOT NULL AND intake.payer_uid IS DISTINCT FROM p_input->>'payerUid') THEN RETURN NULL; END IF;
   IF NOT EXISTS(SELECT 1 FROM public.r36_testnet_ingress_reservations WHERE payment_id=intake.payment_id) THEN
    SELECT payment_id INTO prior_id FROM public.r36_testnet_ingress_reservations WHERE source_wallet=wallet AND retired_by_payment_id IS NULL FOR UPDATE;
-   IF (prior_id IS NOT NULL OR EXISTS(SELECT 1 FROM public.financial_wallet_authorities WHERE network='Pi Testnet' AND source_wallet=wallet))
+   IF (prior_id IS NOT NULL OR EXISTS(SELECT 1 FROM public.financial_wallet_authorities WHERE network=public.r36_network() AND source_wallet=wallet))
     AND (prior_id IS NULL OR public.r36_terminal_ingress_clearance(p_policy,wallet,prior_id) IS DISTINCT FROM true) THEN RETURN NULL; END IF;
    IF EXISTS(SELECT 1 FROM public.settlement_checkpoints WHERE a2u_from_address=wallet AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed'))
     OR EXISTS(SELECT 1 FROM public.refund_checkpoints r WHERE r.status IN ('pending','manual_review_required')
       AND public.r36_held_refund_outside_scope(wallet,r.payment_id,r.refund_id,p_policy) IS DISTINCT FROM true
-      AND NOT EXISTS(SELECT 1 FROM public.financial_wallet_authorities a WHERE a.network='Pi Testnet' AND a.operation_kind='refund' AND a.owner_payment_id=r.payment_id AND a.owner_operation_id=r.refund_id AND a.source_wallet<>wallet AND a.state='prepared')) THEN RETURN NULL; END IF;
+      AND NOT EXISTS(SELECT 1 FROM public.financial_wallet_authorities a WHERE a.network=public.r36_network() AND a.operation_kind='refund' AND a.owner_payment_id=r.payment_id AND a.owner_operation_id=r.refund_id AND a.source_wallet<>wallet AND a.state='prepared')) THEN RETURN NULL; END IF;
    IF prior_id IS NOT NULL THEN
     IF public.r36_terminal_ingress_clearance(p_policy,wallet,prior_id) IS DISTINCT FROM true THEN RETURN NULL; END IF;
     UPDATE public.r36_testnet_ingress_reservations SET retired_by_payment_id=intake.payment_id WHERE payment_id=prior_id AND retired_by_payment_id IS NULL;
@@ -1334,16 +1440,16 @@ BEGIN
   -- A legacy owner without its original budget reservation remains held.
   -- Only a completed, independently cleared prior right can free a creation slot.
   IF (prior_id IS NOT NULL OR EXISTS(SELECT 1 FROM public.financial_wallet_authorities
-      WHERE network='Pi Testnet' AND source_wallet=wallet))
+      WHERE network=public.r36_network() AND source_wallet=wallet))
    AND (prior_id IS NULL OR public.r36_terminal_ingress_clearance(p_policy,wallet,prior_id) IS DISTINCT FROM true)
   THEN RETURN NULL; END IF;
   IF NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation
-      WHERE network='Pi Testnet' AND source_wallet=wallet AND state='enabled' AND clearance_digest ~ '^[0-9a-f]{64}$')
+      WHERE network=public.r36_network() AND source_wallet=wallet AND state='enabled' AND clearance_digest ~ '^[0-9a-f]{64}$')
   OR EXISTS(SELECT 1 FROM public.settlement_checkpoints WHERE a2u_from_address=wallet
        AND stage IN ('a2u_created','prepared','horizon_confirmed','pi_completed'))
   OR EXISTS(SELECT 1 FROM public.refund_checkpoints r WHERE r.status IN ('pending','manual_review_required')
       AND public.r36_held_refund_outside_scope(wallet,r.payment_id,r.refund_id,p_policy) IS DISTINCT FROM true
-       AND NOT EXISTS(SELECT 1 FROM public.financial_wallet_authorities a WHERE a.network='Pi Testnet'
+       AND NOT EXISTS(SELECT 1 FROM public.financial_wallet_authorities a WHERE a.network=public.r36_network()
          AND a.operation_kind='refund' AND a.owner_payment_id=r.payment_id AND a.owner_operation_id=r.refund_id
          AND a.source_wallet<>wallet AND a.state='prepared')) THEN RETURN NULL; END IF;
   SELECT 2*(coalesce((SELECT sum(amount_stroops) FROM public.r36_testnet_ingress_reservations b JOIN public.r36_certificate_policies p ON p.policy_digest=b.policy_digest WHERE NOT public.r36_general_policy(p.worker_profile)),0)
@@ -1373,23 +1479,23 @@ BEGIN
  -- The original R36 claim still checks checkpoint, XOR, historical liabilities,
  -- wallet ownership and attestation in the SAME restricted transaction.
  IF p_action='prepared' THEN
-  IF stored.payer_uid IS NULL OR p_input->>'network' IS DISTINCT FROM 'Pi Testnet'
+  IF stored.payer_uid IS NULL OR p_input->>'network' IS DISTINCT FROM public.r36_network()
    OR p_input->>'sourceWallet' IS DISTINCT FROM stored.source_wallet
    OR p_input->>'operationKind' NOT IN ('settlement','refund') THEN RETURN NULL; END IF;
   IF NOT EXISTS(SELECT 1 FROM public.r36_certificate_requests q
     JOIN public.r36_certificate_receipts c ON c.nonce=q.nonce
     JOIN public.settlement_checkpoints s ON s.payment_id=stored.payment_id
     WHERE q.policy_digest=p_policy AND q.binding->>'paymentId'=stored.payment_id
-    AND q.binding->>'network'='Pi Testnet' AND q.binding->>'sourceWallet'=stored.source_wallet
+    AND q.binding->>'network'=public.r36_network() AND q.binding->>'sourceWallet'=stored.source_wallet
     AND q.binding->>'operationKind'=p_input->>'operationKind' AND q.binding->>'operationId'=p_input->>'operationId'
     AND q.binding->>'preparedHash'=p_input->>'preparedHash' AND q.binding->>'preparedSequence'=p_input->>'preparedSequence'
-    AND q.binding->>'amountStroops'=stored.amount_stroops::text
+    AND q.binding->>'amountStroops'=public.r36_contract_outgoing_stroops(stored.payment_id,p_input->>'operationKind')
     AND q.binding->>'destinationWallet'=CASE WHEN p_input->>'operationKind'='settlement' THEN stored.merchant_wallet ELSE stored.payer_wallet END
     AND q.binding->>'piPaymentId'=s.u2a_identifier AND q.binding->>'u2aTxid'=s.u2a_txid
     AND s.u2a_completed_at IS NOT NULL AND s.payer_uid=stored.payer_uid
     AND s.merchant_uid=stored.merchant_uid AND s.merchant_id=stored.merchant_id
     AND s.customer_amount*10000000=stored.amount_stroops)
-   OR public.r36_certificate_allows('Pi Testnet',stored.source_wallet,stored.payment_id,
+   OR public.r36_certificate_allows(public.r36_network(),stored.source_wallet,stored.payment_id,
       p_input->>'operationKind',p_input->>'operationId',p_input->>'preparedHash',p_input->>'preparedSequence') IS DISTINCT FROM true
    THEN RETURN NULL; END IF;
   RETURN jsonb_build_object('paymentId',stored.payment_id);
@@ -1417,7 +1523,7 @@ BEGIN
  -- 'verify' below remains mandatory with the actual source after a transfer.
  IF p_action='approval' THEN
   IF stored.payer_uid IS NULL OR stored.payer_wallet IS DISTINCT FROM person->>'wallet'
-   OR (stored.payer_uid,stored.source_wallet,stored.amount_stroops::text)
+   OR (stored.payer_uid,public.r36_incoming_wallet(stored.source_wallet),stored.amount_stroops::text)
     IS DISTINCT FROM(p_input->>'payerUid',p_input->>'toAddress',p_input->>'amountStroops')
    OR jsonb_typeof(p_input->'fromAddress') IS DISTINCT FROM 'string'
    OR (p_input->>'fromAddress'<>'' AND (p_input->>'fromAddress' !~ '^G[A-Z2-7]{55}$' OR (stored.payer_wallet IS NOT NULL AND p_input->>'fromAddress' IS DISTINCT FROM stored.payer_wallet)))
@@ -1426,7 +1532,7 @@ BEGIN
      AND s.u2a_completed_at IS NULL AND s.a2u_payment_id IS NULL AND s.prepared_tx_hash IS NULL
      AND s.a2u_txid IS NULL AND s.customer_amount*10000000=stored.amount_stroops
      AND s.merchant_uid=stored.merchant_uid AND s.merchant_id=stored.merchant_id
-     AND s.merchant_amount=s.customer_amount AND s.app_commission=0)
+     AND public.r36_contract_valid(to_jsonb(s)))
    OR EXISTS(SELECT 1 FROM public.refund_checkpoints r WHERE r.payment_id=stored.payment_id)
    OR EXISTS(SELECT 1 FROM public.r36_legacy_right_holds h WHERE h.payment_id=stored.payment_id)
    THEN RETURN NULL; END IF;
@@ -1438,12 +1544,12 @@ BEGIN
   IF coalesce(p_input->>'piPaymentId','') !~ '^[A-Za-z0-9_.:-]{1,128}$'
    OR coalesce(p_input->>'txid','') !~ '^[0-9a-f]{64}$'
    OR coalesce(p_input->>'fromAddress','') !~ '^G[A-Z2-7]{55}$'
-   OR (stored.payer_uid,stored.source_wallet,stored.amount_stroops::text)
+   OR (stored.payer_uid,public.r36_incoming_wallet(stored.source_wallet),stored.amount_stroops::text)
      IS DISTINCT FROM(p_input->>'payerUid',p_input->>'toAddress',p_input->>'amountStroops')
    OR stored.payer_uid IS NULL OR p_input->>'fromAddress'=stored.source_wallet
    OR NOT EXISTS(SELECT 1 FROM public.settlement_checkpoints c WHERE c.payment_id=stored.payment_id
      AND c.merchant_uid=stored.merchant_uid AND c.merchant_id=stored.merchant_id
-     AND c.customer_amount*10000000=stored.amount_stroops AND c.merchant_amount=c.customer_amount AND c.app_commission=0
+     AND c.customer_amount*10000000=stored.amount_stroops AND public.r36_contract_valid(to_jsonb(c))
      AND c.u2a_approval_identifier=p_input->>'piPaymentId' AND c.u2a_approval_claimed_at IS NOT NULL
      AND c.u2a_approval_attempted_at IS NOT NULL
      AND (c.u2a_identifier IS NULL OR c.u2a_identifier=p_input->>'piPaymentId')
@@ -1462,7 +1568,7 @@ BEGIN
    stored.payer_wallet:=p_input->>'fromAddress';
   END IF;
  END IF;
- IF (stored.payer_uid,stored.payer_wallet,stored.source_wallet,stored.amount_stroops::text)
+ IF (stored.payer_uid,stored.payer_wallet,public.r36_incoming_wallet(stored.source_wallet),stored.amount_stroops::text)
    IS DISTINCT FROM (p_input->>'payerUid',p_input->>'fromAddress',p_input->>'toAddress',p_input->>'amountStroops')
  THEN RETURN NULL; END IF;
  RETURN jsonb_build_object('paymentId',stored.payment_id);
@@ -1490,7 +1596,7 @@ BEGIN
  (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(i) k) IS DISTINCT FROM
  ARRAY['amountStroops','destinationWallet','network','operationId','operationKind','paymentId','piPaymentId','sourceWallet']::text[]
  OR EXISTS(SELECT 1 FROM jsonb_each(i) kv WHERE jsonb_typeof(kv.value)<>'string')
- OR i->>'network' IS DISTINCT FROM 'Pi Testnet'
+ OR i->>'network' IS DISTINCT FROM public.r36_network()
  OR coalesce(i->>'paymentId','') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
  OR coalesce(i->>'operationKind','') NOT IN ('settlement','refund')
  OR coalesce(i->>'operationId','') !~ '^[A-Za-z0-9_.:-]{1,128}$'
@@ -1505,7 +1611,7 @@ BEGIN
  SELECT * INTO res FROM public.r36_testnet_ingress_reservations WHERE payment_id=i->>'paymentId' FOR UPDATE;
  deferred_wallet:=res.merchant_wallet IS NULL AND i->>'operationKind'='settlement' AND EXISTS(SELECT 1 FROM public.r36_payment_intake x WHERE x.payment_id=res.payment_id AND x.wallet_contract='PI_PAYMENT_DTO_V1');
  IF NOT FOUND OR res.payer_uid IS NULL OR res.payer_wallet IS NULL
- OR (res.source_wallet,res.amount_stroops::text) IS DISTINCT FROM(i->>'sourceWallet',i->>'amountStroops')
+ OR (res.source_wallet,public.r36_contract_outgoing_stroops(res.payment_id,i->>'operationKind')) IS DISTINCT FROM(i->>'sourceWallet',i->>'amountStroops')
  OR (NOT deferred_wallet AND i->>'destinationWallet' IS DISTINCT FROM (CASE WHEN i->>'operationKind'='settlement' THEN res.merchant_wallet ELSE res.payer_wallet END))
  THEN RETURN NULL; END IF;
  SELECT * INTO policy FROM public.r36_certificate_policies WHERE policy_digest=res.policy_digest FOR SHARE;
@@ -1513,14 +1619,14 @@ BEGIN
  OR extract(epoch FROM clock_timestamp()) NOT BETWEEN policy.valid_from AND least(policy.valid_until,policy.revocation_valid_until)-1
  OR public.r36_policy_subject(policy.worker_profile,res) IS DISTINCT FROM true
  THEN RETURN NULL; END IF;
- IF NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network='Pi Testnet' AND source_wallet=res.source_wallet
+ IF NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network=public.r36_network() AND source_wallet=res.source_wallet
  AND state='enabled' AND clearance_digest ~ '^[0-9a-f]{64}$' FOR SHARE)
  OR NOT EXISTS(SELECT 1 FROM public.payment_create_intents WHERE payment_id=res.payment_id AND merchant_uid=res.merchant_uid
  AND merchant_id=res.merchant_id AND create_intent_id=res.create_intent_id AND customer_amount*10000000=res.amount_stroops)
  THEN RETURN NULL; END IF;
  SELECT * INTO cp FROM public.settlement_checkpoints WHERE payment_id=res.payment_id;
  IF NOT FOUND OR (cp.merchant_uid,cp.merchant_id,cp.payer_uid) IS DISTINCT FROM(res.merchant_uid,res.merchant_id,res.payer_uid)
- OR cp.customer_amount*10000000 IS DISTINCT FROM res.amount_stroops::numeric OR cp.app_commission IS DISTINCT FROM 0::numeric
+ OR cp.customer_amount*10000000 IS DISTINCT FROM res.amount_stroops::numeric OR NOT public.r36_contract_valid(to_jsonb(cp))
  OR cp.u2a_verified_at IS NULL OR cp.u2a_completed_at IS NULL OR coalesce(cp.u2a_identifier,'')='' OR coalesce(cp.u2a_txid,'') !~ '^[0-9a-f]{64}$'
  OR cp.prepared_envelope_xdr IS NOT NULL OR cp.prepared_tx_hash IS NOT NULL OR cp.prepared_sequence IS NOT NULL OR cp.a2u_txid IS NOT NULL
  OR EXISTS(SELECT 1 FROM public.transactions WHERE payment_id=res.payment_id)
@@ -1528,7 +1634,7 @@ BEGIN
  OR EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts WHERE owner_payment_id=res.payment_id)
  THEN RETURN NULL; END IF;
  IF i->>'operationKind'='settlement' THEN
-  IF cp.stage IS DISTINCT FROM 'a2u_created' OR cp.merchant_amount IS DISTINCT FROM cp.customer_amount
+  IF cp.stage IS DISTINCT FROM 'a2u_created' OR NOT public.r36_contract_valid(to_jsonb(cp))
   OR (cp.a2u_payment_id,cp.a2u_from_address,cp.a2u_to_address) IS DISTINCT FROM(i->>'piPaymentId',res.source_wallet,CASE WHEN deferred_wallet THEN i->>'destinationWallet' ELSE res.merchant_wallet END)
   OR i->>'operationId' IS DISTINCT FROM cp.a2u_payment_id
   OR EXISTS(SELECT 1 FROM public.refund_checkpoints WHERE payment_id=res.payment_id) THEN RETURN NULL; END IF;
@@ -1578,7 +1684,7 @@ BEGIN
    IF NOT FOUND THEN RAISE EXCEPTION 'MERCHANT_RESERVATION_CHANGED'; END IF;
   END IF;
   INSERT INTO public.r36_prepared_evidence_candidates(payment_id,network,source_wallet,prepared_sequence,candidate)
-  VALUES(res.payment_id,'Pi Testnet',res.source_wallet,p_input->>'preparedSequence',body);
+  VALUES(res.payment_id,public.r36_network(),res.source_wallet,p_input->>'preparedSequence',body);
  END IF;
  RETURN jsonb_build_object('state','present','candidate',body);
 END $_$;
@@ -1631,7 +1737,7 @@ DECLARE c jsonb;b jsonb;e jsonb;v jsonb;old public.r36_lifecycle_approval_links;
  -- This function cannot create a gate, enable a blocked wallet, claim authority,
  -- submit a transaction or create accounting. Keep the prior value as audit evidence.
  SELECT * INTO gate FROM public.financial_wallet_activation
- WHERE network='Pi Testnet' AND source_wallet=b->>'source_wallet' FOR UPDATE;
+ WHERE network=public.r36_network() AND source_wallet=b->>'source_wallet' FOR UPDATE;
  next_clearance=c->>'successorClearanceDigest';
  IF NOT FOUND OR gate.state<>'enabled' OR gate.clearance_digest IS NULL
  OR next_clearance IS NULL OR next_clearance !~ '^[0-9a-f]{64}$'
@@ -1640,13 +1746,13 @@ DECLARE c jsonb;b jsonb;e jsonb;v jsonb;old public.r36_lifecycle_approval_links;
  IF p_expires<=extract(epoch FROM clock_timestamp()) THEN RAISE EXCEPTION 'BOUND_CLEARANCE_EXPIRED_AFTER_LOCK'; END IF;
  -- No replacement of a prior approval, even expired or consumed. A conflict stays held.
  INSERT INTO public.financial_wallet_rotation_approvals(network,source_wallet,prior_prepared_hash,evidence_digest,approval_id,approved_by)
- VALUES('Pi Testnet',b->>'source_wallet',b->>'prepared_tx_hash',c->'seal'->>'evidence_digest',p_digest,session_user);
+ VALUES(public.r36_network(),b->>'source_wallet',b->>'prepared_tx_hash',c->'seal'->>'evidence_digest',p_digest,session_user);
  INSERT INTO public.r36_rotation_approval_evidence(network,source_wallet,prior_prepared_hash,comparison_digest,seal_evidence_digest,
  horizon_result_verified,historical_wallet_reconciled,accounting_finality_verified,certified_by)
- VALUES('Pi Testnet',b->>'source_wallet',b->>'prepared_tx_hash',p_closure,c->'seal'->>'evidence_digest',true,true,true,session_user);
+ VALUES(public.r36_network(),b->>'source_wallet',b->>'prepared_tx_hash',p_closure,c->'seal'->>'evidence_digest',true,true,true,session_user);
  INSERT INTO public.r36_signed_approval_consumptions(approval_id,network,wallet,prior_hash,prior_sequence,prior_payment,prior_operation,
  kind,evidence_digest,inventory_digest,binding_digest,payload_digest,expires_at,independently_certified_at)
- VALUES(p_digest,'Pi Testnet',b->>'source_wallet',b->>'prepared_tx_hash',(b->>'prepared_sequence')::numeric,b->>'owner_payment_id',
+ VALUES(p_digest,public.r36_network(),b->>'source_wallet',b->>'prepared_tx_hash',(b->>'prepared_sequence')::numeric,b->>'owner_payment_id',
  b->>'owner_operation_id',b->>'operation_kind',c->'seal'->>'evidence_digest',c->>'inventoryDigest',c->>'bindingDigest',p_digest,to_timestamp(p_expires),clock_timestamp());
  INSERT INTO public.r36_lifecycle_approval_links(approval_id,closure_digest,successor_nonce,evidence_text,issued_at,expires_at,prior_clearance_digest,next_clearance_digest)
  VALUES(p_digest,p_closure,p_nonce,p_text,p_issued,p_expires,gate.clearance_digest,next_clearance);
@@ -1737,7 +1843,7 @@ DECLARE c jsonb; v jsonb; old public.r36_prior_closure_receipts; n bigint; BEGIN
  END IF;
  INSERT INTO public.r36_prior_closure_receipts(payload_digest,policy_digest,network,source_wallet,prior_payment,prior_hash,
  context_digest,evidence_digest,inventory_digest,evidence_text,issued_at,expires_at,verified_by)
- VALUES(p_digest,p_policy,'Pi Testnet',p_wallet,p_prior,c->'prior'->>'prepared_tx_hash',c->>'contextDigest',c->'seal'->>'evidence_digest',
+ VALUES(p_digest,p_policy,public.r36_network(),p_wallet,p_prior,c->'prior'->>'prepared_tx_hash',c->>'contextDigest',c->'seal'->>'evidence_digest',
  v->>'inventoryDigest',p_text,p_issued,p_expires,session_user);
  RETURN 'RECORDED';
 END $_$;
@@ -1799,7 +1905,7 @@ BEGIN
  ctx:=public.r36_certificate_context(p_nonce);
  IF ctx IS NULL THEN RETURN NULL; END IF;
  b:=ctx->'binding'; p:=ctx->'policy'; receipt:=ctx->'receipt';
- IF b->>'nonce' IS DISTINCT FROM p_nonce OR b->>'network' IS DISTINCT FROM 'Pi Testnet'
+ IF b->>'nonce' IS DISTINCT FROM p_nonce OR b->>'network' IS DISTINCT FROM public.r36_network()
  OR coalesce(b->>'sourceWallet','') !~ '^G[A-Z2-7]{55}$'
  OR coalesce(b->>'preparedHash','') !~ '^[0-9a-f]{64}$'
  OR coalesce(b->>'preparedSequence','') !~ '^[1-9][0-9]{0,29}$'
@@ -1957,8 +2063,8 @@ BEGIN
  THEN RETURN false; END IF;
  SELECT * INTO s FROM public.settlement_checkpoints WHERE payment_id=a.owner_payment_id;
  IF NOT FOUND OR s.u2a_identifier IS DISTINCT FROM b->>'piPaymentId' OR s.u2a_txid IS DISTINCT FROM b->>'u2aTxid'
- OR s.u2a_verified_at IS NULL OR s.u2a_completed_at IS NULL OR s.customer_amount*10000000<>(b->>'amountStroops')::numeric
- OR s.merchant_amount<>s.customer_amount OR s.app_commission<>0 OR s.a2u_txid IS NOT NULL OR s.horizon_confirmed_at IS NOT NULL
+ OR s.u2a_verified_at IS NULL OR s.u2a_completed_at IS NULL OR public.r36_contract_outgoing_stroops(s.payment_id,b->>'operationKind') IS DISTINCT FROM b->>'amountStroops'
+ OR NOT public.r36_contract_valid(to_jsonb(s)) OR s.a2u_txid IS NOT NULL OR s.horizon_confirmed_at IS NOT NULL
  OR s.pi_completed_at IS NOT NULL OR s.db_finalized_at IS NOT NULL THEN RETURN false; END IF;
  IF EXISTS(SELECT 1 FROM public.transactions WHERE payment_id=s.u2a_identifier)
  OR EXISTS(SELECT 1 FROM public.receipts WHERE u2a_identifier=s.u2a_identifier)
@@ -2011,7 +2117,7 @@ BEGIN
  JOIN public.r36_testnet_ingress_reservations ingress ON ingress.payment_id=i.payment_id AND ingress.policy_digest=p_policy
  LEFT JOIN public.r36_recovery_trial_reservations prior ON prior.payment_id=i.payment_id
  JOIN public.settlement_checkpoints s ON s.payment_id=i.payment_id
- JOIN public.financial_wallet_authorities a ON a.owner_payment_id=i.payment_id AND a.network='Pi Testnet' AND a.state='prepared'
+ JOIN public.financial_wallet_authorities a ON a.owner_payment_id=i.payment_id AND a.network=public.r36_network() AND a.state='prepared'
  JOIN public.r36_certificate_requests q ON q.policy_digest=p_policy AND q.binding->>'paymentId'=i.payment_id
      AND q.binding->>'network'=a.network AND q.binding->>'sourceWallet'=a.source_wallet
      AND q.binding->>'operationKind'=a.operation_kind AND q.binding->>'operationId'=a.owner_operation_id
@@ -2031,9 +2137,9 @@ BEGIN
      (SELECT unnest(historical_holds) FROM public.kernel_deployment_identity WHERE singleton=true)
      AND i.customer_amount>0 AND i.customer_amount*10000000<=public.r36_policy_max_amount(p.worker_profile) AND i.customer_amount*10000000=trunc(i.customer_amount*10000000)
      AND s.merchant_id=i.merchant_id AND s.merchant_uid=i.merchant_uid AND s.customer_amount=i.customer_amount
-     AND s.merchant_amount=i.customer_amount AND s.app_commission=0 AND s.u2a_completed_at IS NOT NULL
+     AND public.r36_contract_valid(to_jsonb(s)) AND s.u2a_completed_at IS NOT NULL
      AND s.u2a_identifier=q.binding->>'piPaymentId' AND s.u2a_txid=q.binding->>'u2aTxid'
-     AND (i.customer_amount*10000000)::bigint::text=q.binding->>'amountStroops'
+     AND public.r36_contract_outgoing_stroops(i.payment_id,a.operation_kind)=q.binding->>'amountStroops'
      AND public.r36_policy_subject(p.worker_profile,ingress)
      AND ((a.operation_kind='settlement' AND r.payment_id IS NULL AND s.stage IN ('prepared','horizon_confirmed','pi_completed')
        AND s.a2u_from_address=a.source_wallet AND s.a2u_to_address=q.binding->>'destinationWallet' AND s.a2u_payment_id=a.owner_operation_id
@@ -2062,7 +2168,7 @@ BEGIN
      AND extract(epoch FROM clock_timestamp()) < least(p.valid_until,p.revocation_valid_until,public.r36_admission_expiry(q.nonce,c.payload_digest))
      AND NOT EXISTS(SELECT 1 FROM public.r36_certificate_revocations x WHERE x.payload_digest=c.payload_digest)
  ORDER BY prior.last_selected_at NULLS FIRST,i.created_at,i.payment_id LOOP
- IF public.r36_certificate_allows('Pi Testnet',v.wallet,v.id,v.kind,v.op,v.hash,v.seq) IS DISTINCT FROM true THEN CONTINUE; END IF;
+ IF public.r36_certificate_allows(public.r36_network(),v.wallet,v.id,v.kind,v.op,v.hash,v.seq) IS DISTINCT FROM true THEN CONTINUE; END IF;
  SELECT * INTO old FROM public.r36_recovery_trial_reservations WHERE payment_id=v.id;
  IF FOUND THEN
    IF (old.nonce,old.payload_digest,old.amount_stroops) IS DISTINCT FROM (v.nonce,v.digest,v.amount) THEN CONTINUE; END IF;
@@ -2075,7 +2181,7 @@ BEGIN
    INSERT INTO public.r36_recovery_trial_reservations(payment_id,nonce,payload_digest,amount_stroops) VALUES(v.id,v.nonce,v.digest,v.amount);
  END IF;
  RETURN jsonb_build_object('id',v.id,'kind',v.kind,'op',v.op,'wallet',v.wallet,'hash',v.hash,'seq',v.seq,'stage',v.stage,
-   'spent',EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts t WHERE t.network='Pi Testnet' AND t.owner_payment_id=v.id
+   'spent',EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts t WHERE t.network=public.r36_network() AND t.owner_payment_id=v.id
      AND t.source_wallet=v.wallet AND t.operation_kind=v.kind AND t.owner_operation_id=v.op AND t.prepared_tx_hash=v.hash AND t.prepared_sequence=v.seq));
  END LOOP;
  RETURN NULL;
@@ -2160,7 +2266,7 @@ BEGIN
  JOIN public.r36_testnet_ingress_reservations ingress ON ingress.payment_id=i.payment_id AND ingress.policy_digest=p_policy
  LEFT JOIN public.r36_recovery_trial_reservations prior ON prior.payment_id=i.payment_id
  JOIN public.settlement_checkpoints s ON s.payment_id=i.payment_id
- JOIN public.financial_wallet_authorities a ON a.owner_payment_id=i.payment_id AND a.network='Pi Testnet' AND a.state='prepared'
+ JOIN public.financial_wallet_authorities a ON a.owner_payment_id=i.payment_id AND a.network=public.r36_network() AND a.state='prepared'
  JOIN public.r36_certificate_requests q ON q.policy_digest=p_policy AND q.binding->>'paymentId'=i.payment_id
      AND q.binding->>'network'=a.network AND q.binding->>'sourceWallet'=a.source_wallet
      AND q.binding->>'operationKind'=a.operation_kind AND q.binding->>'operationId'=a.owner_operation_id
@@ -2184,9 +2290,9 @@ BEGIN
      (SELECT unnest(historical_holds) FROM public.kernel_deployment_identity WHERE singleton=true)
      AND i.customer_amount>0 AND i.customer_amount*10000000<=public.r36_policy_max_amount(p.worker_profile) AND i.customer_amount*10000000=trunc(i.customer_amount*10000000)
      AND s.merchant_id=i.merchant_id AND s.merchant_uid=i.merchant_uid AND s.customer_amount=i.customer_amount
-     AND s.merchant_amount=i.customer_amount AND s.app_commission=0 AND s.u2a_completed_at IS NOT NULL
+     AND public.r36_contract_valid(to_jsonb(s)) AND s.u2a_completed_at IS NOT NULL
      AND s.u2a_identifier=q.binding->>'piPaymentId' AND s.u2a_txid=q.binding->>'u2aTxid'
-     AND (i.customer_amount*10000000)::bigint::text=q.binding->>'amountStroops'
+     AND public.r36_contract_outgoing_stroops(i.payment_id,a.operation_kind)=q.binding->>'amountStroops'
      AND public.r36_policy_subject(p.worker_profile,ingress)
      AND ((a.operation_kind='settlement' AND r.payment_id IS NULL AND s.stage IN ('prepared','horizon_confirmed','pi_completed')
        AND s.a2u_from_address=a.source_wallet AND s.a2u_to_address=q.binding->>'destinationWallet' AND s.a2u_payment_id=a.owner_operation_id
@@ -2269,7 +2375,7 @@ BEGIN
  JOIN public.r36_testnet_ingress_reservations ingress ON ingress.payment_id=i.payment_id AND ingress.policy_digest=p_policy
  LEFT JOIN public.r36_recovery_trial_reservations prior ON prior.payment_id=i.payment_id
  JOIN public.settlement_checkpoints s ON s.payment_id=i.payment_id
- JOIN public.financial_wallet_authorities a ON a.owner_payment_id=i.payment_id AND a.network='Pi Testnet' AND a.state='prepared'
+ JOIN public.financial_wallet_authorities a ON a.owner_payment_id=i.payment_id AND a.network=public.r36_network() AND a.state='prepared'
  JOIN public.r36_certificate_requests q ON q.policy_digest=p_policy AND q.binding->>'paymentId'=i.payment_id
      AND q.binding->>'network'=a.network AND q.binding->>'sourceWallet'=a.source_wallet
      AND q.binding->>'operationKind'=a.operation_kind AND q.binding->>'operationId'=a.owner_operation_id
@@ -2293,9 +2399,9 @@ BEGIN
      (SELECT unnest(historical_holds) FROM public.kernel_deployment_identity WHERE singleton=true)
      AND i.customer_amount>0 AND i.customer_amount*10000000<=public.r36_policy_max_amount(p.worker_profile) AND i.customer_amount*10000000=trunc(i.customer_amount*10000000)
      AND s.merchant_id=i.merchant_id AND s.merchant_uid=i.merchant_uid AND s.customer_amount=i.customer_amount
-     AND s.merchant_amount=i.customer_amount AND s.app_commission=0 AND s.u2a_completed_at IS NOT NULL
+     AND public.r36_contract_valid(to_jsonb(s)) AND s.u2a_completed_at IS NOT NULL
      AND s.u2a_identifier=q.binding->>'piPaymentId' AND s.u2a_txid=q.binding->>'u2aTxid'
-     AND (i.customer_amount*10000000)::bigint::text=q.binding->>'amountStroops'
+     AND public.r36_contract_outgoing_stroops(i.payment_id,a.operation_kind)=q.binding->>'amountStroops'
      AND public.r36_policy_subject(p.worker_profile,ingress)
      AND ((a.operation_kind='settlement' AND r.payment_id IS NULL AND s.stage IN ('prepared','horizon_confirmed','pi_completed')
        AND s.a2u_from_address=a.source_wallet AND s.a2u_to_address=q.binding->>'destinationWallet' AND s.a2u_payment_id=a.owner_operation_id
@@ -2399,7 +2505,7 @@ CREATE FUNCTION public.r36_terminal_ingress_clearance(p_policy text, p_wallet te
     SET search_path TO 'pg_catalog', 'pg_temp'
     AS $$
 DECLARE old public.financial_wallet_authorities; seal public.financial_wallet_finality_seals;
- proof record; policy public.r36_certificate_policies; p_network text := 'Pi Testnet';
+ proof record; policy public.r36_certificate_policies; p_network text := public.r36_network();
 BEGIN
  IF session_user<>'r36_runtime' OR current_setting('transaction_isolation')<>'read committed' THEN RETURN false; END IF;
  SELECT * INTO policy FROM public.r36_certificate_policies WHERE policy_digest=p_policy FOR SHARE;
@@ -2429,11 +2535,11 @@ BEGIN
     AND s.a2u_from_address=p_wallet AND s.a2u_payment_id=old.owner_operation_id
     AND s.a2u_txid=old.prepared_tx_hash AND s.prepared_tx_hash=old.prepared_tx_hash
     AND s.prepared_sequence=old.prepared_sequence::numeric AND s.horizon_fee_stroops=seal.horizon_fee_stroops::bigint
-    AND s.merchant_amount=s.customer_amount AND s.app_commission=0
+    AND public.r36_contract_valid(to_jsonb(s))
     AND t.merchant_id=s.merchant_id AND t.merchant_uid=s.merchant_uid AND t.status='completed' AND t.currency='π'
-    AND t.amount=s.customer_amount AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid
-    AND r.currency='π' AND r.amount=s.customer_amount AND r.customer_amount=s.customer_amount
-    AND r.merchant_amount=s.customer_amount AND r.app_commission=0 AND r.txid=s.a2u_txid
+    AND t.amount=s.merchant_amount AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid
+    AND r.currency='π' AND r.amount=s.merchant_amount AND r.customer_amount=s.customer_amount
+    AND r.merchant_amount=s.merchant_amount AND r.app_commission=s.app_commission AND r.txid=s.a2u_txid
     AND r.u2a_identifier=s.u2a_identifier AND r.u2a_txid=s.u2a_txid
     AND r.a2u_identifier=s.a2u_payment_id AND r.a2u_txid=s.a2u_txid
     AND r.horizon_fee_charged*10000000=s.horizon_fee_stroops AND r.app_net_impact=-r.horizon_fee_charged
@@ -2505,7 +2611,7 @@ CREATE FUNCTION public.r36_terminal_review_context(p_policy text, p_wallet text,
     SET search_path TO 'pg_catalog', 'pg_temp'
     AS $$
 DECLARE old public.financial_wallet_authorities; seal public.financial_wallet_finality_seals;
- terminal jsonb; policy public.r36_certificate_policies; p_network text := 'Pi Testnet';
+ terminal jsonb; policy public.r36_certificate_policies; p_network text := public.r36_network();
 BEGIN
  IF session_user NOT IN ('r36_runtime','r36_issuer') OR current_setting('transaction_isolation')<>'read committed' THEN RETURN NULL; END IF;
  SELECT * INTO policy FROM public.r36_certificate_policies WHERE policy_digest=p_policy FOR SHARE;
@@ -2535,11 +2641,11 @@ BEGIN
     AND s.a2u_from_address=p_wallet AND s.a2u_payment_id=old.owner_operation_id
     AND s.a2u_txid=old.prepared_tx_hash AND s.prepared_tx_hash=old.prepared_tx_hash
     AND s.prepared_sequence=old.prepared_sequence::numeric AND s.horizon_fee_stroops=seal.horizon_fee_stroops::bigint
-    AND s.merchant_amount=s.customer_amount AND s.app_commission=0
+    AND public.r36_contract_valid(to_jsonb(s))
     AND t.merchant_id=s.merchant_id AND t.merchant_uid=s.merchant_uid AND t.status='completed' AND t.currency='π'
-    AND t.amount=s.customer_amount AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid
-    AND r.currency='π' AND r.amount=s.customer_amount AND r.customer_amount=s.customer_amount
-    AND r.merchant_amount=s.customer_amount AND r.app_commission=0 AND r.txid=s.a2u_txid
+    AND t.amount=s.merchant_amount AND r.merchant_id=s.merchant_id AND r.merchant_uid=s.merchant_uid
+    AND r.currency='π' AND r.amount=s.merchant_amount AND r.customer_amount=s.customer_amount
+    AND r.merchant_amount=s.merchant_amount AND r.app_commission=s.app_commission AND r.txid=s.a2u_txid
     AND r.u2a_identifier=s.u2a_identifier AND r.u2a_txid=s.u2a_txid
     AND r.a2u_identifier=s.a2u_payment_id AND r.a2u_txid=s.a2u_txid
     AND r.horizon_fee_charged*10000000=s.horizon_fee_stroops AND r.app_net_impact=-r.horizon_fee_charged
@@ -2567,7 +2673,7 @@ BEGIN
  END IF;
 
  IF old.operation_kind='settlement' THEN
- SELECT jsonb_build_object('piPaymentId',s.a2u_payment_id,'recipientUid',s.merchant_uid,'amountStroops',trunc(s.customer_amount*10000000)::text,
+ SELECT jsonb_build_object('piPaymentId',s.a2u_payment_id,'recipientUid',s.merchant_uid,'amountStroops',trunc(s.merchant_amount*10000000)::text,
  'receiptId',r.id::text,'entryId',t.id::text)
  INTO terminal FROM public.settlement_checkpoints s JOIN public.transactions t ON t.payment_id=s.u2a_identifier
  JOIN public.receipts r ON r.transaction_id=t.id WHERE s.payment_id=old.owner_payment_id;
@@ -2599,7 +2705,7 @@ DECLARE b jsonb; original text; a public.financial_wallet_authorities; s public.
 BEGIN
  IF session_user NOT IN ('r36_registrar','r36_issuer') THEN RETURN false; END IF;
  SELECT q.binding,c.payload_digest INTO b,original FROM public.r36_certificate_requests q JOIN public.r36_certificate_receipts c USING(nonce) WHERE q.nonce=p_nonce FOR UPDATE OF q;
- IF NOT FOUND OR b->>'network'<>'Pi Testnet' OR b->>'operationKind'<>'settlement'
+ IF NOT FOUND OR b->>'network'<>public.r36_network() OR b->>'operationKind'<>'settlement'
  OR EXISTS(SELECT 1 FROM public.r36_certificate_revocations WHERE payload_digest=original) THEN RETURN false; END IF;
  SELECT * INTO a FROM public.financial_wallet_authorities WHERE network=b->>'network' AND source_wallet=b->>'sourceWallet' FOR UPDATE;
  IF NOT FOUND OR a.state<>'prepared' OR a.owner_payment_id=b->>'paymentId' OR a.prepared_sequence::numeric+1<>(b->>'preparedSequence')::numeric THEN RETURN false; END IF;
@@ -2615,8 +2721,8 @@ BEGIN
  IF NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network=a.network AND source_wallet=a.source_wallet AND state='enabled' AND clearance_digest=b->>'clearanceDigest') THEN RETURN false; END IF;
  SELECT * INTO s FROM public.settlement_checkpoints WHERE payment_id=b->>'paymentId' FOR SHARE;
  IF NOT FOUND OR s.stage<>'a2u_created' OR s.u2a_identifier IS DISTINCT FROM b->>'piPaymentId' OR s.u2a_txid IS DISTINCT FROM b->>'u2aTxid'
- OR s.u2a_verified_at IS NULL OR s.u2a_completed_at IS NULL OR s.customer_amount*10000000<>(b->>'amountStroops')::numeric
- OR s.merchant_amount<>s.customer_amount OR s.app_commission<>0 OR s.a2u_payment_id IS DISTINCT FROM b->>'operationId'
+ OR s.u2a_verified_at IS NULL OR s.u2a_completed_at IS NULL OR public.r36_contract_outgoing_stroops(s.payment_id,b->>'operationKind') IS DISTINCT FROM b->>'amountStroops'
+ OR NOT public.r36_contract_valid(to_jsonb(s)) OR s.a2u_payment_id IS DISTINCT FROM b->>'operationId'
  OR s.a2u_to_address IS DISTINCT FROM b->>'destinationWallet' OR s.prepared_tx_hash IS NOT NULL OR s.prepared_sequence IS NOT NULL OR s.prepared_envelope_xdr IS NOT NULL
  OR s.a2u_txid IS NOT NULL OR s.horizon_confirmed_at IS NOT NULL OR s.pi_completed_at IS NOT NULL OR s.db_finalized_at IS NOT NULL THEN RETURN false; END IF;
  SELECT c.candidate INTO candidate FROM public.r36_prepared_evidence_candidates c WHERE c.payment_id=s.payment_id AND c.network=a.network AND c.source_wallet=a.source_wallet AND c.prepared_sequence=b->>'preparedSequence';
@@ -2690,7 +2796,7 @@ BEGIN
   THEN RAISE EXCEPTION 'INVALID_BINDING_FIELD'; END IF;
  END LOOP;
  nonce_value=b->>'nonce';
- IF b->>'network'<>'Pi Testnet' OR b->>'operationKind' NOT IN ('settlement','refund')
+ IF b->>'network'<>public.r36_network() OR b->>'operationKind' NOT IN ('settlement','refund')
  OR b->>'sourceWallet' !~ '^G[A-Z2-7]{55}$' OR b->>'destinationWallet' !~ '^G[A-Z2-7]{55}$'
  THEN RAISE EXCEPTION 'INVALID_SCOPE'; END IF;
  FOREACH k IN ARRAY ARRAY['paymentId','operationId','piPaymentId'] LOOP
@@ -2902,7 +3008,7 @@ CREATE TABLE public.financial_wallet_activation (
     cleared_at timestamp with time zone,
     CONSTRAINT financial_wallet_activation_check CHECK (((state <> 'enabled'::text) OR ((clearance_digest IS NOT NULL) AND (cleared_by IS NOT NULL) AND (cleared_at IS NOT NULL)))),
     CONSTRAINT financial_wallet_activation_clearance_digest_check CHECK ((clearance_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT financial_wallet_activation_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT financial_wallet_activation_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT financial_wallet_activation_source_wallet_check CHECK ((source_wallet ~ '^G[A-Z2-7]{55}$'::text)),
     CONSTRAINT financial_wallet_activation_state_check CHECK ((state = ANY (ARRAY['blocked'::text, 'enabled'::text])))
 );
@@ -2924,7 +3030,7 @@ CREATE TABLE public.financial_wallet_authorities (
     prepared_sequence text NOT NULL,
     state text DEFAULT 'prepared'::text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT financial_wallet_authorities_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT financial_wallet_authorities_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT financial_wallet_authorities_operation_kind_check CHECK ((operation_kind = ANY (ARRAY['settlement'::text, 'refund'::text]))),
     CONSTRAINT financial_wallet_authorities_prepared_sequence_check CHECK ((prepared_sequence ~ '^[1-9][0-9]*$'::text)),
     CONSTRAINT financial_wallet_authorities_prepared_tx_hash_check CHECK ((prepared_tx_hash ~ '^[0-9a-f]{64}$'::text)),
@@ -2978,7 +3084,7 @@ CREATE TABLE public.financial_wallet_finality_seals (
     CONSTRAINT financial_wallet_finality_seals_evidence_digest_check CHECK ((evidence_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_wallet_finality_seals_horizon_fee_stroops_check CHECK ((horizon_fee_stroops ~ '^(0|[1-9][0-9]*)$'::text)),
     CONSTRAINT financial_wallet_finality_seals_horizon_ledger_check CHECK ((horizon_ledger ~ '^[1-9][0-9]*$'::text)),
-    CONSTRAINT financial_wallet_finality_seals_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT financial_wallet_finality_seals_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT financial_wallet_finality_seals_operation_kind_check CHECK ((operation_kind = ANY (ARRAY['settlement'::text, 'refund'::text]))),
     CONSTRAINT financial_wallet_finality_seals_prepared_sequence_check CHECK ((prepared_sequence ~ '^[1-9][0-9]*$'::text)),
     CONSTRAINT financial_wallet_finality_seals_prepared_tx_hash_check CHECK ((prepared_tx_hash ~ '^[0-9a-f]{64}$'::text)),
@@ -3022,7 +3128,7 @@ CREATE TABLE public.financial_wallet_submission_attempts (
     prepared_tx_hash text NOT NULL,
     prepared_sequence text NOT NULL,
     attempted_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT financial_wallet_submission_attempts_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT financial_wallet_submission_attempts_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT financial_wallet_submission_attempts_operation_kind_check CHECK ((operation_kind = ANY (ARRAY['settlement'::text, 'refund'::text]))),
     CONSTRAINT financial_wallet_submission_attempts_prepared_sequence_check CHECK ((prepared_sequence ~ '^[1-9][0-9]*$'::text)),
     CONSTRAINT financial_wallet_submission_attempts_prepared_tx_hash_check CHECK ((prepared_tx_hash ~ '^[0-9a-f]{64}$'::text))
@@ -3208,7 +3314,7 @@ CREATE TABLE public.r36_certificate_requests (
     policy_digest text NOT NULL,
     binding jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
-    CONSTRAINT r36_certificate_requests_check CHECK (((jsonb_typeof(binding) = 'object'::text) AND ((binding ->> 'nonce'::text) = nonce) AND ((binding ->> 'network'::text) = 'Pi Testnet'::text))),
+    CONSTRAINT r36_certificate_requests_check CHECK (((jsonb_typeof(binding) = 'object'::text) AND ((binding ->> 'nonce'::text) = nonce) AND ((binding ->> 'network'::text) = public.r36_network()::text))),
     CONSTRAINT r36_certificate_requests_nonce_check CHECK ((nonce ~ '^[0-9a-f]{64}$'::text))
 );
 
@@ -3246,7 +3352,7 @@ CREATE TABLE public.r36_independent_u2a_attestations (
     u2a_txid text NOT NULL,
     proof_digest text NOT NULL,
     verified_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT r36_independent_u2a_attestations_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT r36_independent_u2a_attestations_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT r36_independent_u2a_attestations_operation_kind_check CHECK ((operation_kind = ANY (ARRAY['settlement'::text, 'refund'::text]))),
     CONSTRAINT r36_independent_u2a_attestations_prepared_sequence_check CHECK ((prepared_sequence ~ '^[1-9][0-9]*$'::text)),
     CONSTRAINT r36_independent_u2a_attestations_prepared_tx_hash_check CHECK ((prepared_tx_hash ~ '^[0-9a-f]{64}$'::text)),
@@ -3274,7 +3380,7 @@ CREATE TABLE public.r36_initial_clearance_links (
     certificate_digest text NOT NULL,
     recorded_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     recorded_by text NOT NULL,
-    CONSTRAINT r36_initial_clearance_links_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT r36_initial_clearance_links_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT r36_initial_clearance_links_next_clearance_digest_check CHECK ((next_clearance_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_initial_clearance_links_prior_clearance_digest_check CHECK ((prior_clearance_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_initial_clearance_links_recorded_by_check CHECK ((recorded_by = 'r36_issuer'::text)),
@@ -3305,7 +3411,7 @@ CREATE TABLE public.r36_legacy_right_holds (
     CONSTRAINT r36_legacy_right_holds_check CHECK ((payment_id = ANY (identity_values))),
     CONSTRAINT r36_legacy_right_holds_check1 CHECK ((original_snapshot_sha256 = encode(sha256(convert_to((original_snapshot)::text, 'UTF8'::name)), 'hex'::text))),
     CONSTRAINT r36_legacy_right_holds_kind_check CHECK ((kind = ANY (ARRAY['settlement'::text, 'refund'::text]))),
-    CONSTRAINT r36_legacy_right_holds_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT r36_legacy_right_holds_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT r36_legacy_right_holds_original_snapshot_check CHECK ((jsonb_typeof(original_snapshot) = 'object'::text)),
     CONSTRAINT r36_legacy_right_holds_payment_id_check CHECK ((payment_id ~ '^[0-9a-f-]{36}$'::text)),
     CONSTRAINT r36_legacy_right_holds_possible_obligation_stroops_check CHECK ((possible_obligation_stroops > 0)),
@@ -3391,7 +3497,7 @@ CREATE TABLE public.r36_prepared_evidence_candidates (
     candidate jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     CONSTRAINT r36_prepared_evidence_candidates_candidate_check CHECK ((jsonb_typeof(candidate) = 'object'::text)),
-    CONSTRAINT r36_prepared_evidence_candidates_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT r36_prepared_evidence_candidates_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT r36_prepared_evidence_candidates_prepared_sequence_check CHECK ((prepared_sequence ~ '^[1-9][0-9]{0,18}$'::text)),
     CONSTRAINT r36_prepared_evidence_candidates_source_wallet_check CHECK ((source_wallet ~ '^G[A-Z2-7]{55}$'::text))
 );
@@ -3421,7 +3527,7 @@ CREATE TABLE public.r36_prior_closure_receipts (
     verified_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     CONSTRAINT r36_prior_closure_receipts_check CHECK ((expires_at > issued_at)),
     CONSTRAINT r36_prior_closure_receipts_evidence_text_check CHECK (((length(evidence_text) >= 1) AND (length(evidence_text) <= 12000000))),
-    CONSTRAINT r36_prior_closure_receipts_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT r36_prior_closure_receipts_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT r36_prior_closure_receipts_payload_digest_check CHECK ((payload_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_prior_closure_receipts_verified_by_check CHECK ((verified_by = 'r36_issuer'::text))
 );
@@ -3463,7 +3569,7 @@ CREATE TABLE public.r36_rotation_approval_evidence (
     certified_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT r36_rotation_approval_evidence_certified_by_check CHECK ((length(btrim(certified_by)) > 0)),
     CONSTRAINT r36_rotation_approval_evidence_comparison_digest_check CHECK ((comparison_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT r36_rotation_approval_evidence_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT r36_rotation_approval_evidence_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT r36_rotation_approval_evidence_prior_prepared_hash_check CHECK ((prior_prepared_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_rotation_approval_evidence_seal_evidence_digest_check CHECK ((seal_evidence_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_rotation_approval_evidence_source_wallet_check CHECK ((source_wallet ~ '^G[A-Z2-7]{55}$'::text))
@@ -3498,7 +3604,7 @@ CREATE TABLE public.r36_signed_approval_consumptions (
     CONSTRAINT r36_signed_approval_consumptions_evidence_digest_check CHECK ((evidence_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_signed_approval_consumptions_inventory_digest_check CHECK ((inventory_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_signed_approval_consumptions_kind_check CHECK ((kind = ANY (ARRAY['settlement'::text, 'refund'::text]))),
-    CONSTRAINT r36_signed_approval_consumptions_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT r36_signed_approval_consumptions_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT r36_signed_approval_consumptions_payload_digest_check CHECK ((payload_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_signed_approval_consumptions_prior_hash_check CHECK ((prior_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_signed_approval_consumptions_prior_sequence_check CHECK ((prior_sequence > (0)::numeric)),
@@ -3522,8 +3628,8 @@ CREATE TABLE public.r36_wallet_execution_scopes (
     CONSTRAINT r36_wallet_execution_scopes_check1 CHECK ((((scope_text)::jsonb ->> 'sourceWallet'::text) = source_wallet)),
     CONSTRAINT r36_wallet_execution_scopes_scope_digest_check CHECK ((scope_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT r36_wallet_execution_scopes_scope_text_check CHECK ((octet_length(scope_text) <= 2000000)),
-    CONSTRAINT r36_wallet_execution_scopes_scope_text_check1 CHECK ((NOT (((scope_text)::jsonb ->> 'schema'::text) IS DISTINCT FROM 'R36_NEW_WALLET_EXECUTION_SCOPE_V1'::text))),
-    CONSTRAINT r36_wallet_execution_scopes_scope_text_check2 CHECK ((NOT (((scope_text)::jsonb ->> 'network'::text) IS DISTINCT FROM 'Pi Testnet'::text))),
+    CONSTRAINT r36_wallet_execution_scopes_scope_text_check1 CHECK ((((scope_text)::jsonb ->> 'schema'::text) IN ('R36_NEW_WALLET_EXECUTION_SCOPE_V1','R36_CLEAN_NETWORK_EXECUTION_SCOPE_V2'))),
+    CONSTRAINT r36_wallet_execution_scopes_scope_text_check2 CHECK ((NOT (((scope_text)::jsonb ->> 'network'::text) IS DISTINCT FROM public.r36_network()::text))),
     CONSTRAINT r36_wallet_execution_scopes_scope_text_check3 CHECK ((NOT (((scope_text)::jsonb ->> 'oldRightsDisposition'::text) IS DISTINCT FROM 'DEFERRED_PRESERVED_NO_RESEND'::text))),
     CONSTRAINT r36_wallet_execution_scopes_scope_text_check4 CHECK ((NOT (((scope_text)::jsonb -> 'oldRightsFinanciallyCleared'::text) IS DISTINCT FROM 'false'::jsonb))),
     CONSTRAINT r36_wallet_execution_scopes_source_wallet_check CHECK ((source_wallet ~ '^G[A-Z2-7]{55}$'::text))
@@ -3692,7 +3798,7 @@ CREATE TABLE public.refund_rejected_create_authorizations (
     CONSTRAINT refund_rejected_create_authorizatio_rejection_http_status_check CHECK ((rejection_http_status = 400)),
     CONSTRAINT refund_rejected_create_authorizations_amount_stroops_check CHECK (((amount_stroops > 0) AND (amount_stroops <= 2000000))),
     CONSTRAINT refund_rejected_create_authorizations_check CHECK (((expires_at > authorized_at) AND (expires_at <= (authorized_at + '06:00:00'::interval)))),
-    CONSTRAINT refund_rejected_create_authorizations_network_check CHECK ((network = 'Pi Testnet'::text)),
+    CONSTRAINT refund_rejected_create_authorizations_network_check CHECK ((network = public.r36_network()::text)),
     CONSTRAINT refund_rejected_create_authorizations_policy_digest_check CHECK ((policy_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT refund_rejected_create_authorizations_rejection_code_check CHECK ((rejection_code = 'ongoing_payment_found'::text)),
     CONSTRAINT refund_rejected_create_authorizations_review_sha256_check CHECK ((review_sha256 ~ '^[0-9a-f]{64}$'::text)),
@@ -7071,3 +7177,13 @@ GRANT SELECT,INSERT ON TABLE r36_signing.requests TO r36_registrar_owner;
 --
 
 
+
+ALTER TABLE public.settlement_checkpoints ADD COLUMN IF NOT EXISTS financial_contract jsonb;
+ALTER TABLE public.settlement_checkpoints DROP CONSTRAINT IF EXISTS settlement_checkpoints_app_commission_check;
+ALTER TABLE public.settlement_checkpoints DROP CONSTRAINT IF EXISTS settlement_checkpoints_check;
+ALTER TABLE public.settlement_checkpoints DROP CONSTRAINT IF EXISTS settlement_financial_contract_check;
+ALTER TABLE public.settlement_checkpoints ADD CONSTRAINT settlement_financial_contract_check CHECK (public.r36_contract_valid(jsonb_build_object(
+ 'payment_id',payment_id,'merchant_uid',merchant_uid,'customer_amount',customer_amount,'merchant_amount',merchant_amount,'app_commission',app_commission,'financial_contract',financial_contract)));
+DROP TRIGGER IF EXISTS financial_contract_snapshot ON public.settlement_checkpoints;
+CREATE TRIGGER financial_contract_snapshot BEFORE INSERT OR UPDATE ON public.settlement_checkpoints FOR EACH ROW EXECUTE FUNCTION public.r36_contract_snapshot_guard();
+GRANT SELECT(financial_contract) ON public.settlement_checkpoints TO r36_evidence_reader;

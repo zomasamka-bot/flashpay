@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import {generalOperationPolicy} from "./r36-operation-policy"
 /** Private producer orchestration. All durable writes stay in the separately
  * authenticated issuer. This module only reads original rows/providers, signs
@@ -55,7 +56,7 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
     appendR36LiveHistories(f.histories as Parameters<typeof appendR36LiveHistories>[0],profile.liveHistoryPolicy,ports.fetcher),
     piRecord((ctx.terminal as Row).piPaymentId)
    ])
-   const as=snapshot.rows.authorities.filter(x=>x.network==='Pi Testnet'&&x.source_wallet===wallet)
+   const as=snapshot.rows.authorities.filter(x=>x.network===financialNetwork()&&x.source_wallet===wallet)
    requireFact(as.length===1&&Object.keys(a).every(k=>as[0][k]===a[k]),'AUTOMATIC_AUTHORITY_CHANGED')
    const completed=a.operation_kind==='settlement'?snapshot.rows.settlements.some(s=>s.payment_id===a.owner_payment_id&&s.stage==='db_finalized'):snapshot.rows.refunds.some(r=>r.payment_id===a.owner_payment_id&&r.refund_id===a.owner_operation_id&&r.status==='completed'&&r.stage==='audit_recorded')
    requireFact(completed,'AUTOMATIC_TERMINAL_CHANGED')

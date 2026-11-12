@@ -110,6 +110,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       status: receipt.status,
       occurredAt: receipt.occurredAt,
       note: receipt.note,
+      merchantFinancials:receipt.merchantFinancials,
     }
     setPdfFile(null)
     setPdfTools(null)
@@ -162,6 +163,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
     receipt.status,
     receipt.occurredAt,
     receipt.note,
+    receipt.merchantFinancials,
     locale,
     direction,
     t,
@@ -332,6 +334,10 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
           <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.dateTime")}</p><p className="mt-1 font-medium" dir="ltr" lang={locale}>{formatDateTime(receipt.occurredAt, locale, t("common.unavailable"))}</p></div>
         </div>
 
+        {receipt.merchantFinancials && <div className="rounded-xl border p-4 text-sm space-y-2">
+          <div className="flex justify-between"><span>{direction==='rtl'?'عمولة التاجر':'Merchant commission'}</span><span>{formatReceiptAmount(receipt.merchantFinancials.commission)} π</span></div>
+          <div className="flex justify-between font-semibold"><span>{direction==='rtl'?'صافي مستحق التاجر':'Merchant net amount'}</span><span>{formatReceiptAmount(receipt.merchantFinancials.net)} π</span></div>
+        </div>}
         {receipt.note && <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.note")}</p><p className="mt-1">{receipt.note}</p></div>}
 
         <div className="rounded-lg border p-4">

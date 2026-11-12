@@ -1,3 +1,5 @@
+import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
+import {financialNetwork} from './financial-network'
 import { readDurableSettlementProjection } from "./settlement-durable-projection"
 import { redis } from "./redis"
 import { compareAndSwapPaymentProjection } from "./payment-projection-cas"
@@ -93,9 +95,9 @@ function isPiCompletedDbPendingCheckpoint(payment: Payment | null): payment is P
   if (payment === null) return false
   const a2uPaymentIdValid = typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim()
   const a2uTxidValid = typeof payment.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(payment.a2uTxid)
-  const amountsValid = typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === payment.customerAmount
+  const amountsValid = typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === settlementTarget(payment)
   const feeValid = typeof payment.horizonFeeCharged === "number" && Number.isFinite(payment.horizonFeeCharged) && payment.horizonFeeCharged >= 0
-  const netValid = payment.appCommission === 0 && typeof payment.appNetImpact === "number" && Number.isFinite(payment.appNetImpact) && amountsValid && feeValid && payment.appNetImpact === payment.customerAmount! - payment.merchantAmount! - payment.horizonFeeCharged!
+  const netValid = payment.appCommission === contractCommission(payment) && typeof payment.appNetImpact === "number" && Number.isFinite(payment.appNetImpact) && amountsValid && feeValid && payment.appNetImpact === netImpact(payment.customerAmount!, payment.merchantAmount!, payment.horizonFeeCharged!, payment.financialContract)
   return payment.status === "settlement_pending" && payment.piCompleted === true && payment.piCompletionPending === false && payment.horizonSuccessFlag === true && payment.requiresDbReconciliation === true && payment.dbRecorded !== true && a2uPaymentIdValid && a2uTxidValid && amountsValid && feeValid && netValid
 }
 
@@ -127,7 +129,7 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
       : latest?.status === "settlement_failed"
     if (!latest || latest.id !== paymentId || !stateMatches || latest.customerAmount !== customerAmount || latest.merchantUid !== merchantUid || latest.a2uTxid || latest.a2uPreparedTxHash || latest.a2uPreparedSequence || latest.a2uPreparedEnvelopeXdr || latest.horizonSuccessFlag || latest.refundPaymentId || latest.refundTxid || refundLookup.state !== "absent") return "MANUAL_REVIEW"
 
-    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, latest.customerAmount, latest.merchantUid)
+    const reconciliation = await reconcileIncompleteA2UPayment(paymentId, settlementTarget(latest), latest.merchantUid)
     if (reconciliation.outcome === "INDETERMINATE") return "INDETERMINATE"
     if (reconciliation.outcome === "FOUND") {
       if (!reconciliation.dto || !isPiA2UPayment(reconciliation.dto)) return "MANUAL_REVIEW"
@@ -144,7 +146,7 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
         typeof identifier === "string" && identifier.trim() !== "" && identifier === identifier.trim() &&
         typeof fromAddress === "string" && fromAddress.trim() !== "" && fromAddress === fromAddress.trim() &&
         typeof toAddress === "string" && toAddress.trim() !== "" && toAddress === toAddress.trim() &&
-        dto.network === "Pi Testnet" && dto.direction === "app_to_user" && dto.amount === latest.customerAmount &&
+        dto.network === financialNetwork() && dto.direction === "app_to_user" && dto.amount === settlementTarget(latest) &&
         dto.user_uid === latest.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === paymentId &&
         typeof dto.txid !== "string" && typeof dto.transaction_id !== "string" && dto.completed !== true && dto.cancelled !== true && dto.rejected !== true &&
         typeof transaction?.txid !== "string" && transaction?.verified !== true &&
@@ -154,7 +156,7 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
       if (latest.a2uPaymentId != null && latest.a2uPaymentId !== identifier) return "MANUAL_REVIEW"
       if (latest.a2uFromAddress != null && latest.a2uFromAddress !== fromAddress) return "MANUAL_REVIEW"
       if (latest.a2uToAddress != null && latest.a2uToAddress !== toAddress) return "MANUAL_REVIEW"
-      if (latest.merchantAmount !== latest.customerAmount || latest.appCommission !== 0 ||
+      if (latest.merchantAmount !== settlementTarget(latest) || latest.appCommission !== contractCommission(latest) ||
           typeof latest.merchantId !== "string" || typeof latest.piPaymentId !== "string" ||
           typeof latest.u2aTxid !== "string") return "MANUAL_REVIEW"
       // PostgreSQL serializes XOR and exact U2A/merchant identity under payment advisory lock.
@@ -230,6 +232,7 @@ async function rebuildSettlementProjectionFromDurable(paymentId:string):Promise<
     'piCompletionPending','piCompleted','requiresDbReconciliation','dbRecorded',
     'appCommission','payerUid','payerUidSource','payerUidCapturedAt','paidAt',
   ]
+  if(JSON.stringify(parsed.financialContract)!==JSON.stringify(projected.financialContract))return null
   for (const key of financialKeys) {
     if (parsed[key] !== projected[key]) return null
   }
@@ -287,7 +290,7 @@ export async function executeA2URecovery(
           payment.customerAmount !== d.customerAmount || payment.merchantAmount !== d.merchantAmount ||
           payment.piPaymentId !== d.u2aIdentifier || payment.u2aTxid !== d.u2aTxid ||
           payment.a2uPaymentId !== d.a2uPaymentId || payment.a2uFromAddress !== d.a2uFromAddress ||
-          payment.a2uToAddress !== d.a2uToAddress || payment.appCommission !== 0) {
+          payment.a2uToAddress !== d.a2uToAddress || payment.appCommission !== contractCommission(payment)) {
         return {status:"manual_review_required",state:"durable_prepared_identity_mismatch",paymentId,details:{error:"Stage1 projection differs from durable Prepared identity"}}
       }
       const restored = await compareAndSwapPaymentProjection(paymentId, payment, {

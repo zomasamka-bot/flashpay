@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import type { Payment, RefundCheckpoint } from './types'
 
 export type Dr11OrphanA2UDtoState = 'CREATED_UNMOVED' | 'CANCELLED_UNMOVED' | 'BLOCKED'
@@ -30,7 +31,7 @@ export function classifyDr11OrphanA2UPaymentDto(
   const metadata = isRecord(value.metadata) ? value.metadata : null
   const status = isRecord(value.status) ? value.status : null
   if (
-    value.identifier !== expected.a2uPaymentId || value.network !== 'Pi Testnet' || value.direction !== 'app_to_user' ||
+    value.identifier !== expected.a2uPaymentId || value.network !== financialNetwork() || value.direction !== 'app_to_user' ||
     value.amount !== expected.amount || value.user_uid !== expected.merchantUid ||
     !canonicalString(value.from_address) || !canonicalString(value.to_address) ||
     metadata?.type !== 'a2u_settlement' || metadata?.paymentId !== expected.paymentId || status === null

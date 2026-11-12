@@ -1,7 +1,10 @@
+import type {MerchantFeeQuote} from './merchant-fee-contract'
+import {type FinancialNetwork} from './financial-network'
 export type PaymentStatus = "pending" | "paid_to_app" | "settlement_pending" | "settled_to_merchant" | "settlement_failed" | "failed" | "cancelled" | "refund_pending" | "refunded"
 export type SettlementFailureState = "none" | "retryable" | "reconciling" | "held" | "manual_review_required" | "refund_pending" | "refunded"
 
 export interface Payment {
+  financialContract?: MerchantFeeQuote // Projection only; PostgreSQL remains authoritative.
   id: string
   merchantId: string // Required: Links payment to specific merchant
   merchantAddress?: string // Optional: Pi wallet address where payment is sent
@@ -129,6 +132,7 @@ export type FlashPayReceiptStatus =
   | "needs_attention"
 
 export interface FlashPayReceiptView {
+  merchantFinancials?: {commission:number;net:number;policyId:string}
   flashPayPaymentId: string
   merchantName: string
   customerName: string | null
@@ -213,8 +217,8 @@ export interface Receipt {
   
   // Fee and accounting breakdown - CRITICAL FOR MERCHANT SETTLEMENT
   horizonFeeCharged?: number // Horizon fee in Pi (stroops / 1e7) - paid separately by the app wallet
-  appCommission?: number // App commission - canonical FlashPay invariant requires exactly 0
-  merchantAmount: number // Amount received by merchant - canonical invariant requires merchantAmount === customerAmount
+  appCommission?: number // App commission frozen by the durable contract; legacy contract is zero
+  merchantAmount: number // Amount received by merchant; gross minus the frozen merchant commission
   appNetImpact: number // customerAmount - merchantAmount - horizonFeeCharged (normally negative fee; app absorbs it)
   
   // Legacy field for backward compatibility
@@ -434,7 +438,7 @@ export interface RefundPresentation {
   requestedAt: string | null
   blockchain: {
     confirmed: boolean
-    network: "Pi Testnet" | null
+    network: FinancialNetwork | null
     confirmationRecordedAt: string | null
     transactionAt: string | null
     piTransactionVerified: boolean | null
@@ -476,7 +480,7 @@ export type RefundPresentationPersistenceReadResult =
   | { outcome: "INDETERMINATE" }
 
 export type RefundPresentationBlockchainReadResult =
-  | { outcome: "CONFIRMED"; transactionAt: string; network: "Pi Testnet"; piTransactionVerified: true; piDeveloperCompleted: boolean; horizonSuccessful: true }
+  | { outcome: "CONFIRMED"; transactionAt: string; network: FinancialNetwork; piTransactionVerified: true; piDeveloperCompleted: boolean; horizonSuccessful: true }
   | { outcome: "PENDING" }
   | { outcome: "INDETERMINATE" }
 
@@ -484,7 +488,7 @@ export interface RefundPresentationProof {
   refundPaymentId: string
   refundTxid: string
   transactionAt: string
-  network: "Pi Testnet"
+  network: FinancialNetwork
   piTransactionVerified: true
   piDeveloperCompleted: true
   horizonSuccessful: true

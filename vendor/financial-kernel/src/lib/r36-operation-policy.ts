@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** Operating limits are enrolled policy, not a client flag or an authority grant. */
 export const MAX_APPLICATION_STROOPS = BigInt('10000000000000') // Existing 1,000,000 Pi input ceiling.
 type ObjectValue=Record<string,unknown>
@@ -5,7 +6,7 @@ const obj=(v:unknown):v is ObjectValue=>!!v&&typeof v==='object'&&!Array.isArray
 export function generalOperationPolicy(profile:unknown):{sourceWallet:string;maxAmountStroops:bigint}|null {
  if(!obj(profile)||'recoveryPilot' in profile||!obj(profile.generalOperation))return null
  const p=profile.generalOperation
- if(p.schema!=='R36_GENERAL_TESTNET_V1'||p.network!=='Pi Testnet'||p.identitySource!=='PI_V2_ME'||
+ if(!['R36_GENERAL_TESTNET_V1','R36_GENERAL_NETWORK_V2'].includes(String(p.schema))||p.network!==financialNetwork()||(p.network==='Pi Network'&&p.schema!=='R36_GENERAL_NETWORK_V2')||p.identitySource!=='PI_V2_ME'||
  p.allowTerminalReservationTurnover!==true||typeof p.sourceWallet!=='string'||!/^G[A-Z2-7]{55}$/.test(p.sourceWallet)||
  typeof p.maxAmountStroops!=='string'||! /^[1-9][0-9]{0,13}$/.test(p.maxAmountStroops))return null
  const max=BigInt(p.maxAmountStroops)

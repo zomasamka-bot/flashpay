@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import {preparedTraceEvent,preparedTraceError} from './r36-prepared-trace'
 import 'server-only'
 import {createHash} from 'node:crypto'
@@ -46,7 +47,7 @@ export async function verifyTestnetInbound(payment:unknown) {
   if(!payment || typeof payment!=='object')return false
   const p=payment as Record<string,unknown>,meta=p.metadata as {paymentId?:unknown}|undefined
   const amountStroops=stroops(p.amount)
-  if(p.network!=='Pi Testnet' || p.direction!=='user_to_app' || !amountStroops || typeof meta?.paymentId!=='string' ||
+  if(p.network!==financialNetwork() || p.direction!=='user_to_app' || !amountStroops || typeof meta?.paymentId!=='string' ||
     typeof p.user_uid!=='string' || typeof p.from_address!=='string' || typeof p.to_address!=='string')return false
   const identity={paymentId:meta.paymentId,payerUid:p.user_uid,fromAddress:p.from_address,toAddress:p.to_address,amountStroops}
   if(p.transaction===null) return await invoke('verify',identity)===meta.paymentId
@@ -74,7 +75,7 @@ export async function verifyTestnetApproval(payment:unknown) {
     return verifyTestnetInbound(payment)
   }
   const amountStroops=stroops(p.amount)
-  if(p.network!=='Pi Testnet' || p.direction!=='user_to_app' || !amountStroops ||
+  if(p.network!==financialNetwork() || p.direction!=='user_to_app' || !amountStroops ||
     typeof p.identifier!=='string' || !p.identifier || typeof meta?.paymentId!=='string' ||
     typeof p.user_uid!=='string' || !p.user_uid || typeof p.from_address!=='string' ||
     (p.from_address!=='' && !/^G[A-Z2-7]{55}$/.test(p.from_address)) ||

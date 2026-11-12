@@ -1,3 +1,4 @@
+import {financialHorizonOrigin} from './financial-network'
 import "server-only"
 import { isRecord } from "./pi-reconciliation"
 
@@ -7,7 +8,7 @@ export type HorizonAbsenceProof = { outcome:"ABSENT" } | { outcome:"MOVEMENT_PRE
 export async function proveA2UStage1HorizonAbsence(pi: Record<string,unknown>, a2uPaymentId:string):Promise<HorizonAbsenceProof>{
   const source=exact(pi.from_address), createdRaw=exact(pi.created_at), created=createdRaw?Date.parse(createdRaw):NaN
   if(!source||!/^G[A-Z2-7]{55}$/.test(source)||!Number.isFinite(created))return{outcome:"INDETERMINATE",reason:"PI_SOURCE_OR_TIME_INVALID"}
-  const stopBefore=created-300000; let url=`https://api.testnet.minepi.com/accounts/${encodeURIComponent(source)}/transactions?order=desc&limit=200&include_failed=true`
+  const stopBefore=created-300000; let url=`${financialHorizonOrigin()}/accounts/${encodeURIComponent(source)}/transactions?order=desc&limit=200&include_failed=true`
   for(let page=0;page<20;page++){
     let response:Response; try{response=await fetch(url,{cache:"no-store"})}catch{return{outcome:"INDETERMINATE",reason:"HORIZON_READ_FAILED"}}
     if(!response.ok)return{outcome:"INDETERMINATE",reason:`HORIZON_HTTP_${response.status}`}
@@ -19,7 +20,7 @@ export async function proveA2UStage1HorizonAbsence(pi: Record<string,unknown>, a
     const last=records[records.length-1], oldestRaw=isRecord(last)?exact(last.created_at):null, oldest=oldestRaw?Date.parse(oldestRaw):NaN
     if(Number.isFinite(oldest)&&oldest<=stopBefore)return{outcome:"ABSENT"}
     const next=isRecord(body._links)&&isRecord(body._links.next)?exact(body._links.next.href):null
-    if(!next||!next.startsWith("https://api.testnet.minepi.com/"))return{outcome:"INDETERMINATE",reason:"HORIZON_PAGINATION_INVALID"}
+    if(!next||!next.startsWith((financialHorizonOrigin()+'/')))return{outcome:"INDETERMINATE",reason:"HORIZON_PAGINATION_INVALID"}
     url=next
   }
   return{outcome:"INDETERMINATE",reason:"HORIZON_SCAN_BOUND_EXHAUSTED"}

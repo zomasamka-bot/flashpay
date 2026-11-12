@@ -563,6 +563,7 @@ export default function HomePage() {
             <span className="text-4xl text-muted-foreground ml-2">π</span>
           </div>
 
+          {payment?.financialContract && <div className="mb-4 text-sm text-muted-foreground">Merchant commission: {Number(payment.financialContract.commissionStroops)/1e7} π · Merchant net: {Number(payment.financialContract.merchantNetStroops)/1e7} π</div>}
           <div className="flex items-center gap-2 px-6 py-3 rounded-full bg-yellow-500/10 text-yellow-700 dark:text-yellow-500 mb-8">
             {payment?.status === "settled_to_merchant" ? (
               <>

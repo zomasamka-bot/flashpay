@@ -1,3 +1,4 @@
+import {financialNetwork,financialHorizonOrigin} from '../../../lib/financial-network'
 import { type NextRequest, NextResponse } from "next/server"
 import { requiresTestnetIngress, testnetIngressEnabled, verifyTestnetInbound } from "../../../lib/r36-testnet-ingress"
 import { serverConfig } from "../../../lib/server-config"
@@ -9,7 +10,7 @@ export const runtime = "nodejs"
 type PiPayment = { identifier?:unknown; user_uid?:unknown; amount?:unknown; direction?:unknown; network?:unknown; created_at?:unknown; from_address?:unknown; metadata?:{paymentId?:unknown}; status?:{developer_approved?:unknown;transaction_verified?:unknown;developer_completed?:unknown;cancelled?:unknown;user_cancelled?:unknown}; transaction?:null|{txid?:unknown;verified?:unknown} }
 
 function exactPretransaction(pi:PiPayment, paymentId:string, piPaymentId:string, amount:number) {
-  return pi.identifier===piPaymentId && pi.metadata?.paymentId===paymentId && pi.network==='Pi Testnet' && pi.direction==='user_to_app' &&
+  return pi.identifier===piPaymentId && pi.metadata?.paymentId===paymentId && pi.network===financialNetwork() && pi.direction==='user_to_app' &&
     pi.amount===amount && pi.status?.developer_approved===true && pi.status?.transaction_verified===false &&
     pi.status?.developer_completed===false && pi.transaction==null
 }
@@ -23,7 +24,7 @@ async function proveHorizonAbsence(pi:PiPayment, piPaymentId:string):Promise<Hor
   const created=typeof pi.created_at==='string'?Date.parse(pi.created_at):NaN
   if(!/^G[A-Z2-7]{55}$/.test(source)||!Number.isFinite(created))return{outcome:'INDETERMINATE',error:'Canonical source/time unavailable'}
   const stopBefore=created-5*60*1000
-  let url=`https://api.testnet.minepi.com/accounts/${encodeURIComponent(source)}/transactions?order=desc&limit=200&include_failed=true`
+  let url=`${financialHorizonOrigin()}/accounts/${encodeURIComponent(source)}/transactions?order=desc&limit=200&include_failed=true`
   for(let page=0;page<20;page++) {
     let response:Response
     try { response=await fetch(url,{cache:'no-store'}) } catch { return{outcome:'INDETERMINATE',error:'Horizon read failed'} }
@@ -35,7 +36,7 @@ async function proveHorizonAbsence(pi:PiPayment, piPaymentId:string):Promise<Hor
     const oldest=Date.parse(String(records[records.length-1]?.created_at??''))
     if(Number.isFinite(oldest)&&oldest<=stopBefore)return{outcome:'ABSENT'}
     const next=body?._links?.next?.href
-    if(typeof next!=='string'||!next.startsWith('https://api.testnet.minepi.com/'))return{outcome:'INDETERMINATE',error:'Horizon pagination unavailable'}
+    if(typeof next!=='string'||!next.startsWith((financialHorizonOrigin()+'/')))return{outcome:'INDETERMINATE',error:'Horizon pagination unavailable'}
     url=next
   }
   return{outcome:'INDETERMINATE',error:'Horizon absence scan bound exhausted'}

@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import 'server-only'
 import {createHash} from 'node:crypto'
 import {query} from './db'
@@ -29,7 +30,7 @@ const selectTerminal = `SELECT jsonb_build_object(
   'destinationWallet',q.binding->>'destinationWallet',
   'recipientUid',CASE WHEN a.operation_kind='refund' THEN r.payer_uid ELSE s.merchant_uid END,
   'piPaymentId',CASE WHEN a.operation_kind='refund' THEN r.refund_payment_id ELSE s.a2u_payment_id END,
-  'amountStroops',q.binding->>'amountStroops','amount',s.customer_amount::text,
+  'amountStroops',q.binding->>'amountStroops','amount',(CASE WHEN a.operation_kind='settlement' THEN s.merchant_amount ELSE s.customer_amount END)::text,
   'fee',CASE WHEN a.operation_kind='refund' THEN ra.horizon_fee_stroops::text ELSE s.horizon_fee_stroops::text END,
   'envelope',CASE WHEN a.operation_kind='refund' THEN e.details->>'envelopeXdr' ELSE s.prepared_envelope_xdr END,
   'idempotencyKey',CASE WHEN a.operation_kind='refund' THEN r.idempotency_key ELSE NULL END,
@@ -52,7 +53,7 @@ const selectTerminal = `SELECT jsonb_build_object(
  LEFT JOIN public.refund_audit_events e ON e.refund_id=r.refund_id AND e.payment_id=r.payment_id
   AND e.event_id='refund:'||r.refund_id||':blockchain_submit_prepared'
   AND e.idempotency_key=r.idempotency_key AND e.event_type='refund_blockchain_submit_prepared' AND e.actor_type='system'
- WHERE a.network='Pi Testnet' AND a.state='prepared' AND ($1::text IS NULL OR a.owner_payment_id=$1)
+ WHERE a.network='${financialNetwork()}' AND a.state='prepared' AND ($1::text IS NULL OR a.owner_payment_id=$1)
   AND p.enabled AND NOT p.revoked
   AND extract(epoch FROM clock_timestamp()) BETWEEN p.valid_from AND least(p.valid_until,p.revocation_valid_until)-1
   AND p.revocation_checked_at<=extract(epoch FROM clock_timestamp())
@@ -68,9 +69,9 @@ const selectTerminal = `SELECT jsonb_build_object(
   AND q.binding->>'operationId'=a.owner_operation_id AND q.binding->>'preparedHash'=a.prepared_tx_hash
   AND q.binding->>'preparedSequence'=a.prepared_sequence
   AND q.binding->>'piPaymentId'=s.u2a_identifier AND q.binding->>'u2aTxid'=s.u2a_txid
-  AND q.binding->>'amountStroops'=trial.amount_stroops::text AND trial.amount_stroops=ingress.amount_stroops
+  AND q.binding->>'amountStroops'=((CASE WHEN a.operation_kind='settlement' THEN s.merchant_amount ELSE s.customer_amount END)*10000000)::bigint::text AND trial.amount_stroops=ingress.amount_stroops
   AND trial.amount_stroops=s.customer_amount*10000000 AND trial.amount_stroops BETWEEN 1 AND public.r36_policy_max_amount(p.worker_profile)
-  AND s.merchant_amount=s.customer_amount AND s.app_commission=0 AND s.u2a_completed_at IS NOT NULL
+  AND s.customer_amount=s.merchant_amount+s.app_commission AND s.u2a_completed_at IS NOT NULL
   AND ingress.merchant_id=s.merchant_id AND ingress.merchant_uid=s.merchant_uid AND ingress.payer_uid=s.payer_uid
   AND q.binding->>'destinationWallet'=CASE WHEN a.operation_kind='refund' THEN ingress.payer_wallet ELSE ingress.merchant_wallet END
   AND encode(sha256(convert_to(CASE WHEN a.operation_kind='refund' THEN e.details->>'envelopeXdr' ELSE s.prepared_envelope_xdr END,'UTF8')),'hex')=q.binding->>'envelopeXdrTextSha256'
@@ -83,12 +84,12 @@ const selectTerminal = `SELECT jsonb_build_object(
      AND s.a2u_payment_id=a.owner_operation_id AND s.a2u_txid=a.prepared_tx_hash
      AND s.prepared_tx_hash=a.prepared_tx_hash AND s.prepared_sequence::text=a.prepared_sequence
      AND t.merchant_id=s.merchant_id AND t.merchant_uid=s.merchant_uid AND t.status='completed' AND t.currency='π'
-     AND t.amount=s.customer_amount AND receipt.merchant_id=s.merchant_id AND receipt.merchant_uid=s.merchant_uid
-     AND receipt.currency='π' AND receipt.amount=s.customer_amount AND receipt.customer_amount=s.customer_amount
-     AND receipt.merchant_amount=s.customer_amount AND receipt.app_commission=0 AND receipt.txid=s.a2u_txid
+     AND t.amount=s.merchant_amount AND receipt.merchant_id=s.merchant_id AND receipt.merchant_uid=s.merchant_uid
+     AND receipt.currency='π' AND receipt.amount=s.merchant_amount AND receipt.customer_amount=s.customer_amount
+     AND receipt.merchant_amount=s.merchant_amount AND receipt.app_commission=s.app_commission AND receipt.txid=s.a2u_txid
      AND receipt.u2a_identifier=s.u2a_identifier AND receipt.u2a_txid=s.u2a_txid
      AND receipt.a2u_identifier=s.a2u_payment_id AND receipt.a2u_txid=s.a2u_txid
-     AND receipt.horizon_fee_charged*10000000=s.horizon_fee_stroops AND receipt.app_net_impact=-receipt.horizon_fee_charged
+     AND receipt.horizon_fee_charged*10000000=s.horizon_fee_stroops AND receipt.app_net_impact=receipt.app_commission-receipt.horizon_fee_charged
      AND receipt.settlement_status='settled_to_merchant'
      AND (SELECT count(*) FROM public.transactions z WHERE z.payment_id=s.u2a_identifier)=1
      AND (SELECT count(*) FROM public.receipts z WHERE z.transaction_id=t.id)=1))
@@ -117,7 +118,7 @@ export async function recordAdmittedTerminalSeal(subject:string|null,policy:stri
     if(rows.length===0)return null
     if(rows.length!==1)return 'terminal_seal_held'
     const t=rows[0].terminal
-    if(!t||t.network!=='Pi Testnet'||!t.piPaymentId||!/^[A-Za-z0-9_-]{1,128}$/.test(t.piPaymentId))return 'terminal_seal_held'
+    if(!t||t.network!==financialNetwork()||!t.piPaymentId||!/^[A-Za-z0-9_-]{1,128}$/.test(t.piPaymentId))return 'terminal_seal_held'
     if(t.sealRecorded) {
       // The authenticated /refunds/status route already records this proof.
       // Recovery must finish that same durable presentation step after a crash;
@@ -132,7 +133,7 @@ export async function recordAdmittedTerminalSeal(subject:string|null,policy:stri
       redirect:'error',cache:'no-store',signal:AbortSignal.timeout(8000)})
     if(!response.ok)return 'terminal_seal_held'
     const pi=object(await response.json()),status=object(pi?.status),tx=object(pi?.transaction),metadata=object(pi?.metadata)
-    if(!pi||!status||!tx||!metadata||pi.network!=='Pi Testnet'||pi.identifier!==t.piPaymentId||
+    if(!pi||!status||!tx||!metadata||pi.network!==financialNetwork()||pi.identifier!==t.piPaymentId||
       pi.direction!=='app_to_user'||pi.user_uid!==t.recipientUid||pi.from_address!==t.sourceWallet||pi.to_address!==t.destinationWallet||
       typeof pi.amount!=='number'||String(numberToExactPositiveStroops(pi.amount))!==t.amountStroops||
       status.developer_approved!==true||status.developer_completed!==true||status.transaction_verified!==true||

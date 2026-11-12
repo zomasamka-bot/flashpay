@@ -1,3 +1,4 @@
+import {financialHorizonOrigin} from './financial-network'
 import "server-only"
 import { getPiSigningSeed } from "./pi-wallet-signing-config"
 
@@ -28,7 +29,7 @@ export type RefundReadiness = {
   }
 }
 
-const HORIZON_TESTNET = "https://api.testnet.minepi.com"
+const HORIZON_TESTNET = financialHorizonOrigin()
 
 async function checkPiServerApi(): Promise<boolean> {
   if (!serverConfig.piApiKey) return false

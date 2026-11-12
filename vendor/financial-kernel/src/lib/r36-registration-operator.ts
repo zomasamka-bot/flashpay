@@ -1,3 +1,4 @@
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 import {deployment} from '../deployment'
 /** Private registrar process. No owner credential, signing key, browser route,
  * financial transport, policy enrollment or wallet activation is accepted. */
@@ -13,14 +14,14 @@ import type {R36WorkerPorts} from './r36-certificate-worker'
 const hex=/^[0-9a-f]{64}$/
 const noAuthority={authorizesFinancialRelease:false,authorizesWalletActivation:false,authorizesRotation:false} as const
 type Tx=Parameters<Parameters<R36CertificateDatabase['begin']>[0]>[0]
-type Config={network:'Pi Testnet';databaseUrl:string;policyDigest:string;service:R36ServiceConfig;
+type Config={network:FinancialNetwork;databaseUrl:string;policyDigest:string;service:R36ServiceConfig;
  providers:{evidence:R36ProviderEndpoint;issuer:R36ProviderEndpoint}}
 const blocked=(reason:string):R36CertificateResult=>({outcome:'BLOCKED',reason,...noAuthority})
 
 export function validateRegistrationConfig(input:unknown):Config{
  const c=input as Config
  if(!c||typeof c!=='object'||Array.isArray(c)||Object.keys(c).sort().join()!=='databaseUrl,network,policyDigest,providers,service'||
-  c.network!=='Pi Testnet'||typeof c.policyDigest!=='string'||!hex.test(c.policyDigest))throw Error('REGISTRAR_CONFIG')
+  c.network!==financialNetwork()||typeof c.policyDigest!=='string'||!hex.test(c.policyDigest))throw Error('REGISTRAR_CONFIG')
  const u=new URL(c.databaseUrl),s=c.service,p=c.providers
  if(u.protocol!=='postgresql:'||u.hostname!==productionR36Host||(u.port&&u.port!=='5432')||u.pathname!==('/'+deployment().databaseName)||
   u.username!=='r36_registrar'||!u.password||u.search||u.hash)throw Error('REGISTRAR_DATABASE_TARGET')

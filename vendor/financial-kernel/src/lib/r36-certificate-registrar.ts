@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** NOT_FOR_DEPLOY. Protected registrar service, never a Runtime/public route.
  * Uses the original seven-artifact verifier without permitting signing or certificate
  * consumption. SQL atomically enrolls the reviewed request and its exact signing bytes.
@@ -25,7 +26,7 @@ export async function registerR36CertificateRequest(db:R36CertificateDatabase,po
   if(!hex.test(policyDigest)||!object(binding)||Object.keys(binding).length!==R36_ADMISSION_FIELDS.length||
    !R36_ADMISSION_FIELDS.every(k=>typeof binding[k]==='string'&&/^[\x20-\x7e]{1,256}$/.test(binding[k] as string)))return blocked('INVALID_REGISTRATION_BINDING')
   const b={...binding} as Record<typeof R36_ADMISSION_FIELDS[number],string>
-  if(b.network!=='Pi Testnet'||!hex.test(b.nonce)||!['settlement','refund'].includes(b.operationKind)||
+  if(b.network!==financialNetwork()||!hex.test(b.nonce)||!['settlement','refund'].includes(b.operationKind)||
    !['sourceWallet','destinationWallet'].every(k=>/^G[A-Z2-7]{55}$/.test(b[k as keyof typeof b]))||
    !['paymentId','operationId','piPaymentId'].every(k=>/^[A-Za-z0-9_.:-]{1,128}$/.test(b[k as keyof typeof b]))||
    !['preparedSequence','amountStroops','cutoffLedger'].every(k=>/^[1-9][0-9]{0,29}$/.test(b[k as keyof typeof b]))||

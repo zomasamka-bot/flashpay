@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import {deployment} from '../deployment'
 /** Private unsigned producer. Secrets arrive on stdin only. Fixed provider GETs;
  * no financial POST, certificate signing, authority enrollment or Redis fallback. */
@@ -25,7 +26,7 @@ export async function collectR36LiveCandidate(snapshot:R36LiveSnapshot,input:R36
   }
   // Reject unresolved old rights before any provider work. No guessed isolation.
   if(d.refunds.some(r=>r.payment_id!==q.paymentId&&['pending','manual_review_required'].includes(String(r.status))&&
-    !d.authorities.some(a=>a.network==='Pi Testnet'&&a.operation_kind==='refund'&&a.owner_payment_id===r.payment_id&&a.owner_operation_id===r.refund_id&&a.state==='prepared'&&a.source_wallet!==q.sourceWallet)))return blocked('UNRESOLVED_REFUND_RIGHT_NOT_ISOLATED')
+    !d.authorities.some(a=>a.network===financialNetwork()&&a.operation_kind==='refund'&&a.owner_payment_id===r.payment_id&&a.owner_operation_id===r.refund_id&&a.state==='prepared'&&a.source_wallet!==q.sourceWallet)))return blocked('UNRESOLVED_REFUND_RIGHT_NOT_ISOLATED')
   if(d.settlements.some(s=>s.payment_id!==q.paymentId&&['a2u_created','prepared','horizon_confirmed','pi_completed'].includes(String(s.stage))&&(!s.a2u_from_address||s.a2u_from_address===q.sourceWallet)))return blocked('UNRESOLVED_SETTLEMENT_RIGHT')
   const cps=d.settlements.filter(s=>s.payment_id===q.paymentId);if(cps.length!==1)return blocked('ORIGINAL_SETTLEMENT_IDENTITY_REQUIRED')
   const cp=cps[0],raw=cp.customer_amount
@@ -36,7 +37,7 @@ export async function collectR36LiveCandidate(snapshot:R36LiveSnapshot,input:R36
   const piOutId=q.kind==='settlement'?cp.a2u_payment_id:refunds.length===1?refunds[0].refund_payment_id:null
   if(typeof piOutId!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(piOutId))return blocked('ORIGINAL_OUTBOUND_IDENTITY_REQUIRED')
   const primary=q.histories.filter(h=>h.wallet===q.sourceWallet);if(primary.length!==1)return blocked('PRIMARY_HISTORY_REQUIRED')
-  const inbound=await collectR36InboundEvidence({network:'Pi Testnet',paymentId:q.paymentId,customerUid:String(cp.payer_uid),piPaymentId:String(cp.u2a_identifier),u2aTxid:String(cp.u2a_txid),sourceWallet:q.sourceWallet,payerWallet:q.payerWallet,amountStroops:units,finalityPolicyDigest:q.finalityPolicyDigest,cutoffLedger:primary[0].cutoffLedger},piApiKey,fetcher)
+  const inbound=await collectR36InboundEvidence({network:financialNetwork(),paymentId:q.paymentId,customerUid:String(cp.payer_uid),piPaymentId:String(cp.u2a_identifier),u2aTxid:String(cp.u2a_txid),sourceWallet:q.sourceWallet,payerWallet:q.payerWallet,amountStroops:units,finalityPolicyDigest:q.finalityPolicyDigest,cutoffLedger:primary[0].cutoffLedger},piApiKey,fetcher)
   if(inbound.outcome!=='OBSERVATION_VERIFIED_NOT_CERTIFIED'||!inbound.artifact)return blocked(inbound.reason)
   let timer:ReturnType<typeof setTimeout>|undefined
   const outboundPi=await Promise.race([(async()=>{

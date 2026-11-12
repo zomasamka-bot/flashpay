@@ -1,3 +1,6 @@
+import {financialContractFromRow,netImpact} from './payment-financial-contract'
+import {financialIncomingWallet} from './financial-network'
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 /** Unsigned evidence production from original read-only records. This is NOT an
  * issuer, finality oracle or history-completeness certificate. Independently
  * enrolled custodians must establish scope/custody before signing any output.
@@ -25,17 +28,17 @@ function amount(v:unknown):string{
 }
 function one(rows:Row[],predicate:(v:Row)=>boolean,why:string):Row{const found=rows.filter(predicate);requireFact(found.length===1,why);return found[0]}
 const clone=<T>(v:T):T=>JSON.parse(JSON.stringify(v))
-export type R36ObservedHistory={network:'Pi Testnet';wallet:string;cutoffLedger:string;cutoffHash:string;
+export type R36ObservedHistory={network:FinancialNetwork;wallet:string;cutoffLedger:string;cutoffHash:string;
  sourceId:string;walletInventory:Row[];transactions:Row[];operations:Row[];accountAtCutoff:Row}
 /** All records are original observations (retained prefix plus a bounded delta).
  * Empty pagination and successful arithmetic do not establish independent coverage.
  */
 export function normalizeR36ObservedHistory(input:R36ObservedHistory):Row{
  const h=clone(input)
- requireFact(h.network==='Pi Testnet'&&wallet(h.wallet)&&uint(h.cutoffLedger)&&hex(h.cutoffHash)&&
+ requireFact(h.network===financialNetwork()&&wallet(h.wallet)&&uint(h.cutoffLedger)&&hex(h.cutoffHash)&&
   /^[A-Za-z0-9_.:-]{1,128}$/.test(h.sourceId)&&Array.isArray(h.transactions)&&h.transactions.length>0&&h.transactions.length<=20000&&
   Array.isArray(h.operations)&&h.operations.length===h.transactions.length,'HISTORY_SOURCE_SCOPE')
- const first=h.transactions[0],g=TransactionBuilder.fromXDR(String(first.envelope_xdr),'Pi Testnet')
+ const first=h.transactions[0],g=TransactionBuilder.fromXDR(String(first.envelope_xdr),financialNetwork())
  requireFact(g instanceof Transaction&&g.operations.length===1&&g.operations[0].type==='createAccount'&&g.operations[0].destination===h.wallet&&first.successful===true,'ORIGINAL_GENESIS_REQUIRED')
  const genesis:Row={ledger:String(first.ledger),hash:first.hash,envelopeXdr:first.envelope_xdr,resultXdr:first.result_xdr,feeStroops:String(first.fee_charged)}
  requireFact(g.toXDR()===first.envelope_xdr&&Buffer.from(g.hash()).toString('hex')===first.hash,'GENESIS_IDENTITY')
@@ -48,7 +51,7 @@ export function normalizeR36ObservedHistory(input:R36ObservedHistory):Row{
  }
  const transactions:Row[]=[]
  for(const r of h.transactions.slice(1)){
-  const t=TransactionBuilder.fromXDR(String(r.envelope_xdr),'Pi Testnet')
+  const t=TransactionBuilder.fromXDR(String(r.envelope_xdr),financialNetwork())
   requireFact(t instanceof Transaction&&t.operations.length===1&&t.operations[0].type==='payment'&&t.operations[0].asset.isNative()&&t.operations[0].source===undefined,'UNSUPPORTED_HISTORY_OPERATION')
   const op=t.operations[0],o=one(h.operations,v=>v.transaction_hash===r.hash,'NETWORK_OPERATION_CARDINALITY')
   requireFact(o.type==='payment'&&o.from===t.source&&o.to===op.destination&&amount(o.amount)===amount(op.amount)&&o.asset_type==='native','NETWORK_OPERATION_IDENTITY')
@@ -86,9 +89,10 @@ export function produceR36LiveEvidence(input:Input):R36ProducedEvidence{
    /^[A-Za-z0-9_.:-]{1,128}$/.test(q.paymentId)&&q.histories.length>0&&q.histories.length<=32,'PRODUCER_SCOPE')
   requireFact(q.snapshot.session.read_only==='on'&&q.snapshot.session.isolation==='repeatable read','CONSISTENT_READONLY_SNAPSHOT_REQUIRED')
   const s=one(d.settlements,x=>x.payment_id===q.paymentId,'ORIGINAL_SETTLEMENT_IDENTITY_REQUIRED')
+  const feeQuote=financialContractFromRow(s),outAmount=q.kind==='settlement'?amount(s.merchant_amount):amount(s.customer_amount)
   const creation=one(d.intents,x=>x.payment_id===q.paymentId,'ORIGINAL_CREATE_INTENT_REQUIRED')
   requireFact(creation.merchant_uid===s.merchant_uid&&creation.merchant_id===s.merchant_id&&amount(creation.customer_amount)===amount(s.customer_amount)&&
-   amount(s.customer_amount)===amount(s.merchant_amount)&&amount(s.app_commission)==='0'&&text(s.payer_uid)&&text(s.u2a_identifier)&&hex(s.u2a_txid)&&s.u2a_verified_at!=null&&s.u2a_completed_at!=null,'ORIGINAL_AMOUNT_OR_INBOUND_IDENTITY')
+   (feeQuote!==undefined||amount(s.customer_amount)===amount(s.merchant_amount)&&amount(s.app_commission)==='0')&&text(s.payer_uid)&&text(s.u2a_identifier)&&hex(s.u2a_txid)&&s.u2a_verified_at!=null&&s.u2a_completed_at!=null,'ORIGINAL_AMOUNT_OR_INBOUND_IDENTITY')
   let operationId:unknown,piOutId:unknown,recipient:unknown
   if(q.kind==='settlement'){
    requireFact(['a2u_created','prepared'].includes(String(s.stage))&&!d.refunds.some(r=>r.payment_id===q.paymentId),'SETTLEMENT_ELIGIBILITY_OR_XOR')
@@ -101,14 +105,14 @@ export function produceR36LiveEvidence(input:Input):R36ProducedEvidence{
    operationId=r.refund_id;piOutId=r.refund_payment_id;recipient=r.payer_uid
   }
   requireFact(text(operationId)&&text(piOutId)&&text(recipient),'ORIGINAL_OUTBOUND_IDENTITY_REQUIRED')
-  const prepared=TransactionBuilder.fromXDR(q.preparedEnvelopeXdr,'Pi Testnet'),pi=q.outboundPi
+  const prepared=TransactionBuilder.fromXDR(q.preparedEnvelopeXdr,financialNetwork()),pi=q.outboundPi
   requireFact(prepared instanceof Transaction&&prepared.operations.length===1&&prepared.operations[0].type==='payment'&&prepared.operations[0].source===undefined&&prepared.operations[0].asset.isNative(),'PREPARED_OPERATION')
   const op=prepared.operations[0],preparedHash=Buffer.from(prepared.hash()).toString('hex')
   const memo=prepared.memo.value
   const exactMemo=typeof memo==='string'?memo===piOutId:memo instanceof Uint8Array&&Buffer.from(memo).equals(Buffer.from(piOutId,'utf8'))
   requireFact(prepared.toXDR()===q.preparedEnvelopeXdr&&prepared.source===q.sourceWallet&&prepared.memo.type==='text'&&exactMemo&&
-   amount(op.amount)===amount(s.customer_amount)&&pi.identifier===piOutId&&pi.network==='Pi Testnet'&&pi.direction==='app_to_user'&&pi.user_uid===recipient&&
-   pi.from_address===prepared.source&&pi.to_address===op.destination&&amount(pi.amount)===amount(s.customer_amount)&&object(pi.status)&&
+   amount(op.amount)===outAmount&&pi.identifier===piOutId&&pi.network===financialNetwork()&&pi.direction==='app_to_user'&&pi.user_uid===recipient&&
+   pi.from_address===prepared.source&&pi.to_address===op.destination&&amount(pi.amount)===outAmount&&object(pi.status)&&
    pi.status.developer_approved===true&&pi.status.developer_completed===false&&pi.status.transaction_verified===false&&
    pi.status.cancelled===false&&pi.status.user_cancelled===false&&pi.transaction===null,'PREPARED_ORIGINAL_PI_BINDING')
   if(q.kind==='settlement')requireFact(s.a2u_from_address===prepared.source&&s.a2u_to_address===op.destination&&
@@ -119,22 +123,22 @@ export function produceR36LiveEvidence(input:Input):R36ProducedEvidence{
   const inbound=q.inboundFinality
   requireFact(inbound.schema==='R36_INBOUND_FINALITY_V1'&&hex(inbound.finalityPolicyDigest)&&object(inbound.piRecord)&&object(inbound.horizonRecord)&&object(inbound.horizonInput),'INBOUND_OBSERVATION_REQUIRED')
   const ip=inbound.piRecord,ih=inbound.horizonInput
-  requireFact(ip.identifier===s.u2a_identifier&&ip.user_uid===s.payer_uid&&ip.direction==='user_to_app'&&ip.network==='Pi Testnet'&&ip.to_address===q.sourceWallet&&
+  requireFact(ip.identifier===s.u2a_identifier&&ip.user_uid===s.payer_uid&&ip.direction==='user_to_app'&&ip.network===financialNetwork()&&ip.to_address===financialIncomingWallet()&&
    amount(ip.amount)===amount(s.customer_amount)&&object(ip.transaction)&&ip.transaction.txid===s.u2a_txid&&ip.transaction.verified===true&&
    object(ip.status)&&ip.status.developer_approved===true&&ip.status.developer_completed===true&&ip.status.transaction_verified===true&&ip.status.cancelled===false&&ip.status.user_cancelled===false&&
-   ih.preparedHash===s.u2a_txid&&ih.sourceWallet===ip.from_address&&ih.destinationWallet===q.sourceWallet&&amount(ih.amount)===amount(s.customer_amount),'ORIGINAL_INBOUND_MISMATCH')
+   ih.preparedHash===s.u2a_txid&&ih.sourceWallet===ip.from_address&&ih.destinationWallet===financialIncomingWallet()&&amount(ih.amount)===amount(s.customer_amount),'ORIGINAL_INBOUND_MISMATCH')
   const artifacts=composeR36OriginalWalletEvidence(input)
-  const binding:Row={network:'Pi Testnet',sourceWallet:q.sourceWallet,paymentId:q.paymentId,operationKind:q.kind,operationId,
-   preparedHash,preparedSequence:prepared.sequence,piPaymentId:s.u2a_identifier,u2aTxid:s.u2a_txid,destinationWallet:op.destination,amountStroops:amount(s.customer_amount),
+  const binding:Row={network:financialNetwork(),sourceWallet:q.sourceWallet,paymentId:q.paymentId,operationKind:q.kind,operationId,
+   preparedHash,preparedSequence:prepared.sequence,piPaymentId:s.u2a_identifier,u2aTxid:s.u2a_txid,destinationWallet:op.destination,amountStroops:outAmount,
    envelopeXdrTextSha256:undefined,cutoffLedger:primary.cutoffLedger,nonce:q.nonce}
   // String payload hashes use raw UTF-8 bytes; snapshot digests use JSON.
   const bytesHash=(v:string)=>createHash('sha256').update(v).digest('hex')
   binding.envelopeXdrTextSha256=bytesHash(q.preparedEnvelopeXdr)
-  artifacts.intent={schema:'R36_ORIGINAL_INTENT_V1',customerUid:s.payer_uid,...Object.fromEntries(['network','sourceWallet','paymentId','operationKind','operationId','preparedHash','preparedSequence','piPaymentId','u2aTxid','destinationWallet','amountStroops'].map(k=>[k,binding[k]])),envelopeXdr:q.preparedEnvelopeXdr,inboundAmountStroops:amount(s.customer_amount)}
+  artifacts.intent={schema:feeQuote?'R36_ORIGINAL_INTENT_V2':'R36_ORIGINAL_INTENT_V1',...(feeQuote?{financialContract:feeQuote,merchantUid:s.merchant_uid}:{}),customerUid:s.payer_uid,...Object.fromEntries(['network','sourceWallet','paymentId','operationKind','operationId','preparedHash','preparedSequence','piPaymentId','u2aTxid','destinationWallet','amountStroops'].map(k=>[k,binding[k]])),envelopeXdr:q.preparedEnvelopeXdr,inboundAmountStroops:amount(s.customer_amount)}
   artifacts.inbound_finality=inbound
   const digestFields={intent:'immutableIntentDigest',inbound_finality:'inboundFinalityDigest',wallet_history:'walletHistoryDigest',accounting:'accountingDigest',exceptions:'exceptionsDigest',exception_isolation:'exceptionIsolationDigest'}
   for(const [kind,key] of Object.entries(digestFields))binding[key]=bytesHash(JSON.stringify(artifacts[kind]))
-  artifacts.clearance={schema:'R36_WALLET_CLEARANCE_V1',network:'Pi Testnet',sourceWallet:q.sourceWallet,cutoffLedger:binding.cutoffLedger,currentRightsDigest:artifacts.accounting.currentRightsDigest,authorityDisposition:'CLEARED_FOR_BOUND_INTENT',...Object.fromEntries(['walletHistoryDigest','accountingDigest','exceptionsDigest','exceptionIsolationDigest'].map(k=>[k,binding[k]]))}
+  artifacts.clearance={schema:'R36_WALLET_CLEARANCE_V1',network:financialNetwork(),sourceWallet:q.sourceWallet,cutoffLedger:binding.cutoffLedger,currentRightsDigest:artifacts.accounting.currentRightsDigest,authorityDisposition:'CLEARED_FOR_BOUND_INTENT',...Object.fromEntries(['walletHistoryDigest','accountingDigest','exceptionsDigest','exceptionIsolationDigest'].map(k=>[k,binding[k]]))}
   binding.clearanceDigest=bytesHash(JSON.stringify(artifacts.clearance))
   requireFact(R36_ADMISSION_FIELDS.every(k=>text(binding[k])),'PRODUCER_BINDING_INCOMPLETE')
   const review=reviewR36EvidenceSnapshot(binding,artifacts)
@@ -160,16 +164,17 @@ export function composeR36OriginalWalletEvidence(input:Pick<Input,'snapshot'|'hi
    const walletId=history.sourceWallet,networkTx=(history.snapshot as Row).transactions as Row[],entries:Row[]=[],merchantUids=new Map<string,string>()
    const net=(hash:unknown)=>one(networkTx,t=>object(t.input)&&t.input.preparedHash===hash,'ORIGINAL_NETWORK_ACCOUNTING_LINK_REQUIRED')
    for(const cp of d.settlements.filter(v=>v.a2u_from_address===walletId&&v.stage==='db_finalized')){
+    const cpQuote=financialContractFromRow(cp)
     const t=one(d.transactions,t=>t.payment_id===cp.u2a_identifier,'TRANSACTION_CARDINALITY'),r=one(d.receipts,r=>r.transaction_id===t.id,'RECEIPT_CARDINALITY'),n=net(cp.a2u_txid),i=n.input as Row
     requireFact(!d.refunds.some(r=>r.payment_id===cp.payment_id)&&cp.prepared_tx_hash===cp.a2u_txid&&String(cp.prepared_sequence)===i.preparedSequence&&
      cp.horizon_confirmed_at!=null&&cp.pi_completed_at!=null&&cp.db_finalized_at!=null&&cp.a2u_payment_id===r.a2u_identifier&&r.a2u_txid===cp.a2u_txid&&r.txid===cp.a2u_txid&&
      r.u2a_identifier===cp.u2a_identifier&&r.u2a_txid===cp.u2a_txid&&t.status==='completed'&&t.currency==='π'&&r.currency==='π'&&
      t.merchant_uid===cp.merchant_uid&&r.merchant_uid===cp.merchant_uid&&t.merchant_id===cp.merchant_id&&r.merchant_id===cp.merchant_id&&
-     [cp.merchant_amount,t.amount,r.amount,r.customer_amount,r.merchant_amount].every(v=>amount(v)===amount(cp.customer_amount))&&amount(cp.app_commission)==='0'&&amount(r.app_commission)==='0'&&
+     [t.amount,r.amount,r.merchant_amount].every(v=>amount(v)===amount(cp.merchant_amount))&&amount(r.customer_amount)===amount(cp.customer_amount)&&amount(r.app_commission)===amount(cp.app_commission)&&(cpQuote!==undefined||amount(cp.merchant_amount)===amount(cp.customer_amount)&&amount(cp.app_commission)==='0')&&
      amount(r.horizon_fee_charged)===String(cp.horizon_fee_stroops)&&r.settlement_status==='settled_to_merchant'&&
-     typeof r.app_net_impact==='string'&&r.app_net_impact.startsWith('-')&&amount(r.app_net_impact.slice(1))===String(cp.horizon_fee_stroops),'SETTLEMENT_ACCOUNTING_CONFLICT')
+     Number(r.app_net_impact)===netImpact(Number(cp.customer_amount),Number(cp.merchant_amount),Number(cp.horizon_fee_stroops)/1e7,cpQuote),'SETTLEMENT_ACCOUNTING_CONFLICT')
     requireFact(!merchantUids.has(String(cp.merchant_id))||merchantUids.get(String(cp.merchant_id))===cp.merchant_uid,'MERCHANT_IDENTITY_CONFLICT');merchantUids.set(String(cp.merchant_id),String(cp.merchant_uid))
-    entries.push({entryId:t.id,paymentId:cp.payment_id,operationId:cp.a2u_payment_id,horizonOperationId:n.operationId,transactionHash:cp.a2u_txid,amountStroops:amount(cp.customer_amount),feeStroops:String(cp.horizon_fee_stroops),destinationWallet:i.destinationWallet,kind:'settlement',stage:'db_finalized',receiptId:r.id,merchantUid:cp.merchant_uid})
+    entries.push({entryId:t.id,paymentId:cp.payment_id,operationId:cp.a2u_payment_id,horizonOperationId:n.operationId,transactionHash:cp.a2u_txid,amountStroops:amount(cp.merchant_amount),feeStroops:String(cp.horizon_fee_stroops),destinationWallet:i.destinationWallet,kind:'settlement',stage:'db_finalized',receiptId:r.id,merchantUid:cp.merchant_uid})
    }
    for(const rc of d.refunds.filter(v=>v.status==='completed'&&networkTx.some(t=>object(t.input)&&t.input.preparedHash===v.refund_txid))){
     const ac=one(d.refundAccounting,a=>a.refund_id===rc.refund_id&&a.payment_id===rc.payment_id,'REFUND_ACCOUNTING_CARDINALITY'),n=net(rc.refund_txid),i=n.input as Row
@@ -182,7 +187,7 @@ export function composeR36OriginalWalletEvidence(input:Pick<Input,'snapshot'|'hi
    }
    const obligations:Row[]=[]
    for(const r of d.refunds.filter(v=>v.payment_id!==q.paymentId&&['pending','manual_review_required'].includes(String(v.status)))){
-    const bindings=d.authorities.filter(a=>a.network==='Pi Testnet'&&a.operation_kind==='refund'&&a.owner_payment_id===r.payment_id&&a.owner_operation_id===r.refund_id&&a.state==='prepared')
+    const bindings=d.authorities.filter(a=>a.network===financialNetwork()&&a.operation_kind==='refund'&&a.owner_payment_id===r.payment_id&&a.owner_operation_id===r.refund_id&&a.state==='prepared')
     requireFact(bindings.length===1&&bindings[0].source_wallet!==walletId,'UNRESOLVED_REFUND_RIGHT_NOT_ISOLATED')
     obligations.push({paymentId:r.payment_id,sourceWallet:bindings[0].source_wallet,originalBindingDigest:hash(bindings[0]),disposition:'PROVED_OTHER_WALLET'})
    }
@@ -193,10 +198,10 @@ export function composeR36OriginalWalletEvidence(input:Pick<Input,'snapshot'|'hi
    const isolation=q.exceptions.isolation.filter(e=>e.sourceWallet===walletId).map(({sourceWallet,...r})=>r)
    const exceptions:Row={schema:'R36_HISTORICAL_EXCEPTIONS_V1',ids:records.map(r=>String(r.id)).sort(),records,recordsDigest:hash(records)}
    const isolated:Row={schema:'R36_EXCEPTION_ISOLATION_V1',exceptionIds:exceptions.ids,records:isolation,disposition:'ISOLATED_NO_CURRENT_RIGHTS_IMPACT',currentRightsDigest:rights,evidenceDigest:hash(isolation)}
-   const accounting:Row={schema:'R36_ACCOUNTING_CLEARANCE_V1',network:'Pi Testnet',sourceWallet:walletId,cutoffLedger:history.cutoffLedger,unbalancedStroops:'0',duplicateFinancialKeys:[],xorViolations:[],snapshot,
+   const accounting:Row={schema:'R36_ACCOUNTING_CLEARANCE_V1',network:financialNetwork(),sourceWallet:walletId,cutoffLedger:history.cutoffLedger,unbalancedStroops:'0',duplicateFinancialKeys:[],xorViolations:[],snapshot,
     pgSnapshotDigest:hash(snapshot),currentRightsDigest:rights,ledgerInventoryDigest:history.transactionsDigest,
-    reconciliationDigest:hash({history:history.transactionsDigest,accounting:hash(snapshot),exceptions:exceptions.recordsDigest,isolation:isolated.evidenceDigest,scope:['Pi Testnet',walletId,history.cutoffLedger]})}
-   if(scopedEvidence){requireFact(walletId===q.sourceWallet&&histories.length===1,'EXECUTION_SCOPE_SINGLE_WALLET');accounting.executionScope=scopedEvidence}
+    reconciliationDigest:hash({history:history.transactionsDigest,accounting:hash(snapshot),exceptions:exceptions.recordsDigest,isolation:isolated.evidenceDigest,scope:[financialNetwork(),walletId,history.cutoffLedger]})}
+   if(scopedEvidence){const scope=JSON.parse(String(scopedEvidence.scopeText));const dual=scope.schema==='R36_CLEAN_NETWORK_EXECUTION_SCOPE_V2'&&financialIncomingWallet()!==q.sourceWallet;requireFact(dual?histories.length===2&&[q.sourceWallet,financialIncomingWallet()].includes(String(walletId)):walletId===q.sourceWallet&&histories.length===1,'EXECUTION_SCOPE_WALLET_INVENTORY');if(walletId===q.sourceWallet)accounting.executionScope=scopedEvidence}
    groups.push({wallet_history:history,accounting,exceptions,exception_isolation:isolated})
   }
   const allEntries=groups.flatMap(g=>(g.accounting.snapshot as Row).entries as Row[])
@@ -212,6 +217,6 @@ export function composeR36OriginalWalletEvidence(input:Pick<Input,'snapshot'|'hi
   requireFact(d.receipts.every(r=>allEntries.some(e=>e.receiptId===r.id)||disposed('receipts',r)),'UNMAPPED_DURABLE_RECEIPT')
   requireFact(d.refunds.filter(r=>r.status==='completed').every(r=>allEntries.some(e=>e.kind==='refund'&&e.entryId===r.refund_id)||disposed('refunds',r)),'UNMAPPED_DURABLE_REFUND')
   const primaryIndex=histories.indexOf(primary),artifacts={...groups[primaryIndex]} as Record<string,Row>
-  for(const kind of ['wallet_history','accounting','exceptions','exception_isolation'])artifacts[kind]={...artifacts[kind],relatedWallets:groups.filter((_,i)=>i!==primaryIndex).map(g=>({...g[kind],network:'Pi Testnet',sourceWallet:g.wallet_history.sourceWallet,cutoffLedger:g.wallet_history.cutoffLedger}))}
+  for(const kind of ['wallet_history','accounting','exceptions','exception_isolation'])artifacts[kind]={...artifacts[kind],relatedWallets:groups.filter((_,i)=>i!==primaryIndex).map(g=>({...g[kind],network:financialNetwork(),sourceWallet:g.wallet_history.sourceWallet,cutoffLedger:g.wallet_history.cutoffLedger}))}
  return artifacts
 }

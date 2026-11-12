@@ -1,3 +1,4 @@
+import {financialNetwork} from '../../../lib/financial-network'
 import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetApproval} from "../../../lib/r36-testnet-ingress"
 import { readPiA2UQueueAdmission } from "../../../lib/pi-a2u-queue-admission"
 import { type NextRequest } from "next/server"
@@ -99,7 +100,7 @@ export async function POST(request: NextRequest) {
     // DR-24: FlashPay is deliberately Testnet-only at this release boundary.
     // A Pi Developer Portal/app-key mismatch must fail before Pi /approve or any
     // durable financial ownership transition can authorize Testnet settlement.
-    if (canonicalPayment.network !== "Pi Testnet") {
+    if (canonicalPayment.network !== financialNetwork()) {
       console.error("[DR-24 NETWORK BOUNDARY] canonical Pi network mismatch", { observedNetwork: typeof canonicalPayment.network === "string" ? canonicalPayment.network : "invalid" })
       return new Response(JSON.stringify({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }), { status: 409, headers: { "Content-Type": "application/json" } })
     }
@@ -268,7 +269,7 @@ export async function POST(request: NextRequest) {
         return new Response(JSON.stringify({ error: "Approval reconciliation unavailable", code: "PI_APPROVAL_RECONCILIATION_UNAVAILABLE" }), { status: 503, headers: { "Content-Type": "application/json" } })
       }
       const replayedPayment: PiPaymentDTO = await replayReconcile.json()
-      const replayIdentityExact = replayedPayment.identifier === identifier && replayedPayment.network === "Pi Testnet" && replayedPayment.metadata?.paymentId === paymentId && replayedPayment.amount === canonicalPayment.amount && replayedPayment.amount === redisPayment.amount && replayedPayment.direction === "user_to_app" && replayedPayment.status?.cancelled !== true && replayedPayment.status?.user_cancelled !== true
+      const replayIdentityExact = replayedPayment.identifier === identifier && replayedPayment.network === financialNetwork() && replayedPayment.metadata?.paymentId === paymentId && replayedPayment.amount === canonicalPayment.amount && replayedPayment.amount === redisPayment.amount && replayedPayment.direction === "user_to_app" && replayedPayment.status?.cancelled !== true && replayedPayment.status?.user_cancelled !== true
       if (!replayIdentityExact) {
         return new Response(JSON.stringify({ error: "Payment validation failed", code: "PI_APPROVAL_REPLAY_CONFLICT" }), { status: 409, headers: { "Content-Type": "application/json" } })
       }
@@ -367,7 +368,7 @@ export async function POST(request: NextRequest) {
       console.error("[PLAN I P1] SECURITY: Refetched identifier mismatch")
       return new Response(JSON.stringify({ error: "Payment validation failed" }), { status: 409, headers: { "Content-Type": "application/json" } })
     }
-    if (refetchedPayment.network !== "Pi Testnet") {
+    if (refetchedPayment.network !== financialNetwork()) {
       console.error("[DR-24 NETWORK BOUNDARY] refetched Pi network mismatch", { paymentId, observedNetwork: typeof refetchedPayment.network === "string" ? refetchedPayment.network : "invalid" })
       return new Response(JSON.stringify({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }), { status: 409, headers: { "Content-Type": "application/json" } })
     }

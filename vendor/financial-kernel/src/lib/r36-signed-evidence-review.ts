@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** Quarantined R36 signature review. NOT an issuer, certificate, or financial permission.
  * DRAFT protocol: independent approval of schema, trust root and finality policy is still
  * required. No environment fallback, embedded key, key discovery, network or persistence.
@@ -85,7 +86,7 @@ export function reviewR36SignedEvidence(input: R36SignedReviewInput): R36Signatu
     if (manifest.schema !== 'R36_SIGNED_EVIDENCE_REVIEW_V1' || manifest.audience !== 'FLASHpay:R36:review' ||
         manifest.policyDigest !== p.policyDigest || manifest.issuerId !== p.issuerId || manifest.keyId !== p.keyId ||
         manifest.finalityPolicyDigest !== p.finalityPolicyDigest) return result('POLICY_OR_ISSUER_MISMATCH')
-    if (manifest.network !== 'Pi Testnet' || !wallet.test(manifest.sourceWallet) || !wallet.test(manifest.destinationWallet) ||
+    if (manifest.network !== financialNetwork() || !wallet.test(manifest.sourceWallet) || !wallet.test(manifest.destinationWallet) ||
         !uuid.test(manifest.paymentId) || !identifier.test(manifest.operationId) ||
         (manifest.operationKind === 'refund' && !uuid.test(manifest.operationId)) ||
         !['settlement', 'refund'].includes(manifest.operationKind) || !identifier.test(manifest.piPaymentId) ||

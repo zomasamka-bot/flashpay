@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** NOT_FOR_DEPLOY. Issuer-side two-phase lifecycle. No private key, financial POST,
  * wallet activation or Runtime enrollment. Signed evidence must be produced by the
  * separately enrolled custodians; supplying synthetic bundles never proves real trust.
@@ -44,7 +45,7 @@ function authenticate(context:Row,kind:string,subject:string,cutoff:string,envel
  const v=m as Row
  requireProof(fields.every(k=>typeof v[k]==='string'&&/^[\x20-\x7e]{1,256}$/.test(v[k] as string))&&
   v.schema==='R36_INDEPENDENT_ARTIFACT_V1'&&v.kind===kind&&v.policyDigest===p.policy_digest&&v.subjectDigest===subject&&
-  v.artifactDigest===sha(e.text as string)&&v.network==='Pi Testnet'&&v.sourceWallet===(context.prior as Row).source_wallet&&v.cutoffLedger===cutoff,'EVIDENCE_SCOPE')
+  v.artifactDigest===sha(e.text as string)&&v.network===financialNetwork()&&v.sourceWallet===(context.prior as Row).source_wallet&&v.cutoffLedger===cutoff,'EVIDENCE_SCOPE')
  requireProof(Array.isArray(profile.authorities),'EVIDENCE_AUTHORITIES')
  const roots=(profile.authorities as unknown[]).filter(r=>obj(r)&&r.kind===kind&&r.issuerId===v.issuerId&&r.keyId===v.keyId)
  requireProof(roots.length===1&&obj(roots[0]),'EVIDENCE_AUTHORITY')
@@ -88,16 +89,16 @@ export async function certifyR36PriorClosure(db:R36CertificateDatabase,policyDig
    requireProof(f.schema==='R36_TERMINAL_FINALITY_V1'&&f.contextDigest===c.contextDigest&&f.finalityPolicyDigest===profile.finalityPolicyDigest&&
     obj(pi)&&obj(hi)&&obj(hr),'TERMINAL_FINALITY')
    const q=pi as Row,h=hi as Row
-   requireProof(h.network==='Pi Testnet'&&h.sourceWallet===wallet&&h.preparedHash===prior.prepared_tx_hash&&
+   requireProof(h.network===financialNetwork()&&h.sourceWallet===wallet&&h.preparedHash===prior.prepared_tx_hash&&
     h.preparedSequence===prior.prepared_sequence&&h.expectedFeeStroops===seal.horizon_fee_stroops&&stroops(h.amount)===terminal.amountStroops&&
-    q.network==='Pi Testnet'&&q.identifier===terminal.piPaymentId&&q.direction==='app_to_user'&&q.user_uid===terminal.recipientUid&&
+    q.network===financialNetwork()&&q.identifier===terminal.piPaymentId&&q.direction==='app_to_user'&&q.user_uid===terminal.recipientUid&&
     q.from_address===wallet&&q.to_address===h.destinationWallet&&stroops(q.amount)===terminal.amountStroops&&obj(q.status)&&
     q.status.developer_approved===true&&q.status.developer_completed===true&&q.status.transaction_verified===true&&
     q.status.cancelled===false&&q.status.user_cancelled===false&&obj(q.transaction)&&q.transaction.txid===prior.prepared_tx_hash&&q.transaction.verified===true,'PI_TERMINAL_IDENTITY')
    const horizon=verifyR36IndependentHorizonRecord(h as R36HorizonProofInput,hr as Row)
    requireProof(horizon.outcome==='PROVEN'&&horizon.ledger===seal.horizon_ledger&&BigInt(cutoffLedger)>=BigInt(String(seal.horizon_ledger)),'TERMINAL_HORIZON')
    assertR36ExecutionScopePolicy(profile,artifacts,wallet)
-   const review=reviewR36TerminalSnapshot({network:'Pi Testnet',sourceWallet:wallet,paymentId,operationKind:prior.operation_kind,
+   const review=reviewR36TerminalSnapshot({network:financialNetwork(),sourceWallet:wallet,paymentId,operationKind:prior.operation_kind,
     operationId:prior.owner_operation_id,preparedHash:prior.prepared_tx_hash,preparedSequence:prior.prepared_sequence,
     amountStroops:terminal.amountStroops,feeStroops:seal.horizon_fee_stroops,receiptId:terminal.receiptId,entryId:terminal.entryId,cutoffLedger},artifacts)
    requireProof(review.outcome==='VERIFIED_SNAPSHOT','TERMINAL_SNAPSHOT_'+review.reason)

@@ -1,6 +1,7 @@
+import {financialHorizonOrigin} from './financial-network'
 import "server-only"
 
-const HORIZON_BASE_URL = "https://api.testnet.minepi.com"
+const HORIZON_BASE_URL = financialHorizonOrigin()
 
 type SettlementSubmitHorizonReadResult =
   | Readonly<{

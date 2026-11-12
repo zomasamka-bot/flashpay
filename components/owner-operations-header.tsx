@@ -1,5 +1,6 @@
 "use client"
 
+import {publicNetworkLabel} from "@/lib/public-network"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Activity, Shield, User } from "lucide-react"
@@ -20,7 +21,7 @@ export function OwnerOperationsHeader() {
           <div className="truncate text-sm font-semibold">FlashPay Owner Operations</div>
           <div className="text-[11px] text-muted-foreground">Operational control plane</div>
         </div>
-        <span className="shrink-0 rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold" aria-label="Pi Network environment: Testnet">Testnet</span>
+        <span className="shrink-0 rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold" aria-label={`Pi Network environment: ${publicNetworkLabel}`}>{publicNetworkLabel}</span>
       </div>
       <nav aria-label="Owner operations" className="mx-auto flex max-w-4xl border-t px-2 sm:px-4">
         {links.map(({ href, label, icon: Icon }) => {

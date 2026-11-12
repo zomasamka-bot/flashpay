@@ -10,7 +10,7 @@ function request(c){return new Promise(resolve=>{
  headers:data?{'content-type':'application/json'}:{}},s=>{status=s.statusCode;let b='';s.on('data',x=>{b+=x;if(b.length>8192)s.destroy()});s.on('end',()=>{let body;try{body=JSON.parse(b)}catch{body={error:'NON_JSON'}}resolve({status,body})})});
  r.setTimeout(5000,()=>r.destroy());r.on('error',e=>resolve({status:status||0,tlsOrTransportRejected:true,code:e.code||'IO'}));r.end(data);
 })}
-async function main(){const c=await input();const configured=c.kernelDeployment;delete c.kernelDeployment;if(!configured)throw Error('KERNEL_PROFILE_REQUIRED');process.env.KERNEL_DEPLOYMENT_PROFILE=configured.raw;process.env.KERNEL_DEPLOYMENT_SHA256=configured.sha256;const deployment=require('/kernel/dist/deployment.js').deployment();
+async function main(){const c=await input();const configured=c.kernelDeployment;delete c.kernelDeployment;if(!configured)throw Error('KERNEL_PROFILE_REQUIRED');process.env.KERNEL_DEPLOYMENT_PROFILE=configured.raw;process.env.KERNEL_DEPLOYMENT_SHA256=configured.sha256;const deployment=require('/kernel/dist/deployment.js').deployment();process.env.NEXT_PUBLIC_PI_NETWORK=deployment.network==='Pi Network'?'mainnet':'testnet';
  if(c.mode==='provider'){const {createR36ReadProxy}=require('/kernel/dist/lib/r36-provider-read-proxy.js');const s=createR36ReadProxy(c.service,c.piApiKey);await new Promise((resolve,reject)=>{s.once('error',reject);s.listen(c.service.port,c.service.host,resolve)});relay(8443,'127.0.0.1',9443);console.log('READ_PROVIDER_LISTENING');return}
  if(c.mode==='producer'){
   const trace=require('/tools/phase-trace.cjs').createPhaseTrace({emit:event=>console.log(JSON.stringify(event))});

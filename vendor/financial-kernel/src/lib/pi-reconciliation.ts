@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import "server-only"
 
 import { serverConfig } from "./server-config"
@@ -31,7 +32,7 @@ function isPaymentDto(value: unknown): value is Record<string, unknown> {
   if (typeof dto.amount !== "number" || !Number.isFinite(dto.amount) || dto.amount <= 0) return false
   // DR-24: all settlement/refund reconciliation in this release is bound to
   // Pi Testnet + the Testnet Horizon/passphrase used by the financial kernel.
-  if (dto.network !== "Pi Testnet") return false
+  if (dto.network !== financialNetwork()) return false
   for (const key of ["completed", "cancelled", "approved", "rejected"] as const) {
     if (key in dto && typeof dto[key] !== "boolean") return false
   }

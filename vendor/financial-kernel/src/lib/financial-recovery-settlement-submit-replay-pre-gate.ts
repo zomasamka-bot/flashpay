@@ -1,3 +1,4 @@
+import {settlementTarget} from './payment-financial-contract'
 import type { Payment } from "./types"
 import type { FinancialRecoverySettlementSubmitReadOrchestrationResult } from "./financial-recovery-settlement-submit-read-orchestration"
 import type { FinancialRecoverySettlementRefundOppositeBindingResult } from "./financial-recovery-settlement-refund-opposite-binding"
@@ -41,7 +42,7 @@ export function evaluateFinancialRecoverySettlementSubmitReplayPreGate(
     input.payment.a2uFromAddress !== read.reference.fromAddress ||
     input.payment.a2uToAddress !== read.reference.toAddress ||
     input.payment.merchantAmount !== read.reference.amount ||
-    input.payment.customerAmount !== read.reference.amount ||
+    settlementTarget(input.payment) !== read.reference.amount ||
     input.payment.status !== "settlement_pending" ||
     input.payment.a2uTxid !== undefined ||
     input.payment.horizonSuccessFlag === true ||

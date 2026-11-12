@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import {verifyDatabaseBinding} from '../deployment'
 import {deployment} from '../deployment'
 /** Private read-only source adapter. No business functions, Redis, signing or DML.
@@ -8,7 +9,7 @@ export type R36SourceRow=Record<string,unknown>
 export type R36ReadOnlySource={beginReadOnly<T>(read:(tx:{unsafe(sql:string):Promise<R36SourceRow[]>})=>Promise<T>):Promise<T>}
 export const R36_SOURCE_QUERIES={
  intents:`SELECT payment_id,merchant_uid,merchant_id,customer_amount::text,note,created_at FROM public.payment_create_intents ORDER BY payment_id LIMIT 20001`,
- settlements:`SELECT payment_id,stage,merchant_id,merchant_uid,payer_uid,customer_amount::text,merchant_amount::text,app_commission::text,u2a_identifier,u2a_txid,u2a_verified_at,u2a_completed_at,a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence::text,a2u_txid,horizon_fee_stroops::text,horizon_confirmed_at,pi_completed_at,db_finalized_at FROM public.settlement_checkpoints ORDER BY payment_id LIMIT 20001`,
+ settlements:`SELECT ${deployment().schema==='KERNEL_DEPLOYMENT_V2'?'financial_contract,':''}payment_id,stage,merchant_id,merchant_uid,payer_uid,customer_amount::text,merchant_amount::text,app_commission::text,u2a_identifier,u2a_txid,u2a_verified_at,u2a_completed_at,a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence::text,a2u_txid,horizon_fee_stroops::text,horizon_confirmed_at,pi_completed_at,db_finalized_at FROM public.settlement_checkpoints ORDER BY payment_id LIMIT 20001`,
  refunds:`SELECT refund_id,payment_id,idempotency_key,status,stage,payer_uid,payer_uid_verified_at,amount::text,currency,source_payment_status,source_settlement_state,refund_payment_id,refund_txid FROM public.refund_checkpoints ORDER BY refund_id LIMIT 20001`,
  transactions:`SELECT id::text,payment_id,merchant_id,merchant_uid,amount::text,currency,status,reference FROM public.transactions ORDER BY id LIMIT 20001`,
  receipts:`SELECT id::text,transaction_id::text,merchant_id,merchant_uid,amount::text,currency,txid,u2a_identifier,u2a_txid,a2u_identifier,a2u_txid,customer_amount::text,merchant_amount::text,app_commission::text,horizon_fee_charged::text,app_net_impact::text,settlement_status FROM public.receipts ORDER BY id LIMIT 20001`,
@@ -56,11 +57,11 @@ export async function readR36LifecycleHead(db:R36ReadOnlySource,wallet:string){
    CASE WHEN a.operation_kind='settlement' THEN EXISTS(SELECT 1 FROM public.settlement_checkpoints s WHERE s.payment_id=a.owner_payment_id AND s.stage='db_finalized')
    WHEN a.operation_kind='refund' THEN EXISTS(SELECT 1 FROM public.refund_checkpoints r WHERE r.payment_id=a.owner_payment_id AND r.refund_id=a.owner_operation_id AND r.status='completed' AND r.stage='audit_recorded')
    ELSE false END AS terminal_checkpoint
-   FROM public.financial_wallet_authorities a WHERE a.network='Pi Testnet' AND a.source_wallet='${wallet}' LIMIT 2`)
+   FROM public.financial_wallet_authorities a WHERE a.network='${financialNetwork()}' AND a.source_wallet='${wallet}' LIMIT 2`)
   if(rows.length>1)throw Error('AUTOMATIC_AUTHORITY_CARDINALITY')
   if(!rows.length)return {authority:undefined,completed:false}
   const {terminal_checkpoint,...authority}=rows[0]
-  if(typeof terminal_checkpoint!=='boolean'||authority.network!=='Pi Testnet'||authority.source_wallet!==wallet)throw Error('SOURCE_LIFECYCLE_HEAD')
+  if(typeof terminal_checkpoint!=='boolean'||authority.network!==financialNetwork()||authority.source_wallet!==wallet)throw Error('SOURCE_LIFECYCLE_HEAD')
   return {authority,completed:terminal_checkpoint}
  })
 }
@@ -78,7 +79,7 @@ export async function readR36LiveSource(db:R36ReadOnlySource,mode:'diagnostic'|'
    const name=group[index],value=result.value
    if(!Array.isArray(value)||value.length>20000||value.some(r=>!r||typeof r!=='object'||Array.isArray(r)))throw Error('SOURCE_ROWS_BOUNDED')
    size+=Buffer.byteLength(JSON.stringify(value));if(size>40_000_000)throw Error('SOURCE_BYTES_BOUNDED')
-   data[name]=value
+   data[name]=name==='settlements'?value.map(row=>{if(row.financial_contract===null){const {financial_contract,...legacy}=row;return legacy}return row}):value
    }
   }
   return {session:s,rows:data,custody:mode==='service'?'READONLY_SERVICE_NOT_CERTIFIED':'UNSIGNED_DIAGNOSTIC'}

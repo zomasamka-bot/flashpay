@@ -1,3 +1,5 @@
+import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
+import {financialNetwork,financialHorizonOrigin} from './financial-network'
 import {currentRecoveryRight} from './r36-recovery-scope'
 import { readDurableSettlementProjection } from "./settlement-durable-projection"
 import { verifyPreparedWalletAuthority, claimFirstWalletSubmission } from "./financial-wallet-authority"
@@ -114,7 +116,7 @@ redis.call('SET',KEYS[1],cjson.encode(current)); return 1
   try { readback = (typeof readbackRaw === "string" ? JSON.parse(readbackRaw) : readbackRaw) as Payment } catch { return null }
   if (readback.id !== paymentId || readback.payerUidCapturedAt !== verifiedAt || readback.paidAt !== completedAt || readback.settlementDispatchRequestedAt !== completedAt) return null
   console.warn("[F2-4 DURABLE TIMESTAMP HOTPATH REPAIR] canonicalized pre-A2U projection", { paymentId, financialAuthorityMutated: false, financialMovementExecuted: false })
-  return readback
+  return {...readback,...(payment.financialContract?{financialContract:payment.financialContract}:{})}
 }
 
 async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Payment): Promise<Payment | null> {
@@ -122,6 +124,8 @@ async function verifyF24DurableMerchantAuthority(paymentId: string, payment: Pay
   const durable = await getDurableU2AIngressAuthoritative(paymentId)
   if (durable.outcome !== "FOUND") return null
   const d = durable.checkpoint
+  if(payment.financialContract && JSON.stringify(payment.financialContract)!==JSON.stringify(d.financialContract))return null
+  payment={...payment,...(d.financialContract?{financialContract:d.financialContract}:{})}
   const completedAt = d.completedAt
   if (completedAt === null) return null
   if (
@@ -198,7 +202,7 @@ export function isStage1OnlySettlementDispatchCandidate(payment: Payment, now: n
     typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim() &&
     typeof payment.a2uFromAddress === "string" && payment.a2uFromAddress.trim() !== "" && payment.a2uFromAddress === payment.a2uFromAddress.trim() &&
     typeof payment.a2uToAddress === "string" && payment.a2uToAddress.trim() !== "" && payment.a2uToAddress === payment.a2uToAddress.trim() &&
-    typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === payment.customerAmount &&
+    typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === settlementTarget(payment) &&
     payment.a2uTxid === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined &&
     payment.horizonFeeCharged === undefined && payment.appNetImpact === undefined && payment.horizonSuccessAt === undefined && payment.settledAt === undefined &&
     payment.refundPaymentId === undefined && payment.refundTxid === undefined && payment.refundProof === undefined &&
@@ -217,6 +221,7 @@ async function verifyStage1OnlyDurableAuthority(paymentId: string, payment: Paym
   return payment.id === d.paymentId &&
     payment.merchantId === d.merchantId && payment.merchantUid === d.merchantUid &&
     payment.customerAmount === d.customerAmount && payment.merchantAmount === d.merchantAmount &&
+    JSON.stringify(payment.financialContract)===JSON.stringify(d.financialContract) &&
     payment.piPaymentId === d.u2aIdentifier && payment.u2aTxid === d.u2aTxid &&
     payment.a2uPaymentId === d.a2uPaymentId && payment.a2uFromAddress === d.a2uFromAddress && payment.a2uToAddress === d.a2uToAddress &&
     payment.a2uTxid === undefined && payment.a2uPreparedEnvelopeXdr === undefined && payment.a2uPreparedTxHash === undefined && payment.a2uPreparedSequence === undefined &&
@@ -231,6 +236,7 @@ async function verifySettlementSubmitDurablePreparedAuthority(paymentId: string,
   return payment.id === d.paymentId &&
     payment.merchantId === d.merchantId && payment.merchantUid === d.merchantUid &&
     payment.customerAmount === d.customerAmount && payment.merchantAmount === d.merchantAmount &&
+    JSON.stringify(payment.financialContract)===JSON.stringify(d.financialContract) &&
     payment.piPaymentId === d.u2aIdentifier && payment.u2aTxid === d.u2aTxid &&
     payment.a2uPaymentId === d.a2uPaymentId && payment.a2uFromAddress === d.a2uFromAddress && payment.a2uToAddress === d.a2uToAddress &&
     payment.a2uPreparedEnvelopeXdr === d.preparedEnvelopeXdr && payment.a2uPreparedTxHash === d.preparedTxHash && payment.a2uPreparedSequence === d.preparedSequence &&
@@ -404,7 +410,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       // may have succeeded before the process could checkpoint the response. It
       // must never issue another Pi create or reach Horizon. Absence from Pi's
       // incomplete list is deliberately not strong enough to authorize a retry.
-      const reconciliation = await reconcileIncompleteA2UPayment(paymentId, latestPayment.customerAmount!, latestPayment.merchantUid!)
+      const reconciliation = await reconcileIncompleteA2UPayment(paymentId, settlementTarget(latestPayment), latestPayment.merchantUid!)
       if (reconciliation.outcome !== "FOUND" || !reconciliation.dto) {
         return { ok: false, status: 409, error: reconciliation.outcome === "CONFIRMED_NONE" ? "Settlement reconcile found no strongly proven A2U identity" : "Settlement reconcile evidence is indeterminate" }
       }
@@ -419,7 +425,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
         typeof identifier === "string" && identifier.trim() !== "" && identifier === identifier.trim() &&
         typeof fromAddress === "string" && fromAddress.trim() !== "" && fromAddress === fromAddress.trim() &&
         typeof toAddress === "string" && toAddress.trim() !== "" && toAddress === toAddress.trim() &&
-        dto.network === "Pi Testnet" && dto.direction === "app_to_user" && dto.amount === latestPayment.customerAmount &&
+        dto.network === financialNetwork() && dto.direction === "app_to_user" && dto.amount === settlementTarget(latestPayment) &&
         dto.user_uid === latestPayment.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === paymentId &&
         typeof dto.txid !== "string" && typeof dto.transaction_id !== "string" && dto.completed !== true && dto.cancelled !== true && dto.rejected !== true &&
         typeof transaction?.txid !== "string" && transaction?.verified !== true &&
@@ -434,7 +440,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           a2uPaymentId: identifier as string,
           a2uFromAddress: fromAddress as string,
           a2uToAddress: toAddress as string,
-          merchantAmount: latestPayment.customerAmount,
+          merchantAmount: settlementTarget(latestPayment),
           settlementFailureState: "none",
         })
       } catch {
@@ -461,8 +467,8 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
       const preparedPairCanonical = canonicalPreparedHash && canonicalPreparedSequence
       const canonicalPreparedEnvelope = typeof latestPayment.a2uPreparedEnvelopeXdr === "string" && latestPayment.a2uPreparedEnvelopeXdr.trim() !== "" && latestPayment.a2uPreparedEnvelopeXdr === latestPayment.a2uPreparedEnvelopeXdr.trim()
       const preparedRecoveryException = params.isRecovery === true && latestPayment.status === "settlement_pending" && canonicalA2UTxid && latestPayment.a2uTxid === latestPayment.a2uPreparedTxHash && latestPayment.horizonSuccessFlag === true && latestPayment.piCompletionPending === true && latestPayment.piCompleted !== true && canonicalPreparedEnvelope && canonicalPreparedHash && canonicalPreparedSequence
-      const dbRecoveryException = params.isRecovery === true && latestPayment.status === "settlement_pending" && latestPayment.requiresDbReconciliation === true && latestPayment.dbRecorded !== true && canonicalA2UPaymentId && canonicalA2UTxid && latestPayment.a2uTxid === latestPayment.a2uPreparedTxHash && latestPayment.horizonSuccessFlag === true && latestPayment.piCompletionPending === false && latestPayment.piCompleted === true && canonicalPreparedEnvelope && canonicalPreparedHash && canonicalPreparedSequence && typeof latestPayment.customerAmount === "number" && Number.isFinite(latestPayment.customerAmount) && latestPayment.customerAmount > 0 && typeof latestPayment.merchantAmount === "number" && Number.isFinite(latestPayment.merchantAmount) && latestPayment.merchantAmount === latestPayment.customerAmount && typeof latestPayment.horizonFeeCharged === "number" && Number.isFinite(latestPayment.horizonFeeCharged) && latestPayment.horizonFeeCharged >= 0 && latestPayment.appCommission === 0 && typeof latestPayment.appNetImpact === "number" && Number.isFinite(latestPayment.appNetImpact) && latestPayment.appNetImpact === latestPayment.customerAmount - latestPayment.merchantAmount - latestPayment.horizonFeeCharged
-      const completionCheckpointRecoveryException = params.isRecovery === true && latestPayment.status === "settlement_pending" && latestPayment.requiresDbReconciliation !== true && latestPayment.dbRecorded !== true && canonicalA2UPaymentId && canonicalA2UTxid && latestPayment.a2uTxid === latestPayment.a2uPreparedTxHash && latestPayment.horizonSuccessFlag === true && latestPayment.piCompletionPending === false && latestPayment.piCompleted === true && canonicalPreparedEnvelope && canonicalPreparedHash && canonicalPreparedSequence && typeof latestPayment.customerAmount === "number" && Number.isFinite(latestPayment.customerAmount) && latestPayment.customerAmount > 0 && typeof latestPayment.merchantAmount === "number" && Number.isFinite(latestPayment.merchantAmount) && latestPayment.merchantAmount === latestPayment.customerAmount && typeof latestPayment.horizonFeeCharged === "number" && Number.isFinite(latestPayment.horizonFeeCharged) && latestPayment.horizonFeeCharged >= 0
+      const dbRecoveryException = params.isRecovery === true && latestPayment.status === "settlement_pending" && latestPayment.requiresDbReconciliation === true && latestPayment.dbRecorded !== true && canonicalA2UPaymentId && canonicalA2UTxid && latestPayment.a2uTxid === latestPayment.a2uPreparedTxHash && latestPayment.horizonSuccessFlag === true && latestPayment.piCompletionPending === false && latestPayment.piCompleted === true && canonicalPreparedEnvelope && canonicalPreparedHash && canonicalPreparedSequence && typeof latestPayment.customerAmount === "number" && Number.isFinite(latestPayment.customerAmount) && latestPayment.customerAmount > 0 && typeof latestPayment.merchantAmount === "number" && Number.isFinite(latestPayment.merchantAmount) && latestPayment.merchantAmount === settlementTarget(latestPayment) && typeof latestPayment.horizonFeeCharged === "number" && Number.isFinite(latestPayment.horizonFeeCharged) && latestPayment.horizonFeeCharged >= 0 && latestPayment.appCommission === contractCommission(latestPayment) && typeof latestPayment.appNetImpact === "number" && Number.isFinite(latestPayment.appNetImpact) && latestPayment.appNetImpact === netImpact(latestPayment.customerAmount, latestPayment.merchantAmount, latestPayment.horizonFeeCharged, latestPayment.financialContract)
+      const completionCheckpointRecoveryException = params.isRecovery === true && latestPayment.status === "settlement_pending" && latestPayment.requiresDbReconciliation !== true && latestPayment.dbRecorded !== true && canonicalA2UPaymentId && canonicalA2UTxid && latestPayment.a2uTxid === latestPayment.a2uPreparedTxHash && latestPayment.horizonSuccessFlag === true && latestPayment.piCompletionPending === false && latestPayment.piCompleted === true && canonicalPreparedEnvelope && canonicalPreparedHash && canonicalPreparedSequence && typeof latestPayment.customerAmount === "number" && Number.isFinite(latestPayment.customerAmount) && latestPayment.customerAmount > 0 && typeof latestPayment.merchantAmount === "number" && Number.isFinite(latestPayment.merchantAmount) && latestPayment.merchantAmount === settlementTarget(latestPayment) && typeof latestPayment.horizonFeeCharged === "number" && Number.isFinite(latestPayment.horizonFeeCharged) && latestPayment.horizonFeeCharged >= 0
       const preparedStateRecoveryException = preparedRecoveryException || dbRecoveryException || completionCheckpointRecoveryException
       if (
         (!preparedStateRecoveryException && !preparedPairAbsent && !preparedPairCanonical) ||
@@ -662,7 +668,7 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }
         }
         try {
-          const transaction = StellarSDK.TransactionBuilder.fromXDR(intent.envelopeXdr, "Pi Testnet")
+          const transaction = StellarSDK.TransactionBuilder.fromXDR(intent.envelopeXdr, financialNetwork())
           if (
             !(transaction instanceof StellarSDK.Transaction) ||
             transaction.toXDR() !== intent.envelopeXdr ||
@@ -680,18 +686,18 @@ export async function executeA2ULocked(params: LockedExecutorParams) {
           }
           // R36: fail closed if PostgreSQL durable owner differs from this exact prepared intent.
           if (!await verifyPreparedWalletAuthority({
-            network: 'Pi Testnet', sourceWallet: intent.fromAddress, paymentId,
+            network: financialNetwork(), sourceWallet: intent.fromAddress, paymentId,
             operationKind: 'settlement', operationId: intent.a2uPaymentId,
             preparedHash: intent.preparedHash, preparedSequence: intent.preparedSequence,
           })) return { ok: false, status: 409, error: "Durable settlement wallet authority not proven" }
           // One-shot PostgreSQL admission: even same stored XDR cannot be POSTed
           // twice after a crash, Redis loss, or a competing recovery worker.
           if (!await claimFirstWalletSubmission({
-            network: 'Pi Testnet', sourceWallet: intent.fromAddress, paymentId,
+            network: financialNetwork(), sourceWallet: intent.fromAddress, paymentId,
             operationKind: 'settlement', operationId: intent.a2uPaymentId,
             preparedHash: intent.preparedHash, preparedSequence: intent.preparedSequence,
           })) return { ok: false, status: 409, error: "Settlement one-shot submission already used or unavailable" }
-          const horizon = new StellarSDK.Horizon.Server("https://api.testnet.minepi.com", { allowHttp: false })
+          const horizon = new StellarSDK.Horizon.Server(financialHorizonOrigin(), { allowHttp: false })
           const submitted = await horizon.submitTransaction(transaction)
           if (submitted.hash !== latestPayment.a2uPreparedTxHash) {
             return { ok: false, status: 409, error: "Settlement submit proof could not be verified" }

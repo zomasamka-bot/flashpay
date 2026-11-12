@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 /** R36 diagnostic, read-only cross-check. NEVER inserts approval or rotates ownership.
  * A successful check is necessary evidence, NOT sufficient authorization: global
  * historical inventory, independent ledger result decoding and authorization remain open.
@@ -15,7 +16,7 @@ export async function checkR36HorizonAgainstDurableRecords(
   db: Queryable, input: R36HorizonProofInput, fetcher: typeof fetch,
 ): Promise<R36GateResult> {
   try {
-    if (input.network !== 'Pi Testnet' || !/^[0-9a-f]{64}$/.test(input.preparedHash)) return deny('INVALID_INPUT')
+    if (input.network !== financialNetwork() || !/^[0-9a-f]{64}$/.test(input.preparedHash)) return deny('INVALID_INPUT')
     // Fixed SQL, parameterized, one wallet; no mutation. Fail closed on missing tables.
     const result = await db.query(`
       SELECT a.network,a.source_wallet,a.owner_payment_id,a.operation_kind,a.owner_operation_id,

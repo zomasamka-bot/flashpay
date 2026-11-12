@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import 'server-only'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { WalletAuthorityClaim } from './financial-wallet-authority'
@@ -12,6 +13,6 @@ export const runWithRecoveryRight = <T>(right:ScopedRecoveryRight, run:()=>Promi
 export function matchesRecoveryClaim(claim:WalletAuthorityClaim) {
   const right = currentRecoveryRight()
   if (!right) return process.env.FLASHPAY_RECOVERY_SCOPE !== 'admitted_new'
-  return !right.spent && claim.network==='Pi Testnet' && claim.paymentId===right.id && claim.sourceWallet===right.wallet &&
+  return !right.spent && claim.network===financialNetwork() && claim.paymentId===right.id && claim.sourceWallet===right.wallet &&
     claim.operationKind===right.kind && claim.operationId===right.op && claim.preparedHash===right.hash && claim.preparedSequence===right.seq
 }

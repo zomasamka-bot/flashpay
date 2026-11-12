@@ -13,7 +13,7 @@ export async function GET(request:NextRequest){
     FROM public.payment_create_intents i JOIN public.settlement_checkpoints s USING(payment_id)
     WHERE i.create_intent_id=$1 AND i.merchant_uid=$2 AND i.merchant_id=$3
       AND s.merchant_uid=i.merchant_uid AND s.merchant_id=i.merchant_id
-      AND s.customer_amount=i.customer_amount AND s.merchant_amount=i.customer_amount AND s.app_commission=0
+      AND s.customer_amount=i.customer_amount AND s.merchant_amount+s.app_commission=i.customer_amount
     LIMIT 2`,[id,viewer.uid,viewer.username])
   if(!Array.isArray(rows))return NextResponse.json({resolution:"UNRESOLVED"},{status:503})
   if(rows.length!==1)return NextResponse.json({resolution:'UNRESOLVED'},{status:rows.length?409:404,headers:{'Cache-Control':'private, no-store'}})

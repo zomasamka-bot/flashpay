@@ -1,3 +1,4 @@
+import {financialHorizonOrigin,financialNetwork} from './financial-network'
 import { prepareR36EvidenceCandidate } from "./r36-prepared-evidence"
 import { getPiSigningSeed } from "./pi-wallet-signing-config"
 import { r36PreparedEvidenceStore } from "./r36-prepared-evidence-store"
@@ -35,7 +36,7 @@ type Input = {
   verifyOwned: () => Promise<boolean>
 }
 
-const HORIZON_URL = "https://api.testnet.minepi.com"
+const HORIZON_URL = financialHorizonOrigin()
 
 type RefundPreparedSubmitXdrInput = {
   envelopeXdr: string
@@ -51,7 +52,7 @@ export function verifyRefundPreparedSubmitXdr(input: RefundPreparedSubmitXdrInpu
   const blocked: { outcome: "BLOCKED"; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } = { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
   if (!input.envelopeXdr || input.envelopeXdr !== input.envelopeXdr.trim() || !input.preparedHash || !/^[0-9a-f]{64}$/.test(input.preparedHash) || !input.preparedSequence || !/^[1-9][0-9]*$/.test(input.preparedSequence) || !input.refundPaymentId || input.refundPaymentId !== input.refundPaymentId.trim() || !input.fromAddress || input.fromAddress !== input.fromAddress.trim() || !input.toAddress || input.toAddress !== input.toAddress.trim() || !isValidPositiveAmount(input.amount)) return blocked
   try {
-    const transaction = TransactionBuilder.fromXDR(input.envelopeXdr, "Pi Testnet")
+    const transaction = TransactionBuilder.fromXDR(input.envelopeXdr, financialNetwork())
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.preparedHash || transaction.sequence !== input.preparedSequence || transaction.source !== input.fromAddress || transaction.timeBounds?.minTime !== "0" || transaction.timeBounds?.maxTime !== "0" || transaction.signatures.length !== 1 || transaction.operations.length !== 1) return blocked
     const operation = transaction.operations[0]
     if (operation.type !== "payment" || operation.source !== undefined || !operation.asset.isNative() || operation.destination !== input.toAddress || !exactStroopAmountMatch(operation.amount, input.amount)) return blocked
@@ -85,7 +86,7 @@ function isExactInput({ checkpoint, payment }: Pick<Input, "checkpoint" | "payme
     checkpoint.paymentId === payment.metadata.paymentId && checkpoint.refundId === payment.metadata.refundId &&
     checkpoint.idempotencyKey === payment.metadata.idempotencyKey && checkpoint.payerUid === payment.user_uid &&
     isValidPositiveAmount(checkpoint.amount) && isValidPositiveAmount(payment.amount) && checkpoint.amount === payment.amount &&
-    payment.direction === "app_to_user" && payment.network === "Pi Testnet" &&
+    payment.direction === "app_to_user" && payment.network === financialNetwork() &&
     payment.metadata.type === "refund" && payment.transaction === null &&
     payment.status.cancelled === false && payment.status.user_cancelled === false &&
     typeof payment.from_address === "string" && payment.from_address.length > 0 &&
@@ -134,12 +135,12 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     if (authorization.state !== "present") return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction authorization is not confirmed" }
     const xdr = verifyRefundPreparedSubmitXdr({ envelopeXdr: input.gate.prepared.envelopeXdr, preparedHash: input.gate.prepared.preparedHash, preparedSequence: input.gate.prepared.preparedSequence, refundPaymentId: input.payment.identifier, fromAddress: input.payment.from_address, toAddress: input.payment.to_address, amount: input.payment.amount })
     if (xdr.outcome !== "VERIFIED_INTENT") return blocked
-    const transaction = TransactionBuilder.fromXDR(input.gate.prepared.envelopeXdr, "Pi Testnet")
+    const transaction = TransactionBuilder.fromXDR(input.gate.prepared.envelopeXdr, financialNetwork())
     if (!(transaction instanceof Transaction) || transaction.toXDR() !== input.gate.prepared.envelopeXdr || Buffer.from(transaction.hash()).toString("hex") !== input.gate.prepared.preparedHash || transaction.sequence !== input.gate.prepared.preparedSequence || transaction.source !== input.payment.from_address) return blocked
     const server = new Horizon.Server(HORIZON_URL)
     if (!await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund wallet submit ownership lost" }
     if (!await verifyPreparedWalletAuthority({
-      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      network: financialNetwork(), sourceWallet: input.payment.from_address,
       paymentId: input.gate.prepared.checkpoint.paymentId, operationKind: 'refund',
       operationId: input.gate.prepared.checkpoint.refundId,
       preparedHash: input.gate.prepared.preparedHash,
@@ -147,14 +148,14 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     })) return { outcome: "FAILED", code: "submit_failed", message: "Durable refund replay authority not proven" }
     if ((await verifyRefundOriginalCustomerBinding({ paymentId: input.gate.prepared.checkpoint.paymentId, payerUid: input.gate.prepared.checkpoint.payerUid, amount: input.gate.prepared.checkpoint.amount })).outcome !== 'VERIFIED') return { outcome: 'FAILED', code: 'submit_failed', message: 'Original customer binding unverified before prepared replay' }
     if (!await claimFirstWalletSubmission({
-      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      network: financialNetwork(), sourceWallet: input.payment.from_address,
       paymentId: input.gate.prepared.checkpoint.paymentId, operationKind: 'refund',
       operationId: input.gate.prepared.checkpoint.refundId,
       preparedHash: input.gate.prepared.preparedHash,
       preparedSequence: input.gate.prepared.preparedSequence,
     })) return { outcome: "FAILED", code: "submit_failed", message: "Refund one-shot submission already used or unavailable" }
     await server.submitTransaction(transaction)
-    if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
+    if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === financialNetwork() && input.payment.amount === 0.1) {
       console.log("[P7 TEST] Refund post-replay-submit 0.10")
       return { outcome: "FAILED", code: "submit_failed", message: "P7 refund post-replay-submit test" }
     }
@@ -201,7 +202,7 @@ export async function submitRefundBlockchainOnce(input: Input, mode: "execute" |
   const refundStellarAmount = refundAmountStroops === null ? null : exactPositiveStroopsToStellarAmount(refundAmountStroops)
   if (refundAmountStroops === null || refundStellarAmount === null) return { outcome: "FAILED", code: "invalid_input", message: "Refund amount is not an exact positive stroop amount" }
 
-  const candidate = await prepareR36EvidenceCandidate({network:'Pi Testnet',sourceWallet:input.payment.from_address,
+  const candidate = await prepareR36EvidenceCandidate({network:financialNetwork(),sourceWallet:input.payment.from_address,
     destinationWallet:input.payment.to_address,paymentId:input.checkpoint.paymentId,operationKind:'refund',
     operationId:input.checkpoint.refundId,piPaymentId:input.payment.identifier,amountStroops:String(refundAmountStroops)},
     source.sequence,baseFee.toString(),async()=>{
@@ -228,7 +229,7 @@ export async function submitRefundBlockchainOnce(input: Input, mode: "execute" |
   if (!prepared || prepared.preparedNow !== true || prepared.envelopeXdr !== envelopeXdr || prepared.preparedHash !== preparedHash || prepared.preparedSequence !== preparedSequence) return { outcome: "FAILED", code: "submit_failed", message: "Refund transaction was not confirmed" }
 
 
-  if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === "Pi Testnet" && input.payment.amount === 0.1) {
+  if (process.env.VERCEL_ENV !== "production" && process.env.FLASHPAY_REFUND_CRASH_TEST === "1" && input.payment.network === financialNetwork() && input.payment.amount === 0.1) {
     console.log("[P7 TEST] Refund prepared-before-auth 0.10")
     return { outcome: "FAILED", code: "submit_failed", message: "P7 refund prepared-before-auth test" }
   }
@@ -239,13 +240,13 @@ export async function submitRefundBlockchainOnce(input: Input, mode: "execute" |
   try {
     if (!await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund wallet submit ownership lost" }
     if (!await verifyPreparedWalletAuthority({
-      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      network: financialNetwork(), sourceWallet: input.payment.from_address,
       paymentId: input.checkpoint.paymentId, operationKind: 'refund',
       operationId: input.checkpoint.refundId, preparedHash, preparedSequence,
     })) return { outcome: "FAILED", code: "submit_failed", message: "Durable refund authority not proven" }
     if ((await verifyRefundOriginalCustomerBinding({ paymentId: input.checkpoint.paymentId, payerUid: input.checkpoint.payerUid, amount: input.checkpoint.amount })).outcome !== 'VERIFIED') return { outcome: 'FAILED', code: 'submit_failed', message: 'Original customer binding unverified before Horizon submission' }
     if (!await claimFirstWalletSubmission({
-      network: 'Pi Testnet', sourceWallet: input.payment.from_address,
+      network: financialNetwork(), sourceWallet: input.payment.from_address,
       paymentId: input.checkpoint.paymentId, operationKind: 'refund',
       operationId: input.checkpoint.refundId, preparedHash, preparedSequence,
     })) return { outcome: "FAILED", code: "submit_failed", message: "Refund one-shot submission already used or unavailable" }

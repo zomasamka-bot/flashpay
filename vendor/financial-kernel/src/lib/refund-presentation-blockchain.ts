@@ -1,3 +1,4 @@
+import {financialHorizonOrigin,financialNetwork} from './financial-network'
 import "server-only"
 
 import { reconcileRefundWithPi } from "./refund-pi-reconciliation"
@@ -47,13 +48,13 @@ export async function readRefundPresentationBlockchain(checkpoint: RefundCheckpo
       payment.transaction?.txid !== txid
     ) return { outcome: "INDETERMINATE" }
 
-    const horizonResponse = await fetch(`https://api.testnet.minepi.com/transactions/${encodeURIComponent(txid)}`, { cache: "no-store" })
+    const horizonResponse = await fetch(`${financialHorizonOrigin()}/transactions/${encodeURIComponent(txid)}`, { cache: "no-store" })
     if (!horizonResponse.ok) return { outcome: "INDETERMINATE" }
     const horizonBody: unknown = await horizonResponse.json()
     const transactionAt = extractRefundHorizonTransactionAt(horizonBody, txid)
     if (!transactionAt) return { outcome: "INDETERMINATE" }
 
-    return { outcome: "CONFIRMED", transactionAt, network: "Pi Testnet", piTransactionVerified: true, piDeveloperCompleted: status.developer_completed, horizonSuccessful: true }
+    return { outcome: "CONFIRMED", transactionAt, network: financialNetwork(), piTransactionVerified: true, piDeveloperCompleted: status.developer_completed, horizonSuccessful: true }
   } catch {
     return { outcome: "INDETERMINATE" }
   }

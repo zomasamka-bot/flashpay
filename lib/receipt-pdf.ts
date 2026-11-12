@@ -218,6 +218,15 @@ function createReceiptCanvas(receipt: FlashPayReceiptView, options: ReceiptPdfOp
   drawValue(ctx, formatReceiptDateTime(receipt.occurredAt, options.locale, labels.unavailable), 630, detailsY + 66, PAGE_WIDTH_PX - margin - 630, 34)
 
   let nextY = 1005
+  if (receipt.merchantFinancials) {
+    const f=receipt.merchantFinancials
+    const feeWidth = (contentWidth - 48) / 2
+    drawLabel(ctx,direction==='rtl'?'عمولة التاجر':'Merchant commission',margin,nextY,feeWidth,direction)
+    drawValue(ctx,`${formatReceiptAmount(f.commission)} π`,margin,nextY+54,feeWidth,34,direction)
+    drawLabel(ctx,direction==='rtl'?'صافي مستحق التاجر':'Merchant net amount',margin+feeWidth+48,nextY,feeWidth,direction)
+    drawValue(ctx,`${formatReceiptAmount(f.net)} π`,margin+feeWidth+48,nextY+54,feeWidth,34,direction)
+    nextY+=112
+  }
   if (receipt.note) {
     drawLabel(ctx, labels.note, margin, nextY, contentWidth, direction)
     ctx.font = "400 31px Arial, Helvetica, sans-serif"

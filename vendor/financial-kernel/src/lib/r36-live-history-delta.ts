@@ -1,3 +1,4 @@
+import {financialHorizonOrigin,financialNetwork} from './financial-network'
 /** Append original Horizon observations to a policy-pinned history prefix.
  * Read-only acquisition; does not certify completeness, sign, or authorize money.
  * The independent snapshot reviewer still verifies XDR/results/accounting.
@@ -11,7 +12,7 @@ function must(v:unknown,reason:string):asserts v{if(!v)throw Error(reason)}
 async function read(fetcher:typeof fetch,path:string):Promise<Row>{
  const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined
  try{return await Promise.race([(async()=>{
- const r=await fetcher('https://api.testnet.minepi.com'+path,{method:'GET',redirect:'error',cache:'no-store',signal:controller.signal})
+ const r=await fetcher(financialHorizonOrigin()+path,{method:'GET',redirect:'error',cache:'no-store',signal:controller.signal})
  must(r.status===200&&!r.redirected&&r.body,'LIVE_HISTORY_PROVIDER_UNAVAILABLE')
  const reader=r.body.getReader(),parts:Uint8Array[]=[];let size=0
  try{for(;;){const x=await reader.read();if(x.done)break;size+=x.value.length;must(size<=2_000_000,'LIVE_HISTORY_RESPONSE_SIZE');parts.push(x.value)}}finally{await reader.cancel().catch(()=>{})}
@@ -48,7 +49,7 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
   (paginated||policy.schema==='R36_HORIZON_BOUNDED_DELTA_V1')&&Number.isSafeInteger(policy.maxNewTransactions)&&Number(policy.maxNewTransactions)>=1&&
   Number(policy.maxNewTransactions)<=(paginated?19999:200)&&(!paginated||(Number.isSafeInteger(policy.maxPages)&&Number(policy.maxPages)>=1&&Number(policy.maxPages)<=100)), 'LIVE_HISTORY_POLICY')
  const h=JSON.parse(JSON.stringify(prefix)) as R36ObservedHistory
- must(h.network==='Pi Testnet'&&/^G[A-Z2-7]{55}$/.test(h.wallet)&&h.transactions.length>0&&h.transactions.length<=20000&&h.transactions.length===h.operations.length&&uint(h.cutoffLedger)&&hex(h.cutoffHash),'LIVE_HISTORY_PREFIX')
+ must(h.network===financialNetwork()&&/^G[A-Z2-7]{55}$/.test(h.wallet)&&h.transactions.length>0&&h.transactions.length<=20000&&h.transactions.length===h.operations.length&&uint(h.cutoffLedger)&&hex(h.cutoffHash),'LIVE_HISTORY_PREFIX')
  const tail=h.transactions[h.transactions.length-1];must(uint(tail.paging_token)&&hex(tail.hash),'LIVE_HISTORY_ORIGINAL_CURSOR_REQUIRED')
  const before=await read(fetcher,'/accounts/'+h.wallet)
  must(before.account_id===h.wallet&&uint(String(before.last_modified_ledger)),'LIVE_HISTORY_ACCOUNT')

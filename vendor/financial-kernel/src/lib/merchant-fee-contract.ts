@@ -1,6 +1,6 @@
-/** Preparation contract only. A quote is not permission to collect or send funds.
+/** Versioned financial contract. A quote alone is never permission to collect or send funds.
  * Values are decimal strings in stroops: no binary floating-point fee arithmetic.
- * Existing V1 financial execution remains zero-commission until V2 is qualified.
+ * Legacy V1 execution remains zero-commission; V2 requires immutable database enrollment.
  */
 export type FinancialNetwork = 'Pi Testnet' | 'Pi Network'
 export type MerchantFeePolicy = Readonly<{
@@ -14,7 +14,7 @@ export type MerchantFeeQuote = Readonly<{
   policy: MerchantFeePolicy; grossStroops: string; merchantNetStroops: string;
   commissionStroops: string;
 }>
-export const MAX_PAYMENT_STROOPS = 10_000_000_000_000n
+export const MAX_PAYMENT_STROOPS = BigInt(10000000000000)
 function exactKeys(v: unknown, fields: string[]): asserts v is Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v) ||
       Object.keys(v).sort().join(',') !== fields.sort().join(',')) throw Error('FEE_CONTRACT_FIELDS')
@@ -25,13 +25,13 @@ function id(v: unknown): asserts v is string {
 export function stroops(value: unknown, allowZero = false): bigint {
   if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,13})$/.test(value)) throw Error('FEE_CONTRACT_PRECISION')
   const n = BigInt(value)
-  if (n > MAX_PAYMENT_STROOPS || n < (allowZero ? 0n : 1n)) throw Error('FEE_CONTRACT_AMOUNT')
+  if (n > MAX_PAYMENT_STROOPS || n < (allowZero ? BigInt(0) : BigInt(1))) throw Error('FEE_CONTRACT_AMOUNT')
   return n
 }
 export function piToExactStroops(value: string): string {
   if (!/^(0|[1-9][0-9]{0,6})(\.[0-9]{1,7})?$/.test(value)) throw Error('FEE_CONTRACT_PRECISION')
   const [whole, fraction = ''] = value.split('.')
-  const n = BigInt(whole) * 10_000_000n + BigInt(fraction.padEnd(7, '0'))
+  const n = BigInt(whole) * BigInt(10000000) + BigInt(fraction.padEnd(7, '0'))
   return stroops(n.toString()).toString()
 }
 export function validateMerchantFeePolicy(value: unknown): MerchantFeePolicy {
@@ -48,7 +48,7 @@ export function validateMerchantFeePolicy(value: unknown): MerchantFeePolicy {
 }
 export function quoteMerchantFee(policy: MerchantFeePolicy, paymentId: string, merchantUid: string, grossStroops: string): MerchantFeeQuote {
   const p = validateMerchantFeePolicy(policy); id(paymentId); id(merchantUid)
-  const gross = stroops(grossStroops), fee = gross * BigInt(p.basisPoints) / 10_000n
+  const gross = stroops(grossStroops), fee = gross * BigInt(p.basisPoints) / BigInt(10000)
   return Object.freeze({schema:'MERCHANT_FEE_QUOTE_V1',paymentId,merchantUid,policy:p,
     grossStroops:gross.toString(),merchantNetStroops:(gross-fee).toString(),commissionStroops:fee.toString()})
 }
@@ -65,7 +65,7 @@ export function validateMerchantFeeQuote(value: unknown): MerchantFeeQuote {
 export function quoteOutcome(value: MerchantFeeQuote, outcome: 'settlement' | 'refund', networkFeeStroops: string) {
   const q = validateMerchantFeeQuote(value), networkFee = stroops(networkFeeStroops, true)
   if (outcome !== 'settlement' && outcome !== 'refund') throw Error('FEE_OUTCOME_INVALID')
-  const commission = outcome === 'settlement' ? BigInt(q.commissionStroops) : 0n
+  const commission = outcome === 'settlement' ? BigInt(q.commissionStroops) : BigInt(0)
   return Object.freeze({outcome, customerAmountStroops:q.grossStroops,
     merchantCreditStroops:outcome === 'settlement' ? q.merchantNetStroops : '0',
     customerRefundStroops:outcome === 'refund' ? q.grossStroops : '0',

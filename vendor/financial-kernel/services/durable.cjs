@@ -67,10 +67,10 @@ async function run(){
  const dependenciesAt=Date.now();timing.networkAndContainersMs=dependenciesAt-startupAt-timing.identityAndCleanupMs;
  const {startServiceGroup}=require('./service-start-group.cjs');
  state.services=await startServiceGroup([
-  ()=>start(names[1],{mode:'evidence',network:'Pi Testnet',service:svc('evidence-server',['issuer','registrar']),directory:'/artifacts'},'EVIDENCE_LISTENING'),
-  ()=>start(names[2],{mode:'signer',network:'Pi Testnet',databaseUrl:url('r36_signer'),policyDigest,approvalId:null,service:svc('signer',['issuer']),signingKeyPem:keys.signer.signing.privateKeyPem},'SIGNER_LISTENING'),
-  ()=>start(names[3],{mode:'issuer',network:'Pi Testnet',databaseUrl:url('r36_issuer'),policyDigest,approvalId:null,service:svc('issuer',['controller','registrar','producer']),providers:{evidence:endpoint('evidence-server'),signer:endpoint('signer')}},'ISSUER_LISTENING'),
-  ()=>start(names[4],{mode:'registrar',network:'Pi Testnet',databaseUrl:url('r36_registrar'),policyDigest,service:svc('registrar',['controller','producer']),providers:{evidence:endpoint('evidence-server','registrar'),issuer:endpoint('issuer','registrar')}},'REGISTRAR_LISTENING'),
+  ()=>start(names[1],{mode:'evidence',network:deployment.network,service:svc('evidence-server',['issuer','registrar']),directory:'/artifacts'},'EVIDENCE_LISTENING'),
+  ()=>start(names[2],{mode:'signer',network:deployment.network,databaseUrl:url('r36_signer'),policyDigest,approvalId:null,service:svc('signer',['issuer']),signingKeyPem:keys.signer.signing.privateKeyPem},'SIGNER_LISTENING'),
+  ()=>start(names[3],{mode:'issuer',network:deployment.network,databaseUrl:url('r36_issuer'),policyDigest,approvalId:null,service:svc('issuer',['controller','registrar','producer']),providers:{evidence:endpoint('evidence-server'),signer:endpoint('signer')}},'ISSUER_LISTENING'),
+  ()=>start(names[4],{mode:'registrar',network:deployment.network,databaseUrl:url('r36_registrar'),policyDigest,service:svc('registrar',['controller','producer']),providers:{evidence:endpoint('evidence-server','registrar'),issuer:endpoint('issuer','registrar')}},'REGISTRAR_LISTENING'),
   ()=>start(names[5],{mode:'provider',service:svc('provider',['producer']),piApiKey:load('pi-provider').apiKey},'READ_PROVIDER_LISTENING')
  ]);timing.dependenciesMs=Date.now()-dependenciesAt;
  const producerAt=Date.now();

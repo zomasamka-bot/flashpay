@@ -1,9 +1,10 @@
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 /** Non-authorizing durable handoff. An evidence candidate is never a prepared
  * checkpoint, wallet claim, certificate, submission attempt or accounting entry. */
 import {Transaction,TransactionBuilder} from '@stellar/stellar-sdk'
 import {createHash} from 'node:crypto'
 import {sealR36Envelope,verifyR36SignedEnvelope,type R36EnvelopeSeal} from './r36-prepared-evidence-seal'
-export type R36PreparedIdentity={network:'Pi Testnet';sourceWallet:string;destinationWallet:string;paymentId:string;
+export type R36PreparedIdentity={network:FinancialNetwork;sourceWallet:string;destinationWallet:string;paymentId:string;
  operationKind:'settlement'|'refund';operationId:string;piPaymentId:string;amountStroops:string}
 export type R36Candidate={identity:R36PreparedIdentity;envelopeXdr:string;preparedHash:string;preparedSequence:string;candidateDigest:string;signedEnvelopeSha256:string;encryptedEnvelope:R36EnvelopeSeal}
 export type R36CandidateStore={read(i:R36PreparedIdentity):Promise<{state:'absent'}|{state:'present';candidate:R36Candidate}>;
@@ -11,12 +12,12 @@ export type R36CandidateStore={read(i:R36PreparedIdentity):Promise<{state:'absen
 const hash=(x:string)=>createHash('sha256').update(x).digest('hex')
 const fields=['network','sourceWallet','destinationWallet','paymentId','operationKind','operationId','piPaymentId','amountStroops'] as const
 export function verifyR36EvidenceCandidate(identity:R36PreparedIdentity,c:Omit<R36Candidate,'candidateDigest'>):Transaction{
- if(!c||!c.identity||!fields.every(k=>c.identity[k]===identity[k])||Object.keys(c.identity).length!==fields.length||identity.network!=='Pi Testnet'||
+ if(!c||!c.identity||!fields.every(k=>c.identity[k]===identity[k])||Object.keys(c.identity).length!==fields.length||identity.network!==financialNetwork()||
   !['settlement','refund'].includes(identity.operationKind)||!['sourceWallet','destinationWallet'].every(k=>/^G[A-Z2-7]{55}$/.test(identity[k as 'sourceWallet']))||
   !['paymentId','operationId','piPaymentId'].every(k=>/^[A-Za-z0-9_.:-]{1,128}$/.test(identity[k as 'paymentId']))||
   !/^[1-9][0-9]{0,13}$/.test(identity.amountStroops)||BigInt(identity.amountStroops)>BigInt('10000000000000')||typeof c.envelopeXdr!=='string'||c.envelopeXdr.length>32768)
   throw Error('EVIDENCE_CANDIDATE_IDENTITY')
- const t=TransactionBuilder.fromXDR(c.envelopeXdr,'Pi Testnet')
+ const t=TransactionBuilder.fromXDR(c.envelopeXdr,financialNetwork())
  if(!(t instanceof Transaction)||t.toXDR()!==c.envelopeXdr||Buffer.from(t.hash()).toString('hex')!==c.preparedHash||t.sequence!==c.preparedSequence||
   t.source!==identity.sourceWallet||t.operations.length!==1||t.operations[0].type!=='payment'||t.operations[0].source!==undefined||!t.operations[0].asset.isNative()||
   t.operations[0].destination!==identity.destinationWallet||t.timeBounds?.minTime!=='0'||t.timeBounds?.maxTime!=='0'||t.memo.type!=='text')throw Error('EVIDENCE_CANDIDATE_XDR')

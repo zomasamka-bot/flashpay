@@ -1,3 +1,4 @@
+import {financialHorizonOrigin} from '../../../lib/financial-network'
 import { NextRequest, NextResponse } from "next/server"
 import { query } from "../../../lib/db"
 import { verifyOwnerAuthorizationHeader } from "../../../lib/owner-server-auth"
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
   checks.redis={status:redisRead.ok?"pass":"fail",detail:redisRead.ok?"Redis responded to PING":"Redis unavailable",latencyMs:redisRead.latencyMs}
   const piApi=await timed(async()=>serverConfig.isPiApiKeyConfigured&&fetchOk("https://api.minepi.com/v2/payments/incomplete_server_payments",{headers:{Authorization:`Key ${serverConfig.piApiKey}`,Accept:"application/json"}}))
   checks.piApi={status:piApi.ok?"pass":"fail",detail:piApi.ok?"Pi Server API reachable":"Pi Server API unavailable",latencyMs:piApi.latencyMs}
-  const horizon=await timed(()=>fetchOk("https://api.testnet.minepi.com/",{headers:{Accept:"application/json"}}))
+  const horizon=await timed(()=>fetchOk((financialHorizonOrigin()+'/'),{headers:{Accept:"application/json"}}))
   checks.horizon={status:horizon.ok?"pass":"fail",detail:horizon.ok?"Pi Testnet Horizon reachable":"Pi Testnet Horizon unavailable",latencyMs:horizon.latencyMs}
   if(!isRedisConfigured){checks.recoveryWake={status:"unknown",detail:"Recovery wake freshness unavailable because Redis is unavailable"}}else{try{const raw=await redis.get<unknown>(RECOVERY_WAKE_KEY);const observedAt=typeof raw==="string"?raw:undefined;const observedMs=observedAt?Date.parse(observedAt):NaN;if(!Number.isFinite(observedMs)||observedMs>Date.now()){checks.recoveryWake={status:"unknown",detail:"No valid trusted recovery wake timestamp has been observed yet"}}else{const ageMs=Date.now()-observedMs;checks.recoveryWake={status:ageMs<=RECOVERY_FRESH_MS?"pass":"warn",detail:ageMs<=RECOVERY_FRESH_MS?"Trusted recovery wake is fresh":"Trusted recovery wake is stale",observedAt,ageMs}}}catch{checks.recoveryWake={status:"unknown",detail:"Recovery wake freshness read failed"}}}
   const canonicalStorageHealthy=checks.postgres.status==="pass"&&checks.redis.status==="pass";checks.canonicalStorage={status:canonicalStorageHealthy?"pass":"fail",detail:canonicalStorageHealthy?"Canonical PostgreSQL + Redis storage dependencies are readable":"One or more canonical storage dependencies are unavailable"}

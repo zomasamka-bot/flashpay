@@ -1,3 +1,5 @@
+import {settlementTarget,contractCommission,netImpact} from '../../../lib/payment-financial-contract'
+import {financialNetwork} from '../../../lib/financial-network'
 import { createHash, randomUUID, timingSafeEqual } from "crypto"
 import { after, type NextRequest, NextResponse } from "next/server"
 
@@ -214,7 +216,7 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
         const payerUid=dto&&typeof dto.user_uid==='string'&&dto.user_uid.trim()!==''&&dto.user_uid===dto.user_uid.trim()?dto.user_uid:''
         // The durable ingress contract is Testnet-only, as in /api/pi/complete.
         // Check both the initial read and the post-completion refetch before claiming or recording.
-        if(!dto||!status||!transaction||dto.network!=='Pi Testnet'||dto.identifier!==ingress.u2aIdentifier||dto.direction!=='user_to_app'||Number(dto.amount)!==ingress.customerAmount||
+        if(!dto||!status||!transaction||dto.network!==financialNetwork()||dto.identifier!==ingress.u2aIdentifier||dto.direction!=='user_to_app'||Number(dto.amount)!==ingress.customerAmount||
           metadata?.paymentId!==paymentId||transaction.txid!==ingress.u2aTxid||transaction.verified!==true||payerUid!==ingress.payerUid||
           status.developer_approved!==true||status.transaction_verified!==true||status.cancelled===true||status.user_cancelled===true)return null
         return{dto,status,transaction}
@@ -820,9 +822,9 @@ function isPiA2USlotReleasedForDbPending(payment: Payment | null): payment is Pa
   if (payment === null) return false
   const a2uPaymentIdValid = typeof payment.a2uPaymentId === "string" && payment.a2uPaymentId.trim() !== "" && payment.a2uPaymentId === payment.a2uPaymentId.trim()
   const a2uTxidValid = typeof payment.a2uTxid === "string" && /^[0-9a-f]{64}$/.test(payment.a2uTxid)
-  const amountsValid = typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === payment.customerAmount
+  const amountsValid = typeof payment.customerAmount === "number" && Number.isFinite(payment.customerAmount) && payment.customerAmount > 0 && typeof payment.merchantAmount === "number" && Number.isFinite(payment.merchantAmount) && payment.merchantAmount === settlementTarget(payment)
   const feeValid = typeof payment.horizonFeeCharged === "number" && Number.isFinite(payment.horizonFeeCharged) && payment.horizonFeeCharged >= 0
-  const netValid = payment.appCommission === 0 && typeof payment.appNetImpact === "number" && Number.isFinite(payment.appNetImpact) && amountsValid && feeValid && payment.appNetImpact === payment.customerAmount! - payment.merchantAmount! - payment.horizonFeeCharged!
+  const netValid = payment.appCommission === contractCommission(payment) && typeof payment.appNetImpact === "number" && Number.isFinite(payment.appNetImpact) && amountsValid && feeValid && payment.appNetImpact === netImpact(payment.customerAmount!,payment.merchantAmount!,payment.horizonFeeCharged!,payment.financialContract)
   return payment.status === "settlement_pending" && payment.piCompleted === true && payment.piCompletionPending === false && payment.horizonSuccessFlag === true && payment.requiresDbReconciliation === true && payment.dbRecorded !== true && a2uPaymentIdValid && a2uTxidValid && amountsValid && feeValid && netValid
 }
 

@@ -1,3 +1,4 @@
+import {financialNetwork} from './financial-network'
 import * as StellarSDK from "@stellar/stellar-sdk"
 import { exactStroopAmountMatch, numberToExactPositiveStroops } from "./financial-amount-stroops"
 
@@ -76,7 +77,7 @@ export function verifySettlementSubmitXdrIntent(input: SettlementSubmitXdrVerifi
 
   let transaction: StellarSDK.Transaction
   try {
-    const parsed = StellarSDK.TransactionBuilder.fromXDR(input.envelopeXdr, "Pi Testnet")
+    const parsed = StellarSDK.TransactionBuilder.fromXDR(input.envelopeXdr, financialNetwork())
     if (!(parsed instanceof StellarSDK.Transaction)) return blocked("XDR_INVALID", [{ check: "parsedTransaction", passed: false, expected: "StellarSDK.Transaction", observed: "non-transaction envelope" }])
     transaction = parsed
   } catch (error) {

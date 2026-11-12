@@ -1,3 +1,4 @@
+import {type FinancialNetwork,financialNetwork} from './financial-network'
 import {deployment} from '../deployment'
 /** Private job entry point, NOT_FOR_DEPLOY until policy/custody/hosting qualification.
  * Read secret configuration from a protected pipe, never arguments or files in artifacts.
@@ -8,11 +9,11 @@ import {checkProductionTransaction} from './r36-production-operator'
 import {productionR36Host} from './r36-production-runtime'
 import {certifyR36PriorClosure,certifyR36BoundSuccessor} from './r36-wallet-lifecycle'
 import type {R36CertificateDatabase} from './r36-certificate-consumer'
-type Config={network:'Pi Testnet';databaseUrl:string;policyDigest:string;mode:'prior_closure'|'bound_successor';evidence:unknown;wallet?:string;paymentId?:string;nonce?:string;closureDigest?:string}
+type Config={network:FinancialNetwork;databaseUrl:string;policyDigest:string;mode:'prior_closure'|'bound_successor';evidence:unknown;wallet?:string;paymentId?:string;nonce?:string;closureDigest?:string}
 export function validateLifecycleConfig(input:unknown):Config{
  if(!input||typeof input!=='object'||Array.isArray(input))throw Error('CONFIG_REQUIRED')
  const c=input as Config,fields=['network','databaseUrl','policyDigest','mode','evidence',...(c.mode==='prior_closure'?['wallet','paymentId']:['nonce','closureDigest'])]
- if(!['prior_closure','bound_successor'].includes(c.mode)||c.network!=='Pi Testnet'||Object.keys(c).length!==fields.length||!fields.every(k=>Object.hasOwn(c,k))||
+ if(!['prior_closure','bound_successor'].includes(c.mode)||c.network!==financialNetwork()||Object.keys(c).length!==fields.length||!fields.every(k=>Object.hasOwn(c,k))||
   typeof c.policyDigest!=='string'||!/^[0-9a-f]{64}$/.test(c.policyDigest))throw Error('LIFECYCLE_CONFIG')
  const u=new URL(c.databaseUrl)
  if(u.protocol!=='postgresql:'||u.hostname!==productionR36Host||u.pathname!==('/'+deployment().databaseName)||u.username!=='r36_issuer'||!u.password||u.search||u.hash||(u.port&&u.port!=='5432'))throw Error('LIFECYCLE_TARGET')

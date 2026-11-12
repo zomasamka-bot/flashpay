@@ -1,3 +1,4 @@
+import {netImpact} from './payment-financial-contract'
 import "server-only"
 
 import type { Payment } from "./types"
@@ -20,7 +21,8 @@ export async function readDurableSettlementProjection(paymentId: string): Promis
     const d = ingress.checkpoint
     return {
       id:d.paymentId, merchantId:d.merchantId, merchantUid:d.merchantUid, accessToken:"", redisProjectionVersion:1,
-      amount:d.customerAmount, customerAmount:d.customerAmount, note:"", status:"paid_to_app", createdAt:d.createdAt,
+      ...(d.financialContract?{financialContract:d.financialContract}:{}),
+    amount:d.customerAmount, customerAmount:d.customerAmount, note:"", status:"paid_to_app", createdAt:d.createdAt,
       piPaymentId:d.u2aIdentifier, u2aTxid:d.u2aTxid, payerUid:d.payerUid, payerUidSource:"verified_u2a",
       payerUidCapturedAt:d.verifiedAt, paidAt:d.completedAt!, settlementDispatchRequestedAt:d.completedAt!,
     }
@@ -34,7 +36,8 @@ export async function readDurableSettlementProjection(paymentId: string): Promis
   const dbDone = d.stage === "db_finalized"
   return {
     id:d.paymentId, merchantId:d.merchantId, merchantUid:d.merchantUid, accessToken:"", redisProjectionVersion:1,
-    amount:d.customerAmount, customerAmount:d.customerAmount, merchantAmount:d.merchantAmount, appCommission:0,
+    ...(d.financialContract?{financialContract:d.financialContract}:{}),
+    amount:d.customerAmount, customerAmount:d.customerAmount, merchantAmount:d.merchantAmount, appCommission:d.appCommission,
     note:"", status:dbDone?"settled_to_merchant":prepared?"settlement_pending":"paid_to_app",
     createdAt:d.createdAt, paidAt:d.paidAt, settlementDispatchRequestedAt:d.paidAt,
     piPaymentId:d.u2aIdentifier, u2aTxid:d.u2aTxid, payerUid:d.payerUid,
@@ -45,7 +48,7 @@ export async function readDurableSettlementProjection(paymentId: string): Promis
     ...(dbDone?{settledAt:d.dbFinalizedAt}:{}),
     ...(prepared?{a2uPreparedEnvelopeXdr:d.preparedEnvelopeXdr,a2uPreparedTxHash:d.preparedTxHash,a2uPreparedSequence:d.preparedSequence}:{}),
     ...(moved?{a2uTxid:d.a2uTxid,horizonSuccessFlag:true,horizonSuccessAt:d.horizonConfirmedAt,horizonFeeCharged:d.horizonFeeStroops!/10_000_000,
-      appNetImpact:d.customerAmount-d.merchantAmount-d.horizonFeeStroops!/10_000_000,
+      appNetImpact:netImpact(d.customerAmount,d.merchantAmount,d.horizonFeeStroops!/10_000_000,d.financialContract),
       piCompletionPending:!piDone,piCompleted:piDone,requiresDbReconciliation:piDone&&!dbDone,dbRecorded:dbDone}:{}),
   }
 }
