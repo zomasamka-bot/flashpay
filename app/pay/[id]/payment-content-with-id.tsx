@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { ExternalLink } from "lucide-react"
+
 import { authenticateCustomer, authenticateCustomerForRefundRead } from "@/lib/pi-sdk"
 import { readCustomerRefundPresentationClient } from "@/lib/customer-refund-presentation-client"
 import CustomerRefundStatusCard from "@/components/customer-refund-status-card"

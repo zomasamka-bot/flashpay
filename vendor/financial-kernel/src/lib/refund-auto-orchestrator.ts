@@ -1,0 +1,237 @@
+import "server-only"
+
+import {
+  clearAutomaticRefundDeferral,
+  cleanupTerminalRefundRetryMetadata,
+  deferAutomaticRefund,
+  getRefundCheckpointReadOnly,
+  listAutomaticRefundCheckpoints,
+  markAutomaticRefundManualReview,
+  findRefundCheckpointByPaymentId,
+  readAutomaticRefundRetirementState,
+} from "./refund-checkpoint-store"
+import { createRefundIntentInternal } from "./refund-intent-service"
+import { executeRefundNextStep } from "./refund-executor"
+import { isRedisConfigured, redis } from "./redis"
+import type { RefundCheckpoint } from "./types"
+
+export type AutomaticRefundPassResult =
+  | { state: "blocked" }
+  | { state: "ok"; processed: number; results: Array<{ refundId: string; paymentId: string; action: "intent" | "execute"; outcome: "success" | "deferred" | "blocked"; reason?: string }>; refundDrainCount: number; refundDrainHeadPaymentId: string | null; refundDrainHeadRefundId: string | null }
+
+const SHORT_RETRY_REASONS = new Set([
+  "unavailable",
+  "lock_conflict",
+  "attempt_conflict",
+  "blockchain_claim_conflict",
+  "submit_failed",
+  "completion_unverified",
+  "dr14_interruption",
+  "intent_409",
+  "intent_503",
+])
+
+function isIntentSuccess(result: unknown): boolean {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return false
+  const value = result as Record<string, unknown>
+  return (value.status === 200 || value.status === 201) && Boolean(value.body)
+}
+
+function isExecutorSuccess(result: unknown): boolean {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return false
+  const value = result as Record<string, unknown>
+  return value.outcome === "found" || value.outcome === "ready_for_submission"
+}
+
+function failureReason(result: unknown): string {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return "uncertain"
+  const reason = (result as Record<string, unknown>).reason
+  return typeof reason === "string" ? reason : "uncertain"
+}
+
+function retryDelayMs(reason: string, thrown: boolean): number {
+  if (thrown) return 60_000
+  const normalized = reason.toLowerCase()
+  if (normalized.includes("uncertain") || SHORT_RETRY_REASONS.has(normalized)) return 60_000
+  return 15 * 60_000
+}
+
+async function deferAfterFailure(checkpoint: RefundCheckpoint, reason: string, thrown: boolean): Promise<boolean> {
+  const current = await getRefundCheckpointReadOnly(checkpoint.refundId)
+  if (current.state !== "present") return false
+  const delay = retryDelayMs(reason, thrown)
+  const deferred = await deferAutomaticRefund(
+    current.checkpoint.refundId,
+    current.checkpoint.stage,
+    current.checkpoint.status,
+    thrown ? "automatic_refund_exception" : "automatic_refund_blocked",
+    reason,
+    new Date(Date.now() + delay).toISOString(),
+  )
+  return deferred !== null
+}
+
+export type AutomaticRefundIntentResult =
+  | { outcome: "created" | "existing" | "blocked"; paymentId: string; refundId?: string; reason?: string }
+
+export type AutomaticRefundRetirementBoundaryDecision =
+  | { allow: true }
+  | { allow: false; reason: "automatic_refund_retired" | "automatic_refund_retirement_uncertain" }
+
+// FIN-4 Step 5: one pure decision function is shared by every pre-movement
+// automatic-refund entry point. `active` is the only state allowed to proceed;
+// both `retired` and `uncertain` fail closed before refund financial execution.
+export function classifyAutomaticRefundRetirementBoundary(
+  retirement: "active" | "retired" | "uncertain",
+): AutomaticRefundRetirementBoundaryDecision {
+  if (retirement === "active") return { allow: true }
+  return { allow: false, reason: retirement === "retired" ? "automatic_refund_retired" : "automatic_refund_retirement_uncertain" }
+}
+
+export async function ensureAutomaticRefundIntent(paymentId: string): Promise<AutomaticRefundIntentResult> {
+  if (typeof paymentId !== "string" || paymentId.trim().length === 0) return { outcome: "blocked", paymentId, reason: "invalid_payment_id" }
+  const first = await findRefundCheckpointByPaymentId(paymentId)
+  if (first.state === "uncertain") return { outcome: "blocked", paymentId, reason: "checkpoint_uncertain" }
+  if (first.state === "present") {
+    const retirement = await readAutomaticRefundRetirementState(first.checkpoint.paymentId, first.checkpoint.refundId)
+    const boundary = classifyAutomaticRefundRetirementBoundary(retirement)
+    if (!boundary.allow) return { outcome: "blocked", paymentId, refundId: first.checkpoint.refundId, reason: boundary.reason }
+    if (first.checkpoint.status === "manual_review_required") {
+      const manualReview = await markAutomaticRefundManualReview(first.checkpoint.refundId, first.checkpoint.stage)
+      if (
+        manualReview &&
+        manualReview.refundId === first.checkpoint.refundId &&
+        manualReview.paymentId === first.checkpoint.paymentId &&
+        manualReview.stage === first.checkpoint.stage &&
+        manualReview.status === "manual_review_required" &&
+        manualReview.lastErrorCode === "refund_cancelled" &&
+        manualReview.lastErrorMessage === "refund_cancelled" &&
+        manualReview.nextRetryAt === undefined &&
+        isRedisConfigured
+      ) {
+        try {
+          await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [first.checkpoint.paymentId])
+        } catch (error) {
+          console.warn("[refund/orchestrator] Active recovery index cleanup failed", error)
+        }
+      }
+    }
+    return { outcome: "existing", paymentId, refundId: first.checkpoint.refundId }
+  }
+  const key = `auto-refund:${paymentId}`
+  const intent = await createRefundIntentInternal(paymentId, key)
+  const second = await findRefundCheckpointByPaymentId(paymentId)
+  if (second.state === "uncertain") return { outcome: "blocked", paymentId, reason: "intent_persistence_uncertain" }
+  if (second.state === "present") {
+    if ((intent.status === 200 || intent.status === 201) && second.checkpoint.idempotencyKey !== key) return { outcome: "blocked", paymentId, reason: "intent_identity_conflict" }
+    return { outcome: intent.status === 201 ? "created" : "existing", paymentId, refundId: second.checkpoint.refundId }
+  }
+  if (intent.status === 200 || intent.status === 201) return { outcome: "blocked", paymentId, reason: "intent_persistence_uncertain" }
+  return { outcome: "blocked", paymentId, reason: `intent_${intent.status}` }
+}
+
+export type AutomaticRefundDrainClassification =
+  | { state: "ok"; refundDrainCount: number; refundDrainHeadPaymentId: string | null; refundDrainHeadRefundId: string | null }
+  | { state: "blocked" }
+
+export function classifyAutomaticRefundDrain(checkpoints: RefundCheckpoint[]): AutomaticRefundDrainClassification {
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.status !== "pending" || checkpoint.stage !== "wallet_submission_started") continue
+    if (typeof checkpoint.paymentId !== "string" || checkpoint.paymentId.length === 0 || checkpoint.paymentId !== checkpoint.paymentId.trim() || typeof checkpoint.refundId !== "string" || checkpoint.refundId.length === 0 || checkpoint.refundId !== checkpoint.refundId.trim()) return { state: "blocked" }
+    if (checkpoint.refundPaymentId !== undefined && (typeof checkpoint.refundPaymentId !== "string" || checkpoint.refundPaymentId.length === 0 || checkpoint.refundPaymentId !== checkpoint.refundPaymentId.trim())) return { state: "blocked" }
+    if (checkpoint.refundTxid !== undefined && (typeof checkpoint.refundTxid !== "string" || checkpoint.refundTxid.length === 0 || checkpoint.refundTxid !== checkpoint.refundTxid.trim())) return { state: "blocked" }
+  }
+  const candidates = checkpoints.filter((checkpoint) => checkpoint.status === "pending" && checkpoint.stage === "wallet_submission_started" && typeof checkpoint.refundPaymentId === "string" && checkpoint.refundPaymentId.length > 0 && checkpoint.refundPaymentId === checkpoint.refundPaymentId.trim() && checkpoint.refundTxid === undefined)
+  return { state: "ok", refundDrainCount: candidates.length, refundDrainHeadPaymentId: candidates[0]?.paymentId ?? null, refundDrainHeadRefundId: candidates[0]?.refundId ?? null }
+}
+
+export async function readAutomaticRefundDrainHead(limit: number): Promise<AutomaticRefundDrainClassification> {
+  const queued = await listAutomaticRefundCheckpoints(Math.min(limit, 20))
+  if (queued.state !== "ok") return { state: "blocked" }
+  return classifyAutomaticRefundDrain(queued.checkpoints)
+}
+
+type AutomaticRefundStepResult = { refundId: string; paymentId: string; action: "intent" | "execute"; outcome: "success" | "deferred" | "blocked"; reason?: string }
+
+async function runAutomaticRefundCheckpointStep(checkpoint: RefundCheckpoint, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<AutomaticRefundStepResult> {
+  if (checkpoint.refundTxid === undefined) {
+    const retirement = await readAutomaticRefundRetirementState(checkpoint.paymentId, checkpoint.refundId)
+    const boundary = classifyAutomaticRefundRetirementBoundary(retirement)
+    if (!boundary.allow) return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action: checkpoint.stage === "eligibility_verified" ? "intent" : "execute", outcome: "blocked", reason: boundary.reason }
+  }
+  let successful = false
+  let reason = "uncertain"
+  let thrown = false
+  try {
+    if (checkpoint.stage === "eligibility_verified" && checkpoint.status === "pending") {
+      const result = await createRefundIntentInternal(checkpoint.paymentId, checkpoint.idempotencyKey)
+      successful = isIntentSuccess(result)
+      if (!successful) reason = `intent_${String((result as Record<string, unknown>)?.status ?? "blocked")}`
+    } else {
+      const result = await executeRefundNextStep(checkpoint.refundId, refundAuthority)
+      successful = isExecutorSuccess(result)
+      if (!successful) reason = failureReason(result)
+    }
+  } catch (error) {
+    thrown = true
+    reason = error instanceof Error && error.message ? error.message : "automatic refund exception"
+  }
+
+  const action = checkpoint.stage === "eligibility_verified" && checkpoint.status === "pending" ? "intent" : "execute"
+  if (successful) {
+    await clearAutomaticRefundDeferral(checkpoint.refundId)
+    return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "success" }
+  }
+  if (!thrown && reason === "wallet_drain_not_selected") return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason }
+  if (!thrown && reason === "refund_cancelled") {
+    const manualReview = await markAutomaticRefundManualReview(checkpoint.refundId, checkpoint.stage)
+    if (manualReview && manualReview.refundId === checkpoint.refundId && manualReview.paymentId === checkpoint.paymentId && manualReview.stage === checkpoint.stage && manualReview.status === "manual_review_required") {
+      try {
+        await redis.eval<[string], number>("redis.call('SREM',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1]); return 1", ["flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1"], [checkpoint.paymentId])
+      } catch (error) {
+        console.warn("[refund/orchestrator] Active recovery index cleanup failed", error)
+      }
+      return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason }
+    }
+  }
+  const deferred = await deferAfterFailure(checkpoint, reason, thrown)
+  return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: deferred ? "deferred" : "blocked", reason }
+}
+
+export async function runAutomaticRefundPreparationStep(paymentId: string, refundId: string): Promise<{ state: "ok"; result: AutomaticRefundStepResult } | { state: "blocked" }> {
+  if (typeof paymentId !== "string" || paymentId.length === 0 || paymentId !== paymentId.trim() || typeof refundId !== "string" || refundId.length === 0 || refundId !== refundId.trim()) return { state: "blocked" }
+  const current = await getRefundCheckpointReadOnly(refundId)
+  if (current.state !== "present" || current.checkpoint.paymentId !== paymentId || current.checkpoint.refundId !== refundId) return { state: "blocked" }
+  const checkpoint = current.checkpoint
+  const retirement = await readAutomaticRefundRetirementState(checkpoint.paymentId, checkpoint.refundId)
+  const boundary = classifyAutomaticRefundRetirementBoundary(retirement)
+  if (!boundary.allow) return { state: "blocked" }
+  const preparationStage =
+    (checkpoint.stage === "eligibility_verified" && checkpoint.status === "pending") ||
+    (checkpoint.stage === "intent_created" && checkpoint.status === "pending" && checkpoint.refundPaymentId === undefined && checkpoint.refundTxid === undefined) ||
+    (checkpoint.stage === "wallet_submission_started" && checkpoint.status === "pending" && checkpoint.refundPaymentId === undefined && checkpoint.refundTxid === undefined)
+  if (!preparationStage) return { state: "blocked" }
+  return { state: "ok", result: await runAutomaticRefundCheckpointStep(checkpoint, null) }
+}
+
+export async function runAutomaticRefundFinalizationStep(paymentId: string, refundId: string): Promise<{ state: "ok"; result: AutomaticRefundStepResult } | { state: "blocked" }> {
+  if (typeof paymentId !== "string" || paymentId.length === 0 || paymentId !== paymentId.trim() || typeof refundId !== "string" || refundId.length === 0 || refundId !== refundId.trim()) return { state: "blocked" }
+  const current = await getRefundCheckpointReadOnly(refundId)
+  if (current.state !== "present" || current.checkpoint.paymentId !== paymentId || current.checkpoint.refundId !== refundId) return { state: "blocked" }
+  if (!["wallet_submission_confirmed", "payment_checkpoint_updated", "accounting_recorded", "audit_recorded"].includes(current.checkpoint.stage) || typeof current.checkpoint.refundPaymentId !== "string" || current.checkpoint.refundPaymentId.length === 0 || typeof current.checkpoint.refundTxid !== "string" || current.checkpoint.refundTxid.length === 0) return { state: "blocked" }
+  return { state: "ok", result: await runAutomaticRefundCheckpointStep(current.checkpoint, null) }
+}
+
+export async function runAutomaticRefundPass(limit: number, refundAuthority?: { paymentId: string; refundId: string } | null): Promise<AutomaticRefundPassResult> {
+  if (!Number.isInteger(limit) || limit <= 0) return { state: "blocked" }
+  const terminalCleanup = await cleanupTerminalRefundRetryMetadata(Math.min(limit, 20))
+  if (terminalCleanup === null) return { state: "blocked" }
+  const queued = await listAutomaticRefundCheckpoints(Math.min(limit, 20))
+  if (queued.state !== "ok") return { state: "blocked" }
+
+  const results: AutomaticRefundStepResult[] = []
+  for (const checkpoint of queued.checkpoints) results.push(await runAutomaticRefundCheckpointStep(checkpoint, refundAuthority))
+  const refundDrain = classifyAutomaticRefundDrain(queued.checkpoints)
+  if (refundDrain.state !== "ok") return { state: "blocked" }
+  return { state: "ok", processed: results.length, results, refundDrainCount: refundDrain.refundDrainCount, refundDrainHeadPaymentId: refundDrain.refundDrainHeadPaymentId, refundDrainHeadRefundId: refundDrain.refundDrainHeadRefundId }
+}

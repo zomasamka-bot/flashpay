@@ -1,0 +1,284 @@
+{
+  "version": 1,
+  "transport": "Next.js 15 server Request/Response; after() retains host lifetime",
+  "routes": [
+    {
+      "path": "/api/control/availability",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/control/availability/route"
+    },
+    {
+      "path": "/api/control/domain",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/control/domain/route"
+    },
+    {
+      "path": "/api/control/system",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/control/system/route"
+    },
+    {
+      "path": "/api/emergency/clear-stuck-payment",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/emergency/clear-stuck-payment/route"
+    },
+    {
+      "path": "/api/merchant/payments",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/merchant/payments/route"
+    },
+    {
+      "path": "/api/operations/financial-health",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/operations/financial-health/route"
+    },
+    {
+      "path": "/api/operations/incident-health",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/operations/incident-health/route"
+    },
+    {
+      "path": "/api/operations/infrastructure-health",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/operations/infrastructure-health/route"
+    },
+    {
+      "path": "/api/operations/overview",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/operations/overview/route"
+    },
+    {
+      "path": "/api/operations/payment-diagnostic",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/operations/payment-diagnostic/route"
+    },
+    {
+      "path": "/api/operations/payment-review",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/operations/payment-review/route"
+    },
+    {
+      "path": "/api/operations/r1001-accounting-truth",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/operations/r1001-accounting-truth/route"
+    },
+    {
+      "path": "/api/owner/verify-uid",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/owner/verify-uid/route"
+    },
+    {
+      "path": "/api/payments/[id]",
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "export": "./handlers/payments/[id]/route"
+    },
+    {
+      "path": "/api/payments/create-intent",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/payments/create-intent/route"
+    },
+    {
+      "path": "/api/payments/history",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/payments/history/route"
+    },
+    {
+      "path": "/api/payments/history/unverified",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/payments/history/unverified/route"
+    },
+    {
+      "path": "/api/payments",
+      "methods": [
+        "OPTIONS",
+        "POST",
+        "GET"
+      ],
+      "export": "./handlers/payments/route"
+    },
+    {
+      "path": "/api/pi/a2u",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/pi/a2u/route"
+    },
+    {
+      "path": "/api/pi/approve",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/pi/approve/route"
+    },
+    {
+      "path": "/api/pi/complete",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/pi/complete/route"
+    },
+    {
+      "path": "/api/pi/entry-token",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/pi/entry-token/route"
+    },
+    {
+      "path": "/api/pi/recover-pretransaction",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/pi/recover-pretransaction/route"
+    },
+    {
+      "path": "/api/pi/start",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/pi/start/route"
+    },
+    {
+      "path": "/api/pi/verify-uid",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/pi/verify-uid/route"
+    },
+    {
+      "path": "/api/profile",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/profile/route"
+    },
+    {
+      "path": "/api/receipt-files/[token]",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/receipt-files/[token]/route"
+    },
+    {
+      "path": "/api/receipt-files",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/receipt-files/route"
+    },
+    {
+      "path": "/api/receipts/[id]",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/receipts/[id]/route"
+    },
+    {
+      "path": "/api/recovery/[id]",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/recovery/[id]/route"
+    },
+    {
+      "path": "/api/recovery/new-intents",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/recovery/new-intents/route"
+    },
+    {
+      "path": "/api/recovery/transient",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/recovery/transient/route"
+    },
+    {
+      "path": "/api/refunds/customer-status",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/refunds/customer-status/route"
+    },
+    {
+      "path": "/api/refunds/execute",
+      "methods": [
+        "POST"
+      ],
+      "export": "./handlers/refunds/execute/route"
+    },
+    {
+      "path": "/api/refunds/intent",
+      "methods": [
+        "POST",
+        "OPTIONS"
+      ],
+      "export": "./handlers/refunds/intent/route"
+    },
+    {
+      "path": "/api/refunds/readiness",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/refunds/readiness/route"
+    },
+    {
+      "path": "/api/refunds/status",
+      "methods": [
+        "GET"
+      ],
+      "export": "./handlers/refunds/status/route"
+    },
+    {
+      "path": "/api/transactions",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "export": "./handlers/transactions/route"
+    }
+  ]
+}

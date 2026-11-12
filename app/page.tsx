@@ -3,13 +3,13 @@
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Check, Wallet, AlertCircle, Share2, Copy, DollarSign, X, AlertTriangle, Globe2 } from "lucide-react"
+import { ArrowLeft, Check, Wallet, AlertCircle, Share2, Copy, DollarSign, X, Globe2 } from "lucide-react";
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { createPayment, getPaymentFromServer } from "@/lib/operations"
 import { acquireCreateIntent, finishCreateIntent, beginNextCustomerIntent, readSavedCreateIntent } from "@/lib/create-intent-client"
-import { config } from "@/lib/config"
+
 import { authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
 import { usePaymentById, usePaymentStats } from "@/lib/use-payments"
@@ -23,7 +23,7 @@ import { unifiedStore } from "@/lib/unified-store"
 import {createMerchantActivityPrewarm} from "@/lib/merchant-activity-prewarm"
 
 export default function HomePage() {
-  const router = useRouter()
+  useRouter()
   const { toast } = useToast()
   const { locale, setLocale, t } = useI18n()
 
@@ -37,7 +37,7 @@ export default function HomePage() {
   const [displayAmount, setDisplayAmount] = useState("0.00")
   const [currentPaymentId, setCurrentPaymentId] = useState<string | null>(null)
   const [showQR, setShowQR] = useState(false)
-  const [redirecting, setRedirecting] = useState(false)
+  const [redirecting] = useState(false)
   const hasShownSuccessRef = useRef(false)
   const createInFlightRef = useRef(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -101,7 +101,7 @@ export default function HomePage() {
   const [sdkInitStatus, setSdkInitStatus] = useState<"loading" | "ready" | "error">("loading")
   const [sdkError, setSdkError] = useState<string | null>(null)
 
-  const paymentStats = usePaymentStats()
+  usePaymentStats()
 
   const payment = usePaymentById(currentPaymentId || "")
 
@@ -185,40 +185,6 @@ export default function HomePage() {
 
     void observeSDKReadiness()
   }, [redirecting, toast, routeResolved, isCustomerView])
-
-  // Manual authentication - user controls when to authenticate
-  const handleManualAuthenticate = async () => {
-    setIsConnecting(true)
-    console.log("[v0] User manually triggered authentication")
-    
-    try {
-      const result = await authenticateMerchant()
-      
-      if (result.success) {
-        console.log("[v0] ✓ Merchant authenticated successfully")
-        toast({
-          title: "Connected",
-          description: "Your Pi Wallet has been connected successfully",
-        })
-      } else {
-        console.error("[v0] ✗ Authentication failed:", result.error)
-        toast({
-          title: "Connection Failed",
-          description: result.error || "Failed to connect wallet",
-          variant: "destructive",
-        })
-      }
-    } catch (error) {
-      console.error("[v0] Authentication error:", error)
-      toast({
-        title: "Error",
-        description: "An unexpected error occurred during authentication",
-        variant: "destructive",
-      })
-    } finally {
-      setIsConnecting(false)
-    }
-  }
 
   useEffect(() => {
     if (payment?.status === "settled_to_merchant" && showQR && !hasShownSuccessRef.current) {
@@ -473,7 +439,6 @@ export default function HomePage() {
   }
 
   const handleShareTelegram = () => {
-    const text = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}\n${sharePaymentUrl}`
     const tg = `https://t.me/share/url?url=${encodeURIComponent(sharePaymentUrl)}&text=${encodeURIComponent(`Pay ${payment?.amount || 0}π`)}`
     window.open(tg, "_blank")
     setShowShareMenu(false)
@@ -526,30 +491,6 @@ export default function HomePage() {
         variant: "destructive",
       })
     }
-  }
-
-  const handleUseConvertedAmount = () => {
-    const local = Number.parseFloat(localAmount)
-    const rate = Number.parseFloat(piRate)
-
-    if (!localAmount || !piRate || local <= 0 || rate <= 0) {
-      toast({
-        title: "Invalid input",
-        description: "Please enter valid amounts",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const piAmount = (local / rate).toFixed(8).replace(/\.?0+$/, "")
-    setAmount(piAmount)
-    setDisplayAmount(piAmount)
-    setShowConversion(false)
-    setLocalAmount("")
-    toast({
-      title: "Amount set",
-      description: `Pi amount set to ${piAmount}π`,
-    })
   }
 
   // Show loader while route is resolving

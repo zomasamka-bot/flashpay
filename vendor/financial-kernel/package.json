@@ -1,0 +1,47 @@
+{
+  "name": "@flashpay/financial-kernel",
+  "version": "0.1.0-kernel.4",
+  "private": true,
+  "description": "FLASHpay guarded server kernel; source distribution compiled during application build.",
+  "type": "commonjs",
+  "files": [
+    "src",
+    "dist",
+    "sql",
+    "contracts",
+    "LICENSE.md",
+    "services",
+    "tools",
+    "tsconfig.json"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./deployment": "./src/deployment.ts",
+    "./lib/*": "./src/lib/*.ts",
+    "./handlers/*": "./src/handlers/*.ts",
+    "./package.json": "./package.json",
+    "./runtime/*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "17.1.0",
+    "@upstash/redis": "1.36.2",
+    "postgres": "3.4.9",
+    "redis": "5.11.0",
+    "server-only": "0.0.1"
+  },
+  "peerDependencies": {
+    "next": "15.5.28",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

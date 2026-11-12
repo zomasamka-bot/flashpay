@@ -1,0 +1,545 @@
+import {requiresTestnetIngress,testnetIngressEnabled,reserveTestnetCreation,readOperationSettings} from "../../lib/r36-testnet-ingress"
+import { after, type NextRequest, NextResponse } from "next/server"
+import {observeIntakePolicy} from "../../lib/r36-intake-observation"
+import {reserveWithCurrentEvidence} from "../../lib/r36-creation-readiness"
+import {ensurePrivateTrustHost} from "../../lib/r36-private-host-wake"
+
+// Force dynamic rendering for this route
+export const dynamic = "force-dynamic"
+export const runtime = "nodejs"
+export const maxDuration = 60
+
+import { redis, isRedisConfigured as isKvConfigured, redisRetry } from "../../lib/redis"
+import type { Payment } from "../../lib/types"
+import { isPaymentFinal } from "../../lib/payment-status"
+import { GET as readPaymentStatus } from "./[id]/route"
+import { verifyFinalPaymentPresentation } from "../../lib/payment-presentation-authority"
+import { readSystemState } from "../../lib/system-control"
+import { ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic, classifyPaymentCreateIntentReplay, recoverInitialPaymentProjectionUnderDurableGuard, probeDurablePaymentIdentity } from "../../lib/db"
+import { consumeFinancialRateLimit } from "../../lib/server-rate-limit"
+
+const PAYMENT_CREATE_LEASE_PREFIX = "flashpay:payment:create-active:"
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+}
+
+// Helper: Filter payment to only include public-safe fields
+function getPublicPayment(payment: any) {
+  return {
+    id: payment.id,
+    merchantId: payment.merchantId,
+    merchantAddress: payment.merchantAddress,
+    amount: payment.amount,
+    note: payment.note,
+    status: payment.status === "settled_to_merchant" && !isPaymentFinal(payment) ? "settlement_pending" : payment.status,
+    createdAt: payment.createdAt,
+    paidAt: payment.paidAt,
+    u2aTxid: payment.u2aTxid,
+    a2uTxid: payment.a2uTxid,
+  }
+}
+
+export async function OPTIONS() {
+  return NextResponse.json({}, { status: 200, headers: corsHeaders })
+}
+
+// POST /api/payments - Create a new payment
+export async function POST(request: NextRequest) {
+  if (requiresTestnetIngress() && !testnetIngressEnabled())
+    return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
+
+  const paymentTimingStartedAt = Date.now()
+  let createLeaseKey: string | null = null
+  let createLeaseOwner: string | null = null
+  try {
+    if (!isKvConfigured) {
+      return NextResponse.json({ error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+    // Availability probe only: a per-request UUID is NOT a mutual-exclusion lock.
+    // PostgreSQL's atomic (merchant_uid, create_intent_id) constraint is the
+    // durable identity authority. Never replace this probe with a shared key
+    // without revalidating concurrent replay/409 response contracts.
+    createLeaseKey = `${PAYMENT_CREATE_LEASE_PREFIX}${crypto.randomUUID()}`
+    createLeaseOwner = crypto.randomUUID()
+    let createLease: string | null
+    try {
+      createLease = await redis.set(createLeaseKey, createLeaseOwner, { nx: true, ex: 120 })
+    } catch (leaseError) {
+      // B-D05-R3: dependency outage must fail closed with an explicit
+      // retryable service-unavailable contract, not a generic 500.
+      // No payment identity or financial record is written before this point.
+      console.error("[BD05 CREATE LEASE] Redis unavailable:", leaseError)
+      return NextResponse.json(
+        { error: "Payment persistence temporarily unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
+    if (createLease !== "OK") {
+      return NextResponse.json({ error: "Payment creation temporarily unavailable", code: "PAYMENT_CREATE_LEASE_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+    // M9: kill switch blocks creation of NEW financial flows only.
+    // Existing payment completion/recovery routes remain available so funds are never stranded.
+    const control = await readSystemState()
+    if (!control.ok || control.state.killSwitchEnabled) {
+      return NextResponse.json(
+        { error: "Service temporarily unavailable", code: "SYSTEM_MAINTENANCE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
+    console.log("[API] ========================================")
+    console.log("[API] PAYMENT CREATION REQUEST RECEIVED")
+    const body = await request.json()
+    const { amount, note, accessToken, createIntentId } = body
+    const normalizedNote = note || ""
+    if (typeof createIntentId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(createIntentId)) {
+      return NextResponse.json({ error: "Valid createIntentId is required", code: "CREATE_INTENT_REQUIRED" }, { status: 400, headers: corsHeaders })
+    }
+
+    console.log("[API] Extracted values:")
+    console.log("[API]   - amount:", amount, typeof amount)
+    console.log("[API]   - note:", note, typeof note)
+    console.log("[API]   - accessToken:", accessToken ? "PROVIDED" : "MISSING")
+    console.log("[API] ========================================")
+
+    // Validate required fields from client
+    if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 || amount > 1000000 || Number(amount.toFixed(7)) !== amount) {
+      return NextResponse.json(
+        { error: "Invalid amount. Must be a positive number." },
+        { status: 400, headers: corsHeaders },
+      )
+    }
+
+    // Validate note (optional but if provided must be a string)
+    if (note !== undefined && (typeof note !== "string" || note.length > 500)) {
+      return NextResponse.json(
+        { error: "Invalid note. Must be a string." },
+        { status: 400, headers: corsHeaders },
+      )
+    }
+
+    // CRITICAL: Verify the UID with Pi /v2/me before creating payment
+    console.log("[API] ===== VERIFYING MERCHANT UID WITH PI NETWORK =====")
+    
+    // Validate accessToken (already extracted at top)
+    if (!accessToken || typeof accessToken !== "string") {
+      console.error("[API] ❌ accessToken not provided or invalid")
+      return NextResponse.json(
+        { 
+          error: "UID verification failed - no access token provided",
+          details: "Frontend must send accessToken in payment creation request"
+        },
+        { status: 400, headers: corsHeaders }
+      )
+    }
+    
+    const piMeTimingStartedAt = Date.now()
+    const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
+      method: "GET",cache:"no-store",redirect:"error",signal:AbortSignal.timeout(10000),
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    })
+    
+    if (!verifyResponse.ok) {
+      return NextResponse.json(
+        {
+          error: "UID verification failed with Pi Network",
+          piStatus: verifyResponse.status,
+        },
+        { status: 401, headers: corsHeaders }
+      )
+    }
+    
+    console.log("[P7B TIMING] Pi /v2/me", { durationMs: Date.now() - piMeTimingStartedAt })
+    const verifiedUser = await verifyResponse.json()
+    const verifiedMerchantUid = typeof verifiedUser.uid === "string" ? verifiedUser.uid.trim() : ""
+    const trustedMerchantId = typeof verifiedUser.username === "string" ? verifiedUser.username.trim() : ""
+
+    if (verifiedMerchantUid.length === 0 || trustedMerchantId.length === 0) {
+      return NextResponse.json({ error: "Verified merchant identity invalid" }, { status: 502, headers: corsHeaders })
+    }
+    // /me proves the app-local identity and granted scopes. Pi does not return
+    // wallet_address here; the canonical A2U DTO later binds the destination.
+    // Never promote a client SDK address into server financial evidence.
+    const merchantWalletConsent = Array.isArray(verifiedUser.credentials?.scopes) && verifiedUser.credentials.scopes.includes("wallet_address")
+    
+    // Cold-start prerequisite: classify must not query absent tables.
+    // Both initializers are idempotent; failure is fail-closed, not NEW.
+    if (!(await ensureSettlementCheckpointTable())) {
+      return NextResponse.json({ error: "Payment durability unavailable", code: "PAYMENT_SCHEMA_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+    if (!(await ensurePaymentCreateIntentTable())) {
+      return NextResponse.json({ error: "Payment intent schema unavailable", code: "PAYMENT_INTENT_SCHEMA_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+
+    // B-D05-R1: authenticate first; classify the durable intent before charging
+    // the rate limit for NEW flows. The final atomic record call below remains
+    // authoritative against concurrent requests and mismatched payloads.
+    // Uncertain reads fail closed; they never bypass the creation limiter.
+    const replayClassification = await classifyPaymentCreateIntentReplay({
+      createIntentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
+      amount, note: normalizedNote,
+    })
+    if (replayClassification === "CONFLICT") {
+      return NextResponse.json({ error: "Create intent payload mismatch", code: "CREATE_INTENT_CONFLICT" }, { status: 409, headers: corsHeaders })
+    }
+    if (replayClassification === "INDETERMINATE") {
+      return NextResponse.json({ error: "Payment intent verification unavailable", code: "PAYMENT_INTENT_INDETERMINATE" }, { status: 503, headers: corsHeaders })
+    }
+    if (replayClassification === "NEW") {
+      const creationLimit = await consumeFinancialRateLimit({
+        namespace: "payments-create", subject: verifiedMerchantUid, limit: 30, windowSeconds: 60,
+      })
+      if (creationLimit.outcome === "LIMITED") {
+        return NextResponse.json({ error: "Too many payment creation requests", code: "RATE_LIMITED" }, { status: 429, headers: { ...corsHeaders, "Retry-After": String(creationLimit.retryAfterSeconds) } })
+      }
+      if (creationLimit.outcome === "UNAVAILABLE") {
+        return NextResponse.json({ error: "Payment creation temporarily unavailable", code: "RATE_LIMIT_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+      }
+    }
+
+    console.log("[API] ✅ UID VERIFIED")
+
+    // Generate unique payment ID (Edge Runtime compatible)
+    let paymentId = crypto.randomUUID()
+    if (requiresTestnetIngress()) {
+      // Keep official identity, wallet consent and the original SQL admission.
+      // A valid durable policy does not require waiting for a cold worker boot.
+      const settings = !merchantWalletConsent ? await readOperationSettings() : null
+      if (!merchantWalletConsent && !settings) return NextResponse.json({error:"Payment policy unavailable",code:"PAYMENT_ADMISSION_UNAVAILABLE"},{status:503,headers:corsHeaders})
+      if (!merchantWalletConsent && settings?.mode === 'general') {
+        return NextResponse.json({error:"Pi receiving-wallet permission is required. Your saved request is unchanged.",code:"PI_WALLET_PERMISSION_REQUIRED"},{status:403,headers:corsHeaders})
+      }
+      const admissionStartedAt=Date.now()
+      const input={paymentId,createIntentId,merchantUid:verifiedMerchantUid,
+        merchantId:trustedMerchantId,amount,note:normalizedNote}
+      const reservation=await reserveWithCurrentEvidence({
+        reserve:()=>reserveTestnetCreation(input),wake:()=>observeIntakePolicy(),
+        prepare:()=>after(async()=>{await ensurePrivateTrustHost('creation')}),
+      })
+      console.info("[R36 create admission]", {phase:"reservation",path:reservation.path,admitted:Boolean(reservation.id),elapsedMs:Date.now()-admissionStartedAt})
+      if (!reservation.id) return NextResponse.json({error:"Payment admission temporarily unavailable; your saved request is unchanged",code:"PAYMENT_ADMISSION_UNAVAILABLE"},{status:503,headers:corsHeaders})
+      paymentId = reservation.id
+    }
+    let durableCreatedAt = new Date().toISOString()
+
+    // Create payment object with VERIFIED identity from Pi /v2/me
+    const payment: Payment = {
+      id: paymentId,
+      merchantId: trustedMerchantId, // Use verified username as source of truth
+      merchantUid: verifiedMerchantUid, // Use the verified UID from Pi /v2/me
+      redisProjectionVersion: 1, // F2-6 initial projection fence
+      amount: amount,
+      note: normalizedNote,
+      status: "pending",
+      createdAt: durableCreatedAt,
+    }
+
+    console.log("[API] ========================================")
+    console.log("[API] PAYMENT OBJECT CREATED WITH REQUIRED FIELDS:")
+    console.log("[API]   - payment.id:", payment.id)
+    console.log("[API]   - payment.amount:", payment.amount)
+    console.log("[API]   - payment.note:", payment.note)
+    console.log("[API]   - payment.status:", payment.status)
+    console.log("[API]   - payment.createdAt:", payment.createdAt, "TYPE:", typeof payment.createdAt)
+    console.log("[API] ========================================")
+
+    if (!isKvConfigured) {
+      return NextResponse.json(
+        { error: "Payment persistence unavailable", code: "PAYMENT_REDIS_UNAVAILABLE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
+
+    // DR-13: a clean-install first payment request must establish the durable
+    // Settlement authority schema before attempting the F2-1 identity write.
+    // Idempotent PostgreSQL DDL is safe under concurrent cold-start requests.
+    if (!(await ensureSettlementCheckpointTable())) {
+      return NextResponse.json(
+        { error: "Payment durability unavailable", code: "PAYMENT_SCHEMA_UNAVAILABLE" },
+        { status: 503, headers: corsHeaders },
+      )
+    }
+
+    if (!(await ensurePaymentCreateIntentTable())) {
+      return NextResponse.json({ error: "Payment intent schema unavailable", code: "PAYMENT_INTENT_SCHEMA_UNAVAILABLE" }, { status: 503, headers: corsHeaders })
+    }
+    const durableIdentity = await recordPaymentCreateIntentAtomic({
+      createIntentId, paymentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
+      amount, note: normalizedNote, createdAt: durableCreatedAt,
+    })
+    if (durableIdentity.outcome === "CONFLICT") {
+      return NextResponse.json({ error: durableIdentity.error, code: "CREATE_INTENT_CONFLICT" }, { status: 409, headers: corsHeaders })
+    }
+    if (durableIdentity.outcome !== "CREATED" && durableIdentity.outcome !== "REPLAYED") {
+      return NextResponse.json({ error: "Payment durability unavailable", code: "PAYMENT_INTENT_INDETERMINATE" }, { status: 503, headers: corsHeaders })
+    }
+    paymentId = durableIdentity.paymentId
+    durableCreatedAt = durableIdentity.createdAt
+    payment.id = paymentId
+    payment.createdAt = durableCreatedAt
+
+    async function respondToDurableReplay() {
+      // Never recreate an absent or advanced financial projection as pending.
+      let projected: unknown
+      try { projected = await redis.get(`payment:${paymentId}`) } catch {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      let existing: any
+      try { existing = typeof projected === "string" ? JSON.parse(projected) : projected } catch { existing = null }
+      if (!existing && (projected === null || projected === undefined)) {
+        const restored = await recoverInitialPaymentProjectionUnderDurableGuard({
+          paymentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
+          amount, note: normalizedNote, createdAt: durableCreatedAt,
+          persist: async () => {
+            const historyScore = Date.parse(durableCreatedAt)
+            if (!Number.isSafeInteger(historyScore)) return 'CONFLICT'
+            const result = Number(await redis.eval(`
+local raw=redis.call('GET',KEYS[1])
+if raw then return 0 end
+local score=redis.call('ZSCORE',KEYS[2],ARGV[3])
+if score and tonumber(score)~=tonumber(ARGV[2]) then return -1 end
+if not score then redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) end
+redis.call('SET',KEYS[1],ARGV[1]); return 1
+`, [`payment:${paymentId}`, `flashpay:merchant:${trustedMerchantId}:payments:v1`],
+              [JSON.stringify(payment), String(historyScore), paymentId]))
+            return result === 1 ? 'CREATED' : result === 0 ? 'PRESENT' : 'CONFLICT'
+          },
+        })
+        if (restored !== 'CREATED' && restored !== 'PRESENT') {
+          return NextResponse.json({ error: 'Durable payment exists; projection recovery required', code: 'CREATE_INTENT_RECOVERY_REQUIRED', paymentId }, { status: 503, headers: corsHeaders })
+        }
+        try { projected = await redis.get(`payment:${paymentId}`) } catch { projected = null }
+        try { existing = typeof projected === 'string' ? JSON.parse(projected) : projected } catch { existing = null }
+      }
+      if (!existing || existing.id !== paymentId || existing.merchantUid !== verifiedMerchantUid ||
+          existing.merchantId !== trustedMerchantId || Number(existing.amount) !== amount ||
+          existing.note !== normalizedNote || existing.createdAt !== durableCreatedAt) {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      // FIN100B B-NEW-03: replay must not acknowledge an invisible or conflicting
+      // merchant-history projection. Read-only validation: never repair from
+      // Redis alone or reconstruct a potentially advanced financial payment.
+      const historyScore = Date.parse(durableCreatedAt)
+      if (!Number.isSafeInteger(historyScore)) {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      let indexedScore: number | null
+      try {
+        const score = await redis.zscore(`flashpay:merchant:${trustedMerchantId}:payments:v1`, paymentId)
+        indexedScore = score === null || score === undefined ? null : Number(score)
+      } catch {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      if (indexedScore === null) {
+        // FIN100B B-NEW-03: repair ONLY an absent merchant index, with the
+        // durable initial-state + append-only evidence guard holding its PG
+        // transaction lock throughout the conditional Redis operation.
+        // Re-read and compare the live projection inside the Redis script:
+        // the earlier GET is not authority and may have changed meanwhile.
+        const repaired = await recoverInitialPaymentProjectionUnderDurableGuard({
+          paymentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
+          amount, note: normalizedNote, createdAt: durableCreatedAt,
+          persist: async () => {
+            const result = Number(await redis.eval(`
+local raw=redis.call('GET',KEYS[1])
+if not raw then return -1 end
+local ok,p=pcall(cjson.decode,raw)
+if not ok or type(p)~='table' then return -1 end
+if p.id~=ARGV[1] or p.merchantUid~=ARGV[2] or p.merchantId~=ARGV[3] or
+   tonumber(p.amount)~=tonumber(ARGV[4]) or p.note~=ARGV[5] or
+   p.createdAt~=ARGV[6] or p.status~='pending' or
+   tonumber(p.redisProjectionVersion)~=1 then return -1 end
+local indexed=redis.call('ZSCORE',KEYS[2],ARGV[1])
+if indexed then
+  if tonumber(indexed)==tonumber(ARGV[7]) then return 0 end
+  return -1
+end
+redis.call('ZADD',KEYS[2],'NX',ARGV[7],ARGV[1])
+return 1
+`, [`payment:${paymentId}`, `flashpay:merchant:${trustedMerchantId}:payments:v1`],
+              [paymentId, verifiedMerchantUid, trustedMerchantId, String(amount), normalizedNote,
+               durableCreatedAt, String(historyScore)]))
+            return result === 1 ? 'CREATED' : result === 0 ? 'PRESENT' : 'CONFLICT'
+          },
+        })
+        if (repaired !== 'CREATED' && repaired !== 'PRESENT') {
+          return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+        }
+        // Verify the resulting index; do not turn a failed Redis write or
+        // concurrent index mutation into a successful replay response.
+        try {
+          const verifiedScore = await redis.zscore(`flashpay:merchant:${trustedMerchantId}:payments:v1`, paymentId)
+          if (verifiedScore === null || verifiedScore === undefined || Number(verifiedScore) !== historyScore) {
+            return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+          }
+        } catch {
+          return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+        }
+      } else if (!Number.isSafeInteger(indexedScore) || indexedScore !== historyScore) {
+        return NextResponse.json({ error: "Durable payment exists; projection recovery required", code: "CREATE_INTENT_RECOVERY_REQUIRED", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      if (!(await verifyFinalPaymentPresentation(existing))) {
+        return NextResponse.json({ error: "Payment finality unavailable", code: "PAYMENT_FINALITY_UNAVAILABLE", paymentId }, { status: 503, headers: corsHeaders })
+      }
+      return NextResponse.json({ success: true, payment: { ...getPublicPayment(existing), merchantUid: verifiedMerchantUid } }, { status: 200, headers: corsHeaders })
+    }
+
+    if (durableIdentity.outcome === "REPLAYED") return await respondToDurableReplay()
+
+    try {
+      const kvKey = `payment:${paymentId}`
+      
+      // CRITICAL: Ensure merchantId and createdAt are present before serialization
+      if (!payment.merchantId) {
+        throw new Error("CRITICAL: Cannot store payment without merchantId")
+      }
+      if (!payment.createdAt) {
+        throw new Error("CRITICAL: Cannot store payment without createdAt")
+      }
+
+      const paymentString = JSON.stringify(payment)
+      const historyKey = `flashpay:merchant:${payment.merchantId}:payments:v1`
+      const historyScore = Date.parse(payment.createdAt)
+      if (!Number.isSafeInteger(historyScore)) {
+        throw new Error("Invalid payment createdAt for history index")
+      }
+      
+      console.log("[API] CRITICAL CHECK BEFORE REDIS STORAGE:")
+      console.log("[API]   - kvKey:", kvKey)
+      console.log("[API]   - Has merchantAddress:", !!payment.merchantAddress, "Value:", payment.merchantAddress)
+      console.log("[API]   - Has createdAt:", !!payment.createdAt, "Value:", payment.createdAt)
+      console.log("[API]   - JSON includes 'merchantId':", paymentString.includes('"merchantId"'))
+      console.log("[API]   - JSON includes 'merchantUid':", paymentString.includes('"merchantUid"'))
+      console.log("[API]   - JSON includes 'merchantAddress':", paymentString.includes('"merchantAddress"'))
+      console.log("[API]   - JSON includes 'createdAt':", paymentString.includes('"createdAt"'))
+      
+      const redisPersistTimingStartedAt = Date.now()
+      const redisPersistResult = await redis.eval(
+        "if redis.call('EXISTS',KEYS[1])~=0 then return 0 end local a=redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) if a~=1 then return -1 end redis.call('SET',KEYS[1],ARGV[1]) return 1",
+        [kvKey, historyKey],
+        [paymentString, String(historyScore), payment.id]
+      )
+      // Another authenticated replay may have restored this durable identity.
+      // Reuse all identity/index checks; never accept Redis existence alone.
+      if (redisPersistResult === 0) return await respondToDurableReplay()
+      if (redisPersistResult !== 1) {
+        throw new Error("Atomic payment persistence failed")
+      }
+      const redisPersistDurationMs = Date.now() - redisPersistTimingStartedAt
+      console.log("[API] ✅ Atomic payment and history index persistence completed successfully for key:", kvKey)
+      
+      // CRITICAL: Verify merchantId and createdAt were actually persisted
+      // Use retry mechanism because Redis might need a moment to confirm the write
+      console.log("[API] Starting verification with retry mechanism (3 attempts, 100-400ms backoff)...")
+      
+      const verification = await redisRetry(
+        async () => {
+          const result = await redis.get(kvKey)
+          console.log("[API] redis.get() returned:", result ? "DATA_FOUND" : "NULL")
+          return result
+        },
+        3, // max retries
+        100 // initial delay in ms
+      )
+      
+      if (!verification) {
+        throw new Error("Payment verification failed - not found in Redis after 3 retry attempts (300ms total)")
+      }
+      
+      const storedData = typeof verification === "string" ? JSON.parse(verification) : verification
+      console.log("[API] VERIFICATION AFTER REDIS RETRIEVAL - PASSED")
+      console.log("[API]   - Retrieved ID:", storedData.id)
+      console.log("[API]   - Retrieved amount:", storedData.amount)
+      console.log("[API]   - Retrieved status:", storedData.status)
+      
+      // Check critical fields are persisted correctly
+      if (storedData.id !== payment.id) {
+        throw new Error("CRITICAL: Payment ID mismatch after storage")
+      }
+      if (storedData.merchantId !== payment.merchantId) {
+        throw new Error("CRITICAL: merchantId was corrupted during storage")
+      }
+      if (storedData.merchantUid !== payment.merchantUid) {
+        throw new Error("CRITICAL: merchantUid was corrupted during storage")
+      }
+      
+      console.log("[API] ✅ All verification checks passed - merchantUid successfully persisted")
+      console.log("[P7B TIMING] Redis persist/verify", { paymentId, durationMs: Date.now() - redisPersistTimingStartedAt, persistDurationMs: redisPersistDurationMs })
+      
+      console.log("[API] ========================================")
+    } catch (storageError) {
+      console.error("[API] ❌ Storage error:", storageError)
+      console.error("[API] Error details:", {
+        name: storageError instanceof Error ? storageError.name : "Unknown",
+        message: storageError instanceof Error ? storageError.message : String(storageError),
+        stack: storageError instanceof Error ? storageError.stack : undefined
+      })
+      
+      return NextResponse.json(
+        {
+          error: "Failed to store payment",
+          details: storageError instanceof Error ? storageError.message : String(storageError),
+          isKvConfigured: isKvConfigured,
+        },
+        { status: 500, headers: corsHeaders },
+      )
+    }
+
+    console.log("[API] ✅ Payment created successfully:", paymentId)
+    console.log("[API] Returning payment to client")
+
+    console.log("[P7B TIMING] payment total", { paymentId, durationMs: Date.now() - paymentTimingStartedAt })
+    return NextResponse.json(
+      {
+        success: true,
+        payment: {
+          id: payment.id,
+          merchantId: payment.merchantId,
+          merchantAddress: payment.merchantAddress,
+          merchantUid: payment.merchantUid,
+          amount: payment.amount,
+          note: payment.note,
+          status: payment.status,
+          createdAt: payment.createdAt,
+        },
+      },
+      { status: 201, headers: corsHeaders },
+    )
+  } catch (error) {
+    console.error("[API] Error creating payment:", error)
+    return NextResponse.json(
+      { error: "Failed to create payment", details: String(error) },
+      { status: 500, headers: corsHeaders },
+    )
+  } finally {
+    if (createLeaseKey && createLeaseOwner) {
+      try {
+        // Atomic compare-and-delete: an expired owner cannot delete a newer
+        // owner's value, including under delayed finally/Redis responses.
+        await redis.eval<[string], number>(`
+          if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+          end
+          return 0
+        `, [createLeaseKey], [createLeaseOwner])
+      } catch {
+        console.warn("[DR56 PAYMENT CREATE LEASE] cleanup deferred to TTL")
+      }
+    }
+  }
+}
+
+// GET /api/payments?id={paymentId} - Retrieve a payment by ID
+export async function GET(request: NextRequest) {
+  const id = new URL(request.url).searchParams.get("id")
+  if (!id) return NextResponse.json({ error: "Payment ID required. Use ?id=<paymentId>" }, { status: 400, headers: corsHeaders })
+  // Both public lookup forms must cross the same durable status guard.
+  const response = await readPaymentStatus(request, { params: Promise.resolve({ id }) })
+  for (const [name, value] of Object.entries(corsHeaders)) response.headers.set(name, value)
+  return response
+}

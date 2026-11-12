@@ -1,0 +1,690 @@
+import {originalRefundCertificationEnabled} from "../../../lib/r36-operation-policy"
+import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetInbound} from "../../../lib/r36-testnet-ingress"
+import { after, type NextRequest, NextResponse } from "next/server"
+import { redis, isRedisConfigured } from "../../../lib/redis"
+import { serverConfig } from "../../../lib/server-config"
+import { buildA2USuccessResponse } from "../../../lib/a2u-response"
+import { recordSettlementU2AVerifiedCheckpoint, recordSettlementU2ACompletedCheckpoint, recordDr11RefundCertificationHold, readDr11RefundCertificationHold, getDurableU2AIngressAuthoritative, claimSettlementPiMutationAttempt } from "../../../lib/db"
+import { shouldInjectFin8AmbiguousPiPost } from "../../../lib/fin8-live-ambiguity-certification"
+import type { Payment } from "../../../lib/types"
+import { consumeFinancialRateLimit } from "../../../lib/server-rate-limit"
+import { createDr11RefundAuthorityFromDurableHold, getRefundCheckpointByIdempotency } from "../../../lib/refund-checkpoint-store"
+
+export const dynamic = "force-dynamic"
+export const runtime = "nodejs"
+
+const IMMEDIATE_DRAIN_KICK_KEY = "flashpay:settlement:immediate-drain-kick:v1"
+const IMMEDIATE_DRAIN_KICK_TTL_SECONDS = 90
+
+const IMMEDIATE_DRAIN_MODE = "immediate-drain"
+
+function buildDr11DurableRefundPendingResponse(input: {
+  paymentId: string
+  piPaymentId: string
+  u2aTxid: string
+  customerAmount: number
+}) {
+  return {
+    success: false,
+    status: "refund_pending",
+    paymentId: input.paymentId,
+    piPaymentId: input.piPaymentId,
+    u2aTxid: input.u2aTxid,
+    customerAmount: input.customerAmount,
+    piCompleted: true,
+    dbRecorded: false,
+  }
+}
+
+/**
+ * POST /api/pi/complete
+ * 
+ * Client-facing endpoint that completes U2A payment verification from Pi.
+ * Receives Pi payment identifier and txid from Pi Wallet callback.
+ * 
+ * AUTHORITATIVE U2A COMPLETION FLOW:
+ * 1. Verify U2A payment from Pi API and exact FlashPay identity
+ * 2. Durably checkpoint verified U2A identifier/txid/payer in PostgreSQL BEFORE Pi /complete
+ * 3. If not developer_completed, call Pi /v2/payments/{piPaymentId}/complete, then refetch and validate
+ * 4. Durably checkpoint Pi developer completion in PostgreSQL BEFORE Redis projection
+ * 5. Atomically persist verified U2A state and durable ready/active recovery indexing in Redis
+ * 6. Return canonical processing/final response from authoritative Redis state
+ * 
+ * Settlement execution is intentionally decoupled from U2A ingress.
+ * The transient drain/recovery worker owns asynchronous A2U settlement execution.
+ * Never overwrites stale payment state over newer checkpoint.
+ */
+export async function POST(request: NextRequest) {
+  if (requiresTestnetIngress() && !testnetIngressEnabled())
+    return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
+
+  const completeTimingStartedAt = Date.now()
+  console.log("[Pi Complete] Request received at", new Date().toISOString())
+
+  try {
+    // R101-7: /complete is a Pi SDK browser callback, not an internal A2U route.
+    // Do not require or expose A2U_INTERNAL_SECRET here. Financial authorization
+    // is established below from canonical Pi server evidence plus durable identity.
+    if (!serverConfig.isPiApiKeyConfigured) {
+      console.error("[Pi Complete] PI_API_KEY not configured")
+      return NextResponse.json({ error: "Server not configured" }, { status: 500 })
+    }
+
+    if (!isRedisConfigured) {
+      console.error("[Pi Complete] Redis not configured")
+      return NextResponse.json({ error: "Storage not available" }, { status: 503 })
+    }
+
+    // Parse request - accept ONLY piPaymentId + txid from client
+    const body = await request.json()
+    const { piPaymentId, txid } = body
+
+    if (!piPaymentId || !txid) {
+      console.error("[Pi Complete] Missing piPaymentId or txid")
+      return NextResponse.json({ error: "Missing piPaymentId or txid" }, { status: 400 })
+    }
+
+    console.log("[Pi Complete] Processing Pi payment:", piPaymentId, "txid:", txid)
+
+    // === STAGE 1: U2A VERIFICATION (validation only, no state changes) ===
+    console.log("[Pi Complete] === STAGE 1: U2A VERIFICATION ===")
+
+    const u2aPiTimingStartedAt = Date.now()
+    const piResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Key ${serverConfig.piApiKey}`,
+        "Content-Type": "application/json",
+      },
+    })
+
+    if (!piResponse.ok) {
+      console.error("[Pi Complete] Pi API verification failed - status:", piResponse.status)
+      return NextResponse.json({ error: "Payment verification failed" }, { status: 400 })
+    }
+
+    const piPayment = await piResponse.json()
+
+    // Validate payment structure
+    if (!piPayment.identifier || piPayment.identifier !== piPaymentId) {
+      console.error("[Pi Complete] Payment identifier mismatch")
+      return NextResponse.json({ error: "Payment identifier mismatch" }, { status: 400 })
+    }
+
+    // DR-24: never let a Mainnet/unknown Pi payment enter the Testnet-only
+    // durable ingress + settlement kernel. Network mismatch is a hard boundary.
+    if (piPayment.network !== "Pi Testnet") {
+      console.error("[DR-24 NETWORK BOUNDARY] completion Pi network mismatch", { observedNetwork: typeof piPayment.network === "string" ? piPayment.network : "invalid" })
+      return NextResponse.json({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }, { status: 409 })
+    }
+
+    if (piPayment.direction !== "user_to_app") {
+      console.error("[Pi Complete] Invalid payment direction:", piPayment.direction)
+      return NextResponse.json({ error: "Invalid payment direction" }, { status: 400 })
+    }
+
+    if (piPayment.status?.cancelled === true || piPayment.status?.user_cancelled === true) {
+      console.error("[Pi Complete] Payment was cancelled")
+      return NextResponse.json({ error: "Payment was cancelled" }, { status: 400 })
+    }
+
+    if (piPayment.status?.developer_approved !== true) {
+      console.error("[Pi Complete] Developer did not approve payment")
+      return NextResponse.json({ error: "Payment not approved" }, { status: 400 })
+    }
+
+    if (piPayment.status?.transaction_verified !== true) {
+      console.error("[Pi Complete] Transaction not verified by Pi")
+      return NextResponse.json({ error: "Transaction not verified" }, { status: 400 })
+    }
+
+    const canonicalTxid = piPayment.transaction?.txid
+    if (!canonicalTxid || canonicalTxid !== txid) {
+      console.error("[Pi Complete] Transaction txid mismatch or missing")
+      return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
+    }
+
+    const rawPrePaymentId = piPayment.metadata?.paymentId
+    if (typeof rawPrePaymentId !== "string" || rawPrePaymentId.length === 0 || rawPrePaymentId !== rawPrePaymentId.trim()) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
+    const preFlashPaymentId = rawPrePaymentId
+    if (requiresTestnetIngress() && !await verifyTestnetInbound(piPayment))
+      return NextResponse.json({error:"Testnet payment admission mismatch",code:"TESTNET_INGRESS_HELD"},{status:503})
+    const preStoredPayment = await redis.get(`payment:${preFlashPaymentId}`)
+    if (!preStoredPayment) return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+    const prePayment: Payment = typeof preStoredPayment === "string" ? JSON.parse(preStoredPayment) : preStoredPayment
+    if (prePayment.id !== preFlashPaymentId || typeof piPayment.amount !== "number" || !Number.isFinite(piPayment.amount) || piPayment.amount <= 0 || typeof prePayment.amount !== "number" || !Number.isFinite(prePayment.amount) || prePayment.amount <= 0 || piPayment.amount !== prePayment.amount || (prePayment.piPaymentId && prePayment.piPaymentId !== piPayment.identifier)) return NextResponse.json({ error: "Payment validation failed" }, { status: 400 })
+
+    // R101-8: completion is existing-money recovery. A definite excess is a
+    // retry-safe 429, but limiter infrastructure uncertainty cannot strand a
+    // canonically verified U2A lifecycle and therefore does not become money truth.
+    const completionLimit = await consumeFinancialRateLimit({
+      namespace: "pi-complete", subject: `${preFlashPaymentId}:${piPaymentId}`, limit: 30, windowSeconds: 60,
+    })
+    if (completionLimit.outcome === "LIMITED") {
+      return NextResponse.json({ error: "Too many completion requests", code: "RATE_LIMITED" }, { status: 429, headers: { "Retry-After": String(completionLimit.retryAfterSeconds) } })
+    }
+    if (completionLimit.outcome === "UNAVAILABLE") {
+      console.warn("[R101-8 RATE LIMIT] completion limiter unavailable; canonical existing-money recovery continues", { paymentId: preFlashPaymentId })
+    }
+
+    const preMerchantId = typeof prePayment.merchantId === "string" && prePayment.merchantId.length > 0 && prePayment.merchantId === prePayment.merchantId.trim() ? prePayment.merchantId : ""
+    const preMerchantUid = typeof prePayment.merchantUid === "string" && prePayment.merchantUid.length > 0 && prePayment.merchantUid === prePayment.merchantUid.trim() ? prePayment.merchantUid : ""
+    const verifiedPayerUid = typeof piPayment.user_uid === "string" && piPayment.user_uid.length > 0 && piPayment.user_uid === piPayment.user_uid.trim() ? piPayment.user_uid : ""
+    if (!preMerchantId || !preMerchantUid || !verifiedPayerUid) {
+      console.error("[F2-2 U2A DURABLE] pre-completion identity invalid")
+      return NextResponse.json({ error: "Payment identity verification failed" }, { status: 400 })
+    }
+
+    // F2-2 crash boundary: the blockchain U2A identity is durable before Pi /complete.
+    // If PostgreSQL is unavailable or the immutable F2-1 identity disagrees, fail closed
+    // while developer_completed is still false so Pi's incomplete-payment recovery remains available.
+    const durableU2AVerified = await recordSettlementU2AVerifiedCheckpoint({
+      paymentId: preFlashPaymentId,
+      merchantId: preMerchantId,
+      merchantUid: preMerchantUid,
+      customerAmount: prePayment.amount,
+      u2aIdentifier: piPayment.identifier,
+      u2aTxid: canonicalTxid,
+      payerUid: verifiedPayerUid,
+    })
+    if (durableU2AVerified.outcome !== "RECORDED" && durableU2AVerified.outcome !== "REPLAYED") {
+      console.error("[F2-2 U2A DURABLE] verified checkpoint unavailable", { paymentId: preFlashPaymentId, outcome: durableU2AVerified.outcome })
+      return NextResponse.json({ error: "Payment durability unavailable", code: "U2A_VERIFIED_DURABILITY_UNAVAILABLE" }, { status: 503 })
+    }
+    console.log("[F2-2 U2A DURABLE] verified", { paymentId: preFlashPaymentId, version: durableU2AVerified.version, outcome: durableU2AVerified.outcome })
+
+    // If not developer_completed, call Pi /complete endpoint and refetch
+    let finalPiPayment = piPayment
+    if (piPayment.status?.developer_completed !== true) {
+      console.log("[Pi Complete] Payment not developer_completed - claiming one-shot Pi /complete authority")
+      const completionAttempt = await claimSettlementPiMutationAttempt({ kind: "u2a_complete", paymentId: preFlashPaymentId, externalPaymentId: piPaymentId, txid: canonicalTxid })
+      if (completionAttempt.outcome !== "RECORDED") {
+        return NextResponse.json({ error: "Completion attempt unavailable", code: completionAttempt.outcome === "INDETERMINATE" ? "U2A_COMPLETE_ATTEMPT_INDETERMINATE" : "U2A_COMPLETE_ATTEMPT_RECONCILE_ONLY" }, { status: completionAttempt.outcome === "INDETERMINATE" ? 503 : 409 })
+      }
+      
+      // Crash/transport ambiguity rule: attempt Pi /complete exactly once, then always
+      // reconcile by exact GET. A non-2xx response or thrown transport error is not
+      // proof that Pi did not complete the payment, and must never trigger a blind POST retry.
+      try {
+        const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Key ${serverConfig.piApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ txid }),
+        })
+        // FIN-8 LIVE: simulate a lost Pi /complete response only for the explicitly
+        // armed 0.20 Pi Testnet fixture. The shared fin7_v2 u2a_complete attempt
+        // authority is already consumed, including for transient recovery.
+        if (shouldInjectFin8AmbiguousPiPost({
+          stage: "complete_post_response_lost",
+          paymentId: preFlashPaymentId,
+          network: piPayment.network,
+          amount: piPayment.amount,
+        })) {
+          console.warn("[FIN8 LIVE] injected complete response-loss boundary", { paymentId: preFlashPaymentId })
+          return NextResponse.json({ error: "FIN8 live completion ambiguity injected", code: "FIN8_COMPLETE_POST_RESPONSE_LOST" }, { status: 503 })
+        }
+        if (!completeResponse.ok) {
+          console.error("[Pi Complete] Pi /complete returned non-OK; reconciling exact payment - status:", completeResponse.status)
+        }
+      } catch (completeError) {
+        console.error("[Pi Complete] Pi /complete transport outcome ambiguous; reconciling exact payment:", completeError instanceof Error ? completeError.message : "unknown")
+      }
+
+      // Refetch payment to validate developer_completed=true after every POST outcome.
+      const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Key ${serverConfig.piApiKey}`,
+          "Content-Type": "application/json",
+        },
+      })
+
+      if (!refetchResponse.ok) {
+        console.error("[Pi Complete] Refetch after /complete failed - status:", refetchResponse.status)
+        return NextResponse.json({ error: "Payment verification failed" }, { status: 400 })
+      }
+
+      finalPiPayment = await refetchResponse.json()
+
+      const refetchedFlashPaymentId = finalPiPayment.metadata?.paymentId
+      if (typeof refetchedFlashPaymentId !== "string" || refetchedFlashPaymentId.length === 0 || refetchedFlashPaymentId !== refetchedFlashPaymentId.trim() || refetchedFlashPaymentId !== preFlashPaymentId) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
+
+      // Validate identifier, network, direction, amount, txid, non-cancelled, developer_completed after refetch
+      if (finalPiPayment.network !== "Pi Testnet") {
+        console.error("[DR-24 NETWORK BOUNDARY] refetched completion network mismatch", { paymentId: preFlashPaymentId, observedNetwork: typeof finalPiPayment.network === "string" ? finalPiPayment.network : "invalid" })
+        return NextResponse.json({ error: "Payment network mismatch", code: "PI_NETWORK_MISMATCH" }, { status: 409 })
+      }
+      if (!finalPiPayment.identifier || finalPiPayment.identifier !== piPaymentId) {
+        console.error("[Pi Complete] Refetched payment identifier mismatch")
+        return NextResponse.json({ error: "Payment identifier mismatch" }, { status: 400 })
+      }
+
+      if (finalPiPayment.direction !== "user_to_app") {
+        console.error("[Pi Complete] Refetched payment invalid direction:", finalPiPayment.direction)
+        return NextResponse.json({ error: "Invalid payment direction" }, { status: 400 })
+      }
+
+      if (finalPiPayment.status?.cancelled === true || finalPiPayment.status?.user_cancelled === true) {
+        console.error("[Pi Complete] Refetched payment was cancelled")
+        return NextResponse.json({ error: "Payment was cancelled" }, { status: 400 })
+      }
+
+      if (finalPiPayment.status?.developer_completed !== true) {
+        console.error("[Pi Complete] Refetched payment still not developer_completed")
+        return NextResponse.json({ error: "Payment completion failed" }, { status: 400 })
+      }
+
+      const refetchedTxid = finalPiPayment.transaction?.txid
+      if (!refetchedTxid || refetchedTxid !== txid) {
+        console.error("[Pi Complete] Refetched txid mismatch")
+        return NextResponse.json({ error: "Transaction verification failed" }, { status: 400 })
+      }
+
+      console.log("[Pi Complete] ✓ Pi /complete succeeded and payment verified")
+    } else {
+      console.log("[Pi Complete] Payment already developer_completed - skipping Pi /complete call")
+    }
+
+    // F2-2: common post-completion authority validation also covers a retry where
+    // Pi was already developer_completed before this request arrived.
+    const finalPayerUid = typeof finalPiPayment.user_uid === "string" && finalPiPayment.user_uid.length > 0 && finalPiPayment.user_uid === finalPiPayment.user_uid.trim() ? finalPiPayment.user_uid : ""
+    if (
+      finalPiPayment.identifier !== piPaymentId ||
+      finalPiPayment.network !== "Pi Testnet" ||
+      finalPiPayment.direction !== "user_to_app" ||
+      finalPiPayment.metadata?.paymentId !== preFlashPaymentId ||
+      finalPiPayment.status?.developer_approved !== true ||
+      finalPiPayment.status?.transaction_verified !== true ||
+      finalPiPayment.status?.developer_completed !== true ||
+      finalPiPayment.status?.cancelled === true ||
+      finalPiPayment.status?.user_cancelled === true ||
+      finalPiPayment.transaction?.txid !== canonicalTxid ||
+      typeof finalPiPayment.amount !== "number" || !Number.isFinite(finalPiPayment.amount) || finalPiPayment.amount !== prePayment.amount ||
+      !finalPayerUid || finalPayerUid !== verifiedPayerUid
+    ) {
+      console.error("[F2-2 U2A DURABLE] post-completion Pi authority mismatch")
+      return NextResponse.json({ error: "Payment completion authority mismatch" }, { status: 409 })
+    }
+
+    // INTENTIONAL LIVE TESTNET CERTIFICATION HOOK — DO NOT REMOVE AS BUSINESS CLEANUP.
+    // DR60/DR11 uses the exact 0.10 Pi Testnet payment to exercise automatic Refund
+    // recovery in production. Acquire the durable PostgreSQL hold BEFORE publishing
+    // U2A completion to Settlement; the 0.10 amount is certification scope, not a
+    // general customer refund rule. Build evidence enforces hold -> completed ->
+    // Refund authority ordering and the exact production/Testnet/0.10 scope.
+    const previousCertificationHold=await readDr11RefundCertificationHold(preFlashPaymentId)
+    if(previousCertificationHold.outcome==='INDETERMINATE')return NextResponse.json({error:'Certification recovery unavailable'},{status:503})
+    const dr11ExactIdentity = originalRefundCertificationEnabled(finalPiPayment.network,finalPiPayment.amount) ||
+      (previousCertificationHold.outcome==='HELD' && finalPiPayment.network==='Pi Testnet' && finalPiPayment.amount===0.1)
+    if (dr11ExactIdentity) {
+      const autoRefundHold = await recordDr11RefundCertificationHold({
+        paymentId: preFlashPaymentId,
+        merchantId: preMerchantId,
+        merchantUid: preMerchantUid,
+        customerAmount: finalPiPayment.amount,
+      })
+      if (autoRefundHold.outcome === "CONFLICT") return NextResponse.json({ error: "Pi review auto-refund authority conflict" }, { status: 409 })
+      if (autoRefundHold.outcome === "INDETERMINATE") return NextResponse.json({ error: "Pi review auto-refund authority unavailable" }, { status: 503 })
+    }
+
+    // F2-2 second crash boundary: once Pi reports developer_completed=true, record
+    // that fact durably before touching the Redis payment projection or ready queue.
+    // For DR11 the hold above is already authoritative, so Settlement remains excluded
+    // while this completion checkpoint is persisted.
+    const durableU2ACompleted = await recordSettlementU2ACompletedCheckpoint({
+      paymentId: preFlashPaymentId,
+      merchantId: preMerchantId,
+      merchantUid: preMerchantUid,
+      customerAmount: prePayment.amount,
+      u2aIdentifier: piPaymentId,
+      u2aTxid: canonicalTxid,
+      payerUid: verifiedPayerUid,
+    })
+    if (durableU2ACompleted.outcome !== "RECORDED" && durableU2ACompleted.outcome !== "REPLAYED") {
+      console.error("[F2-2 U2A DURABLE] completed checkpoint unavailable", { paymentId: preFlashPaymentId, outcome: durableU2ACompleted.outcome })
+      return NextResponse.json({ error: "Payment completion durability unavailable", code: "U2A_COMPLETED_DURABILITY_UNAVAILABLE" }, { status: 503 })
+    }
+    console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
+
+    // F2-4 hot-path canonicalization: when this payment is still pre-A2U, the
+    // Redis projection must use the exact PostgreSQL verified/completed timestamps.
+    // This prevents the immediate settlement path from depending on a later F2-3
+    // rediscovery pass to repair millisecond drift introduced by new Date().
+    let durableCanonicalTimes: { verifiedAt: string; completedAt: string } | null = null
+    const preA2UIngress = !prePayment.a2uPaymentId && !prePayment.a2uTxid && prePayment.horizonSuccessFlag !== true && !prePayment.refundPaymentId && !prePayment.refundTxid
+    if (preA2UIngress) {
+      const durableIngress = await getDurableU2AIngressAuthoritative(preFlashPaymentId)
+      if (durableIngress.outcome !== "FOUND") {
+        console.error("[F2-4 DURABLE TIMESTAMP HOTPATH] canonical durable timestamps unavailable", { paymentId: preFlashPaymentId, outcome: durableIngress.outcome })
+        return NextResponse.json({ error: "Payment timestamp durability unavailable", code: "U2A_TIMESTAMP_DURABILITY_UNAVAILABLE" }, { status: 503 })
+      }
+      const ingress = durableIngress.checkpoint
+      const ingressCompletedAt = ingress.completedAt
+      if (ingressCompletedAt === null ||
+          ingress.merchantId !== preMerchantId || ingress.merchantUid !== preMerchantUid ||
+          ingress.customerAmount !== prePayment.amount || ingress.u2aIdentifier !== piPaymentId ||
+          ingress.u2aTxid !== canonicalTxid || ingress.payerUid !== verifiedPayerUid) {
+        console.error("[F2-4 DURABLE TIMESTAMP HOTPATH] canonical durable timestamps unavailable", { paymentId: preFlashPaymentId, outcome: durableIngress.outcome })
+        return NextResponse.json({ error: "Payment timestamp durability unavailable", code: "U2A_TIMESTAMP_DURABILITY_UNAVAILABLE" }, { status: 503 })
+      }
+      durableCanonicalTimes = { verifiedAt: ingress.verifiedAt, completedAt: ingressCompletedAt }
+    }
+
+    const dr11Hold = await readDr11RefundCertificationHold(preFlashPaymentId)
+    if (dr11Hold.outcome === "INDETERMINATE") return NextResponse.json({ error: "DR11 durable hold authority unavailable" }, { status: 503 })
+    if (dr11Hold.outcome === "HELD" && !dr11ExactIdentity) return NextResponse.json({ error: "DR11 durable hold identity conflict" }, { status: 409 })
+    let dr11DurableRefund = dr11ExactIdentity ? await getRefundCheckpointByIdempotency(`dr11-live:${preFlashPaymentId}`) : null
+    if (dr11ExactIdentity && dr11Hold.outcome === "HELD" && !dr11DurableRefund) dr11DurableRefund = await createDr11RefundAuthorityFromDurableHold(preFlashPaymentId)
+    if (dr11Hold.outcome === "HELD" && !dr11DurableRefund) return NextResponse.json({ error: "DR11 durable refund authority unavailable" }, { status: 503 })
+    if (dr11DurableRefund) {
+      if (dr11DurableRefund.paymentId !== preFlashPaymentId || dr11DurableRefund.payerUid !== verifiedPayerUid || dr11DurableRefund.amount !== 0.1 || dr11DurableRefund.status !== "pending" || dr11DurableRefund.stage !== "intent_created" || dr11DurableRefund.lastErrorCode !== "dr11_live_hold" || dr11DurableRefund.lastErrorMessage !== "awaiting_owner_concurrent_harness" || !dr11DurableRefund.nextRetryAt) return NextResponse.json({ error: "DR11 durable refund authority conflict" }, { status: 409 })
+      console.warn("[DR61 DR11 DURABLE REFUND AUTHORITY] intent and automatic-drain hold committed atomically", { paymentId: preFlashPaymentId, refundId: dr11DurableRefund.refundId, settlementAuthorityCreated: false })
+    }
+
+    console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
+
+    // Derive flashPaymentId from metadata BEFORE loading Redis (internal app identifier)
+    const flashPaymentId = preFlashPaymentId
+    if (!flashPaymentId || typeof flashPaymentId !== "string") {
+      console.error("[Pi Complete] Invalid payment metadata - missing paymentId")
+      return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
+    }
+
+    // Use finalPiPayment.identifier as canonical Pi identifier
+    const piPaymentIdCanonical = finalPiPayment.identifier
+    if (!piPaymentIdCanonical || typeof piPaymentIdCanonical !== "string") {
+      console.error("[Pi Complete] Invalid Pi payment identifier")
+      return NextResponse.json({ error: "Invalid Pi payment identifier" }, { status: 400 })
+    }
+
+    console.log("[Pi Complete] ✅ U2A verification passed - flashPaymentId:", flashPaymentId, "piPaymentId:", piPaymentIdCanonical)
+
+    // === STAGE 2: Load and validate payment state ===
+    console.log("[Pi Complete] === STAGE 2: Load and validate payment state ===")
+
+    // Load current payment state using flashPaymentId
+    let currentCheckpoint: any
+    try {
+      currentCheckpoint = await redis.get(`payment:${flashPaymentId}`)
+    } catch (error) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis projection unavailable after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: canonicalTxid, customerAmount: finalPiPayment.amount }), { status: 200 })
+      }
+      throw error
+    }
+    if (!currentCheckpoint) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis payment projection missing after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: canonicalTxid, customerAmount: finalPiPayment.amount }), { status: 200 })
+      }
+      console.error("[Pi Complete] Payment not found in Redis")
+      return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+    }
+
+    const payment: Payment = typeof currentCheckpoint === "string" ? JSON.parse(currentCheckpoint) : currentCheckpoint
+    
+    // Capture and validate all required fields BEFORE mutation (strict TypeScript contracts)
+    // Validate merchantUid BEFORE any A2U execution
+    const merchantUid = payment.merchantUid
+    if (!merchantUid || typeof merchantUid !== "string") {
+      console.error("[Pi Complete] Payment missing merchantUid")
+      return NextResponse.json({ error: "Invalid payment - missing merchantUid" }, { status: 400 })
+    }
+    
+    // Validate finalPiPayment.amount is finite positive and matches Redis payment.amount
+    const finalPiAmount = finalPiPayment.amount
+    if (typeof finalPiAmount !== "number" || !Number.isFinite(finalPiAmount) || finalPiAmount <= 0) {
+      console.error("[Pi Complete] Pi amount invalid - not finite or not positive:", finalPiAmount)
+      return NextResponse.json({ error: "Invalid Pi payment amount" }, { status: 400 })
+    }
+
+    const redisAmount = payment.amount
+    if (typeof redisAmount !== "number" || !Number.isFinite(redisAmount)) {
+      console.error("[Pi Complete] Redis payment amount invalid:", redisAmount)
+      return NextResponse.json({ error: "Invalid payment - invalid amount in Redis" }, { status: 400 })
+    }
+
+    if (finalPiAmount !== redisAmount) {
+      console.error("[Pi Complete] Amount mismatch - Pi:", finalPiAmount, "Redis:", redisAmount)
+      return NextResponse.json({ error: "Payment amount mismatch" }, { status: 400 })
+    }
+
+    // Validate stored piPaymentId against canonical Pi identifier
+    const storedPiPaymentId = payment.piPaymentId
+    if (storedPiPaymentId && storedPiPaymentId !== piPaymentIdCanonical) {
+      console.error("[Pi Complete] Stored piPaymentId differs from canonical Pi identifier - stored:", storedPiPaymentId, "canonical:", piPaymentIdCanonical)
+      return NextResponse.json({ error: "Payment identifier conflict" }, { status: 400 })
+    }
+
+    console.log("[Pi Complete] Using canonical piPaymentId from finalPiPayment.identifier:", piPaymentIdCanonical)
+
+    // Authoritative amount: if existing customerAmount differs from finalPiAmount, reject
+    const existingCustomerAmount = payment.customerAmount
+    if (typeof existingCustomerAmount === "number" && Number.isFinite(existingCustomerAmount)) {
+      if (existingCustomerAmount !== finalPiAmount) {
+        console.error("[Pi Complete] Existing customerAmount differs from authoritative finalPiAmount - existing:", existingCustomerAmount, "authoritative:", finalPiAmount)
+        return NextResponse.json({ error: "Customer amount mismatch with authoritative Pi amount" }, { status: 400 })
+      }
+      console.log("[Pi Complete] Existing customerAmount matches authoritative amount:", existingCustomerAmount)
+    } else {
+      console.log("[Pi Complete] No existing customerAmount - will persist authoritative finalPiAmount:", finalPiAmount)
+    }
+
+    console.log("[Pi Complete] ✓ All required fields validated - merchantUid, amount, piPaymentId, customerAmount")
+    
+    // === STAGE 3: Persist verified U2A fields with strict status validation ===
+    console.log("[Pi Complete] === STAGE 3: Persist verified U2A fields ===")
+    
+    // Use canonical transaction.txid directly (authoritative, no fallback)
+    const finalCanonicalTxid = finalPiPayment.transaction?.txid
+    if (!finalCanonicalTxid || typeof finalCanonicalTxid !== "string") {
+      console.error("[Pi Complete] Canonical transaction.txid missing or invalid")
+      return NextResponse.json({ error: "Invalid Pi transaction id" }, { status: 400 })
+    }
+
+    // DR57: an exact owner-controlled Testnet 0.10 certification payment is
+    // diverted into refund authority only after canonical Pi completion is proven.
+    // This is a test authority gate, never a shortcut around the Pi handshake.
+    const dr11RefundCertificationCandidate = dr11DurableRefund !== null
+
+    // Fail closed on incompatible statuses. A replay of the exact DR11 certification
+    // payment may already be in the refund-pending source state; no other failed
+    // settlement is accepted by /complete.
+    const currentStatus = payment.status
+    const dr11RefundReplay = dr11RefundCertificationCandidate && currentStatus === "settlement_failed" && payment.settlementFailureState === "refund_pending" && payment.refundStatus === "pending" && payment.payerRefundEligible === true && payment.a2uErrorCode === "dr11_live_concurrent_refund_certification"
+    const incompatibleStatuses = ["cancelled", "failed", "settlement_failed"]
+    if (incompatibleStatuses.includes(currentStatus) && !dr11RefundReplay) {
+      console.error("[Pi Complete] Payment has incompatible status:", currentStatus)
+      return NextResponse.json({ error: "Payment in incompatible state" }, { status: 400 })
+    }
+
+    // Persist the same payer UID already bound to the durable F2-2 U2A authority.
+    if (payment.payerUid && payment.payerUid !== finalPayerUid) {
+      return NextResponse.json({ error: "Payer identity conflict" }, { status: 400 })
+    }
+    payment.payerUid = finalPayerUid
+    payment.payerUidSource = "verified_u2a"
+    payment.payerUidCapturedAt = durableCanonicalTimes?.verifiedAt ?? payment.payerUidCapturedAt ?? new Date().toISOString()
+
+    // Persist canonical piPaymentId from Pi identifier
+    payment.piPaymentId = piPaymentIdCanonical
+
+    // Persist canonical txid from transaction
+    payment.u2aTxid = finalCanonicalTxid
+
+    // Preserve existing paidAt, or set once if absent
+    if (durableCanonicalTimes) {
+      payment.paidAt = durableCanonicalTimes.completedAt
+      console.log("[F2-4 DURABLE TIMESTAMP HOTPATH] using durable completedAt:", payment.paidAt)
+    } else if (!payment.paidAt) {
+      payment.paidAt = new Date().toISOString()
+      console.log("[Pi Complete] Setting paidAt for first time:", payment.paidAt)
+    } else {
+      console.log("[Pi Complete] Preserving existing paidAt:", payment.paidAt)
+    }
+
+    // Persist authoritative amount as customerAmount
+    payment.customerAmount = finalPiAmount
+
+    // Change status only if currently pending; preserve paid_to_app, settlement_pending, settled_to_merchant.
+    // DR11 replay preserves the already-authorized refund source state.
+    if (dr11RefundCertificationCandidate || dr11RefundReplay) {
+      payment.status = "settlement_failed"
+      payment.settlementFailureState = "refund_pending"
+      payment.payerRefundEligible = true
+      payment.refundStatus = "pending"
+      payment.a2uErrorCode = "dr11_live_concurrent_refund_certification"
+      payment.a2uErrorMessage = "Pi-review merchant-agnostic Testnet auto-refund certification"
+      console.log("[DR60 DR11 REFUND AUTHORITY] durable refund source state selected")
+    } else if (currentStatus === "pending" || !currentStatus) {
+      payment.status = "paid_to_app"
+      console.log("[Pi Complete] Changed status from pending to paid_to_app")
+    } else if (currentStatus === "paid_to_app" || currentStatus === "settlement_pending" || currentStatus === "settled_to_merchant") {
+      console.log("[Pi Complete] Preserving existing compatible status:", currentStatus)
+    } else {
+      console.error("[Pi Complete] Status neither pending nor compatible settlement status:", currentStatus)
+      return NextResponse.json({ error: "Payment in unexpected status" }, { status: 400 })
+    }
+    
+    const redisU2ATimingStartedAt = Date.now()
+    let atomicU2AResult: unknown
+    try {
+      atomicU2AResult = await redis.eval(`
+      local latest = redis.call('GET', KEYS[1])
+      if not latest then return 0 end
+      local ok, current = pcall(cjson.decode, latest)
+      if not ok or type(current) ~= 'table' then return 0 end
+      local projectionVersion=current.redisProjectionVersion
+      if projectionVersion==nil then projectionVersion=0 end
+      if type(projectionVersion)~='number' or projectionVersion<0 or projectionVersion~=math.floor(projectionVersion) then return 0 end
+      local incoming = cjson.decode(ARGV[1])
+      if current.id ~= incoming.id or current.amount ~= incoming.amount or current.customerAmount ~= nil and current.customerAmount ~= incoming.customerAmount or current.merchantId ~= incoming.merchantId or current.merchantUid ~= incoming.merchantUid or current.piPaymentId ~= nil and current.piPaymentId ~= incoming.piPaymentId or current.u2aTxid ~= nil and current.u2aTxid ~= incoming.u2aTxid or current.payerUid ~= nil and incoming.payerUid ~= nil and current.payerUid ~= incoming.payerUid then return 0 end
+      local dr11Candidate = ARGV[5] == '1'
+      local dr11Refund = dr11Candidate and (current.status == nil or current.status == 'pending')
+      local transitioningToPaidToApp = (current.status == nil or current.status == 'pending') and not dr11Refund
+      local dr11RefundReplay = dr11Candidate and current.status == 'settlement_failed' and current.settlementFailureState == 'refund_pending' and current.refundStatus == 'pending' and current.payerRefundEligible == true and current.a2uErrorCode == 'dr11_live_concurrent_refund_certification'
+      if current.status ~= nil and current.status ~= 'pending' and current.status ~= 'paid_to_app' and current.status ~= 'settlement_pending' and current.status ~= 'settled_to_merchant' and not dr11RefundReplay then return 0 end
+      if dr11Refund and (current.status == nil or current.status == 'pending') then
+        if current.a2uPaymentId ~= nil or current.a2uTxid ~= nil or current.a2uPreparedTxHash ~= nil or current.a2uPreparedSequence ~= nil or current.a2uPreparedEnvelopeXdr ~= nil or current.horizonSuccessFlag == true or current.refundPaymentId ~= nil or current.refundTxid ~= nil then return 0 end
+        current.status = 'settlement_failed'; current.settlementFailureState = 'refund_pending'; current.payerRefundEligible = true; current.refundStatus = 'pending'; current.a2uErrorCode = 'dr11_live_concurrent_refund_certification'; current.a2uErrorMessage = 'Pi-review merchant-agnostic Testnet auto-refund certification'
+        current.settlementDispatchRequestedAt = nil
+        redis.call('DEL', KEYS[6])
+        redis.call('SREM', KEYS[2], ARGV[2]); redis.call('ZREM', KEYS[3], ARGV[2])
+      elseif transitioningToPaidToApp then current.status = 'paid_to_app' end
+      current.customerAmount = incoming.customerAmount
+      current.piPaymentId = incoming.piPaymentId
+      current.u2aTxid = incoming.u2aTxid
+      if current.paidAt == nil then current.paidAt = incoming.paidAt end
+      if transitioningToPaidToApp and current.settlementDispatchRequestedAt == nil then current.settlementDispatchRequestedAt = incoming.settlementDispatchRequestedAt end
+      if incoming.payerUid ~= nil then current.payerUid = incoming.payerUid; current.payerUidSource = incoming.payerUidSource; if current.payerUidCapturedAt == nil then current.payerUidCapturedAt = incoming.payerUidCapturedAt end end
+      local immediateDrainKickOwned = 0
+      if transitioningToPaidToApp then local seq=redis.call('GET',KEYS[4]); if not seq then local top=redis.call('ZRANGE',KEYS[3],-1,-1,'WITHSCORES'); if #top ~= 0 and #top ~= 2 then return 0 end; local base=0; if #top == 2 then base=tonumber(top[2]); if not base or base < 0 or base ~= math.floor(base) then return 0 end end; redis.call('SET',KEYS[4],base) end; local readySequence=redis.call('INCR',KEYS[4]); redis.call('SADD', KEYS[2], ARGV[2]); redis.call('ZADD', KEYS[3], 'NX', readySequence, ARGV[2]); local kick=redis.call('SET',KEYS[5],ARGV[3],'NX','EX',ARGV[4]); if kick then immediateDrainKickOwned=1 end end
+      current.redisProjectionVersion=projectionVersion+1
+      redis.call('SET', KEYS[1], cjson.encode(current))
+      if dr11Refund then return 3 end
+      if immediateDrainKickOwned == 1 then return 2 end
+      return 1
+    `, [`payment:${flashPaymentId}`, "flashpay:recovery:active-payments:v1", "flashpay:settlement:ready:v1", "flashpay:settlement:ready:v1:sequence", IMMEDIATE_DRAIN_KICK_KEY, `flashpay:certification:dr11:payment:${flashPaymentId}`], [JSON.stringify({
+      id: flashPaymentId,
+      amount: payment.amount,
+      customerAmount: payment.customerAmount,
+      merchantId: payment.merchantId,
+      merchantUid: payment.merchantUid,
+      piPaymentId: payment.piPaymentId,
+      u2aTxid: payment.u2aTxid,
+      payerUid: payment.payerUid,
+      payerUidSource: payment.payerUidSource,
+      payerUidCapturedAt: payment.payerUidCapturedAt,
+      paidAt: payment.paidAt,
+      settlementDispatchRequestedAt: payment.paidAt,
+    }), flashPaymentId, flashPaymentId, String(IMMEDIATE_DRAIN_KICK_TTL_SECONDS), dr11RefundCertificationCandidate ? "1" : "0", "armed:v1"])
+    } catch (error) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis projection write failed after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: finalCanonicalTxid, customerAmount: finalPiAmount }), { status: 200 })
+      }
+      throw error
+    }
+    console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
+    const atomicU2AResultNumber = Number(atomicU2AResult)
+    if (atomicU2AResultNumber !== 1 && atomicU2AResultNumber !== 2 && atomicU2AResultNumber !== 3) {
+      if (dr11DurableRefund) {
+        console.warn("[DR63 DR11 RESPONSE] Redis projection rejected after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, redisResult: atomicU2AResultNumber })
+        return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: finalCanonicalTxid, customerAmount: finalPiAmount }), { status: 200 })
+      }
+      console.error("[Pi Complete] Atomic U2A persistence rejected")
+      return NextResponse.json({ error: "Payment state conflict" }, { status: 409 })
+    }
+    console.log("[Pi Complete] ✓ Persisted verified U2A fields: piPaymentId, u2aTxid, paidAt, customerAmount, status")
+
+    if (atomicU2AResultNumber === 3) {
+      if (!dr11DurableRefund || dr11DurableRefund.stage !== "intent_created" || dr11DurableRefund.status !== "pending" || dr11DurableRefund.lastErrorCode !== "dr11_live_hold" || dr11DurableRefund.lastErrorMessage !== "awaiting_owner_concurrent_harness") {
+        console.error("[DR60 DR11 REFUND AUTHORITY] durable intent/hold unavailable after projection", { paymentId: flashPaymentId })
+        return NextResponse.json({ error: "DR11 durable refund authority unavailable after projection" }, { status: 503 })
+      }
+      console.warn("[DR60 DR11 REFUND AUTHORITY] pristine intent held", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, amount: finalPiAmount, settlementQueued: false, authority: "postgres" })
+    }
+
+    // A production qualification wake carries this payment across the HTTP boundary.
+    // The periodic read covers a lost event, including a coalesced Redis kick.
+    const observeNewIntents = process.env.VERCEL_ENV === "production" && (process.env.FLASHPAY_RECOVERY_SCOPE === "observe_new" || process.env.FLASHPAY_RECOVERY_SCOPE === "admitted_new")
+    if (observeNewIntents || atomicU2AResultNumber === 2 || (atomicU2AResultNumber === 3 && dr11RefundCertificationCandidate)) {
+      const recoverySecret = process.env.FLASHPAY_TRANSIENT_RECOVERY_SECRET
+      const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL
+      const isProductionVercel = process.env.VERCEL_ENV === "production"
+      if (isProductionVercel && recoverySecret && productionHost) {
+        try {
+          after(async () => {
+            try {
+              const immediateDrainRequestUrl = new URL(observeNewIntents ? "/api/recovery/new-intents" : "/api/recovery/transient", `https://${productionHost}`)
+              if (observeNewIntents) immediateDrainRequestUrl.searchParams.set("paymentId", flashPaymentId)
+              else immediateDrainRequestUrl.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
+              const immediateDrainUrl = immediateDrainRequestUrl.toString()
+              const response = await fetch(immediateDrainUrl, {
+                method: "POST",
+                headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
+                cache: "no-store",
+                redirect: "error",
+              })
+              if (!response.ok) console.warn("[P7J12C KICK] immediate drain returned non-OK", { status: response.status })
+            } catch (error) {
+              console.warn("[P7J12C KICK] immediate drain dispatch failed", error instanceof Error ? error.message : String(error))
+            }
+          })
+          console.log("[P7J12C KICK] coalesced immediate drain scheduled", { paymentId: flashPaymentId, ttlSeconds: IMMEDIATE_DRAIN_KICK_TTL_SECONDS })
+        } catch (error) {
+          console.warn("[P7J12C KICK] immediate drain scheduling failed; durable queue remains authoritative", error instanceof Error ? error.message : String(error))
+        }
+      } else {
+        console.warn("[P7J12C KICK] immediate drain not scheduled; durable queue remains authoritative", {
+          production: isProductionVercel,
+          recoverySecretConfigured: Boolean(recoverySecret),
+          productionUrlConfigured: Boolean(productionHost),
+        })
+      }
+    }
+
+    // === STAGE 4: Return canonical response without waiting for settlement drain ===
+    console.log("[Pi Complete] === STAGE 4: Return canonical asynchronous-settlement response ===")
+
+    const canonicalResponse = await buildA2USuccessResponse(flashPaymentId)
+    if (!canonicalResponse) {
+      console.error("[Pi Complete] Failed to build canonical response")
+      return NextResponse.json({ error: "Response building failed" }, { status: 500 })
+    }
+
+    console.log("[Pi Complete] ✅ U2A ingress committed; settlement queued - status:", canonicalResponse.status)
+    console.log("[P7B TIMING] /complete total", { paymentId: flashPaymentId, durationMs: Date.now() - completeTimingStartedAt })
+    return NextResponse.json(canonicalResponse, { status: 200 })
+  } catch (error) {
+    console.error("[Pi Complete] Exception:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Internal server error" },
+      { status: 500 }
+    )
+  }
+}

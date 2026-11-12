@@ -9,16 +9,15 @@ import { authenticateCustomer } from "@/lib/pi-sdk"
 import { useToast } from "@/hooks/use-toast"
 import { executePayment, getPaymentFromServer } from "@/lib/operations"
 import { unifiedStore } from "@/lib/unified-store"
-import { getStatusColor, isPaid as isPaymentSettled, isProcessingStatus } from "@/lib/payment-status"
+import { getStatusColor, isPaid as isPaymentSettled } from "@/lib/payment-status";
 import { useI18n } from "@/components/i18n-provider"
-import { getRetryDecision, shouldSuppressErrorCallback, isPaymentSettled as isSettled } from "@/lib/retry-decision"
+import { shouldSuppressErrorCallback } from "@/lib/retry-decision";
 import type { Payment, PaymentStatus } from "@/lib/types"
 
 export function CustomerPaymentView({ 
   paymentId,
   bridgeToken,
   onSuccess, 
-  onError 
 }: { 
   paymentId: string
   bridgeToken?: string | null
@@ -34,7 +33,6 @@ export function CustomerPaymentView({
   const [progressMessage, setProgressMessage] = useState<string>("")
   const [piSDKReady, setPiSDKReady] = useState(false)
   const [entryVerified, setEntryVerified] = useState(false)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [authError, setAuthError] = useState<string>("")
   const [isPaymentPaid, setIsPaymentPaid] = useState(false)
   const [piPaymentInitiated, setPiPaymentInitiated] = useState(false)

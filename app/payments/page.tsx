@@ -105,14 +105,6 @@ function isSalesDay(value: unknown): value is SalesDay {
   })
 }
 
-const STATUS_LABEL: Record<SalesStatus, string> = {
-  paid: "Paid",
-  processing: "Processing",
-  failed: "Failed",
-  cancelled: "Cancelled",
-  needs_attention: "Needs attention",
-}
-
 export default function PaymentsPage() {
   const router = useRouter()
   const merchant = useMerchant()

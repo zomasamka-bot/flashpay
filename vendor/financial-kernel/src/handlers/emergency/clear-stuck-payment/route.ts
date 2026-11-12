@@ -1,0 +1,141 @@
+import { type NextRequest, NextResponse } from "next/server"
+import { redis, isRedisConfigured } from "../../../lib/redis"
+
+export const dynamic = "force-dynamic"
+export const runtime = "nodejs"
+
+// Verify Bearer token and owner authorization
+async function verifyOwnerAuth(token: string, ownerUid?: string) {
+  try {
+    // Check if owner UID is configured
+    if (!ownerUid) {
+      console.log("[Emergency-Auth] Owner UID not configured")
+      return { verified: null, statusCode: 500 }
+    }
+    
+    // Verify token with Pi /v2/me endpoint
+    const meResponse = await fetch("https://api.minepi.com/v2/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    
+    if (!meResponse.ok) {
+      console.log("[Emergency-Auth] Token verification failed:", meResponse.status)
+      return { verified: null, statusCode: 401 }
+    }
+    
+    const meData = await meResponse.json()
+    const verifiedUid = meData.uid
+    
+    console.log("[Emergency-Auth] Token verified for uid:", verifiedUid)
+    
+    // Compare with owner UID
+    if (verifiedUid !== ownerUid) {
+      console.log("[Emergency-Auth] UID mismatch - not owner. Expected:", ownerUid, "Got:", verifiedUid)
+      return { verified: null, statusCode: 403 }
+    }
+    
+    return { verified: verifiedUid, statusCode: 200 }
+  } catch (error) {
+    console.error("[Emergency-Auth] Token verification error:", error)
+    return { verified: null, statusCode: 401 }
+  }
+}
+
+// GET /api/emergency/clear-stuck-payment — Pending listing disabled (owner only)
+export async function GET(request: NextRequest) {
+  // Get config for owner UID
+  const config = require("../../../lib/config").config || {}
+  
+  // Verify authorization
+  const authHeader = request.headers.get("authorization")
+  const token = authHeader?.replace("Bearer ", "") || ""
+  
+  if (!token) {
+    console.log("[Emergency] No authorization header")
+    return NextResponse.json({ error: "Missing Authorization header" }, { status: 401 })
+  }
+  
+  const authResult = await verifyOwnerAuth(token, config.ownerUid)
+  if (authResult.statusCode === 500) {
+    return NextResponse.json({ error: "Owner UID not configured" }, { status: 500 })
+  }
+  if (!authResult.verified) {
+    console.log("[Emergency] Authorization failed with status:", authResult.statusCode)
+    return NextResponse.json({ error: "Unauthorized" }, { status: authResult.statusCode })
+  }
+
+  return NextResponse.json({ error: "Emergency pending listing disabled: local pending is not authoritative proof; manual review required.", stuckPayments: [] }, { status: 409 })
+}
+
+// POST /api/emergency/clear-stuck-payment — Clear a single stuck payment (owner only)
+export async function POST(request: NextRequest) {
+  console.log("[Emergency] POST - Clearing single payment")
+  
+  // Get config for owner UID
+  const config = require("../../../lib/config").config || {}
+  
+  // Verify authorization
+  const authHeader = request.headers.get("authorization")
+  const token = authHeader?.replace("Bearer ", "") || ""
+  
+  if (!token) {
+    console.log("[Emergency-POST] No authorization header")
+    return NextResponse.json({ error: "Missing Authorization header" }, { status: 401 })
+  }
+  
+  const authResult = await verifyOwnerAuth(token, config.ownerUid)
+  if (authResult.statusCode === 500) {
+    return NextResponse.json({ error: "Owner UID not configured" }, { status: 500 })
+  }
+  if (!authResult.verified) {
+    console.log("[Emergency-POST] Authorization failed with status:", authResult.statusCode)
+    return NextResponse.json({ error: "Unauthorized" }, { status: authResult.statusCode })
+  }
+  
+  if (!isRedisConfigured) {
+    return NextResponse.json(
+      { error: "Redis not configured" },
+      { status: 503 }
+    )
+  }
+
+  try {
+    // Get paymentId from request body
+    const body = await request.json()
+    const { paymentId } = body
+    
+    if (!paymentId) {
+      console.log("[Emergency-POST] Missing paymentId")
+      return NextResponse.json({ error: "Missing paymentId in request body" }, { status: 400 })
+    }
+    
+    // Only read this specific payment
+    const key = `payment:${paymentId}`
+    const paymentData = await redis.get(key)
+    
+    if (!paymentData) {
+      console.log("[Emergency-POST] Payment not found:", paymentId)
+      return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+    }
+    
+    const payment = typeof paymentData === "string" ? JSON.parse(paymentData) : paymentData
+    console.log("[Emergency-POST] Current payment status:", payment.status)
+    
+    // Only cancel if status is pending (case-insensitive, safe check)
+    if (String(payment.status).toLowerCase() !== "pending") {
+      console.log("[Emergency-POST] Payment status is not pending:", payment.status)
+      return NextResponse.json(
+        { error: `Cannot clear payment with status: ${payment.status}. Only pending payments can be cleared.` },
+        { status: 409 }
+      )
+    }
+    
+    return NextResponse.json({ error: "Emergency clear blocked: local pending is not authoritative proof; manual review required." }, { status: 409 })
+  } catch (error) {
+    console.error("[Emergency-POST] Error clearing payment:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unknown error" },
+      { status: 500 }
+    )
+  }
+}

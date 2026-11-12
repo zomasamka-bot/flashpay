@@ -34,3 +34,6 @@ next-env.d.ts
 *.zip
 .DS_Store
 **/.DS_Store
+
+# Compiled worker outputs are built from the packaged kernel source.
+/vendor/financial-kernel/dist/

@@ -26,10 +26,6 @@ declare global {
   }
 }
 
-let sdkLoadAttempts = 0
-const MAX_SDK_LOAD_ATTEMPTS = 30
-const SDK_LOAD_RETRY_DELAY = 200
-
 if (typeof window !== "undefined") {
   window.addEventListener("error", (event) => {
     if (event.message?.includes("Pi") || event.filename?.includes("pi-sdk")) {
@@ -45,24 +41,6 @@ if (typeof window !== "undefined") {
     CoreLogger.error("Unhandled promise rejection", {
       reason: event.reason?.toString(),
     })
-  })
-}
-
-const waitForPiSDK = async (): Promise<boolean> => {
-  return new Promise((resolve) => {
-    const checkSDK = () => {
-      sdkLoadAttempts++
-      if (typeof window !== "undefined" && window.Pi && typeof window.Pi.init === "function") {
-        resolve(true)
-        return
-      }
-      if (sdkLoadAttempts >= MAX_SDK_LOAD_ATTEMPTS) {
-        resolve(false)
-        return
-      }
-      setTimeout(checkSDK, SDK_LOAD_RETRY_DELAY)
-    }
-    checkSDK()
   })
 }
 
@@ -400,13 +378,6 @@ export const authenticateMerchant = async (): Promise<{
   username?: string
   error?: string
 }> => {
-  
-  // CRITICAL: Log window context to understand where app is running
-  
-  // DETECT PI BROWSER ENVIRONMENT
-  const isInPiBrowser = typeof window !== "undefined" && (window as any).Pi !== undefined
-  const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "UNKNOWN"
-  const isPiBrowserUserAgent = userAgent.includes("PiBrowser") || userAgent.includes("pi-browser")
   
   
   if (typeof window === "undefined" || !window.Pi || typeof window.Pi.authenticate !== "function") {

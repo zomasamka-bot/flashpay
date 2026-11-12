@@ -1,0 +1,14 @@
+{
+  "schema": "KERNEL_SERVICES_V1",
+  "policyEnrollment": "Explicit authorized deployment policy; never created by runtime",
+  "issuer": {"role": "r36_issuer", "walletSeed": false, "purpose": "Verify original independent evidence and record scoped certificate"},
+  "signer": {"role": "r36_signer", "walletSeed": false, "purpose": "Sign only approved exact digest under separate pinned key"},
+  "registrar": {"role": "r36_registrar", "directTablePrivileges": false},
+  "producer": {"role": "r36_evidence_reader", "readOnly": true, "externalMethods": ["GET"]},
+  "runtime": {"role": "r36_runtime", "financialPermission": "Original guarded PostgreSQL functions only"},
+  "appDatabaseRole": "Existing application schema owner privileges retained; deployment administrator is trusted",
+  "wake": {"path": "/api/recovery/new-intents", "authentication": "Existing protected recovery secret", "financialAuthority": false},
+  "schedule": "Reuse existing event wake and bounded backup schedule; never duplicate schedules; completed payments excluded by original selectors",
+  "isolation": "Separate process/database/Redis/wallet/credentials/policy/Drive per app; no shared tenant switching",
+  "cutover": "NOT_PERFORMED"
+}

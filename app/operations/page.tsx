@@ -22,7 +22,7 @@ import { translateUpperOperationsText } from "@/components/upper-operations-arab
 export default function OperationsPage() {
   const router = useRouter()
   const { uidData } = useOwnerUid()
-  const { toast } = useToast()
+  useToast()
   const { locale } = useI18n()
   const tr = (value: string) => translateUpperOperationsText(locale, value)
   const [mounted, setMounted] = useState(false)
@@ -33,7 +33,7 @@ export default function OperationsPage() {
   const [financialHealth, setFinancialHealth] = useState<{ postgres: { settled: number; settlementOpen: number; settlementFailed: number; refundPending: number; refundManualReview: number }; recovery: { active: number; ready: number; drainLeaseActive: boolean; piCreateBackpressureActive: boolean }; asOf: string } | null>(null)
   const [financialHealthError, setFinancialHealthError] = useState(false)
   const [financialHealthLoading, setFinancialHealthLoading] = useState(false)
-  const [accessDenied, setAccessDenied] = useState(false)
+  const [, setAccessDenied] = useState(false)
   const [incident, setIncident] = useState<{ overall: "healthy" | "degraded" | "maintenance" | "unknown"; reason: string; asOf: string; control: { available: boolean; killSwitchEnabled?: boolean; revision?: number }; financial: { settlementOpen:number; settlementFailed:number; refundPending:number; manualReview:number; oldestOpenAt:string|null } | null; recovery: { active:number; ready:number; lastWakeAt:string|null; lastWakeAgeMs:number|null; wakeFresh:boolean|null } | null } | null>(null)
   const [incidentLoading, setIncidentLoading] = useState(false)
 

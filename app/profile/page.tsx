@@ -125,7 +125,6 @@ function ProfileContent() {
 
   // Owner UID verification — stores result separately from payment system
   const { uidData, verifyUid, clearUid } = useOwnerUid()
-  const piUsername = uidData.username
   
   // Canonical merchant state for continuity
   const merchantState = useMerchant()

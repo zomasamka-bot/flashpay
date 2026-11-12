@@ -7,7 +7,7 @@
  */
 
 import type { Payment } from "./types"
-import { isProcessingStatus, isTerminalState, canClientRetryPayment as canRetryFromStatus } from "./payment-status"
+import { isProcessingStatus, isTerminalState } from "./payment-status";
 
 export interface RetryDecision {
   canRetry: boolean

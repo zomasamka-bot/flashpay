@@ -12,7 +12,7 @@ import { useMerchant } from "@/lib/use-merchant"
 import { config } from "@/lib/config"
 import { getReceiptLink } from "@/lib/router"
 
-import { Calendar, Search, Download, ChevronRight, ChevronDown, TrendingUp, Filter } from "lucide-react"
+import { Search, Download, ChevronRight, ChevronDown, TrendingUp, Filter } from "lucide-react";
 import { useI18n } from "@/components/i18n-provider"
 
 type UndatedHistoricalIdentity = {

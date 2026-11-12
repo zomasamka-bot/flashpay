@@ -1,0 +1,194 @@
+import "server-only"
+
+import { getRefundCheckpointReadOnly } from "./refund-checkpoint-store"
+import type { RefundCheckpointReadOnly } from "./refund-checkpoint-store"
+import { readRefundPresentationBlockchain } from "./refund-presentation-blockchain"
+import {
+  readRefundPresentationPersistence,
+  readRefundPresentationPersistences,
+  readRefundPresentationProof,
+  readRefundPresentationProofs,
+  recordRefundPresentationProof,
+} from "./refund-presentation-persistence"
+import {
+  buildRefundPresentationFromEvidence,
+  deriveRefundFinalizationFromPersistence,
+} from "./refund-presentation"
+import type {
+  RefundCheckpoint,
+  RefundPresentationBlockchainReadResult,
+  RefundPresentationPersistenceReadResult,
+  RefundPresentationProofReadResult,
+  RefundPresentationReadResult,
+} from "./types"
+
+export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult }, suppliedPersistence?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationPersistenceReadResult }, proofMode: "read" | "record" = "read"): Promise<RefundPresentationReadResult> {
+  try {
+    if (suppliedCheckpoint && suppliedCheckpoint.refundId !== refundId) return { outcome: "INDETERMINATE" }
+    const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
+      ? { state: "present", checkpoint: suppliedCheckpoint }
+      : await getRefundCheckpointReadOnly(refundId)
+    if (checkpointResult.state === "absent") return { outcome: "NOT_FOUND" }
+    if (checkpointResult.state === "uncertain") return { outcome: "INDETERMINATE" }
+
+    const checkpoint = checkpointResult.checkpoint
+
+    // PRE-DR118 UX16: every durable refund checkpoint with status=pending is
+    // presentation-ready, but never by stage name alone. Pre-confirmation stages
+    // must reconcile as PENDING; confirmed/projection stages must reconcile as
+    // CONFIRMED against Pi + Horizon. Only completed checkpoints enter the strict
+    // persistence/proof/finality path below. This restores progressive customer
+    // status without weakening terminal receipt evidence.
+    if (checkpoint.status === "pending") {
+      if (suppliedProof || suppliedPersistence) return { outcome: "INDETERMINATE" }
+      const blockchain = await readRefundPresentationBlockchain(checkpoint)
+      const preConfirmation =
+        checkpoint.stage === "eligibility_verified" ||
+        checkpoint.stage === "intent_created" ||
+        checkpoint.stage === "wallet_submission_started"
+      const postConfirmation =
+        checkpoint.stage === "wallet_submission_confirmed" ||
+        checkpoint.stage === "payment_checkpoint_updated" ||
+        checkpoint.stage === "accounting_recorded" ||
+        checkpoint.stage === "audit_recorded"
+      if (!preConfirmation && !postConfirmation) return { outcome: "INDETERMINATE" }
+      if (preConfirmation && blockchain.outcome !== "PENDING") return { outcome: "INDETERMINATE" }
+      if (postConfirmation && blockchain.outcome !== "CONFIRMED") return { outcome: "INDETERMINATE" }
+
+      const presentation = buildRefundPresentationFromEvidence(checkpoint, {
+        requestedAt: checkpoint.createdAt,
+        finalization: {
+          accountingRecorded: false,
+          accountingRecordedAt: null,
+          auditRecorded: false,
+          auditRecordedAt: null,
+          completionAuditRecorded: false,
+          completedAt: null,
+          projectionFinalized: false,
+          finalizedAt: null,
+        },
+        blockchain: blockchain.outcome === "CONFIRMED"
+          ? {
+              confirmed: true,
+              network: blockchain.network,
+              confirmationRecordedAt: checkpoint.updatedAt,
+              transactionAt: blockchain.transactionAt,
+              piTransactionVerified: blockchain.piTransactionVerified,
+              piDeveloperCompleted: blockchain.piDeveloperCompleted,
+              horizonSuccessful: blockchain.horizonSuccessful,
+            }
+          : {
+              confirmed: false,
+              network: null,
+              confirmationRecordedAt: null,
+              transactionAt: null,
+              piTransactionVerified: null,
+              piDeveloperCompleted: null,
+              horizonSuccessful: null,
+            },
+      })
+      return { outcome: "FOUND", presentation }
+    }
+
+    if (checkpoint.status !== "completed" || checkpoint.stage !== "audit_recorded") return { outcome: "INDETERMINATE" }
+
+    if (suppliedPersistence && (suppliedPersistence.refundId !== checkpoint.refundId || suppliedPersistence.paymentId !== checkpoint.paymentId || suppliedPersistence.idempotencyKey !== checkpoint.idempotencyKey)) return { outcome: "INDETERMINATE" }
+    const persistence = suppliedPersistence?.result ?? await readRefundPresentationPersistence(checkpoint)
+    if (persistence.outcome !== "FOUND") return { outcome: "INDETERMINATE" }
+
+    let blockchain: RefundPresentationBlockchainReadResult
+    if (
+      checkpoint.stage === "audit_recorded" &&
+      checkpoint.status === "completed" &&
+      Object.values(persistence.timestamps).every((value) => value !== null)
+    ) {
+      if (suppliedProof && (suppliedProof.refundId !== checkpoint.refundId || suppliedProof.paymentId !== checkpoint.paymentId || suppliedProof.idempotencyKey !== checkpoint.idempotencyKey)) return { outcome: "INDETERMINATE" }
+      const proof = suppliedProof?.result ?? await readRefundPresentationProof(checkpoint)
+      if (proof.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
+      if (proof.outcome === "FOUND") {
+        blockchain = {
+          outcome: "CONFIRMED",
+          transactionAt: proof.proof.transactionAt,
+          network: proof.proof.network,
+          piTransactionVerified: proof.proof.piTransactionVerified,
+          piDeveloperCompleted: proof.proof.piDeveloperCompleted,
+          horizonSuccessful: proof.proof.horizonSuccessful,
+        }
+      } else {
+        // User-facing reads cannot append to the financial audit. The protected
+        // internal reconciliation caller retains its verified proof-write path.
+        if (proofMode === "read") return { outcome: "INDETERMINATE" }
+        const blockchainRead = await readRefundPresentationBlockchain(checkpoint)
+        if (blockchainRead.outcome !== "CONFIRMED" || blockchainRead.piDeveloperCompleted !== true) {
+          return { outcome: "INDETERMINATE" }
+        }
+        if (!(await recordRefundPresentationProof(checkpoint, blockchainRead))) {
+          return { outcome: "INDETERMINATE" }
+        }
+        blockchain = blockchainRead
+      }
+    } else {
+      blockchain = await readRefundPresentationBlockchain(checkpoint)
+      if (blockchain.outcome === "INDETERMINATE") return { outcome: "INDETERMINATE" }
+    }
+
+    const persisted = persistence.timestamps
+    if (
+      blockchain.outcome === "PENDING" &&
+      [
+        persisted.confirmationRecordedAt,
+        persisted.accountingRecordedAt,
+        persisted.auditRecordedAt,
+        persisted.completedAt,
+        persisted.finalizedAt,
+      ].some((v) => v !== null)
+    ) return { outcome: "INDETERMINATE" }
+    if (blockchain.outcome === "CONFIRMED" && persisted.confirmationRecordedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+    // PRE-DR118 UX16B: terminal timestamp monotonicity. At this point the
+    // checkpoint is already narrowed to completed/audit_recorded, so validate
+    // the durable evidence chain itself rather than comparing an unreachable
+    // earlier stage. This preserves the accounting-before-audit-before-complete
+    // invariant and avoids weakening terminal receipt proof.
+    if (persisted.accountingRecordedAt === null || persisted.auditRecordedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+    if (persisted.completedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+    if (persisted.finalizedAt !== null && persisted.completedAt === null) {
+      return { outcome: "INDETERMINATE" }
+    }
+
+    const presentationBlockchain = blockchain.outcome === "PENDING"
+      ? {
+          confirmed: false,
+          network: null,
+          confirmationRecordedAt: null,
+          transactionAt: null,
+          piTransactionVerified: null,
+          piDeveloperCompleted: null,
+          horizonSuccessful: null,
+        }
+      : {
+          confirmed: true,
+          network: blockchain.network,
+          confirmationRecordedAt: persisted.confirmationRecordedAt,
+          transactionAt: blockchain.transactionAt,
+          piTransactionVerified: blockchain.piTransactionVerified,
+          piDeveloperCompleted: blockchain.piDeveloperCompleted,
+          horizonSuccessful: blockchain.horizonSuccessful,
+        }
+
+    const presentation = buildRefundPresentationFromEvidence(checkpoint, {
+      requestedAt: persisted.requestedAt,
+      finalization: deriveRefundFinalizationFromPersistence(persisted),
+      blockchain: presentationBlockchain,
+    })
+
+    return { outcome: "FOUND", presentation }
+  } catch {
+    return { outcome: "INDETERMINATE" }
+  }
+}

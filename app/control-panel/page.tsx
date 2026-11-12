@@ -5,18 +5,17 @@
 
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { config } from "@/lib/config"
 import type { SystemState } from "@/lib/system-control"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { AlertTriangle, Power, RefreshCw, CheckCircle2 } from "lucide-react"
+import { AlertTriangle, RefreshCw, CheckCircle2 } from "lucide-react";
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { OwnerOperationsHeader } from "@/components/owner-operations-header"
 
-type ControlAction = "enable" | "disable" | "reset"
 
 function ControlPanelContent() {
   const router = useRouter()
@@ -24,12 +23,9 @@ function ControlPanelContent() {
   const [mounted, setMounted] = useState(false)
   const [systemState, setSystemState] = useState<SystemState | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [isToggling, setIsToggling] = useState(false)
+  const [isToggling] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
-  const [reason, setReason] = useState("")
-  const writeInFlightRef = useRef(false)
-  const reasonRef = useRef<HTMLTextAreaElement>(null)
+  const [success] = useState<string | null>(null)
 
   useEffect(() => setMounted(true), [])
 
@@ -59,59 +55,6 @@ function ControlPanelContent() {
   }, [uidData.accessToken])
 
   useEffect(() => { void fetchSystemState() }, [fetchSystemState])
-
-  const executeControl = useCallback(async (action: ControlAction) => {
-    if (writeInFlightRef.current || !systemState || !uidData.accessToken) return
-    const cleanReason = reason.trim()
-    if (!cleanReason) {
-      setError("Enter an operational reason before changing control state.")
-      requestAnimationFrame(() => {
-        reasonRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
-        reasonRef.current?.focus({ preventScroll: true })
-      })
-      return
-    }
-
-    const confirmation = action === "enable" ? "ACTIVATE" : action === "disable" ? "DEACTIVATE" : "RESTORE"
-    const typed = window.prompt(document.documentElement.lang === "ar" ? `تحكم عالي التأثير للمالك. اكتب ${confirmation} للمتابعة.` : `High-impact owner control. Type ${confirmation} to continue.`)
-    if (typed !== confirmation) return
-
-    writeInFlightRef.current = true
-    setIsToggling(true)
-    setError(null)
-    setSuccess(null)
-    try {
-      const response = await fetch(`${config.appUrl}/api/control/system`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${uidData.accessToken}`,
-        },
-        body: JSON.stringify({
-          action,
-          reason: cleanReason,
-          expectedRevision: systemState.revision,
-          message: action === "enable" ? "Maintenance in progress. Please try again later." : undefined,
-        }),
-      })
-      const data = await response.json()
-      if (!response.ok) {
-        if (response.status === 409 && data?.state) setSystemState(data.state)
-        throw new Error(data?.error || "Control change failed")
-      }
-      setSystemState(data.state)
-      setReason("")
-      setSuccess(`${data.message} · request ${data.requestId}`)
-    } catch (err) {
-      setError((err as Error)?.message || "Control change failed")
-    } finally {
-      // A control write can succeed while audit persistence becomes uncertain.
-      // Always re-read canonical state before allowing another destructive action.
-      await fetchSystemState()
-      writeInFlightRef.current = false
-      setIsToggling(false)
-    }
-  }, [reason, systemState, uidData.accessToken, fetchSystemState])
 
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
