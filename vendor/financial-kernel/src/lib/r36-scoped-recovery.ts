@@ -113,21 +113,45 @@ export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'con
   })
 }
 
-// Break only the operational readiness cycle. The ORIGINAL SQL selector must
-// approve this exact unsent refund for preparation. No scoped send right is
-// manufactured, and the executor's explicit mode returns before authority/POST.
+// Bootstrap only preparation through the ORIGINAL SQL selector and refund
+// orchestrator. A pending intent must be able to reach its encrypted candidate
+// before the private producer can certify wallet turnover. No send right is
+// inferred from readiness or from a candidate, and evidence_only stops before
+// prepared authority/signing/submission. The ordinary admitted path stays above.
 export async function preparePendingRefundEvidence(subject:string|null) {
   const policy=process.env.R36_SCOPED_POLICY_DIGEST
   if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new'||!policy||!/^[0-9a-f]{64}$/.test(policy)||currentRecoveryRight())return 'preparation_held'
   const client=await getR36RestrictedClient()
   if(!client)return 'preparation_held'
-  const rows=await client.unsafe('SELECT public.r36_next_testnet_preparation($1,$2) AS candidate',[subject,policy])
-  if(rows.length!==1)throw Error('R36_PREPARATION_SELECTION_UNAVAILABLE')
-  const c=rows[0].candidate
-  if(c===null||c?.kind!=='refund')return 'no_pending_refund_evidence'
-  if(c.phase!=='preparation_only'||c.stage!=='wallet_submission_started'||c.piCreated!==true)return 'no_pending_refund_evidence'
-  if(typeof c.id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(c.id)||
-    (subject!==null&&c.id!==subject)||typeof c.op!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(c.op))throw Error('R36_PREPARATION_SELECTION_MISMATCH')
+  const select=async(id:string|null)=>{
+    const rows=await client.unsafe('SELECT public.r36_next_testnet_preparation($1,$2) AS candidate',[id,policy])
+    if(rows.length!==1)throw Error('R36_PREPARATION_SELECTION_UNAVAILABLE')
+    return rows[0].candidate
+  }
+  const validate=(c: {id:string;op:string},expectedId:string|null,expectedOp?:string)=>{
+    if(typeof c.id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(c.id)||
+      (expectedId!==null&&c.id!==expectedId)||typeof c.op!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(c.op)||
+      (expectedOp!==undefined&&c.op!==expectedOp))throw Error('R36_PREPARATION_SELECTION_MISMATCH')
+  }
+  let c=await select(subject)
+  if(c===null||c?.kind!=='refund'||c.phase!=='preparation_only')return 'no_pending_refund_evidence'
+  validate(c,subject)
+  if(c.piCreated===false&&['eligibility_verified','intent_created','wallet_submission_started'].includes(c.stage)){
+    // The original orchestrator re-reads identity, pending state, retirement,
+    // projection and one-shot Pi-create authority. It passes NULL send authority.
+    // No reset or alternate identity is created when an earlier create is unclear.
+    const prepared=await runAutomaticRefundPreparationStep(c.id,c.op)
+    if(prepared.state!=='ok'||prepared.result.outcome!=='success')return 'refund_preparation_held'
+    const next=await select(c.id)
+    // Another worker may have advanced the original right. Do not inherit it,
+    // switch payments, or fall back to execution from this preparation-only path.
+    if(next===null)return 'refund_preparation_advanced'
+    validate(next,c.id,c.op)
+    if(next.kind!=='refund'||next.phase!=='preparation_only')throw Error('R36_PREPARATION_SELECTION_MISMATCH')
+    c=next
+    if(c.stage!=='wallet_submission_started'||c.piCreated!==true)return 'refund_preparation_invoked'
+  }
+  if(c.stage!=='wallet_submission_started'||c.piCreated!==true)return 'no_pending_refund_evidence'
   const result=await executeRefundBlockchain(c.op,{paymentId:c.id,refundId:c.op},'evidence_only')
   return result.outcome==='blocked'&&result.reason==='prepared_evidence_only'?'refund_evidence_prepared':'refund_evidence_held'
 }

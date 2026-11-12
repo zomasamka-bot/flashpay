@@ -124,13 +124,13 @@ async function observe(request: NextRequest) {
           durationMs:Math.round(performance.now()-started)})
         if(admitted!=='no_ready_admitted_right')dispatch=admitted
       }
-      // An unissued refund needs its encrypted XDR candidate BEFORE the evidence
-      // service can prove the successor. This mode cannot acquire financial
-      // authority or send; all original selectors and execution guards remain.
+      // An unissued refund needs its original Pi identity and encrypted XDR
+      // candidate BEFORE private-host readiness can require successor evidence.
+      // Original preparation only; no signing or funds submission is authorized.
       if(dispatch==='no_confirmed_right'&&Number(counts.evidence_work)>0){
         const {preparePendingRefundEvidence}=await import("../../../lib/r36-scoped-recovery")
         const prepared=await preparePendingRefundEvidence(id??null)
-        console.info('[Recovery refund evidence]',{scope:result.scope,result:prepared,financialDispatch:false})
+        console.info('[Recovery refund evidence]',{scope:result.scope,result:prepared,fundsSubmission:false})
       }
       // Empty periodic wakes remain cheap. No rights or historical cursor change.
       if(dispatch==='no_confirmed_right'&&Number(counts.evidence_work)>0&&!await ensurePrivateTrustHost('recovery')) {
