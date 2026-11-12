@@ -13,8 +13,8 @@ importers:
   .:
     dependencies:
       '@flashpay/financial-kernel':
-        specifier: file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz
-        version: file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz(next@15.5.28(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: file:vendor/flashpay-financial-kernel-0.1.0-kernel.4.tgz
+        version: file:vendor/flashpay-financial-kernel-0.1.0-kernel.4.tgz(next@15.5.28(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@hookform/resolvers':
         specifier: ^3.10.0
         version: 3.10.0(react-hook-form@7.89.0(@types/react@19.3.0)(react@19.3.0))
@@ -240,9 +240,9 @@ packages:
       '@noble/hashes':
         optional: true
 
-  '@flashpay/financial-kernel@file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz':
-    resolution: {integrity: sha512-uRgFaoLxs/URunEnHlLgf7krxJOmc5f2CiraIsaOz7EvdyOVTl+cplD1mRPFeOLY9xMp5GyNXKjGZ5flG6om6w==, tarball: file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz}
-    version: 0.1.0-kernel.3
+  '@flashpay/financial-kernel@file:vendor/flashpay-financial-kernel-0.1.0-kernel.4.tgz':
+    resolution: {integrity: sha512-+ke4Iv0ZjyzRsu5JvRr8renAMcVm1S/ALGSD3wH3v3l4K+gMgO6IJRu0uLzHG6wimuARvlVBSkSnrQ85ovxo5A==, tarball: file:vendor/flashpay-financial-kernel-0.1.0-kernel.4.tgz}
+    version: 0.1.0-kernel.4
     engines: {node: 24.x}
     peerDependencies:
       next: 15.5.28
@@ -2206,7 +2206,7 @@ snapshots:
     optionalDependencies:
       '@noble/hashes': 2.4.0
 
-  '@flashpay/financial-kernel@file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz(next@15.5.28(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@flashpay/financial-kernel@file:vendor/flashpay-financial-kernel-0.1.0-kernel.4.tgz(next@15.5.28(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@stellar/stellar-sdk': 17.1.0
       '@upstash/redis': 1.36.2

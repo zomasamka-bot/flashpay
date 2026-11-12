@@ -79,7 +79,7 @@
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
     "vaul": "0.9.9",
-    "@flashpay/financial-kernel": "file:vendor/flashpay-financial-kernel-0.1.0-kernel.3.tgz"
+    "@flashpay/financial-kernel": "file:vendor/flashpay-financial-kernel-0.1.0-kernel.4.tgz"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.9",
