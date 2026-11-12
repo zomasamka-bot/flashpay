@@ -59,6 +59,9 @@ function retryDelayMs(reason: string, thrown: boolean): number {
 async function deferAfterFailure(checkpoint: RefundCheckpoint, reason: string, thrown: boolean): Promise<boolean> {
   const current = await getRefundCheckpointReadOnly(checkpoint.refundId)
   if (current.state !== "present") return false
+  // A stale observer must never defer the successor stage committed by another worker.
+  // The store CAS below still protects against advancement after this read.
+  if (current.checkpoint.stage !== checkpoint.stage || current.checkpoint.status !== checkpoint.status) return false
   const delay = retryDelayMs(reason, thrown)
   const deferred = await deferAutomaticRefund(
     current.checkpoint.refundId,
@@ -182,11 +185,11 @@ async function runAutomaticRefundCheckpointStep(checkpoint: RefundCheckpoint, re
     await clearAutomaticRefundDeferral(checkpoint.refundId)
     return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "success" }
   }
-  // A consumed create attempt belongs to its original in-flight/reconciliation
+  // A consumed create/complete attempt belongs to its original in-flight/reconciliation
   // path. This competing observer must not defer the same checkpoint while the
   // owner is persisting its verified Pi identity. Reconciliation remains GET-only
   // under the original One-Shot guard; neither a new create nor a reset is allowed.
-  if (!thrown && (reason === "wallet_drain_not_selected" || reason === "refund_create_reconcile_only")) return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason }
+  if (!thrown && (reason === "wallet_drain_not_selected" || reason === "refund_create_reconcile_only" || reason === "completion_reconcile_only")) return { refundId: checkpoint.refundId, paymentId: checkpoint.paymentId, action, outcome: "blocked", reason }
   if (!thrown && reason === "refund_cancelled") {
     const manualReview = await markAutomaticRefundManualReview(checkpoint.refundId, checkpoint.stage)
     if (manualReview && manualReview.refundId === checkpoint.refundId && manualReview.paymentId === checkpoint.paymentId && manualReview.stage === checkpoint.stage && manualReview.status === "manual_review_required") {
