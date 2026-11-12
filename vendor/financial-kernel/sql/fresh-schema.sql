@@ -936,7 +936,13 @@ BEGIN
  OR EXISTS(SELECT 1 FROM jsonb_array_elements(doc->'baseline'->'settlements') x WHERE x->>'a2u_from_address'=p_wallet)
  THEN RETURN false; END IF;
  -- Re-read the original full protected snapshot, not Redis or caller assertions.
- SELECT jsonb_build_object('settlements',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY payment_id)
+ SELECT jsonb_build_object('settlements',coalesce((SELECT jsonb_agg(CASE
+  -- A pre-fee hold has no financial_contract key. Preserve its original
+  -- shape only when the added column is NULL; never hide a real contract.
+  WHEN t.financial_contract IS NULL AND EXISTS (
+   SELECT 1 FROM jsonb_array_elements(h.original_snapshot->'settlements') prior
+   WHERE prior->>'payment_id'=t.payment_id AND NOT (prior ? 'financial_contract'))
+  THEN to_jsonb(t)-'financial_contract' ELSE to_jsonb(t) END ORDER BY payment_id)
  FROM public.settlement_checkpoints t WHERE payment_id=p_payment),'[]'::jsonb),
  'refunds',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY refund_id) FROM public.refund_checkpoints t WHERE payment_id=p_payment),'[]'::jsonb)) INTO observed;
  IF observed IS DISTINCT FROM h.original_snapshot
