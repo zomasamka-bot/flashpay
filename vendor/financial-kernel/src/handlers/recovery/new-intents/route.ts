@@ -20,13 +20,23 @@ function matches(expected: string | undefined, supplied: string | null) {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
-async function observe(request: NextRequest) {
+async function observe(request: NextRequest, selectedId?:string):Promise<Response> {
   const url = new URL(request.url)
   const subjects = url.searchParams.getAll("paymentId")
-  const id = subjects[0]
+  const id = selectedId ?? subjects[0]
   if ([...url.searchParams.keys()].some(k => k !== "paymentId") || subjects.length > 1 ||
       (id !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))) {
     return NextResponse.json({ error: "Invalid recovery scope" }, { status: 400 })
+  }
+  if(id===undefined && process.env.FLASHPAY_RECOVERY_SCOPE==='admitted_new'){
+    try{
+      const {drainBoundedRecovery}=await import('../../../lib/r36-bounded-recovery')
+      const result=await drainBoundedRecovery({query,visit:payment=>observe(request,payment),now:()=>Date.now()})
+      console.info('[Recovery bounded work]',{selected:result.selected,processed:result.processed})
+      return NextResponse.json(result,{status:result.outcomes.some(x=>x.status>=500)?503:200,headers:{'Cache-Control':'no-store'}})
+    }catch{
+      return NextResponse.json({error:'Recovery discovery unavailable',financialOutcome:'not_authorized_by_discovery'},{status:503})
+    }
   }
   // Poll unfinished work only. A final checkpoint alone is insufficient: a
   // missing finality seal or refund presentation remains recoverable work.

@@ -49,9 +49,20 @@ function normalizePostgresNumeric(value: unknown, fieldName: string): number {
 // Singleton connection instance
 let sqlClient: any = null
 let initializationAttempted = false
+let sqlInitialization: Promise<any | null> | null = null
 
 // Get or create the postgres client connection
 async function getPostgresClient() {
+  if (sqlClient !== null) return sqlClient
+  if (sqlInitialization !== null) return sqlInitialization
+  // Share only connection initialization, never a query result, transaction,
+  // certificate or financial authorization. Publish the promise before callers
+  // can cross the first asynchronous import/TLS/identity boundary.
+  sqlInitialization = initializePostgresClient()
+  try { return await sqlInitialization } finally { sqlInitialization = null }
+}
+
+async function initializePostgresClient() {
   // Return cached client if already initialized
   if (sqlClient !== null) {
     return sqlClient
@@ -99,8 +110,14 @@ async function getPostgresClient() {
 // R36 restricted DB identity. This connection must never use DATABASE_URL.
 // Fail closed until a separately provisioned runtime credential is present.
 let r36RestrictedClient: any = null
+let r36Initialization: Promise<any | null> | null = null
 export async function getR36RestrictedClient(): Promise<any | null> {
   if (r36RestrictedClient) return r36RestrictedClient
+  if (r36Initialization !== null) return r36Initialization
+  r36Initialization = initializeR36RestrictedClient()
+  try { return await r36Initialization } finally { r36Initialization = null }
+}
+async function initializeR36RestrictedClient(): Promise<any | null> {
   const url = process.env.R36_RUNTIME_DATABASE_URL
   if (!url || url === process.env.DATABASE_URL) return null
   try {
