@@ -255,7 +255,7 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
     !canonicalText(params.merchantUid) ||
     typeof params.customerAmount !== 'number' ||
     !Number.isFinite(params.customerAmount) ||
-    params.customerAmount <= 0
+    numberToExactPositiveStroops(params.customerAmount) === null
   ) {
     return { outcome: 'CONFLICT', error: 'Settlement payment identity input is invalid' }
   }
@@ -317,7 +317,6 @@ export async function recordSettlementPaymentIdentityCheckpoint(params: {
       row.merchant_id !== params.merchantId ||
       row.merchant_uid !== params.merchantUid ||
       storedCustomerAmount !== params.customerAmount ||
-      storedMerchantAmount !== params.customerAmount ||
       !financialAmountsMatch(storedCustomerAmount,storedMerchantAmount,storedAppCommission,row.financial_contract)
     ) {
       return { outcome: 'CONFLICT', error: 'Settlement payment identity durable identity/accounting mismatch' }

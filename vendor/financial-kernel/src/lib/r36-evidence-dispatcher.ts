@@ -76,7 +76,9 @@ export async function dispatchR36EvidenceCycle(db:R36ReadOnlySource,c:R36Dispatc
     if(Number.isSafeInteger(expiry)&&expiry>now){result.published++;continue} // do not republish a frozen pre-preparation snapshot
    }
    let renewal:{generation:number;evidenceNotBefore:number}|undefined
-   if(row.original_nonce&&Number.isSafeInteger(Number(row.original_expiry))&&Number(row.original_expiry)<=now){
+   // A committed request is not an issued certificate. SQL NULL must never
+   // become epoch zero and route interrupted initial issuance into renewal.
+   if(row.original_nonce&&row.original_expiry!==null&&row.original_expiry!==undefined&&Number.isSafeInteger(Number(row.original_expiry))&&Number(row.original_expiry)>0&&Number(row.original_expiry)<=now){
     if(row.submission_attempted!==false)throw Error('DISPATCH_RENEWAL_UNSPENT_REQUIRED')
     // Scheduling only: protected registrar/issuer SQL proves either the exact
     // prepared owner or its already approved, unconsumed successor. No new right.

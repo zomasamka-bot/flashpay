@@ -350,6 +350,29 @@ export async function POST(request: NextRequest) {
     }
     console.log("[F2-2 U2A DURABLE] completed", { paymentId: preFlashPaymentId, version: durableU2ACompleted.version, outcome: durableU2ACompleted.outcome })
 
+    // A projection outage cannot erase a verified, durably completed U2A.
+    // Report only that fact, never settlement/receipt success. The unchanged
+    // scoped recovery endpoint must still obtain its original financial guards.
+    const durableProcessingResponse = () => {
+      const secret = process.env.FLASHPAY_TRANSIENT_RECOVERY_SECRET
+      const host = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL
+      if (process.env.VERCEL_ENV === "production" && process.env.FLASHPAY_RECOVERY_SCOPE === "admitted_new" && secret && host) {
+        try {
+          after(async () => {
+            try {
+              const url = new URL("/api/recovery/new-intents", `https://${host}`)
+              url.searchParams.set("paymentId", preFlashPaymentId)
+              const response = await fetch(url, { method: "POST", headers: { "x-flashpay-transient-recovery-secret": secret }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(12000) })
+              if (!response.ok) console.warn("[U2A PROJECTION RECOVERY] wake held", { paymentId: preFlashPaymentId, status: response.status })
+            } catch { console.warn("[U2A PROJECTION RECOVERY] wake unavailable; durable recovery remains queued", { paymentId: preFlashPaymentId }) }
+          })
+        } catch { console.warn("[U2A PROJECTION RECOVERY] scheduling unavailable", { paymentId: preFlashPaymentId }) }
+      }
+      return NextResponse.json({ success: false, status: "paid_to_app", paymentId: preFlashPaymentId,
+        piPaymentId, u2aTxid: canonicalTxid, customerAmount: prePayment.amount, piCompleted: true,
+        dbRecorded: false, code: "U2A_RECORDED_PROJECTION_PENDING" }, { status: 202 })
+    }
+
     // F2-4 hot-path canonicalization: when this payment is still pre-A2U, the
     // Redis projection must use the exact PostgreSQL verified/completed timestamps.
     // This prevents the immediate settlement path from depending on a later F2-3
@@ -415,7 +438,7 @@ export async function POST(request: NextRequest) {
         console.warn("[DR63 DR11 RESPONSE] Redis projection unavailable after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
         return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: canonicalTxid, customerAmount: finalPiPayment.amount }), { status: 200 })
       }
-      throw error
+      return durableProcessingResponse()
     }
     if (!currentCheckpoint) {
       if (dr11DurableRefund) {
@@ -423,7 +446,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: canonicalTxid, customerAmount: finalPiPayment.amount }), { status: 200 })
       }
       console.error("[Pi Complete] Payment not found in Redis")
-      return NextResponse.json({ error: "Payment not found" }, { status: 404 })
+      return durableProcessingResponse()
     }
 
     const payment: Payment = typeof currentCheckpoint === "string" ? JSON.parse(currentCheckpoint) : currentCheckpoint
@@ -500,7 +523,7 @@ export async function POST(request: NextRequest) {
     const incompatibleStatuses = ["cancelled", "failed", "settlement_failed"]
     if (incompatibleStatuses.includes(currentStatus) && !dr11RefundReplay) {
       console.error("[Pi Complete] Payment has incompatible status:", currentStatus)
-      return NextResponse.json({ error: "Payment in incompatible state" }, { status: 400 })
+      return NextResponse.json({ error: "Payment was received; its conflicting state requires reconciliation", code: "U2A_RECORDED_STATE_CONFLICT" }, { status: 409 })
     }
 
     // Persist the same payer UID already bound to the durable F2-2 U2A authority.
@@ -608,7 +631,7 @@ export async function POST(request: NextRequest) {
         console.warn("[DR63 DR11 RESPONSE] Redis projection write failed after durable refund authority; returning durable processing response", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId })
         return NextResponse.json(buildDr11DurableRefundPendingResponse({ paymentId: flashPaymentId, piPaymentId: piPaymentIdCanonical, u2aTxid: finalCanonicalTxid, customerAmount: finalPiAmount }), { status: 200 })
       }
-      throw error
+      return durableProcessingResponse()
     }
     console.log("[P7B TIMING] Redis verified-U2A work", { paymentId: flashPaymentId, durationMs: Date.now() - redisU2ATimingStartedAt })
     const atomicU2AResultNumber = Number(atomicU2AResult)
@@ -675,7 +698,7 @@ export async function POST(request: NextRequest) {
     const canonicalResponse = await buildA2USuccessResponse(flashPaymentId)
     if (!canonicalResponse) {
       console.error("[Pi Complete] Failed to build canonical response")
-      return NextResponse.json({ error: "Response building failed" }, { status: 500 })
+      return durableProcessingResponse()
     }
 
     console.log("[Pi Complete] ✅ U2A ingress committed; settlement queued - status:", canonicalResponse.status)
@@ -684,7 +707,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("[Pi Complete] Exception:", error)
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Internal server error" },
+      { error: "Payment completion is temporarily unavailable", code: "PAYMENT_COMPLETION_UNAVAILABLE" },
       { status: 500 }
     )
   }

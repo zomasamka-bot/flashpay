@@ -37,6 +37,8 @@ export async function registerR36CertificateRequest(db:R36CertificateDatabase,po
    const c=rows.length===1?rows[0].context:null
    if(!object(c)||!object(c.policy)||typeof c.nowSeconds!=='number'||typeof c.requestCreatedAt!=='number')return blocked('REGISTRATION_CONTEXT_UNAVAILABLE')
    if(c.renewalUnavailable===true)return blocked('RENEWAL_NOT_ELIGIBLE')
+   if(c.initialIssuanceUnavailable===true)return blocked('INITIAL_ISSUANCE_NOT_ELIGIBLE')
+   if(c.initialIssuanceGeneration!==undefined&&(!Number.isSafeInteger(c.initialIssuanceGeneration)||Number(c.initialIssuanceGeneration)<1))return blocked('INVALID_INITIAL_ISSUANCE_CONTEXT')
    // The private operator may capture the DB clock before refreshing revocation.
    // Existing requests retain their durable issuance time. Never backdate to the
    // previous revocation observation or accept a browser-supplied timestamp.
@@ -63,7 +65,7 @@ export async function registerR36CertificateRequest(db:R36CertificateDatabase,po
    const request=approved as Parameters<R36WorkerPorts['signOnce']>[0]
    const reviewDigest=hash(JSON.stringify({schema:'R36_REGISTRATION_REVIEW_V1',policyDigest,approvalRecordDigest:p.approvalRecordDigest,
     binding:R36_ADMISSION_FIELDS.map(k=>b[k]),payloadDigest:request.idempotencyKey,issued,expires}))
-   const recordedReview=c.renewalGeneration===undefined?reviewDigest:hash('FLASHpay:R36:RENEWAL_REVIEW:V1\n'+[policyDigest,b.nonce,request.idempotencyKey,String(c.renewalGeneration),String(c.evidenceNotBefore)].join('\n'))
+   const recordedReview=c.renewalGeneration===undefined?(c.initialIssuanceGeneration===undefined?reviewDigest:hash('FLASHpay:R36:INITIAL_ISSUANCE_REVIEW:V1\n'+[policyDigest,b.nonce,request.idempotencyKey,String(c.initialIssuanceGeneration)].join('\n'))):hash('FLASHpay:R36:RENEWAL_REVIEW:V1\n'+[policyDigest,b.nonce,request.idempotencyKey,String(c.renewalGeneration),String(c.evidenceNotBefore)].join('\n'))
    const result=await tx.unsafe('SELECT r36_registration.enroll($1,$2::text::jsonb,$3,$4,$5,$6,$7) AS outcome',
     [policyDigest,JSON.stringify(b),request.bytesBase64,request.idempotencyKey,issued,expires,recordedReview])
    const outcome=result.length===1?result[0].outcome:null
