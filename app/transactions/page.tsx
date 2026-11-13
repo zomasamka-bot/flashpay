@@ -1,4 +1,5 @@
 "use client"
+import { shareOrDownloadFile } from "@/lib/browser-actions"
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -27,18 +28,10 @@ type TransactionSummary = {
 
 type SettlementStatus = "settled_to_merchant" | "pending" | "paid_to_app" | "settlement_pending" | "failed" | "settlement_failed" | "cancelled" | "completed" | string | null | undefined
 
-const dateFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-})
-
-function formatTransactionDate(createdAt: string): string {
+function formatTransactionDate(createdAt: string, locale: string, unavailable: string): string {
   const date = new Date(createdAt)
-  if (!Number.isFinite(date.getTime())) {
-    return "Unavailable"
-  }
-  return dateFormatter.format(date)
+  if (!Number.isFinite(date.getTime())) return unavailable
+  return new Intl.DateTimeFormat(locale, {day: "2-digit", month: "short", year: "numeric"}).format(date)
 }
 
 function mapSettlementStatus(status: SettlementStatus, t: (key: string) => string): string {
@@ -60,7 +53,7 @@ function getSettlementCategory(status: SettlementStatus): "settled" | "processin
 }
 
 export default function TransactionsPage() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const router = useRouter()
   const merchant = useMerchant()
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -155,7 +148,7 @@ export default function TransactionsPage() {
     const rows = filteredTransactions.map((txn) => [
       escapeCsvCell(txn.reference),
       escapeCsvCell(txn.amount.toString()),
-      escapeCsvCell(formatTransactionDate(txn.createdAt)),
+      escapeCsvCell(formatTransactionDate(txn.createdAt, locale, t("common.unavailable"))),
       escapeCsvCell(mapSettlementStatus(txn.settlementStatus && txn.settlementStatus.length > 0 ? txn.settlementStatus : txn.status, t)),
       escapeCsvCell(txn.description),
     ])
@@ -170,36 +163,8 @@ export default function TransactionsPage() {
       type: "text/csv;charset=utf-8",
     })
 
-    // Try navigator.share if supported
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          files: [file],
-          title: "Transactions Export",
-          text: "Export of transaction history",
-        })
-        return
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return
-        }
-        console.error("Share failed:", error)
-      }
-    }
+    await shareOrDownloadFile(file, t("transactions.export"))
 
-    // Fallback: download via hidden link
-    const url = URL.createObjectURL(file)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = file.name
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-
-    // Revoke URL after delay
-    setTimeout(() => {
-      URL.revokeObjectURL(url)
-    }, 1000)
   }
 
   return (
@@ -323,7 +288,7 @@ export default function TransactionsPage() {
                         <Badge variant="secondary">{txn.reference}</Badge>
                         <span className="text-sm text-muted-foreground flex items-center gap-1" dir="ltr" lang="en">
                           <Calendar className="h-3 w-3" />
-                          {formatTransactionDate(txn.createdAt)}
+                          {formatTransactionDate(txn.createdAt, locale, t("common.unavailable"))}
                         </span>
                       </div>
                       <p className="text-sm text-muted-foreground break-words">{txn.description}</p>

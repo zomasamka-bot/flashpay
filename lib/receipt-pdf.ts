@@ -18,6 +18,8 @@ export interface ReceiptPdfLabels {
   dateTime: string
   note: string
   flashPayId: string
+  merchantCommission: string
+  merchantNet: string
   verified: string
   status: Record<FlashPayReceiptView["status"], string>
 }
@@ -221,9 +223,9 @@ function createReceiptCanvas(receipt: FlashPayReceiptView, options: ReceiptPdfOp
   if (receipt.merchantFinancials) {
     const f=receipt.merchantFinancials
     const feeWidth = (contentWidth - 48) / 2
-    drawLabel(ctx,direction==='rtl'?'عمولة التاجر':'Merchant commission',margin,nextY,feeWidth,direction)
+    drawLabel(ctx,labels.merchantCommission,margin,nextY,feeWidth,direction)
     drawValue(ctx,`${formatReceiptAmount(f.commission)} π`,margin,nextY+54,feeWidth,34,direction)
-    drawLabel(ctx,direction==='rtl'?'صافي مستحق التاجر':'Merchant net amount',margin+feeWidth+48,nextY,feeWidth,direction)
+    drawLabel(ctx,labels.merchantNet,margin+feeWidth+48,nextY,feeWidth,direction)
     drawValue(ctx,`${formatReceiptAmount(f.net)} π`,margin+feeWidth+48,nextY+54,feeWidth,34,direction)
     nextY+=112
   }

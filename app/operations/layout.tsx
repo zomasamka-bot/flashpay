@@ -1,10 +1,13 @@
+"use client"
+
+import { UIMessage } from "@/components/ui-message"
 /**
  * Operations Console Layout
  * Owner-only access to platform management tools
  * Verified owner UID is checked from ownerUidStore
  */
 
-"use client"
+
 
 import { useEffect, useState } from "react"
 import { useOwnerUid } from "@/lib/use-owner-uid"
@@ -29,21 +32,19 @@ export default function OperationsLayout({ children }: { children: React.ReactNo
   }
 
   // Explicitly denied - not the owner
-  if (mounted && uidData.status === "success" && uidData.uid !== config.ownerUid) {
+  if (mounted && uidData.status !== "pending") {
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
         <Card className="w-full max-w-md border-red-500/50">
           <CardHeader>
-            <CardTitle className="text-red-600">Access Denied</CardTitle>
-            <CardDescription>You do not have permission to access the Operations Console.</CardDescription>
+            <CardTitle className="text-red-600"> <UIMessage text={"Access Denied"} /> </CardTitle>
+            <CardDescription> <UIMessage text={"You do not have permission to access the Operations Console."} /> </CardDescription>
           </CardHeader>
           <CardContent>
             <Button
               onClick={() => router.push("/")}
               className="w-full"
-            >
-              Return to Home
-            </Button>
+            > <UIMessage text={"Return to Home"} /> </Button>
           </CardContent>
         </Card>
       </div>

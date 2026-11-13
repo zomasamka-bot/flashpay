@@ -2,6 +2,15 @@
 
 
 const EXACT: Record<string, string> = {
+  "Emergency control has an explicit 24-hour safety expiry:":"ينتهي تحكم الطوارئ تلقائيًا بعد 24 ساعة للأمان:",
+  ". Deactivate manually when the incident is resolved.":". ألغِ التفعيل يدويًا بعد حل الحادث.",
+  "Server-backed platform health with secondary device diagnostics":"صحة المنصة من الخادم مع تشخيص إضافي للجهاز",
+  "Diagnosing…":"جارٍ التشخيص…", "Prepared / Horizon Diagnostic":"تشخيص المعاملة المجهزة وHorizon",
+  "Classification":"التصنيف", "Platform Overview":"نظرة عامة على المنصة", "Manage Domains":"إدارة النطاقات",
+  "Owner operations":"تشغيل المالك",
+  "Read-only: no Horizon submit, no stored XDR returned, no Redis/DB write, no refund, no status mutation.":"قراءة فقط: لا إرسال إلى Horizon، ولا إرجاع XDR المخزن، ولا كتابة إلى Redis أو قاعدة البيانات، ولا استرداد أو تعديل حالة.",
+  "Owner-only read-only evidence. This action never submits a transaction or mutates payment/refund state.":"أدلة للمالك للقراءة فقط. لا يرسل هذا الإجراء أي معاملة ولا يغيّر حالة دفع أو استرداد.",
+
   "FlashPay Owner Operations":"تشغيل FlashPay للمالك","Operational control plane":"طبقة التحكم التشغيلية","Operations":"التشغيل","Control":"التحكم","Profile":"الملف الشخصي","Testnet":"الشبكة التجريبية",
   "Access Denied":"تم رفض الوصول","You do not have permission to access the Operations Console.":"ليست لديك صلاحية للوصول إلى وحدة التحكم التشغيلية.","Return to Home":"العودة إلى الرئيسية",
   "Operations Console":"وحدة التحكم التشغيلية","Platform management and monitoring":"إدارة المنصة ومراقبتها","System Health":"صحة النظام","CHECKING":"جارٍ التحقق","UNKNOWN":"غير معروف","Healthy":"سليم","Degraded":"متدهور","Maintenance":"صيانة","Unknown":"غير معروف",

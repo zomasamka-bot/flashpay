@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+
 import type React from "react"
 
 import { useEffect, useState } from "react"
@@ -148,9 +150,9 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
             <div className="mb-4 inline-block h-12 w-12 text-yellow-600">
               <span className="text-4xl">⚠️</span>
             </div>
-            <h1 className="text-xl font-semibold mb-2">SDK Unavailable</h1>
+            <h1 className="text-xl font-semibold mb-2"> <UIMessage text={"SDK Unavailable"} /> </h1>
             <p className="text-sm text-muted-foreground mb-4">{error}</p>
-            <p className="text-xs text-muted-foreground">Please refresh or try again in Pi Browser</p>
+            <p className="text-xs text-muted-foreground"> <UIMessage text={"Please refresh or try again in Pi Browser"} /> </p>
           </div>
         </div>
       )
@@ -163,7 +165,7 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="text-center">
           <div className="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          <p className="text-sm text-muted-foreground">Loading Pi SDK...</p>
+          <p className="text-sm text-muted-foreground"> <UIMessage text={"Loading Pi SDK..."} /> </p>
         </div>
       </div>
     )

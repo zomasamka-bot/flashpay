@@ -11,6 +11,7 @@ import { ErrorBoundary } from "@/components/error-boundary"
 import { PiSDKLoader } from "@/components/pi-sdk-loader"
 import { Analytics } from "@vercel/analytics/next"
 import { I18nProvider } from "@/components/i18n-provider"
+import { AppShell } from "@/components/app-shell"
 
 // Database schema initialization moved to non-blocking background task
 // (Called in /app/api/pi/complete/route.ts when first payment completes)
@@ -24,6 +25,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
   themeColor: "#6366f1",
 }
 
@@ -44,16 +47,16 @@ html {
         `}</style>
       </head>
       <body>
-        <ErrorBoundary>
-          <I18nProvider>
+        <I18nProvider>
+          <ErrorBoundary>
             <PiSDKLoader>
               <TestnetIndicator />
-              <DomainGuard>{children}</DomainGuard>
+              <AppShell><DomainGuard>{children}</DomainGuard></AppShell>
               <MobileNav />
               <Toaster />
             </PiSDKLoader>
-          </I18nProvider>
-        </ErrorBoundary>
+          </ErrorBoundary>
+        </I18nProvider>
         <Analytics />
       </body>
     </html>

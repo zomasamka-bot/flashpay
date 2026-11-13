@@ -1,3 +1,5 @@
+
+import { UIMessage } from "@/components/ui-message"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,13 +14,13 @@ export default function NotFound() {
             <div className="h-10 w-10 rounded-full bg-destructive/10 flex items-center justify-center">
               <AlertCircle className="h-5 w-5 text-destructive" />
             </div>
-            <CardTitle>Page Not Found</CardTitle>
+            <CardTitle> <UIMessage text={"Page Not Found"} /> </CardTitle>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-muted-foreground">The page you're looking for doesn't exist or has been moved.</p>
+          <p className="text-muted-foreground"> <UIMessage text={"The page you're looking for doesn't exist or has been moved."} /> </p>
           <Link href="/">
-            <Button className="w-full">Go Back Home</Button>
+            <Button className="w-full"> <UIMessage text={"Go Back Home"} /> </Button>
           </Link>
         </CardContent>
       </Card>

@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+
 import {formatReceiptAmount} from "@/lib/receipt-presentation"
 
 import { useEffect, useState } from "react"
@@ -72,7 +74,7 @@ export default function ReceiptPage() {
   return (
     <main className="min-h-screen bg-background pb-20 print:bg-white">
       <div className="max-w-2xl mx-auto px-4 pb-4 pt-12 space-y-5 print:p-0">
-        <div className="flex items-center justify-between print:hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
           <h1 className="text-2xl font-bold">{t("receipt.title", "Receipt")}</h1>
           <div className="flex gap-2">
             <Button type="button" variant="outline" size="sm" onClick={() => window.print()}>
@@ -101,7 +103,7 @@ function PostgresReceiptCard({ receipt }: { receipt: PostgresHistoricalReceiptVi
     <section className="rounded-lg border p-6 space-y-5 print:border-0" aria-label="Historical PostgreSQL receipt">
       <div>
         <p className="font-semibold text-xl">{t("receipt.paymentReceipt", "Payment receipt")}</p>
-        <p className="text-sm text-muted-foreground">Historical receipt — PostgreSQL record</p>
+        <p className="text-sm text-muted-foreground"> <UIMessage text={"Historical receipt — PostgreSQL record"} /> </p>
       </div>
       <div className="text-center text-3xl font-bold">{formatReceiptAmount(receipt.amount)} {receipt.currency}</div>
       <div className="grid grid-cols-2 gap-4">
@@ -109,16 +111,16 @@ function PostgresReceiptCard({ receipt }: { receipt: PostgresHistoricalReceiptVi
         <div><p className="text-xs text-muted-foreground">{t("receipt.customer")}</p><p>{receipt.customerName ?? t("common.unavailable")}</p></div>
       </div>
       <div>
-        <p className="text-xs text-muted-foreground">Receipt timestamp (not original payment creation time)</p>
+        <p className="text-xs text-muted-foreground"> <UIMessage text={"Receipt timestamp (not original payment creation time)"} /> </p>
         <p dir="ltr">{Number.isFinite(recorded.getTime()) ? recorded.toLocaleString(locale) : t("common.unavailable")}</p>
       </div>
-      <div><p className="text-xs text-muted-foreground">Stored settlement status</p><p>{t(`receipt.status.${receipt.status}`)}</p></div>
+      <div><p className="text-xs text-muted-foreground"> <UIMessage text={"Stored settlement status"} /> </p><p>{t(`receipt.status.${receipt.status}`)}</p></div>
       {receipt.note && <div><p className="text-xs text-muted-foreground">{t("receipt.note")}</p><p>{receipt.note}</p></div>}
       <div className="rounded border p-3">
-        <p className="text-xs font-semibold text-muted-foreground">PostgreSQL transaction ID (not FlashPay payment ID)</p>
+        <p className="text-xs font-semibold text-muted-foreground"> <UIMessage text={"PostgreSQL transaction ID (not FlashPay payment ID)"} /> </p>
         <code className="break-all text-sm">{receipt.transactionId}</code>
       </div>
-      <p className="text-xs text-muted-foreground">This display reflects the PostgreSQL receipt record. Independent Pi/Horizon finality and the original payment creation time are not certified by this view. Use Print → Save as PDF for a copy.</p>
+      <p className="text-xs text-muted-foreground"> <UIMessage text={"This display reflects the PostgreSQL receipt record. Independent Pi/Horizon finality and the original payment creation time are not certified by this view. Use Print → Save as PDF for a copy."} /> </p>
     </section>
   )
 }

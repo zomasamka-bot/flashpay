@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage, useUIText } from "@/components/ui-message"
+
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -113,6 +115,7 @@ interface ProfileSummary {
 function ProfileContent() {
   const router = useRouter()
   const { t, locale } = useI18n()
+  const tr = useUIText()
   const { toast } = useToast()
   const [mounted, setMounted] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
@@ -260,7 +263,7 @@ function ProfileContent() {
 
   // Disconnect wallet and clear both owner UID and merchant state
   const handleDisconnect = () => {
-    if (confirm("Disconnect wallet and clear authentication?")) {
+    if (confirm(tr("Disconnect wallet and clear authentication?"))) {
       // Clear from both stores for consistent state
       clearUid()
       unifiedStore.clearMerchantAuth()
@@ -320,7 +323,7 @@ function ProfileContent() {
   }
 
   const handleLogout = () => {
-    if (confirm("Are you sure you want to log out?")) {
+    if (confirm(tr("Are you sure you want to log out?"))) {
       // Clear from both stores for consistent state
       clearUid()
       unifiedStore.clearMerchantAuth()
@@ -352,7 +355,7 @@ function ProfileContent() {
       <div className="max-w-4xl mx-auto px-4 space-y-6">
         {/* Header */}
         <div className="mb-6">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
             <div className="flex items-center gap-2">
               <Shield className="h-6 w-6 text-primary" />
               <h1 className="text-2xl font-bold">{t("profile.account")}</h1>
@@ -371,33 +374,27 @@ function ProfileContent() {
           <Card className={isOwner ? "border-green-200 bg-green-50" : "border-yellow-200 bg-yellow-50"}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Wallet className="h-5 w-5" />
-                Wallet Connection
-              </CardTitle>
+                <Wallet className="h-5 w-5" /> <UIMessage text={"Wallet Connection"} /> </CardTitle>
             </CardHeader>
             <CardContent>
               {isOwner ? (
                 <div className="space-y-3">
                   <div className="text-sm">
-                    <p className="font-medium text-green-900">Owner connected</p>
-                    <p className="text-xs text-green-700 mt-1">Operations Console is available for your verified owner account.</p>
+                    <p className="font-medium text-green-900"> <UIMessage text={"Owner connected"} /> </p>
+                    <p className="text-xs text-green-700 mt-1"> <UIMessage text={"Operations Console is available for your verified owner account."} /> </p>
                   </div>
-                  <Button onClick={handleDisconnect} variant="outline" className="w-full gap-2">
-                    Disconnect Wallet
-                  </Button>
+                  <Button onClick={handleDisconnect} variant="outline" className="w-full gap-2"> <UIMessage text={"Disconnect Wallet"} /> </Button>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-yellow-900">
-                    Connect your Pi Wallet to open the owner Operations Console.
-                  </p>
+                  <p className="text-sm text-yellow-900"> <UIMessage text={"Connect your Pi Wallet to open the owner Operations Console."} /> </p>
                   <Button 
                     onClick={handleConnectWallet} 
                     disabled={isAuthenticating}
                     className="w-full gap-2"
                   >
                     <Wallet className="h-4 w-4" />
-                    {isAuthenticating ? "Connecting..." : "Connect Wallet"}
+                    {isAuthenticating ? tr("Connecting...") : tr("Connect Wallet")}
                   </Button>
                 </div>
               )}
@@ -412,13 +409,11 @@ function ProfileContent() {
           </CardHeader>
           <CardContent>
             {!merchantAuthenticated ? (
-              <p className="text-sm text-muted-foreground">
-                Authenticate from Home to load your merchant profile
-              </p>
+              <p className="text-sm text-muted-foreground"> <UIMessage text={"Authenticate from Home to load your merchant profile"} /> </p>
             ) : summaryLoading ? (
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Loading profile...</span>
+                <span> <UIMessage text={"Loading profile..."} /> </span>
               </div>
             ) : summaryError ? (
               <p className="text-sm text-destructive">{summaryError}</p>
@@ -464,11 +459,11 @@ function ProfileContent() {
                   {(summary.completedTransactions > 0 || summary.totalCompletedAmount > 0) && (
                     <>
                       <div>
-                        <p className="text-xs text-muted-foreground">Legacy Completed Transactions</p>
+                        <p className="text-xs text-muted-foreground"> <UIMessage text={"Legacy Completed Transactions"} /> </p>
                         <p className="text-lg font-semibold">{summary.completedTransactions}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-muted-foreground">Legacy Completed Amount</p>
+                        <p className="text-xs text-muted-foreground"> <UIMessage text={"Legacy Completed Amount"} /> </p>
                         <p className="text-lg font-semibold">{summary.totalCompletedAmount.toFixed(2)}π</p>
                       </div>
                     </>
@@ -495,8 +490,8 @@ function ProfileContent() {
                         .map((item) => (
                           <div key={item.paymentId} className="rounded-md border p-3 text-sm">
                             <div className="flex items-center justify-between gap-3">
-                              <span className="font-medium">{item.paymentId}</span>
-                              <span>{item.amount.toFixed(2)}π</span>
+                              <span className="min-w-0 break-all font-medium">{item.paymentId}</span>
+                              <span className="shrink-0">{item.amount.toFixed(2)}π</span>
                             </div>
                             <p className="text-muted-foreground mt-1">{merchantAttentionStatus(item, t)}</p>
                             {item.refundPresentation?.merchantStatus === "refund_completed" && (
@@ -561,10 +556,11 @@ function ProfileContent() {
                   }}
                 >
                   <p className="mb-2 text-xs font-medium text-muted-foreground">{t("profile.findReceipt")}</p>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <Input
                       value={receiptSearchId}
                       onChange={(event) => setReceiptSearchId(event.target.value)}
+                      className="min-w-0 flex-1 basis-40"
                       placeholder="FlashPay ID"
                       autoComplete="off"
                       spellCheck={false}
@@ -586,16 +582,12 @@ function ProfileContent() {
           <Card className="border-2 border-primary">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Shield className="h-5 w-5" />
-                Operations Console
-              </CardTitle>
-              <CardDescription>Access platform management tools</CardDescription>
+                <Shield className="h-5 w-5" /> <UIMessage text={"Operations Console"} /> </CardTitle>
+              <CardDescription> <UIMessage text={"Access platform management tools"} /> </CardDescription>
             </CardHeader>
             <CardContent>
               <Button onClick={() => router.push("/operations")} className="w-full" size="lg">
-                <Shield className="h-4 w-4 mr-2" />
-                Open Operations Console
-                <ArrowRight className="h-4 w-4 ml-2" />
+                <Shield className="h-4 w-4 mr-2" /> <UIMessage text={"Open Operations Console"} /> <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
             </CardContent>
           </Card>

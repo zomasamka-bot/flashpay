@@ -1,9 +1,12 @@
+"use client"
+
+import { UIMessage } from "@/components/ui-message"
 /**
  * Owner operational control panel.
  * M9: fresh owner authorization, explicit reason, revision guard and deliberate confirmation.
  */
 
-"use client"
+
 
 import { useEffect, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
@@ -59,7 +62,7 @@ function ControlPanelContent() {
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
   if (isLoading) {
-    return <div className="min-h-screen bg-background p-4"><div className="max-w-2xl mx-auto text-center pt-20"><div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /><p className="text-foreground/60 mt-4">Loading authoritative control state...</p></div></div>
+    return <div className="min-h-screen bg-background p-4"><div className="max-w-2xl mx-auto text-center pt-20"><div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /><p className="text-foreground/60 mt-4"> <UIMessage text={"Loading authoritative control state..."} /> </p></div></div>
   }
 
   return (
@@ -67,26 +70,26 @@ function ControlPanelContent() {
     <OwnerOperationsHeader />
     <main className="min-h-screen bg-background p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <div className="max-w-2xl mx-auto space-y-6">
-        <div><h1 className="text-3xl font-bold">Control Panel</h1><p className="text-xs text-muted-foreground mt-1">Owner control plane · operational authority only</p></div>
+        <div><h1 className="text-3xl font-bold"> <UIMessage text={"Control Panel"} /> </h1><p className="text-xs text-muted-foreground mt-1"> <UIMessage text={"Owner control plane · operational authority only"} /> </p></div>
 
         <div aria-live="polite" aria-atomic="true">
-          {error && <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{error}</AlertDescription></Alert>}
-          {success && <Alert className="border-green-500 bg-green-50 dark:bg-green-950"><CheckCircle2 className="h-4 w-4 text-green-600" /><AlertDescription>{success}</AlertDescription></Alert>}
+          {error && <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription><UIMessage text={error} /></AlertDescription></Alert>}
+          {success && <Alert className="border-green-500 bg-green-50 dark:bg-green-950"><CheckCircle2 className="h-4 w-4 text-green-600" /><AlertDescription><UIMessage text={success} /></AlertDescription></Alert>}
         </div>
 
         <Card>
-          <CardHeader><CardTitle>Authoritative Control State</CardTitle><CardDescription>Server-verified owner read · Redis-backed state</CardDescription></CardHeader>
+          <CardHeader><CardTitle> <UIMessage text={"Authoritative Control State"} /> </CardTitle><CardDescription> <UIMessage text={"Server-verified owner read · Redis-backed state"} /> </CardDescription></CardHeader>
           <CardContent className="space-y-4">
             {systemState ? <>
-              <div className="flex items-center justify-between p-4 rounded-lg border"><div><p className="font-medium">Application control</p><p className="text-sm text-muted-foreground">{systemState.killSwitchEnabled ? "Maintenance control active" : "Normal operation"}</p></div><span className={`px-3 py-1 rounded-full text-sm font-medium ${systemState.killSwitchEnabled ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400" : "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"}`}>{systemState.killSwitchEnabled ? "OFFLINE" : "ONLINE"}</span></div>
-              <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground"><div>Revision <span className="font-mono text-foreground">{systemState.revision}</span></div><div>Updated <span className="text-foreground">{new Date(systemState.lastToggleTime).toLocaleString()}</span></div></div>
-              {systemState.killSwitchEnabled && systemState.expiresAt && <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription>Emergency control has an explicit 24-hour safety expiry: {new Date(systemState.expiresAt).toLocaleString()}. Deactivate manually when the incident is resolved.</AlertDescription></Alert>}
-            </> : <Alert variant="destructive"><AlertDescription>Control state is unknown. Writes are blocked.</AlertDescription></Alert>}
-            <Button variant="outline" className="w-full" onClick={() => void fetchSystemState()} disabled={isToggling}><RefreshCw className="h-4 w-4 mr-2" />Refresh canonical state</Button>
+              <div className="flex items-center justify-between p-4 rounded-lg border"><div><p className="font-medium"> <UIMessage text={"Application control"} /> </p><p className="text-sm text-muted-foreground">{systemState.killSwitchEnabled ? <UIMessage text={"Maintenance control active"} /> : <UIMessage text={"Normal operation"} />}</p></div><span className={`px-3 py-1 rounded-full text-sm font-medium ${systemState.killSwitchEnabled ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400" : "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"}`}>{systemState.killSwitchEnabled ? <UIMessage text={"OFFLINE"} /> : <UIMessage text={"ONLINE"} />}</span></div>
+              <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground"><div> <UIMessage text={"Revision"} /> <span className="font-mono text-foreground">{systemState.revision}</span></div><div> <UIMessage text={"Updated"} /> <span className="text-foreground">{new Date(systemState.lastToggleTime).toLocaleString()}</span></div></div>
+              {systemState.killSwitchEnabled && systemState.expiresAt && <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription> <UIMessage text={"Emergency control has an explicit 24-hour safety expiry:"} /> {new Date(systemState.expiresAt).toLocaleString()} <UIMessage text={". Deactivate manually when the incident is resolved."} /> </AlertDescription></Alert>}
+            </> : <Alert variant="destructive"><AlertDescription> <UIMessage text={"Control state is unknown. Writes are blocked."} /> </AlertDescription></Alert>}
+            <Button variant="outline" className="w-full" onClick={() => void fetchSystemState()} disabled={isToggling}><RefreshCw className="h-4 w-4 mr-2" /> <UIMessage text={"Refresh canonical state"} /> </Button>
           </CardContent>
         </Card>
 
-        <div className="text-center text-xs text-muted-foreground"><p>CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH.</p></div>
+        <div className="text-center text-xs text-muted-foreground"><p> <UIMessage text={"CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH."} /> </p></div>
       </div>
     </main>
     </>

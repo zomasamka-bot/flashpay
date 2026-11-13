@@ -1,5 +1,8 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+import { shareOrDownloadFile } from "@/lib/browser-actions"
+
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -418,23 +421,7 @@ export default function MerchantPaymentsPage() {
       const filename = `payments-export-${new Date().toISOString().split("T")[0]}.csv`
       const file = new File([bomContent], filename, { type: "text/csv;charset=utf-8" })
 
-      // Try navigator.share if available
-      if (typeof navigator.share === "function" && navigator.canShare?.({ files: [file] }) === true) {
-        await navigator.share({
-          files: [file],
-        })
-      } else {
-        // Fallback: use hidden anchor
-        const url = URL.createObjectURL(file)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = filename
-        a.style.display = "none"
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        setTimeout(() => URL.revokeObjectURL(url), 1000)
-      }
+      await shareOrDownloadFile(file, t("dashboard.export"))
     } catch (err) {
       if (err && typeof err === "object" && (err as any).name === "AbortError") {
         // User cancelled share, silently ignore
@@ -795,8 +782,7 @@ export default function MerchantPaymentsPage() {
                         {payment.amount.toFixed(2)}π
                       </div>
                       {payment.completedAt && (
-                        <p className="text-xs text-green-600 dark:text-green-400">
-                          Completed: {formatDate(payment.completedAt)}
+                        <p className="text-xs text-green-600 dark:text-green-400"> <UIMessage text={"Completed:"} /> {formatDate(payment.completedAt)}
                         </p>
                       )}
                     </div>
@@ -810,25 +796,22 @@ export default function MerchantPaymentsPage() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Historical records without a verified creation date</CardTitle>
-            <CardDescription>
-              These are PostgreSQL checkpoint identities only. Dates, settlement status, and
-              financial finality are NOT certified by this inventory. Entries have no chronological order.
-            </CardDescription>
+            <CardTitle> <UIMessage text={"Historical records without a verified creation date"} /> </CardTitle>
+            <CardDescription> <UIMessage text={"These are PostgreSQL checkpoint identities only. Dates, settlement status, and financial finality are NOT certified by this inventory. Entries have no chronological order."} /> </CardDescription>
           </CardHeader>
           <CardContent>
             {undatedHistoryError ? (
               <p role="alert" className="text-sm text-red-600">{undatedHistoryError}</p>
             ) : undatedHistory.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No undated historical identities returned.</p>
+              <p className="text-sm text-muted-foreground"> <UIMessage text={"No undated historical identities returned."} /> </p>
             ) : (
               <div className="space-y-2">
                 {undatedHistory.map(item => (
                   <div key={item.paymentId} className="rounded border p-3 text-sm">
                     <p className="break-all font-medium">{item.paymentId}</p>
-                    <p>Checkpoint amount: {item.amount}π</p>
-                    <p>Original creation date: unknown — not chronologically ranked</p>
-                    <p>Financial outcome: not certified by this listing</p>
+                    <p> <UIMessage text={"Checkpoint amount:"} /> {item.amount}π</p>
+                    <p> <UIMessage text={"Original creation date: unknown — not chronologically ranked"} /> </p>
+                    <p> <UIMessage text={"Financial outcome: not certified by this listing"} /> </p>
                   </div>
                 ))}
               </div>

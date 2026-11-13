@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock, RefreshCw, ShoppingBag } from "lucide-react"
@@ -63,7 +65,7 @@ function parseLocalDateKey(dateKey: string): Date | null {
   return parsed
 }
 
-function getLocalDayWindow(dateKey: string): LocalDayWindow | null {
+function getLocalDayWindow(dateKey: string, locale: string): LocalDayWindow | null {
   const start = parseLocalDateKey(dateKey)
   if (!start) return null
   const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1, 0, 0, 0, 0)
@@ -71,8 +73,8 @@ function getLocalDayWindow(dateKey: string): LocalDayWindow | null {
     dateKey,
     from: start.toISOString(),
     to: end.toISOString(),
-    label: new Intl.DateTimeFormat("en-GB-u-nu-latn", { weekday: "long" }).format(start),
-    dateLabel: new Intl.DateTimeFormat("en-GB-u-nu-latn", { day: "2-digit", month: "long", year: "numeric" }).format(start),
+    label: new Intl.DateTimeFormat(`${locale}-u-nu-latn`, { weekday: "long" }).format(start),
+    dateLabel: new Intl.DateTimeFormat(`${locale}-u-nu-latn`, { day: "2-digit", month: "long", year: "numeric" }).format(start),
   }
 }
 
@@ -108,10 +110,10 @@ function isSalesDay(value: unknown): value is SalesDay {
 export default function PaymentsPage() {
   const router = useRouter()
   const merchant = useMerchant()
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const todayKey = useMemo(() => toLocalDateKey(new Date()), [])
   const [selectedDate, setSelectedDate] = useState(todayKey)
-  const dayWindow = useMemo(() => getLocalDayWindow(selectedDate), [selectedDate])
+  const dayWindow = useMemo(() => getLocalDayWindow(selectedDate, locale), [selectedDate, locale])
   const [day, setDay] = useState<SalesDay | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -202,7 +204,7 @@ export default function PaymentsPage() {
   const canGoNext = nextDate !== null && nextDate <= todayKey
 
   const selectDate = (dateKey: string) => {
-    if (!getLocalDayWindow(dateKey) || dateKey > todayKey) return
+    if (!getLocalDayWindow(dateKey, locale) || dateKey > todayKey) return
     setSelectedDate(dateKey)
   }
 
@@ -228,9 +230,7 @@ export default function PaymentsPage() {
             disabled={loading || !merchant.merchantId || !merchant.accessToken || !dayWindow}
             className="gap-2"
           >
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> <UIMessage text={"Refresh"} /> </Button>
         </div>
 
         <Card>
@@ -285,21 +285,19 @@ export default function PaymentsPage() {
                 {t("sales.backToday")}
               </Button>
             )}
-            <p className="mt-2 text-xs text-muted-foreground">Day boundaries follow this device&apos;s local time; the server receives the exact UTC window for that local calendar day.</p>
+            <p className="mt-2 text-xs text-muted-foreground"> <UIMessage text={"Day boundaries follow this device's local time; the server receives the exact UTC window for that local calendar day."} /> </p>
           </CardContent>
         </Card>
 
         {!merchant.merchantId || !merchant.accessToken ? (
           <Card>
-            <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              Connect your Pi merchant account from Home to view sales.
-            </CardContent>
+            <CardContent className="py-10 text-center text-sm text-muted-foreground"> <UIMessage text={"Connect your Pi merchant account from Home to view sales."} /> </CardContent>
           </Card>
         ) : error && !day ? (
           <Card>
             <CardContent className="py-10 text-center">
               <p className="text-sm text-destructive">{error}</p>
-              <Button type="button" variant="outline" className="mt-4" onClick={() => void loadSales()}>Try again</Button>
+              <Button type="button" variant="outline" className="mt-4" onClick={() => void loadSales()}> <UIMessage text={"Try again"} /> </Button>
             </CardContent>
           </Card>
         ) : (
@@ -334,7 +332,7 @@ export default function PaymentsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>{isToday ? t("sales.todayActivity") : t("sales.activity")}</CardTitle>
-                <CardDescription>Server-authoritative merchant sales timeline. Tap any sale to open its canonical receipt.</CardDescription>
+                <CardDescription> <UIMessage text={"Server-authoritative merchant sales timeline. Tap any sale to open its canonical receipt."} /> </CardDescription>
               </CardHeader>
               <CardContent>
                 {loading && !day ? (
@@ -352,7 +350,7 @@ export default function PaymentsPage() {
                         aria-label={`Open receipt for ${item.customerName ? `@${item.customerName}` : "this sale"}`}
                       >
                         <div className="w-16 shrink-0 text-sm font-medium tabular-nums">
-                          {new Intl.DateTimeFormat("en-GB-u-nu-latn", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(item.occurredAt))}
+                          {new Intl.DateTimeFormat(`${locale}-u-nu-latn`, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(item.occurredAt))}
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium">{item.customerName ? `@${item.customerName}` : "Name unavailable"}</p>

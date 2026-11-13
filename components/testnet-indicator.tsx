@@ -10,7 +10,7 @@ export function TestnetIndicator() {
   if (ownerOperationalRoute) return null
 
   return (
-    <div className="fixed top-2 right-2 z-50">
+    <div className="flex justify-end px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-1 print:hidden">
       <Badge variant="secondary" className="bg-secondary/80 backdrop-blur-sm">
         {publicNetworkLabel}
       </Badge>

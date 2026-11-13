@@ -1,5 +1,6 @@
 'use client'
 
+import { useUIText } from '@/components/ui-message'
 import { useToast } from '@/hooks/use-toast'
 import {
   Toast,
@@ -12,6 +13,7 @@ import {
 
 export function Toaster() {
   const { toasts } = useToast()
+  const tr = useUIText()
 
   return (
     <ToastProvider>
@@ -19,9 +21,9 @@ export function Toaster() {
         return (
           <Toast key={id} {...props}>
             <div className="grid gap-1">
-              {title && <ToastTitle>{title}</ToastTitle>}
+              {title && <ToastTitle>{typeof title === 'string' ? tr(title) : title}</ToastTitle>}
               {description && (
-                <ToastDescription>{description}</ToastDescription>
+                <ToastDescription>{typeof description === 'string' ? tr(description) : description}</ToastDescription>
               )}
             </div>
             {action}

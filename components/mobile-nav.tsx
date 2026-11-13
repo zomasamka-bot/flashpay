@@ -6,6 +6,7 @@ import { Home, Plus, List, User } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ROUTES } from "@/lib/router"
 import { useI18n } from "@/components/i18n-provider"
+import { showBottomNavigation } from "@/lib/ui-routes"
 
 export function MobileNav() {
   const pathname = usePathname()
@@ -18,23 +19,22 @@ export function MobileNav() {
     { href: ROUTES.PROFILE, icon: User, label: t("nav.profile", "Profile") },
   ]
 
-  const ownerOperationalRoute = pathname === "/control-panel" || pathname === "/diagnostics" || pathname === "/emergency" || pathname === "/operations" || pathname.startsWith("/operations/")
-
-  if (pathname.startsWith("/pay") || ownerOperationalRoute) {
+  if (!showBottomNavigation(pathname)) {
     return null
   }
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border">
-      <div className="flex items-center justify-around h-16 max-w-lg mx-auto px-4">
+    <nav data-bottom-navigation aria-label={t("nav.navigation", "Main navigation")} className="bottom-navigation fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border print:hidden">
+      <div className="flex items-stretch justify-around min-h-16 max-w-lg mx-auto px-2">
         {navItems.map(({ href, icon: Icon, label }) => {
           const isActive = pathname === href
           return (
             <Link
               key={href}
               href={href}
+              aria-current={isActive ? "page" : undefined}
               className={cn(
-                "flex flex-col items-center justify-center gap-1 flex-1 h-full transition-colors",
+                "flex min-w-0 flex-col items-center justify-center gap-1 flex-1 px-1 py-2 text-center transition-colors",
                 isActive ? "text-primary" : "text-muted-foreground hover:text-foreground",
               )}
             >

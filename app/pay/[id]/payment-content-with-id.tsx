@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+
 import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -606,7 +608,7 @@ export default function PaymentContentWithId({
           <CardContent className="p-8 text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
             <p className="text-muted-foreground">{t("pay.loading")}</p>
-            <p className="text-xs text-muted-foreground mt-2">ID: {paymentId}</p>
+            <p className="text-xs text-muted-foreground mt-2"> <UIMessage text={"ID:"} /> {paymentId}</p>
           </CardContent>
         </Card>
       </div>

@@ -12,6 +12,8 @@ import {
   type TranslationValues,
 } from "@/lib/i18n/config"
 import { loadDictionary } from "@/lib/i18n/load-dictionary"
+import { usePathname } from "next/navigation"
+import { isOwnerRoute } from "@/lib/ui-routes"
 
 interface I18nContextValue {
   locale: AppLocale
@@ -60,7 +62,9 @@ function applyDocumentLocale(locale: AppLocale): void {
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<AppLocale>(DEFAULT_LOCALE)
+  const [preferredLocale, setLocaleState] = useState<AppLocale>(DEFAULT_LOCALE)
+  const path = usePathname()
+  const locale: AppLocale = isOwnerRoute(path) ? (preferredLocale === "ar" ? "ar" : "en") : preferredLocale
   const [initialized, setInitialized] = useState(false)
   const [dictionary, setDictionary] = useState<TranslationDictionary>(EMPTY_DICTIONARY)
   const [englishFallback, setEnglishFallback] = useState<TranslationDictionary>(EMPTY_DICTIONARY)
@@ -70,7 +74,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const storedLocale = readStoredLocale()
     setLocaleState(storedLocale)
-    applyDocumentLocale(storedLocale)
     setInitialized(true)
   }, [])
 
@@ -79,7 +82,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     const sequence = ++loadSequenceRef.current
     setReady(false)
     applyDocumentLocale(locale)
-    persistLocale(locale)
 
     const load = async () => {
       const [selected, english] = await Promise.all([
@@ -96,6 +98,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
     void load()
   }, [initialized, locale])
+
+  useEffect(() => { if (initialized) persistLocale(preferredLocale) }, [initialized, preferredLocale])
 
   const setLocale = useCallback((nextLocale: AppLocale) => {
     if (!isAppLocale(nextLocale)) return

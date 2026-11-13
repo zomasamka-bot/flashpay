@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+
 import { Component, type ReactNode } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -74,13 +76,13 @@ function ErrorScreen({ trackingId, onReset }: { trackingId?: string; onReset: ()
               <AlertTriangle className="h-8 w-8 text-red-600" />
             </div>
           </div>
-          <CardTitle>Something went wrong</CardTitle>
-          <CardDescription>We encountered an unexpected error. Don't worry, your data is safe.</CardDescription>
+          <CardTitle> <UIMessage text={"Something went wrong"} /> </CardTitle>
+          <CardDescription> <UIMessage text={"We encountered an unexpected error. Don't worry, your data is safe."} /> </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {trackingId && (
             <div className="p-3 rounded-lg bg-muted border">
-              <p className="text-xs text-muted-foreground mb-1">Error Tracking ID</p>
+              <p className="text-xs text-muted-foreground mb-1"> <UIMessage text={"Error Tracking ID"} /> </p>
               <Badge variant="outline" className="font-mono text-xs">
                 {trackingId}
               </Badge>
@@ -89,18 +91,12 @@ function ErrorScreen({ trackingId, onReset }: { trackingId?: string; onReset: ()
 
           <div className="space-y-2">
             <Button onClick={onReset} className="w-full">
-              <RefreshCcw className="h-4 w-4 mr-2" />
-              Try Again
-            </Button>
+              <RefreshCcw className="h-4 w-4 mr-2" /> <UIMessage text={"Try Again"} /> </Button>
             <Button onClick={() => router.push("/")} variant="outline" className="w-full">
-              <Home className="h-4 w-4 mr-2" />
-              Go to Home
-            </Button>
+              <Home className="h-4 w-4 mr-2" /> <UIMessage text={"Go to Home"} /> </Button>
           </div>
 
-          <p className="text-xs text-center text-muted-foreground">
-            If this problem persists, please report the tracking ID to support.
-          </p>
+          <p className="text-xs text-center text-muted-foreground"> <UIMessage text={"If this problem persists, please report the tracking ID to support."} /> </p>
         </CardContent>
       </Card>
     </div>

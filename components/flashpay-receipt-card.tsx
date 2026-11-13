@@ -1,4 +1,5 @@
 "use client"
+import { copyText, isShareCancelled, downloadFile } from "@/lib/browser-actions"
 
 import {formatReceiptAmount} from "@/lib/receipt-presentation"
 
@@ -33,43 +34,11 @@ function shareErrorMessage(error: unknown): string {
   return String(error)
 }
 
-async function copyText(value: string): Promise<boolean> {
-  if (typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function") {
-    try {
-      await navigator.clipboard.writeText(value)
-      return true
-    } catch {
-      // Pi Browser/WebViews may expose Clipboard API while rejecting writes.
-    }
-  }
-
-  if (typeof document === "undefined") return false
-  const textarea = document.createElement("textarea")
-  textarea.value = value
-  textarea.setAttribute("readonly", "")
-  textarea.style.position = "fixed"
-  textarea.style.left = "-9999px"
-  textarea.style.top = "0"
-  textarea.style.opacity = "0"
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-  textarea.setSelectionRange(0, value.length)
-  let copied = false
-  try {
-    copied = document.execCommand("copy")
-  } catch {
-    copied = false
-  } finally {
-    textarea.remove()
-  }
-  return copied
-}
 
 type ReceiptPdfTools = typeof import("@/lib/receipt-pdf")
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError"
+  return isShareCancelled(error)
 }
 
 function getPiNativeBridge(): PiNativeBridge | null {
@@ -91,6 +60,8 @@ function webFileShareSupport(file: File): "supported" | "unknown" | "unsupported
 export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPayReceiptView; accessToken?: string | null }) {
   const { t, locale, direction } = useI18n()
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null)
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [pdfTools, setPdfTools] = useState<ReceiptPdfTools | null>(null)
   const [pdfFailed, setPdfFailed] = useState(false)
@@ -116,6 +87,8 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
     setPdfTools(null)
     setPdfFailed(false)
     setShareError(null)
+    setFallbackUrl(null)
+    setCopyFailed(false)
     sharedPdfUrlRef.current = null
     sharedPdfPromiseRef.current = null
     void import("@/lib/receipt-pdf")
@@ -136,6 +109,8 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
             note: t("receipt.note"),
             flashPayId: t("receipt.flashpayId"),
             verified: t("receipt.verified"),
+            merchantCommission: t("fees.merchantCommission"),
+            merchantNet: t("fees.merchantNet"),
             status: {
               successful: t("receipt.status.successful"),
               processing: t("receipt.status.processing"),
@@ -170,7 +145,9 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
   ])
 
   const copyId = async () => {
-    if (!(await copyText(receipt.flashPayPaymentId))) return
+    const ok = await copyText(receipt.flashPayPaymentId)
+    setCopyFailed(!ok)
+    if (!ok) return
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1800)
   }
@@ -206,36 +183,18 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
 
   const downloadPdf = async () => {
     if (!pdfFile || !pdfTools) return
-    let url: string
-    try {
-      url = await ensureSharedPdfUrl()
-    } catch {
-      // iOS can still save the actual PDF through its native file share sheet
-      // when an authenticated HTTPS link cannot be created.
-      if (webFileShareSupport(pdfFile) === "supported" && typeof navigator.share === "function") {
-        try {
-          await navigator.share({ files: [pdfFile], title: t("receipt.downloadPdf") })
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-        }
-      }
-      pdfTools.downloadReceiptPdfFile(pdfFile)
-      return
+    // Invoke native file handling inside the original tap, before any network wait.
+    if (/iPad|iPhone|iPod/.test(navigator.userAgent) && webFileShareSupport(pdfFile) === "supported") {
+      try { await navigator.share({ files: [pdfFile], title: t("receipt.downloadPdf") }); return }
+      catch (error) { if (isAbortError(error)) return }
     }
-
-    const downloadUrl = `${url}?download=1`
-    const pi = getPiNativeBridge()
-    if (typeof pi?.openUrlInSystemBrowser === "function") {
-      try {
-        await pi.openUrlInSystemBrowser(downloadUrl)
-        return
-      } catch {
-        // Continue to a normal HTTPS navigation if this Pi Browser build does
-        // not expose the native system-browser bridge.
-      }
+    downloadFile(pdfFile)
+    // Some Android WebViews do not implement blob downloads. Keep an explicit
+    // authenticated HTTPS fallback available without opening a delayed popup.
+    if (/Android/.test(navigator.userAgent) && /PiBrowser/i.test(navigator.userAgent) && accessToken) {
+      try { setFallbackUrl(await ensureSharedPdfUrl()) }
+      catch { setShareError(t("receipt.shareUnavailable")) }
     }
-    pdfTools.openHttpsPdfUrl(downloadUrl)
   }
 
   const sharePdf = async () => {
@@ -281,19 +240,14 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
         failures.push(`pdf-url: ${shareErrorMessage(error)}`)
       }
 
-      if (url && typeof pi?.openShareDialog === "function") {
-        try {
-          await pi.openShareDialog(
-            receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt"),
-            `${receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")} · ${receipt.flashPayPaymentId}\n${url}`,
-          )
-          setShareError(t("receipt.shareAttachmentUnavailable"))
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`pi-url: ${shareErrorMessage(error)}`)
-        }
+      if (url) {
+        // A separate link/share tap retains user activation after preparing the URL.
+        // No automatic popup after awaiting a request; restricted WebViews can use it too.
+        setFallbackUrl(url)
+        setShareError(t("receipt.shareAttachmentUnavailable"))
+        return
       }
+      downloadFile(pdfFile)
 
       console.warn("[Receipt PDF] Share unavailable", {
         paymentId: receipt.flashPayPaymentId,
@@ -309,7 +263,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
   return (
     <Card className="print:shadow-none">
       <CardHeader className="border-b">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">FlashPay</p>
             <CardTitle className="mt-1 text-2xl">{receipt.transactionType === "refund" ? t("receipt.refundReceipt") : t("receipt.paymentReceipt")}</CardTitle>
@@ -321,22 +275,22 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       </CardHeader>
       <CardContent className="space-y-5 pt-6">
         <div className="text-center border-b pb-5">
-          <div className="text-4xl font-bold">{formatReceiptAmount(receipt.amount)} {receipt.currency}</div>
+          <div className="text-4xl font-bold break-words">{formatReceiptAmount(receipt.amount)} {receipt.currency}</div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 rounded-lg bg-muted p-4">
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.merchant")}</p><p className="mt-1 font-semibold">{receipt.merchantName}</p></div>
-          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.customer")}</p><p className="mt-1 font-semibold">{receipt.customerName ?? t("common.unavailable")}</p></div>
+        <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-4 rounded-lg bg-muted p-4">
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.merchant")}</p><p className="mt-1 font-semibold break-words [overflow-wrap:anywhere]">{receipt.merchantName}</p></div>
+          <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.customer")}</p><p className="mt-1 font-semibold break-words [overflow-wrap:anywhere]">{receipt.customerName ?? t("common.unavailable")}</p></div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-4">
           <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.type")}</p><p className="mt-1 font-medium">{receipt.transactionType === "refund" ? t("receipt.refund") : t("receipt.payment")}</p></div>
           <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.dateTime")}</p><p className="mt-1 font-medium" dir="ltr" lang={locale}>{formatDateTime(receipt.occurredAt, locale, t("common.unavailable"))}</p></div>
         </div>
 
         {receipt.merchantFinancials && <div className="rounded-xl border p-4 text-sm space-y-2">
-          <div className="flex justify-between"><span>{direction==='rtl'?'عمولة التاجر':'Merchant commission'}</span><span>{formatReceiptAmount(receipt.merchantFinancials.commission)} π</span></div>
-          <div className="flex justify-between font-semibold"><span>{direction==='rtl'?'صافي مستحق التاجر':'Merchant net amount'}</span><span>{formatReceiptAmount(receipt.merchantFinancials.net)} π</span></div>
+          <div className="flex justify-between"><span>{t("fees.merchantCommission")}</span><span>{formatReceiptAmount(receipt.merchantFinancials.commission)} π</span></div>
+          <div className="flex justify-between font-semibold"><span>{t("fees.merchantNet")}</span><span>{formatReceiptAmount(receipt.merchantFinancials.net)} π</span></div>
         </div>}
         {receipt.note && <div><p className="text-xs font-semibold uppercase text-muted-foreground">{t("receipt.note")}</p><p className="mt-1">{receipt.note}</p></div>}
 
@@ -360,6 +314,20 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
           </Button>
         </div>
 
+        {copyFailed && <div className="print:hidden text-sm" role="status"><p>{t("actions.manualCopy")}</p><input readOnly aria-label={t("receipt.flashpayId")} value={receipt.flashPayPaymentId} onFocus={(e) => e.currentTarget.select()} className="w-full rounded border p-2" /></div>}
+        {fallbackUrl && <div className="print:hidden space-y-2">
+          <a href={fallbackUrl} target="_blank" rel="noopener noreferrer" className="block break-all underline">{t("actions.openPdf")}</a>
+          <Button variant="outline" onClick={async () => {
+            try {
+              const pi = getPiNativeBridge()
+              if (typeof pi?.openShareDialog === "function") { await pi.openShareDialog(t("receipt.paymentReceipt"), fallbackUrl); return }
+              if (typeof navigator.share === "function") { await navigator.share({url: fallbackUrl, title: t("receipt.paymentReceipt")}); return }
+              if (!await copyText(fallbackUrl)) setShareError(t("actions.manualCopy"))
+              else setShareError(t("actions.linkCopied"))
+            } catch (error) { if (!isAbortError(error)) setShareError(t("actions.manualCopy")) }
+          }}>{t("actions.shareLink")}</Button>
+          <input readOnly aria-label={t("actions.shareLink")} value={fallbackUrl} onFocus={(e) => e.currentTarget.select()} className="w-full rounded border p-2" />
+        </div>}
         {shareError && <p className="print:hidden text-center text-xs text-amber-700">{shareError}</p>}
 
         <div className="border-t pt-4 text-center text-xs text-muted-foreground">{t("receipt.verified")}</div>

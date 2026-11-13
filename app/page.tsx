@@ -1,5 +1,8 @@
 "use client"
 
+import { UIMessage, useUIText } from "@/components/ui-message"
+import { copyText, openExternalUrl } from "@/lib/browser-actions"
+
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -26,6 +29,7 @@ export default function HomePage() {
   useRouter()
   const { toast } = useToast()
   const { locale, setLocale, t } = useI18n()
+  const tr = useUIText()
 
   // Load persistent payment history on app mount
   const verifiedHistorySummary = useLoadPaymentHistory()
@@ -112,6 +116,12 @@ export default function HomePage() {
   const [routeResolved, setRouteResolved] = useState(false)
   const [showShareMenu, setShowShareMenu] = useState(false)
   const [showConversion, setShowConversion] = useState(false)
+  useEffect(() => {
+    if (!showConversion) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    document.querySelector<HTMLElement>("[data-conversion-dialog] button")?.focus()
+    return () => { previous?.focus({preventScroll:true}) }
+  }, [showConversion])
   const [showLanguageSelector, setShowLanguageSelector] = useState(false)
   const [localAmount, setLocalAmount] = useState("")
   const [currency, setCurrency] = useState("USD")
@@ -434,19 +444,20 @@ export default function HomePage() {
   const handleShareWhatsApp = () => {
     const text = `Pay ${payment?.amount || 0}π to @${merchantSetup.piUsername}: ${sharePaymentUrl}`
     const wa = `https://wa.me/?text=${encodeURIComponent(text)}`
-    window.open(wa, "_blank")
+    openExternalUrl(wa)
     setShowShareMenu(false)
   }
 
   const handleShareTelegram = () => {
     const tg = `https://t.me/share/url?url=${encodeURIComponent(sharePaymentUrl)}&text=${encodeURIComponent(`Pay ${payment?.amount || 0}π`)}`
-    window.open(tg, "_blank")
+    openExternalUrl(tg)
     setShowShareMenu(false)
   }
 
   const handleShareSMS = () => {
     const text = `Pay ${payment?.amount || 0}π: ${sharePaymentUrl}`
-    const sms = `sms:?body=${encodeURIComponent(text)}`
+    const separator = /iPad|iPhone|iPod/.test(navigator.userAgent) ? "&" : "?"
+    const sms = `sms:${separator}body=${encodeURIComponent(text)}`
     window.location.href = sms
     setShowShareMenu(false)
   }
@@ -461,7 +472,7 @@ export default function HomePage() {
 
   const handleCopyLink = async () => {
     try {
-      await navigator.clipboard.writeText(sharePaymentUrl)
+      if (!await copyText(sharePaymentUrl)) throw new Error("COPY_UNAVAILABLE")
       toast({
         title: "Copied!",
         description: "Payment link copied to clipboard",
@@ -478,7 +489,7 @@ export default function HomePage() {
 
   const handleCopyPaymentId = async () => {
     try {
-      await navigator.clipboard.writeText(currentPaymentId || "")
+      if (!await copyText(currentPaymentId || "")) throw new Error("COPY_UNAVAILABLE")
       toast({
         title: "Copied!",
         description: "Payment ID copied to clipboard",
@@ -499,7 +510,7 @@ export default function HomePage() {
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="text-center">
           <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-border border-t-primary"></div>
-          <p className="text-sm text-muted-foreground">Loading payment...</p>
+          <p className="text-sm text-muted-foreground"> <UIMessage text={"Loading payment..."} /> </p>
         </div>
       </div>
     )
@@ -533,13 +544,13 @@ export default function HomePage() {
       <div className="min-h-screen flex flex-col">
         {/* Merchant Operational Data - Always Visible */}
         <div className="border-b bg-muted/30 px-4 py-3">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-muted-foreground">{t("home.verifiedTotal", "Verified total:")}</span>
-              <span className="font-semibold">{verifiedHistorySummary?.settledTransactions ?? "—"} sales</span>
+              <span className="font-semibold">{verifiedHistorySummary?.settledTransactions ?? "—"} <UIMessage text={"sales"} /> </span>
               <span className="font-semibold">{verifiedHistorySummary ? verifiedHistorySummary.total.toFixed(2) : "—"} π</span>
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex min-w-0 max-w-full items-center gap-2 break-all text-xs text-muted-foreground">
               <Check className="h-3 w-3 text-green-600" />
               <span>@{merchantSetup.piUsername}</span>
             </div>
@@ -554,16 +565,14 @@ export default function HomePage() {
             <QRCode value={paymentLink} size={300} />
           </div>
 
-          <div className="text-xs text-center text-muted-foreground mb-6 max-w-xs">
-            Scan and open in Pi Browser for fastest payment
-          </div>
+          <div className="text-xs text-center text-muted-foreground mb-6 max-w-xs"> <UIMessage text={"Scan and open in Pi Browser for fastest payment"} /> </div>
 
           <div className="text-6xl font-bold mb-4 tabular-nums">
             {displayAmount}
             <span className="text-4xl text-muted-foreground ml-2">π</span>
           </div>
 
-          {payment?.financialContract && <div className="mb-4 text-sm text-muted-foreground">Merchant commission: {Number(payment.financialContract.commissionStroops)/1e7} π · Merchant net: {Number(payment.financialContract.merchantNetStroops)/1e7} π</div>}
+          {payment?.financialContract && <div className="mb-4 text-sm text-muted-foreground"> <UIMessage text={"Merchant commission:"} /> {Number(payment.financialContract.commissionStroops)/1e7} <UIMessage text={"π · Merchant net:"} /> {Number(payment.financialContract.merchantNetStroops)/1e7} π</div>}
           <div className="flex items-center gap-2 px-6 py-3 rounded-full bg-yellow-500/10 text-yellow-700 dark:text-yellow-500 mb-8">
             {payment?.status === "settled_to_merchant" ? (
               <>
@@ -619,12 +628,8 @@ export default function HomePage() {
                 <Button onClick={handleShareTelegram} variant="ghost" size="sm" className="text-xs h-10">
                   Telegram
                 </Button>
-                <Button onClick={handleShareSMS} variant="ghost" size="sm" className="text-xs h-10">
-                  SMS
-                </Button>
-                <Button onClick={handleShareEmail} variant="ghost" size="sm" className="text-xs h-10">
-                  Email
-                </Button>
+                <Button onClick={handleShareSMS} variant="ghost" size="sm" className="text-xs h-10"> <UIMessage text={"SMS"} /> </Button>
+                <Button onClick={handleShareEmail} variant="ghost" size="sm" className="text-xs h-10"> <UIMessage text={"Email"} /> </Button>
                 <Button onClick={handleCopyLink} variant="ghost" size="sm" className="text-xs h-10 col-span-2">
                   {t("home.copyLink", "Copy Link")}
                 </Button>
@@ -649,7 +654,7 @@ export default function HomePage() {
         <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
-            <div className="text-sm font-medium">Pi SDK Failed to Load</div>
+            <div className="text-sm font-medium"> <UIMessage text={"Pi SDK Failed to Load"} /> </div>
             <div className="text-xs mt-1">{sdkError}</div>
             <div className="flex gap-2 mt-2">
               <Button onClick={() => window.location.reload()} variant="outline" size="sm" className="h-7 text-xs">
@@ -666,7 +671,7 @@ export default function HomePage() {
             <div className="flex items-center gap-2 flex-1">
               <Wallet className="h-4 w-4 text-yellow-700 dark:text-yellow-500" />
               <span className="text-sm text-yellow-700 dark:text-yellow-500">
-                {sdkInitStatus === "loading" ? "Loading Pi SDK..." : "Wallet not connected"}
+                {sdkInitStatus === "loading" ? tr("Loading Pi SDK...") : tr("Wallet not connected")}
               </span>
             </div>
             <Button
@@ -676,7 +681,7 @@ export default function HomePage() {
               variant="secondary"
               className="h-8 text-xs"
             >
-              {isConnecting ? "Connecting..." : sdkInitStatus === "loading" ? "Please wait..." : "Connect Pi Wallet"}
+              {isConnecting ? tr("Connecting...") : sdkInitStatus === "loading" ? tr("Please wait...") : tr("Connect Pi Wallet")}
             </Button>
           </div>
         </div>
@@ -685,13 +690,13 @@ export default function HomePage() {
       {/* Merchant Operational Data - Always Visible */}
       {merchantSetup.isSetupComplete && (
         <div className="border-b bg-muted/30 px-4 py-3">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-muted-foreground">{t("home.verifiedTotal", "Verified total:")}</span>
-              <span className="font-semibold">{verifiedHistorySummary?.settledTransactions ?? "—"} sales</span>
+              <span className="font-semibold">{verifiedHistorySummary?.settledTransactions ?? "—"} <UIMessage text={"sales"} /> </span>
               <span className="font-semibold">{verifiedHistorySummary ? verifiedHistorySummary.total.toFixed(2) : "—"} π</span>
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex min-w-0 max-w-full items-center gap-2 break-all text-xs text-muted-foreground">
               <Check className="h-3 w-3 text-green-600" />
               <span>@{merchantSetup.piUsername}</span>
             </div>
@@ -800,7 +805,7 @@ export default function HomePage() {
           size="lg"
         >
           <Check className="h-6 w-6" />
-          {isCreating ? "Preparing your request…" : t("home.generateQr", "Generate QR Code")}
+          {isCreating ? tr("Preparing your request…") : t("home.generateQr", "Generate QR Code")}
         </Button>
 
         {/* Explicitly retire only an acknowledged payment identity after reload. */}
@@ -838,7 +843,7 @@ export default function HomePage() {
             <div
               role="listbox"
               aria-label={t("common.language", "Language")}
-              className="absolute bottom-full z-40 mb-2 w-full overflow-hidden rounded-md border bg-background shadow-md"
+              className="absolute bottom-full z-40 mb-2 w-full max-h-[50dvh] overflow-y-auto rounded-md border bg-background shadow-md"
             >
               {SUPPORTED_LOCALES.map((option) => (
                 <button
@@ -865,12 +870,21 @@ export default function HomePage() {
       {showConversion && (
         <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center p-4 md:p-0 pt-16 md:pt-0 overflow-y-auto">
           <div className="absolute inset-0 bg-black/50" onClick={() => setShowConversion(false)} />
-          <div className="relative bg-background rounded-t-lg md:rounded-lg w-full md:max-w-md max-h-[calc(100vh-120px)] md:max-h-[90vh] overflow-y-auto flex flex-col pb-20 md:pb-6">
+          <div data-conversion-dialog role="dialog" aria-modal="true" aria-labelledby="conversion-title" onKeyDown={(event) => {
+            if (event.key === "Escape") setShowConversion(false)
+            if (event.key === "Tab") {
+              const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),a[href]')).filter(el => el.offsetParent !== null)
+              const first = controls[0], last = controls[controls.length - 1]
+              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+            }
+          }} className="app-dialog relative bg-background rounded-lg w-full md:max-w-md overflow-y-auto flex flex-col pb-6">
             {/* Header */}
             <div className="flex items-center justify-between mb-4 shrink-0 px-6 pt-6">
-              <h2 className="text-lg font-semibold">{t("convert.title", "Convert to Pi")}</h2>
+              <h2 id="conversion-title" className="text-lg font-semibold">{t("convert.title", "Convert to Pi")}</h2>
               <Button
                 onClick={() => setShowConversion(false)}
+                aria-label={t("common.close")}
                 variant="ghost"
                 size="sm"
                 className="h-8 w-8 p-0"
@@ -901,13 +915,13 @@ export default function HomePage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="USD">USD (US Dollar)</SelectItem>
-                    <SelectItem value="EUR">EUR (Euro)</SelectItem>
-                    <SelectItem value="GBP">GBP (British Pound)</SelectItem>
-                    <SelectItem value="JPY">JPY (Japanese Yen)</SelectItem>
-                    <SelectItem value="CNY">CNY (Chinese Yuan)</SelectItem>
-                    <SelectItem value="INR">INR (Indian Rupee)</SelectItem>
-                    <SelectItem value="KES">KES (Kenyan Shilling)</SelectItem>
+                    <SelectItem value="USD"> <UIMessage text={"USD (US Dollar)"} /> </SelectItem>
+                    <SelectItem value="EUR"> <UIMessage text={"EUR (Euro)"} /> </SelectItem>
+                    <SelectItem value="GBP"> <UIMessage text={"GBP (British Pound)"} /> </SelectItem>
+                    <SelectItem value="JPY"> <UIMessage text={"JPY (Japanese Yen)"} /> </SelectItem>
+                    <SelectItem value="CNY"> <UIMessage text={"CNY (Chinese Yuan)"} /> </SelectItem>
+                    <SelectItem value="INR"> <UIMessage text={"INR (Indian Rupee)"} /> </SelectItem>
+                    <SelectItem value="KES"> <UIMessage text={"KES (Kenyan Shilling)"} /> </SelectItem>
                   </SelectContent>
                 </Select>
               </div>

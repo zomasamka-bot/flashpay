@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+
 import type React from "react"
 
 import { usePathname, useRouter } from "next/navigation"
@@ -68,20 +70,16 @@ export function DomainGuard({ children }: { children: React.ReactNode }) {
                 <AlertTriangle className="h-8 w-8 text-muted-foreground" />
               </div>
             </div>
-            <CardTitle className="text-2xl">Service Temporarily Unavailable</CardTitle>
-            <CardDescription className="text-base">FlashPay is currently in maintenance mode.</CardDescription>
+            <CardTitle className="text-2xl"> <UIMessage text={"Service Temporarily Unavailable"} /> </CardTitle>
+            <CardDescription className="text-base"> <UIMessage text={"FlashPay is currently in maintenance mode."} /> </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-center text-muted-foreground">
               {availability.message || "Maintenance in progress. Please try again later."}
             </p>
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1 bg-transparent" onClick={() => router.back()}>
-                Go Back
-              </Button>
-              <Button className="flex-1" onClick={() => void refreshAvailability()}>
-                Check Again
-              </Button>
+              <Button variant="outline" className="flex-1 bg-transparent" onClick={() => router.back()}> <UIMessage text={"Go Back"} /> </Button>
+              <Button className="flex-1" onClick={() => void refreshAvailability()}> <UIMessage text={"Check Again"} /> </Button>
             </div>
           </CardContent>
         </Card>

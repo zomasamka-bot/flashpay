@@ -1,3 +1,6 @@
+"use client"
+
+import { UIMessage } from "@/components/ui-message"
 /**
  * Operations Console Dashboard
  * Central hub for platform management and owner-level operations
@@ -5,7 +8,7 @@
  * SECURITY: This page is owner-only. Non-owners are redirected to home.
  */
 
-"use client"
+
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
@@ -166,9 +169,7 @@ export default function OperationsPage() {
             <Button
               onClick={() => router.push("/")}
               className="w-full"
-            >
-              Return to Home
-            </Button>
+            > <UIMessage text={"Return to Home"} /> </Button>
           </CardContent>
         </Card>
       </div>
@@ -207,7 +208,7 @@ export default function OperationsPage() {
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>{incident ? `as of ${new Date(incident.asOf).toLocaleString()}${incident.recovery?.lastWakeAt ? ` · last wake ${new Date(incident.recovery.lastWakeAt).toLocaleString()}` : ""}` : "Loading…"}</span>
-              <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => void loadIncidentHealth()} disabled={incidentLoading || !uidData.accessToken}>{incidentLoading ? <Loader2 className="h-3 w-3 animate-spin"/> : <RefreshCw className="h-3 w-3"/>} Refresh</Button>
+              <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => void loadIncidentHealth()} disabled={incidentLoading || !uidData.accessToken}>{incidentLoading ? <Loader2 className="h-3 w-3 animate-spin"/> : <RefreshCw className="h-3 w-3"/>} <UIMessage text={"Refresh"} /> </Button>
             </div>
           </CardContent>
         </Card>
@@ -216,9 +217,7 @@ export default function OperationsPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5" />
-              Platform Overview
-            </CardTitle>
+              <BarChart3 className="h-5 w-5" /> <UIMessage text={"Platform Overview"} /> </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -244,9 +243,7 @@ export default function OperationsPage() {
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>{overviewError ? "Authoritative platform overview unavailable" : overviewAsOf ? `PostgreSQL · as of ${new Date(overviewAsOf).toLocaleString()}` : "Loading authoritative platform overview…"}</span>
               <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => void loadAnalyticsSafely()} disabled={overviewLoading || !uidData.accessToken}>
-                {overviewLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                Refresh
-              </Button>
+                {overviewLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} <UIMessage text={"Refresh"} /> </Button>
             </div>
           </CardContent>
         </Card>
@@ -255,14 +252,12 @@ export default function OperationsPage() {
         <Card className="border-amber-500/40">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Stethoscope className="h-5 w-5" />
-              Financial Operations Health
-            </CardTitle>
+              <Stethoscope className="h-5 w-5" /> <UIMessage text={"Financial Operations Health"} /> </CardTitle>
             <CardDescription>{tr("Authoritative read-only settlement, refund, and recovery signals")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {financialHealthError ? (
-              <Alert variant="destructive"><AlertDescription>Financial health is unavailable. No healthy state is inferred.</AlertDescription></Alert>
+              <Alert variant="destructive"><AlertDescription> <UIMessage text={"Financial health is unavailable. No healthy state is inferred."} /> </AlertDescription></Alert>
             ) : (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
@@ -278,8 +273,7 @@ export default function OperationsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span>{financialHealth ? `PostgreSQL + Redis · as of ${new Date(financialHealth.asOf).toLocaleString()} · drain lease ${financialHealth.recovery.drainLeaseActive ? "active" : "idle"}` : "Loading authoritative financial health…"}</span>
                   <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => void loadFinancialHealth()} disabled={financialHealthLoading || !uidData.accessToken}>
-                    {financialHealthLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Refresh
-                  </Button>
+                    {financialHealthLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} <UIMessage text={"Refresh"} /> </Button>
                 </div>
               </>
             )}
@@ -292,9 +286,7 @@ export default function OperationsPage() {
           <Card className="border-blue-500/50">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Stethoscope className="h-5 w-5 text-blue-500" />
-                System Diagnostics
-              </CardTitle>
+                <Stethoscope className="h-5 w-5 text-blue-500" /> <UIMessage text={"System Diagnostics"} /> </CardTitle>
               <CardDescription>{tr("Check health and troubleshoot issues")}</CardDescription>
             </CardHeader>
             <CardContent>
@@ -303,9 +295,7 @@ export default function OperationsPage() {
                 className="w-full"
                 size="lg"
                 variant="outline"
-              >
-                Run Diagnostics
-                <ArrowRight className="h-4 w-4 ml-2" />
+              > <UIMessage text={"Run Diagnostics"} /> <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
             </CardContent>
           </Card>
@@ -314,9 +304,7 @@ export default function OperationsPage() {
           <Card className="border-red-500/50 bg-red-50/50 dark:bg-red-950/20">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-red-600">
-                <AlertTriangle className="h-5 w-5" />
-                Emergency Payment Recovery
-              </CardTitle>
+                <AlertTriangle className="h-5 w-5" /> <UIMessage text={"Emergency Payment Recovery"} /> </CardTitle>
               <CardDescription>{tr("Clear stuck pending payments securely")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -329,9 +317,7 @@ export default function OperationsPage() {
                 size="lg"
                 variant="destructive"
               >
-                <AlertTriangle className="h-4 w-4 mr-2" />
-                Go to Emergency Recovery
-                <ArrowRight className="h-4 w-4 ml-2" />
+                <AlertTriangle className="h-4 w-4 mr-2" /> <UIMessage text={"Go to Emergency Recovery"} /> <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
             </CardContent>
           </Card>
@@ -340,9 +326,7 @@ export default function OperationsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Globe className="h-5 w-5" />
-                Domain Management
-              </CardTitle>
+                <Globe className="h-5 w-5" /> <UIMessage text={"Domain Management"} /> </CardTitle>
               <CardDescription>{tr("Configure integration domains")}</CardDescription>
             </CardHeader>
             <CardContent>
@@ -351,9 +335,7 @@ export default function OperationsPage() {
                 className="w-full"
                 size="lg"
                 variant="outline"
-              >
-                Manage Domains
-                <ArrowRight className="h-4 w-4 ml-2" />
+              > <UIMessage text={"Manage Domains"} /> <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
             </CardContent>
           </Card>
@@ -362,9 +344,7 @@ export default function OperationsPage() {
           <Card className="border-2 border-primary md:col-span-2">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Settings className="h-5 w-5" />
-                Control Panel
-              </CardTitle>
+                <Settings className="h-5 w-5" /> <UIMessage text={"Control Panel"} /> </CardTitle>
               <CardDescription>{tr("System operations and emergency kill switch")}</CardDescription>
             </CardHeader>
             <CardContent>
@@ -372,9 +352,7 @@ export default function OperationsPage() {
                 onClick={() => router.push("/control-panel")}
                 className="w-full"
                 size="lg"
-              >
-                Open Control Panel
-                <ArrowRight className="h-4 w-4 ml-2" />
+              > <UIMessage text={"Open Control Panel"} /> <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
             </CardContent>
           </Card>

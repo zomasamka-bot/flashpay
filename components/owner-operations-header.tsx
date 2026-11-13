@@ -1,5 +1,7 @@
 "use client"
 
+import { UIMessage } from "@/components/ui-message"
+
 import {publicNetworkLabel} from "@/lib/public-network"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -18,15 +20,15 @@ export function OwnerOperationsHeader() {
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 pt-[env(safe-area-inset-top)]">
       <div className="mx-auto flex min-h-14 max-w-4xl items-center gap-2 px-4 py-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">FlashPay Owner Operations</div>
-          <div className="text-[11px] text-muted-foreground">Operational control plane</div>
+          <div className="break-words text-sm font-semibold"> <UIMessage text={"FlashPay Owner Operations"} /> </div>
+          <div className="text-[11px] text-muted-foreground"> <UIMessage text={"Operational control plane"} /> </div>
         </div>
         <span className="shrink-0 rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold" aria-label={`Pi Network environment: ${publicNetworkLabel}`}>{publicNetworkLabel}</span>
       </div>
       <nav aria-label="Owner operations" className="mx-auto flex max-w-4xl border-t px-2 sm:px-4">
         {links.map(({ href, label, icon: Icon }) => {
           const active = href === "/operations" ? pathname === href || pathname.startsWith("/operations/") : pathname === href
-          return <Link key={href} href={href} aria-current={active ? "page" : undefined} className={cn("flex min-h-11 flex-1 items-center justify-center gap-1.5 border-b-2 px-2 text-xs font-medium transition-colors sm:text-sm", active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")}><Icon className="h-4 w-4" aria-hidden="true" />{label}</Link>
+          return <Link key={href} href={href} aria-current={active ? "page" : undefined} className={cn("flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 border-b-2 px-2 text-xs font-medium transition-colors sm:text-sm", active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")}><Icon className="h-4 w-4" aria-hidden="true" /><UIMessage text={label} /></Link>
         })}
       </nav>
     </header>
