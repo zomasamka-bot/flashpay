@@ -53,7 +53,12 @@ function start(name,c,ready){c.kernelDeployment={raw:process.env.KERNEL_DEPLOYME
  }})}}catch{}}}if(buffer.length>100000)void finish(2)});p.stderr.resume();p.on('error',()=>{clearTimeout(t);reject(Error('SERVICE_FAILED'))});p.on('close',()=>{clearTimeout(t);if(!p._flashpayReady)reject(Error('SERVICE_NOT_READY'));else if(!closing){state.failure='SERVICE_EXIT';void finish(2)}});p.stdin.on('error',()=>{});p.stdin.end(JSON.stringify(c))})}
 async function finish(code){if(closing)return;closing=true;try{await cleanup()}catch{state.cleanup='FAILED'}savePhases();state.running=false;state.stoppedAt=new Date().toISOString();saved('DURABLE_STATUS',state);process.exit(code)}
 async function run(){
- const startupAt=Date.now(),timing={};const lock=inspectLock(),keys=await tlsIdentities();await cleanup();timing.identityAndCleanupMs=Date.now()-startupAt;
+ const startupAt=Date.now(),timing={};const lock=inspectLock();await cleanup();
+ // Before readers/writers start, retain old immutable closure bytes in a
+ // verified lossless representation. No database or financial action occurs.
+ const storage=await require('/kernel/dist/lib/r36-lifecycle-storage.js').compactR36PriorBundles(path.join(root,'jobs'));
+ if(storage.files)saved('STORAGE_COMPACTION',storage);
+ const keys=await tlsIdentities();timing.identityAndCleanupMs=Date.now()-startupAt;
  const credentials={};for(const role of ['r36_signer','r36_issuer','r36_registrar','r36_evidence_reader']){const c=databaseSecret('get',role);if(c.role!==role||c.host!==host||c.database!==deployment.databaseName||!/^[A-Za-z0-9_-]{64}$/.test(c.password))throw Error('CREDENTIAL_TARGET');credentials[role]=c}
  const image=lock.image,ip=(await dns.lookup(host,{family:4})).address;
  const network=(n,internal)=>docker(['network','create',...(internal?['--internal']:[]),'--label','org.flashpay.owner='+label,n]);network(net,true);network(egress,false);

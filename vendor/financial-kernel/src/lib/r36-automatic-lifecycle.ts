@@ -47,7 +47,11 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
    if(!head.completed){prior=undefined;return{status:'WAITING_FOR_ORIGINAL_TERMINAL_CHECKPOINT'}}
    if(successor)requireFact(successor.sourceWallet===wallet&&hex(successor.nonce),'AUTOMATIC_SUCCESSOR_IDENTITY')
    const request={action:'prior_context',wallet,paymentId:a.owner_payment_id,...(successor?{nonce:successor.nonce}:{})},ctx=await context(request)
-   if(!successor&&prior&&prior.context.contextDigest===ctx.contextDigest&&prior.expiresAt>Math.floor(Date.now()/1000)+15)return{status:'PRIOR_CLOSURE_CURRENT',proofDigest:prior.proofDigest}
+   // An idle wallet has no successor to bind. Keep the original protected
+   // context/terminal-fact checks above, but do not persist another identical
+   // closure every idle cycle. register(binding) still proves and records the
+   // full fresh closure before an actual successor can acquire authority.
+   if(!successor)return{status:'WAITING_FOR_SUCCESSOR'}
    const f=await facts(profile)
    // Independent read-only acquisitions may overlap. Nothing is published or
    // accepted until every source succeeds and the original joint review passes.

@@ -1,3 +1,4 @@
+import {readR36LifecycleBytes,storeR36LifecycleBytes} from './r36-lifecycle-storage'
 import {encodeR36Artifact,decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {financialNetwork} from './financial-network'
 /** Private durable lifecycle observations. New observations may renew PRIOR
@@ -26,7 +27,7 @@ export async function publishR36LifecycleJob(input:{kind:'prior'|'bound';context
   const job=q.kind==='prior'?sha(subject+'\n'+rawDigest+'\n'+JSON.stringify(q.request)+'\n'+Math.floor(now()/30)):q.context.boundRenewal===true?sha(String(q.context.successorNonce)+'\n'+String(q.context.closureDigest)):String(q.context.successorNonce)
   must(hex(job),'LIFECYCLE_JOB_IDENTITY')
   const file=path.join(base,'lifecycle-'+q.kind+'-'+job+'.json')
-  async function read():Promise<Row|null>{try{const s=await lstat(file);must(s.isFile()&&!s.isSymbolicLink()&&(s.mode&0o077)===0&&s.size<=12_100_000,'LIFECYCLE_FILE');return JSON.parse(await readFile(file,'utf8'))}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return null;throw e}}
+  async function read():Promise<Row|null>{const raw=await readR36LifecycleBytes(file);return raw?JSON.parse(raw.toString('utf8')):null}
   async function fresh(){const c=await ports.refresh(),p=policy(c);must((q.kind==='prior'?c.contextDigest:c.bindingDigest)===subject&&identity(p)===scope,'LIFECYCLE_POLICY_CHANGED');current(p,now());return p}
   let stored=await read(),p=pr
   if(!stored){
@@ -39,8 +40,7 @@ export async function publishR36LifecycleJob(input:{kind:'prior'|'bound';context
    }
    const body={schema:'R36_LIFECYCLE_PUBLICATION_V1',subjectDigest:subject,rawDigest,policyIdentity:scope,request:q.request,bundle},raw=JSON.stringify(body)
    must(Buffer.byteLength(raw)<=12_100_000,'LIFECYCLE_BUNDLE_SIZE')
-   const tmp=file+'.'+randomUUID()+'.tmp',h=await open(tmp,'wx',0o600)
-   try{await h.writeFile(raw);await h.sync();await h.close();try{await link(tmp,file)}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e}const d=await open(base,'r');try{await d.sync()}finally{await d.close()}}finally{await h.close().catch(()=>{});await unlink(tmp).catch(()=>{})}
+   await storeR36LifecycleBytes(file,Buffer.from(raw,'utf8'))
    stored=await read()
   }
   p=await fresh();must(stored?.schema==='R36_LIFECYCLE_PUBLICATION_V1'&&stored.subjectDigest===subject&&stored.rawDigest===rawDigest&&stored.policyIdentity===scope&&JSON.stringify(stored.request)===JSON.stringify(q.request)&&obj(stored.bundle),'LIFECYCLE_IMMUTABLE_JOB_CONFLICT')

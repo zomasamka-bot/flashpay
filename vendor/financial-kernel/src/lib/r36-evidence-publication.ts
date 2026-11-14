@@ -123,5 +123,5 @@ export async function publishR36LiveEvidenceJob(input:{candidateDigest:string;so
   validate(b,c.candidateDigest,c.policy,c.sourceRowsDigest,now())
   const r=await ports.register(clone(b.binding));must(['RECORDED','REPLAYED'].includes(r.outcome)&&hex(r.certificateDigest)&&r.authorizesFinancialRelease===false&&r.authorizesRotation===false&&r.authorizesWalletActivation===false,'PUBLICATION_REGISTRAR_NOT_CONFIRMED_RETRY_SAME_BUNDLE')
   return {outcome:r.outcome,reason:'PUBLISHED_AND_REGISTERED_SUBJECT_TO_ORIGINAL_FINANCIAL_GUARDS',certificateDigest:r.certificateDigest,authorizesFinancialRelease:false,authorizesRotation:false,authorizesWalletActivation:false}
- }catch(e){return denied(e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'PUBLICATION_FAILED_CLOSED_RETRY_SAME_BUNDLE')}
+ }catch(e){return denied((e as NodeJS.ErrnoException)?.code==='ENOSPC'?'PUBLICATION_STORAGE_FULL':e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'PUBLICATION_FAILED_CLOSED_RETRY_SAME_BUNDLE')}
 }
