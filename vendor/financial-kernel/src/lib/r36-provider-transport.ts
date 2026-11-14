@@ -1,3 +1,4 @@
+import {R36_ARTIFACT_ENVELOPE_BYTES} from './r36-artifact-codec'
 /** Executable mTLS, pinned HTTPS ports. No arbitrary URL, redirect or finance endpoint.
  * Config is deployment/operator input, never an HTTP caller's input. No key fallback.
  */
@@ -13,7 +14,7 @@ function endpoint(c:R36ProviderEndpoint){
  if(u.protocol!=='https:'||u.username||u.password||u.pathname!=='/'||u.search||u.hash||/^(?:.*\.)?(?:minepi\.com|vercel\.app|neon\.tech|upstash\.io)$/i.test(u.hostname)||!/^[0-9a-f]{64}$/.test(v.serverSpkiSha256)||![v.caPem,v.clientCertPem,v.clientKeyPem].every(x=>typeof x==='string'&&x.length>0))throw Error('PROVIDER_ENDPOINT_NOT_ALLOWED')
  return{config:v,url:u}
 }
-const request=(target:ReturnType<typeof endpoint>,path:string,method:'GET'|'POST',body:unknown,signal:AbortSignal,timeout=8000):Promise<unknown>=>new Promise((resolve,reject)=>{
+const request=(target:ReturnType<typeof endpoint>,path:string,method:'GET'|'POST',body:unknown,signal:AbortSignal,timeout=8000,maxBytes=4_000_000):Promise<unknown>=>new Promise((resolve,reject)=>{
   const payload=body===undefined?undefined:Buffer.from(JSON.stringify(body));let settled=false
   const done=(error:Error|null,result?:unknown)=>{if(settled)return;settled=true;clearTimeout(timer);signal.removeEventListener('abort',abort);error?reject(Error('PROVIDER_REQUEST_FAILED')):resolve(result)}
   const req=https.request(new URL(path,target.url),{method,agent:false,ca:target.config.caPem,cert:target.config.clientCertPem,key:target.config.clientKeyPem,rejectUnauthorized:true,checkServerIdentity:(host,cert)=>{
@@ -22,7 +23,7 @@ const request=(target:ReturnType<typeof endpoint>,path:string,method:'GET'|'POST
   },headers:{accept:'application/json',...(payload?{'content-type':'application/json','content-length':payload.length}:{})}},res=>{
    if(res.statusCode!==200||!String(res.headers['content-type']).startsWith('application/json')){res.destroy();done(Error('PROVIDER_STATUS'));return}
    let size=0;const chunks:Buffer[]=[]
-   res.on('data',(b:Buffer)=>{size+=b.length;if(size>4_000_000){res.destroy();done(Error('PROVIDER_SIZE'))}else chunks.push(b)})
+   res.on('data',(b:Buffer)=>{size+=b.length;if(size>maxBytes){res.destroy();done(Error('PROVIDER_SIZE'))}else chunks.push(b)})
    res.on('end',()=>{try{done(null,JSON.parse(Buffer.concat(chunks).toString('utf8')))}catch{done(Error('PROVIDER_JSON'))}});res.on('error',()=>done(Error('PROVIDER_RESPONSE')))
   })
   const abort=()=>{req.destroy();done(Error('PROVIDER_ABORTED'))};const timer=setTimeout(abort,timeout)
@@ -31,7 +32,7 @@ const request=(target:ReturnType<typeof endpoint>,path:string,method:'GET'|'POST
  })
 export function createR36EvidenceReader(config:R36ProviderEndpoint):R36WorkerPorts['readEvidence']{
  const evidence=endpoint(config)
- return (kind,digest,signal,subjectDigest,evidenceNotBefore)=>{if(evidenceNotBefore!==undefined&&(!Number.isSafeInteger(evidenceNotBefore)||evidenceNotBefore<1))return Promise.reject(Error('EVIDENCE_GENERATION'));if(!R36_WORKER_KINDS.includes(kind)||!/^[0-9a-f]{64}$/.test(digest)||!/^[0-9a-f]{64}$/.test(subjectDigest))return Promise.reject(Error('EVIDENCE_DIGEST'));return request(evidence,`/r36/v1/evidence/${kind}/${subjectDigest}/${digest}${evidenceNotBefore===undefined?'':'/'+evidenceNotBefore}`,'GET',undefined,signal)}
+ return (kind,digest,signal,subjectDigest,evidenceNotBefore)=>{if(evidenceNotBefore!==undefined&&(!Number.isSafeInteger(evidenceNotBefore)||evidenceNotBefore<1))return Promise.reject(Error('EVIDENCE_GENERATION'));if(!R36_WORKER_KINDS.includes(kind)||!/^[0-9a-f]{64}$/.test(digest)||!/^[0-9a-f]{64}$/.test(subjectDigest))return Promise.reject(Error('EVIDENCE_DIGEST'));return request(evidence,`/r36/v1/evidence/${kind}/${subjectDigest}/${digest}${evidenceNotBefore===undefined?'':'/'+evidenceNotBefore}`,'GET',undefined,signal,8000,R36_ARTIFACT_ENVELOPE_BYTES)}
 }
 /** Only the existing issuer route is reachable. A receipt response never grants
  * wallet activation, rotation, or a financial submission to this caller. */

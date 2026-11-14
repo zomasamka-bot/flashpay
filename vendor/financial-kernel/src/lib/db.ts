@@ -93,7 +93,10 @@ async function initializePostgresClient() {
 
     // Create client instance with connection URL
     verifyDatabaseUrl(process.env.DATABASE_URL)
-    const candidate = sql(process.env.DATABASE_URL, {ssl:{rejectUnauthorized:true}})
+    // Bound each application instance independently of request concurrency.
+    // Keep connection capacity available for restricted runtime/issuer/signer
+    // roles; queries wait in the driver's pool without replaying financial work.
+    const candidate = sql(process.env.DATABASE_URL, {ssl:{rejectUnauthorized:true},max:4,idle_timeout:20})
     try { await verifyDatabaseBinding(candidate as any) } catch (e) { await candidate.end({timeout:1});throw e }
     sqlClient = candidate
     initializationAttempted = true

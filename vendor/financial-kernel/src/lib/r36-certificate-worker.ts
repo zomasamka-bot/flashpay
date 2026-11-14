@@ -1,3 +1,4 @@
+import {decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {validateMerchantFeeQuote} from './merchant-fee-contract'
 import {financialIncomingWallet} from './financial-network'
 import {deployment} from '../deployment'
@@ -96,7 +97,7 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   for(const kind of R36_WORKER_KINDS){
    const expected=b[digestFields[kind]];if(typeof expected!=='string'||!hex.test(expected))return fail('MISSING_EVIDENCE_DIGEST')
    const e=observed.get(kind)
-   if(!obj(e)||!exact(e,['text','manifest','signature'])||typeof e.text!=='string'||e.text.length>2_000_000||!obj(e.manifest)||typeof e.signature!=='string'||hash(e.text)!==expected)return fail('EVIDENCE_ARTIFACT_INVALID')
+   if(!obj(e)||!exact(e,['text','manifest','signature'])||typeof e.text!=='string'||Buffer.byteLength(e.text)>R36_ARTIFACT_TEXT_BYTES||!obj(e.manifest)||typeof e.signature!=='string'||hash(e.text)!==expected)return fail('EVIDENCE_ARTIFACT_INVALID')
    const m=e.manifest
    if(!exact(m,evidenceFields)||!evidenceFields.every(k=>typeof m[k]==='string'&&/^[\x20-\x7e]{1,256}$/.test(m[k] as string))||m.schema!=='R36_INDEPENDENT_ARTIFACT_V1'||m.kind!==kind||m.policyDigest!==p.policyDigest||m.subjectDigest!==subject||m.artifactDigest!==expected||m.network!==b.network||m.sourceWallet!==b.sourceWallet||m.cutoffLedger!==b.cutoffLedger)return fail('EVIDENCE_SCOPE_MISMATCH')
    const roots=profile.authorities.filter(x=>obj(x)&&x.kind===kind&&x.issuerId===m.issuerId&&x.keyId===m.keyId)
@@ -107,7 +108,7 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
    if(typeof root.publicKeyPem!=='string'||typeof root.publicKeySpkiSha256!=='string')return fail('EVIDENCE_KEY_MISSING')
    const key=createPublicKey(root.publicKeyPem),sig=Buffer.from(e.signature,'base64')
    if(key.asymmetricKeyType!=='ed25519'||hash(key.export({type:'spki',format:'der'}))!==root.publicKeySpkiSha256||sig.length!==64||sig.toString('base64')!==e.signature||!verify(null,Buffer.from('FLASHpay:R36:INDEPENDENT_ARTIFACT:V1\n'+JSON.stringify(evidenceFields.map(k=>m[k]))),key,sig))return fail('EVIDENCE_SIGNATURE_INVALID')
-   const body:unknown=JSON.parse(e.text);if(!obj(body))return fail('EVIDENCE_CONTENT_INVALID');artifacts[kind]=body
+   const body:unknown=decodeR36Artifact(e.text);if(!obj(body))return fail('EVIDENCE_CONTENT_INVALID');artifacts[kind]=body
   }
   const i=artifacts.intent,f=artifacts.inbound_finality,h=artifacts.wallet_history,a=artifacts.accounting,x=artifacts.exceptions,s=artifacts.exception_isolation,g=artifacts.clearance
   const identity=['network','sourceWallet','paymentId','operationKind','operationId','preparedHash','preparedSequence','piPaymentId','u2aTxid','destinationWallet','amountStroops']

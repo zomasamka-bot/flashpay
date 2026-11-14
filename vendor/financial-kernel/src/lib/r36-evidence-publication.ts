@@ -1,3 +1,4 @@
+import {encodeR36Artifact,decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {financialNetwork} from './financial-network'
 /** Private collector -> immutable signed artifacts -> registrar handoff.
  * Technical publication is not a policy enrollment or independent certification.
@@ -65,9 +66,9 @@ function validate(b:Bundle,candidate:string,p:R36PublicationPolicy,sourceRowsDig
  const subject=sha(JSON.stringify(R36_ADMISSION_FIELDS.map(k=>b.binding[k]))),bodies:Record<string,Row>={}
  for(const kind of R36_WORKER_KINDS){const e=b.artifacts[kind],r=rootFor(p,kind,now),m=e?.manifest;must(m&&Object.keys(m).length===fields.length&&fields.every(k=>typeof m[k]==='string')&&m.schema==='R36_INDEPENDENT_ARTIFACT_V1'&&m.kind===kind&&m.policyDigest===p.policyDigest&&m.subjectDigest===subject&&m.issuerId===r.issuerId&&m.keyId===r.keyId&&m.network===b.binding.network&&m.sourceWallet===b.binding.sourceWallet&&m.cutoffLedger===b.binding.cutoffLedger,'PUBLICATION_MANIFEST')
   const start=Number(m.issuedAt),end=Number(m.expiresAt);must([start,end].every(Number.isSafeInteger)&&start>=Math.max(p.validFrom,r.validFrom)&&start<=now&&end>now&&end<=Math.min(p.validUntil,r.validUntil)&&start<=Math.min(p.revocationCheckedAt,r.revocationCheckedAt),'PUBLICATION_ARTIFACT_EXPIRED')
-  must(typeof e.text==='string'&&Buffer.byteLength(e.text)<=2_000_000&&sha(e.text)===b.binding[digests[kind]]&&m.artifactDigest===sha(e.text),'PUBLICATION_BODY_DIGEST')
+  must(typeof e.text==='string'&&Buffer.byteLength(e.text)<=R36_ARTIFACT_TEXT_BYTES&&sha(e.text)===b.binding[digests[kind]]&&m.artifactDigest===sha(e.text),'PUBLICATION_BODY_DIGEST')
   const sig=Buffer.from(e.signature,'base64');must(sig.length===64&&sig.toString('base64')===e.signature&&verify(null,bytes(m),r.publicKeyPem,sig),'PUBLICATION_SIGNATURE')
-  bodies[kind]=JSON.parse(e.text)
+  bodies[kind]=decodeR36Artifact(e.text)
  }
  must(reviewR36EvidenceSnapshot(b.binding,bodies).outcome==='VERIFIED_SNAPSHOT','PUBLICATION_FINANCIAL_EVIDENCE_INVALID')
 }
@@ -106,7 +107,7 @@ export async function publishR36LiveEvidenceJob(input:{candidateDigest:string;so
     const issued=at;must(c.policy.revocationCheckedAt>=issued&&root.revocationCheckedAt>=issued,'PUBLICATION_FRESH_REVOCATION_OBSERVATION_REQUIRED')
     // Evidence must cover the certificate created later by the registrar. Its
     // expiry is bounded by the approved roots; the issuer bounds certificate age.
-    const expires=Math.min(c.policy.validUntil,root.validUntil),text=JSON.stringify(raw[kind]);
+    const expires=Math.min(c.policy.validUntil,root.validUntil),text=encodeR36Artifact(raw[kind]);
     const manifest={schema:'R36_INDEPENDENT_ARTIFACT_V1',kind,policyDigest:c.policy.policyDigest,subjectDigest:subject,artifactDigest:sha(text),issuerId:root.issuerId,keyId:root.keyId,network:String(binding.network),sourceWallet:String(binding.sourceWallet),cutoffLedger:String(binding.cutoffLedger),issuedAt:String(issued),expiresAt:String(expires)}
     b.artifacts[kind]={text,manifest,signature:sign(null,bytes(manifest),key).toString('base64')}
    }

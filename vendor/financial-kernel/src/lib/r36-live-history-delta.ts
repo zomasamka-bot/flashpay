@@ -4,6 +4,7 @@ import {financialHorizonOrigin,financialNetwork} from './financial-network'
  * The independent snapshot reviewer still verifies XDR/results/accounting.
  */
 import type {R36ObservedHistory} from './r36-live-evidence-producer'
+import {createHash} from 'node:crypto'
 type Row=Record<string,unknown>
 const object=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v)
 const uint=(v:unknown):v is string=>typeof v==='string'&&/^(0|[1-9][0-9]{0,39})$/.test(v)
@@ -25,13 +26,25 @@ const accountIdentity=(a:Row)=>JSON.stringify([a.account_id,a.sequence,a.last_mo
 // Cache immutable operation bodies only after a complete, unchanged-account
 // observation. Every invocation still reads the current account, transaction
 // pages and cutoff ledger. This is never a cache of finality or financial rights.
-const operationBodies=new WeakMap<typeof fetch,Map<string,{at:number;body:string}>>()
+type OperationBody={at:number;body:string;bytes:number}
+type OperationCache={entries:Map<string,OperationBody>;bytes:number}
+const OPERATION_CACHE_BYTES=96*1024*1024,OPERATION_CACHE_ENTRIES=40000
+const operationBodies=new WeakMap<typeof fetch,OperationCache>()
+// Original observations only: a complete prior read is a resumable acquisition
+// cursor, not a financial clearance. The full independent reviewer still runs.
+// Re-read its original ledger hash before using the prefix. A restart, changed
+// policy/facts/provider or eviction requires fresh acquisition. A failed read
+// never advances this cursor.
+type HistoryCursor={history:R36ObservedHistory;bytes:number}
+const historyCursors=new WeakMap<typeof fetch,Map<string,HistoryCursor>>()
+const HISTORY_CURSOR_BYTES=96*1024*1024
+function removeOperation(cache:OperationCache,key:string){const old=cache.entries.get(key);if(old){cache.bytes-=old.bytes;cache.entries.delete(key)}}
 const operationKey=(t:Row)=>JSON.stringify(t)
 function currentOperations(fetcher:typeof fetch){
  let cache=operationBodies.get(fetcher)
- if(!cache){cache=new Map();operationBodies.set(fetcher,cache)}
+ if(!cache){cache={entries:new Map(),bytes:0};operationBodies.set(fetcher,cache)}
  const now=Date.now()
- for(const [key,value] of cache)if(now<value.at||now-value.at>=60000)cache.delete(key)
+ for(const [key,value] of cache.entries)if(now<value.at||now-value.at>=60000)removeOperation(cache,key)
  return cache
 }
 /** No provider next-link is followed. V1 retains its original one-page contract.
@@ -47,18 +60,25 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
  const paginated=policy.schema==='R36_HORIZON_PAGINATED_DELTA_V2'
  must(Object.keys(policy).sort().join(',')===(paginated?'maxNewTransactions,maxPages,schema':'maxNewTransactions,schema')&&
   (paginated||policy.schema==='R36_HORIZON_BOUNDED_DELTA_V1')&&Number.isSafeInteger(policy.maxNewTransactions)&&Number(policy.maxNewTransactions)>=1&&
-  Number(policy.maxNewTransactions)<=(paginated?19999:200)&&(!paginated||(Number.isSafeInteger(policy.maxPages)&&Number(policy.maxPages)>=1&&Number(policy.maxPages)<=100)), 'LIVE_HISTORY_POLICY')
- const h=JSON.parse(JSON.stringify(prefix)) as R36ObservedHistory
- must(h.network===financialNetwork()&&/^G[A-Z2-7]{55}$/.test(h.wallet)&&h.transactions.length>0&&h.transactions.length<=20000&&h.transactions.length===h.operations.length&&uint(h.cutoffLedger)&&hex(h.cutoffHash),'LIVE_HISTORY_PREFIX')
+  Number(policy.maxNewTransactions)<=(paginated?40000:200)&&(!paginated||(Number.isSafeInteger(policy.maxPages)&&Number(policy.maxPages)>=1&&Number(policy.maxPages)<=201)), 'LIVE_HISTORY_POLICY')
+ const cursorKey=createHash('sha256').update(JSON.stringify([prefix,policy])).digest('hex')
+ let cursors=historyCursors.get(fetcher);if(!cursors){cursors=new Map();historyCursors.set(fetcher,cursors)}
+ const retained=cursors.get(cursorKey)
+ const h=JSON.parse(JSON.stringify(retained?.history??prefix)) as R36ObservedHistory
+ must(h.network===financialNetwork()&&/^G[A-Z2-7]{55}$/.test(h.wallet)&&h.transactions.length>0&&h.transactions.length<=40001&&h.transactions.length===h.operations.length&&uint(h.cutoffLedger)&&hex(h.cutoffHash),'LIVE_HISTORY_PREFIX')
  const tail=h.transactions[h.transactions.length-1];must(uint(tail.paging_token)&&hex(tail.hash),'LIVE_HISTORY_ORIGINAL_CURSOR_REQUIRED')
  const before=await read(fetcher,'/accounts/'+h.wallet)
  must(before.account_id===h.wallet&&uint(String(before.last_modified_ledger)),'LIVE_HISTORY_ACCOUNT')
+ if(retained){
+  const anchor=await read(fetcher,'/ledgers/'+h.cutoffLedger)
+  must(String(anchor.sequence)===h.cutoffLedger&&anchor.hash===h.cutoffHash&&BigInt(String(before.last_modified_ledger))>=BigInt(h.cutoffLedger),'LIVE_HISTORY_RETAINED_CUTOFF_CHANGED')
+ }
  const seen=new Set(h.transactions.map(t=>t.hash));let cursor=BigInt(tail.paging_token)
  const cache=currentOperations(fetcher),observed=new Map<string,Row>()
  let added=0,complete=false
  for(let pageNumber=0;pageNumber<(paginated?Number(policy.maxPages):1);pageNumber++){
   const page=records(await read(fetcher,'/accounts/'+h.wallet+'/transactions?order=asc&limit=200&include_failed=true&cursor='+cursor))
-  must(page.length<=200&&(paginated||page.length<200)&&added+page.length<=Number(policy.maxNewTransactions)&&h.transactions.length+page.length<=20000,'LIVE_HISTORY_DELTA_BOUND')
+  must(page.length<=200&&(paginated||page.length<200)&&h.transactions.length-prefix.transactions.length+page.length<=Number(policy.maxNewTransactions)&&h.transactions.length+page.length<=40001,'LIVE_HISTORY_DELTA_BOUND')
   for(const t of page){
    must(hex(t.hash)&&!seen.has(t.hash)&&uint(t.paging_token)&&BigInt(t.paging_token)>cursor&&Number(t.operation_count)===1&&typeof t.successful==='boolean'&&uint(String(t.ledger))&&BigInt(String(t.ledger))<=BigInt(String(before.last_modified_ledger)),'LIVE_HISTORY_DELTA_IDENTITY')
    seen.add(t.hash);cursor=BigInt(t.paging_token)
@@ -69,7 +89,7 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
   for(let offset=0;offset<page.length;offset+=width){
    const batch=page.slice(offset,offset+width)
    const operations=await Promise.all(batch.map(async t=>{
-    const key=operationKey(t),cached=cache.get(key)
+    const key=operationKey(t),cached=cache.entries.get(key)
     const ops=cached?[JSON.parse(cached.body) as Row]:records(await read(fetcher,'/transactions/'+t.hash+'/operations?order=asc&limit=200&include_failed=true'))
     must(ops.length===1&&ops[0].transaction_hash===t.hash&&ops[0].transaction_successful===t.successful,'LIVE_HISTORY_OPERATION_BINDING')
     if(!cached)observed.set(key,ops[0])
@@ -78,6 +98,7 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
    h.transactions.push(...batch);h.operations.push(...operations)
   }
   added+=page.length
+  must(h.transactions.length-prefix.transactions.length<(paginated?Number(policy.maxPages):1)*200,'LIVE_HISTORY_PAGINATION_INCOMPLETE')
   if(page.length<200){complete=true;break}
  }
  must(complete,'LIVE_HISTORY_PAGINATION_INCOMPLETE')
@@ -89,7 +110,16 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
  h.cutoffLedger=cutoff;h.cutoffHash=ledger.hash;h.accountAtCutoff=after
  const inventory=h.walletInventory.filter(x=>x.wallet===h.wallet);must(inventory.length===1,'LIVE_HISTORY_INVENTORY');inventory[0].lastLedger=cutoff
  // No entries from a failed or incomplete observation can escape this call.
- for(const [key,body] of observed){cache.set(key,{at:Date.now(),body:JSON.stringify(body)});while(cache.size>512)cache.delete(cache.keys().next().value!)}
+ for(const [key,body] of observed){
+  const encoded=JSON.stringify(body),bytes=2*(Buffer.byteLength(key)+Buffer.byteLength(encoded))+256
+  // Bounded raw observations only. Keep the original 60-second lifetime and
+  // full transaction identity key; current pages/account/cutoff remain uncached.
+  if(bytes>OPERATION_CACHE_BYTES)continue
+  removeOperation(cache,key);cache.entries.set(key,{at:Date.now(),body:encoded,bytes});cache.bytes+=bytes
+  while(cache.entries.size>OPERATION_CACHE_ENTRIES||cache.bytes>OPERATION_CACHE_BYTES)removeOperation(cache,cache.entries.keys().next().value!)
+ }
+ const bytes=Buffer.byteLength(JSON.stringify(h))*2
+ if(bytes<=HISTORY_CURSOR_BYTES){cursors.delete(cursorKey);cursors.set(cursorKey,{history:JSON.parse(JSON.stringify(h)),bytes});let total=[...cursors.values()].reduce((n,x)=>n+x.bytes,0);while(total>HISTORY_CURSOR_BYTES||cursors.size>32){const key=cursors.keys().next().value!;total-=cursors.get(key)!.bytes;cursors.delete(key)}}
  return h
 }
 

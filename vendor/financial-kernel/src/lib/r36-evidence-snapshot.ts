@@ -1,3 +1,4 @@
+import {readR36ReadonlyEnvelope} from './r36-readonly-envelope'
 import {financialIncomingWallet} from './financial-network'
 import {financialNetwork} from './financial-network'
 /** NOT_FOR_DEPLOY. Full, deterministic review of independently signed artifact bodies.
@@ -23,6 +24,15 @@ export const r36SnapshotDigest=(x:unknown)=>createHash('sha256').update(JSON.str
 function requireProof(ok:unknown,reason:string):asserts ok{if(!ok)throw Error(reason)}
 function stroops(v:unknown):bigint{requireProof(typeof v==='string'&&/^(0|[1-9][0-9]*)(\.[0-9]{1,7})?$/.test(v),'INVALID_AMOUNT');const [a,b='']=v.split('.');return BigInt(a)*BigInt(10000000)+BigInt(b.padEnd(7,'0'))}
 export type R36SnapshotReview={outcome:'VERIFIED_SNAPSHOT'|'BLOCKED';reason:string;reviewDigest?:string;transactions?:number;accountingEntries?:number;isolatedExceptions?:number;authorizesFinancialRelease:false}
+type Outflow={hash:string;amount:string;fee:string;destination:string;successful:boolean}
+type VerifiedPrefix={count:number;digest:string;balance:bigint;sequence:bigint;lastLedger:bigint;seen:Set<string>;opIds:Set<string>;outgoing:Map<string,Outflow>;bytes:number}
+// A memo of deterministic history arithmetic ONLY, populated after exact review.
+// Every reuse hashes ALL supplied prefix bytes again. Old-row mutation, omission,
+// reordering or another genesis/network/wallet forces the original full review.
+// Current signatures, policy/revocation, cutoff, rights, balances, accounting and
+// intent/terminal bindings are outside this memo and are always checked anew.
+// Nothing is loaded from disk or accepted as an externally supplied checkpoint.
+const verifiedPrefixes=new Map<string,VerifiedPrefix>(),PREFIX_BUDGET=64*1024*1024
 function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolean):R36SnapshotReview{
  try{
   const h=artifacts.wallet_history,a=artifacts.accounting,x=artifacts.exceptions,s=artifacts.exception_isolation
@@ -31,7 +41,7 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
   requireProof(h.schema==='R36_COMPLETE_HISTORY_V1'&&a.schema==='R36_ACCOUNTING_CLEARANCE_V1'&&a.unbalancedStroops==='0'&&Array.isArray(a.duplicateFinancialKeys)&&a.duplicateFinancialKeys.length===0&&Array.isArray(a.xorViolations)&&a.xorViolations.length===0&&x.schema==='R36_HISTORICAL_EXCEPTIONS_V1'&&s.schema==='R36_EXCEPTION_ISOLATION_V1'&&s.disposition==='ISOLATED_NO_CURRENT_RIGHTS_IMPACT'&&s.currentRightsDigest===a.currentRightsDigest,'WALLET_CLEARANCE_CONTRACT')
   requireProof(history.schema==='R36_COMPLETE_WALLET_SNAPSHOT_V1'&&accounting.schema==='R36_ACCOUNTING_SNAPSHOT_V1','SNAPSHOT_SCHEMA')
   requireProof(history.network===binding.network&&history.wallet===binding.sourceWallet&&history.cutoffLedger===binding.cutoffLedger&&history.cutoffHash===h.cutoffHash&&wallet(history.wallet),'SNAPSHOT_SCOPE')
-  requireProof(uint(history.cutoffLedger)&&list(history.walletInventory)&&history.walletInventory.length>0&&list(history.transactions)&&object(history.genesis)&&list(accounting.entries)&&list(accounting.merchantBalances)&&list(accounting.openObligations)&&list(x.records)&&list(s.records),'SNAPSHOT_ROWS')
+  requireProof(uint(history.cutoffLedger)&&list(history.walletInventory)&&history.walletInventory.length>0&&Array.isArray(history.transactions)&&history.transactions.length<=40000&&history.transactions.every(object)&&object(history.genesis)&&list(accounting.entries)&&list(accounting.merchantBalances)&&list(accounting.openObligations)&&list(x.records)&&list(s.records),'SNAPSHOT_ROWS')
   const inventory=new Set<string>()
   for(const w of history.walletInventory){requireProof(wallet(w.wallet)&&uint(w.firstLedger)&&uint(w.lastLedger)&&BigInt(w.lastLedger)>=BigInt(w.firstLedger)&&!inventory.has(w.wallet),'WALLET_INVENTORY_INVALID');inventory.add(w.wallet)}
   requireProof(inventory.has(history.wallet)&&h.controlledWalletsInventoryDigest===r36SnapshotDigest(history.walletInventory),'WALLET_INVENTORY_DIGEST')
@@ -39,8 +49,8 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
   requireProof(range.firstLedger===h.genesisLedger&&range.lastLedger===history.cutoffLedger,'WALLET_INVENTORY_RANGE')
   const genesis=history.genesis
   requireProof(genesis.ledger===h.genesisLedger&&uint(genesis.ledger)&&Number.isSafeInteger(Number(genesis.ledger))&&Number(genesis.ledger)>0&&hex(genesis.hash)&&typeof genesis.envelopeXdr==='string'&&typeof genesis.resultXdr==='string'&&uint(genesis.feeStroops),'GENESIS_REQUIRED')
-  const created=TransactionBuilder.fromXDR(genesis.envelopeXdr,financialNetwork())
-  requireProof(created instanceof Transaction&&created.toXDR()===genesis.envelopeXdr&&Buffer.from(created.hash()).toString('hex')===genesis.hash&&created.operations.length===1,'GENESIS_XDR')
+  const created=readR36ReadonlyEnvelope(genesis.envelopeXdr,financialNetwork())
+  requireProof(created.isTransaction&&created.canonical===genesis.envelopeXdr&&created.hash===genesis.hash&&created.operations.length===1,'GENESIS_XDR')
   const creation=created.operations[0]
   requireProof(creation.type==='createAccount'&&creation.destination===history.wallet&&created.source!==history.wallet,'GENESIS_OPERATION')
   if(creation.source!==undefined){
@@ -55,9 +65,12 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
   const gres=gr.result as unknown as Row
   requireProof(gr.toXDR('base64')===genesis.resultXdr&&gr.feeCharged.toString()===genesis.feeStroops&&gres.type==='txSuccess'&&decodedList(gres.results)&&gres.results.length===1,'GENESIS_RESULT')
   const go=gres.results[0];requireProof(go.type==='opInner'&&decoded(go.tr)&&go.tr.type==='createAccount'&&decoded(go.tr.createAccountResult)&&go.tr.createAccountResult.type==='createAccountSuccess','GENESIS_RESULT_OPERATION')
-  let balance=stroops(creation.startingBalance),sequence=BigInt(genesis.ledger)*BigInt(4294967296),lastLedger=BigInt(genesis.ledger)
-  const seen=new Set<string>(),opIds=new Set<string>(),outgoing=new Map<string,{hash:string;amount:string;fee:string;destination:string;successful:boolean}>()
-  for(const t of history.transactions){
+  const prefixKey=r36SnapshotDigest([financialNetwork(),history.wallet,genesis]),candidate=verifiedPrefixes.get(prefixKey)
+  const checkpoint=candidate&&candidate.count<=history.transactions.length&&r36SnapshotDigest(history.transactions.slice(0,candidate.count))===candidate.digest?candidate:undefined
+  let balance=checkpoint?.balance??stroops(creation.startingBalance),sequence=checkpoint?.sequence??BigInt(genesis.ledger)*BigInt(4294967296),lastLedger=checkpoint?.lastLedger??BigInt(genesis.ledger)
+  requireProof(BigInt(history.cutoffLedger)>=lastLedger,'TRANSACTION_LEDGER_ORDER')
+  const seen=new Set<string>(checkpoint?.seen),opIds=new Set<string>(checkpoint?.opIds),outgoing=new Map<string,Outflow>(checkpoint?.outgoing)
+  for(const t of history.transactions.slice(checkpoint?.count??0)){
    requireProof(object(t.input)&&object(t.record)&&uint(t.operationId)&&t.operationId!=='0','TRANSACTION_SHAPE')
    const i=t.input,r=t.record
    requireProof(i.network===financialNetwork()&&hex(i.preparedHash)&&typeof i.envelopeXdr==='string'&&uint(i.preparedSequence)&&wallet(i.sourceWallet)&&wallet(i.destinationWallet)&&uint(i.expectedFeeStroops),'TRANSACTION_INPUT')
@@ -67,10 +80,10 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
    // Horizon operation ID: high 32 bits identify the containing ledger.
    requireProof(BigInt(t.operationId)/BigInt(4294967296)===BigInt(ledger),'OPERATION_LEDGER_MISMATCH')
    requireProof(i.sourceWallet===history.wallet||i.destinationWallet===history.wallet,'FOREIGN_WALLET_RECORD')
-   const parsed=TransactionBuilder.fromXDR(i.envelopeXdr,financialNetwork())
-   requireProof(parsed instanceof Transaction&&parsed.toXDR()===i.envelopeXdr&&Buffer.from(parsed.hash()).toString('hex')===i.preparedHash&&parsed.source===i.sourceWallet&&parsed.sequence===i.preparedSequence&&parsed.operations.length===1,'HISTORY_XDR_IDENTITY')
+   const parsed=readR36ReadonlyEnvelope(i.envelopeXdr,financialNetwork())
+   requireProof(parsed.isTransaction&&parsed.canonical===i.envelopeXdr&&parsed.hash===i.preparedHash&&parsed.source===i.sourceWallet&&parsed.sequence===i.preparedSequence&&parsed.operations.length===1,'HISTORY_XDR_IDENTITY')
    const op=parsed.operations[0]
-   requireProof(op.type==='payment'&&op.source===undefined&&op.asset.isNative()&&op.destination===i.destinationWallet&&stroops(op.amount)===stroops(i.amount),'HISTORY_OPERATION')
+   requireProof(op.type==='payment'&&op.source===undefined&&op.nativeAsset&&op.destination===i.destinationWallet&&stroops(op.amount)===stroops(i.amount),'HISTORY_OPERATION')
    requireProof(r.hash===i.preparedHash&&r.source_account===i.sourceWallet&&String(r.source_account_sequence)===i.preparedSequence&&r.envelope_xdr===i.envelopeXdr&&String(r.fee_charged)===i.expectedFeeStroops&&typeof r.result_xdr==='string','HISTORY_RECORD_IDENTITY')
    if(i.sourceWallet===history.wallet){requireProof(BigInt(i.preparedSequence)===sequence+BigInt(1),'OUTBOUND_SEQUENCE_GAP');sequence++;balance-=BigInt(i.expectedFeeStroops)}
    if(r.successful===true){
@@ -133,6 +146,8 @@ function reviewWallet(binding:Row,artifacts:Record<string,Row>,bindIntent:boolea
   requireProof(a.pgSnapshotDigest===r36SnapshotDigest(accounting)&&a.currentRightsDigest===r36SnapshotDigest(accounting.openObligations)&&x.recordsDigest===r36SnapshotDigest(x.records)&&s.evidenceDigest===r36SnapshotDigest(s.records),'SNAPSHOT_ACCOUNTING_DIGEST')
   const reviewDigest=r36SnapshotDigest({history:h.transactionsDigest,accounting:a.pgSnapshotDigest,exceptions:x.recordsDigest,isolation:s.evidenceDigest,scope:[binding.network,binding.sourceWallet,binding.cutoffLedger]})
   requireProof(a.reconciliationDigest===reviewDigest,'RECONCILIATION_DIGEST')
+  const bytes=seen.size*200+opIds.size*100+outgoing.size*512+1024
+  if(bytes<=PREFIX_BUDGET&&history.transactions.length>=(verifiedPrefixes.get(prefixKey)?.count??0)){verifiedPrefixes.delete(prefixKey);verifiedPrefixes.set(prefixKey,{count:history.transactions.length,digest:String(h.transactionsDigest),balance,sequence,lastLedger,seen,opIds,outgoing,bytes});let total=[...verifiedPrefixes.values()].reduce((n,p)=>n+p.bytes,0);while(total>PREFIX_BUDGET||verifiedPrefixes.size>32){const key=verifiedPrefixes.keys().next().value!;total-=verifiedPrefixes.get(key)!.bytes;verifiedPrefixes.delete(key)}}
   return{outcome:'VERIFIED_SNAPSHOT',reason:'SIGNED_SCOPE_EXACT_HISTORY_ACCOUNTING_AND_ISOLATION',reviewDigest,transactions:seen.size,accountingEntries:entryIds.size,isolatedExceptions:exceptionIds.size,authorizesFinancialRelease:false}
  }catch(e){return{outcome:'BLOCKED',reason:e instanceof Error?e.message:'SNAPSHOT_REVIEW_FAILED',authorizesFinancialRelease:false}}
 }

@@ -12,7 +12,7 @@ const flags={authorizesFinancialRelease:false,authorizesSubmission:false,indepen
 const units=(v:unknown)=>{if(typeof v==='number'){const x=numberToExactPositiveStroops(v);if(x!==null)return String(x)}if(typeof v==='string'&&/^(0|[1-9]\d*)(\.\d{1,18})?$/.test(v)){const[a,b='']=v.split('.');if(!/^0*$/.test(b.slice(7)))throw Error('TERMINAL_AMOUNT_PRECISION');return String(BigInt(a)*BigInt(10000000)+BigInt(b.slice(0,7).padEnd(7,'0')))}throw Error('TERMINAL_AMOUNT')}
 export function produceR36TerminalEvidence(input:{context:Row;snapshot:R36LiveSnapshot;histories:R36ObservedHistory[];outboundPi:Row;exceptions:{records:Row[];isolation:Row[]};executionScopeDigest?:string}){
  try{
-  if(Buffer.byteLength(JSON.stringify(input))>48_000_000)throw Error('TERMINAL_SOURCE_SIZE')
+  if(Buffer.byteLength(JSON.stringify(input))>128_000_000)throw Error('TERMINAL_SOURCE_SIZE')
   const q=JSON.parse(JSON.stringify(input)) as typeof input,c=q.context,prior=c.prior as Row,seal=c.seal as Row,t=c.terminal as Row,p=c.policy as Row;
   must(object(prior)&&object(seal)&&object(t)&&object(p)&&object(p.worker_profile)&&typeof c.contextDigest==='string'&&/^[0-9a-f]{64}$/.test(c.contextDigest),'TERMINAL_PROTECTED_CONTEXT')
   const wallet=String(prior.source_wallet),paymentId=String(prior.owner_payment_id),kind=String(prior.operation_kind),profile=p.worker_profile as Row

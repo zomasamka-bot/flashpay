@@ -1,9 +1,9 @@
+import {readR36ReadonlyEnvelope} from './r36-readonly-envelope'
 import {type FinancialNetwork,financialNetwork,financialHorizonOrigin} from './financial-network'
 /** R36 independent Horizon evidence check. READ-ONLY, never authorizes rotation.
  * The result is diagnostic evidence, NOT a durable approval. The caller must
  * independently verify PostgreSQL accounting and historical wallet inventory.
  */
-import { Asset, Transaction, TransactionBuilder } from '@stellar/stellar-sdk'
 import { verifyR36TransactionResultXdr } from './r36-transaction-result-evidence'
 
 export type R36HorizonProofInput = Readonly<{
@@ -33,13 +33,13 @@ export function verifyR36IndependentHorizonRecord(input: R36HorizonProofInput, r
       !/^G[A-Z2-7]{55}$/.test(input.destinationWallet) || !/^(0|[1-9]\d*)$/.test(input.expectedFeeStroops) ||
       decimal(input.amount) === null || !input.envelopeXdr) return blocked('INVALID_INPUT')
   try {
-    const parsed = TransactionBuilder.fromXDR(input.envelopeXdr, input.network)
-    if (!(parsed instanceof Transaction) || parsed.toXDR() !== input.envelopeXdr ||
-        Buffer.from(parsed.hash()).toString('hex') !== input.preparedHash ||
+    const parsed = readR36ReadonlyEnvelope(input.envelopeXdr, input.network)
+    if (!parsed.isTransaction || parsed.canonical !== input.envelopeXdr ||
+        parsed.hash !== input.preparedHash ||
         parsed.source !== input.sourceWallet || parsed.sequence !== input.preparedSequence ||
         parsed.operations.length !== 1) return blocked('PREPARED_XDR_MISMATCH')
     const op = parsed.operations[0]
-    if (op.type !== 'payment' || op.source !== undefined || !(op.asset instanceof Asset) || !op.asset.isNative() ||
+    if (op.type !== 'payment' || op.source !== undefined || !op.assetIsSdk || !op.nativeAsset ||
         op.destination !== input.destinationWallet || decimal(op.amount) !== decimal(input.amount)) return blocked('PAYMENT_INTENT_MISMATCH')
     if (record.hash !== input.preparedHash || record.successful !== true ||
         record.source_account !== input.sourceWallet || String(record.source_account_sequence) !== input.preparedSequence ||

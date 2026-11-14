@@ -1,3 +1,4 @@
+import {encodeR36Artifact,decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {financialNetwork} from './financial-network'
 /** Private durable lifecycle observations. New observations may renew PRIOR
  * evidence; an exact successor nonce is frozen once. Never signs a transaction. */
@@ -32,7 +33,7 @@ export async function publishR36LifecycleJob(input:{kind:'prior'|'bound';context
    const at=now();p=await fresh();const key=createPrivateKey(q.privateKeyPem),pin=sha(createPublicKey(key).export({type:'spki',format:'der'})),bundle:Row={}
    must(key.asymmetricKeyType==='ed25519'&&obj(q.context.prior),'LIFECYCLE_SIGNING_KEY')
    for(const k of ks){const root=rootFor(p,k,now());must(root.publicKeySpkiSha256===pin&&p.revocationCheckedAt>=at&&root.revocationCheckedAt>=at,'LIFECYCLE_CUSTODIAN_OR_FRESHNESS')
-    const text=JSON.stringify(q.artifacts[k]);must(Buffer.byteLength(text)<=2_000_000,'LIFECYCLE_ARTIFACT_SIZE')
+    const text=encodeR36Artifact(q.artifacts[k]);must(Buffer.byteLength(text)<=R36_ARTIFACT_TEXT_BYTES,'LIFECYCLE_ARTIFACT_SIZE')
     const manifest={schema:'R36_INDEPENDENT_ARTIFACT_V1',kind:k,policyDigest:p.policyDigest,subjectDigest:subject,artifactDigest:sha(text),issuerId:root.issuerId,keyId:root.keyId,network:financialNetwork(),sourceWallet:String(q.context.prior.source_wallet),cutoffLedger:q.cutoffLedger,issuedAt:String(at),expiresAt:String(Math.min(p.validUntil,root.validUntil))}
     bundle[k]={text,manifest,signature:sign(null,bytes(manifest),key).toString('base64')}
    }
@@ -46,7 +47,8 @@ export async function publishR36LifecycleJob(input:{kind:'prior'|'bound';context
   const bundle=stored!.bundle as Row
   must(Object.keys(bundle).sort().join()===ks.slice().sort().join(),'LIFECYCLE_BUNDLE_KINDS')
   for(const k of ks){const root=rootFor(p,k,now()),e=bundle[k] as Row,m=e?.manifest as Record<string,string>,sig=typeof e?.signature==='string'?Buffer.from(e.signature,'base64'):Buffer.alloc(0)
-   must(obj(e)&&obj(m)&&m.policyDigest===p.policyDigest&&m.subjectDigest===subject&&m.kind===k&&m.issuerId===root.issuerId&&m.keyId===root.keyId&&m.sourceWallet===(q.context.prior as Row).source_wallet&&m.network===financialNetwork()&&m.cutoffLedger===q.cutoffLedger&&e.text===JSON.stringify(q.artifacts[k])&&m.artifactDigest===sha(String(e.text))&&Number(m.issuedAt)<=Math.min(now(),p.revocationCheckedAt,root.revocationCheckedAt)&&Number(m.expiresAt)>now()&&sig.length===64&&sig.toString('base64')===e.signature&&verify(null,bytes(m),root.publicKeyPem,sig),'LIFECYCLE_STORED_SIGNATURE_INVALID')
+   must(obj(e)&&obj(m)&&m.policyDigest===p.policyDigest&&m.subjectDigest===subject&&m.kind===k&&m.issuerId===root.issuerId&&m.keyId===root.keyId&&m.sourceWallet===(q.context.prior as Row).source_wallet&&m.network===financialNetwork()&&m.cutoffLedger===q.cutoffLedger&&typeof e.text==='string'&&Buffer.byteLength(e.text)<=R36_ARTIFACT_TEXT_BYTES&&m.artifactDigest===sha(String(e.text))&&Number(m.issuedAt)<=Math.min(now(),p.revocationCheckedAt,root.revocationCheckedAt)&&Number(m.expiresAt)>now()&&sig.length===64&&sig.toString('base64')===e.signature&&verify(null,bytes(m),root.publicKeyPem,sig),'LIFECYCLE_STORED_SIGNATURE_INVALID')
+   must(JSON.stringify(decodeR36Artifact(String(e.text)))===JSON.stringify(q.artifacts[k]),'LIFECYCLE_STORED_CONTENT_INVALID')
   }
   const out=await ports.submit({...q.request,subjectDigest:subject,bundle})
   must(['RECORDED','REPLAYED'].includes(String(out.outcome))&&hex(out.proofDigest)&&out.financialAuthority===false&&out.financialSubmission===false,'LIFECYCLE_ISSUER_NOT_CONFIRMED_RETRY_SAME_JOB')

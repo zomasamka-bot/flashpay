@@ -1,6 +1,7 @@
 import {financialNetwork} from './financial-network'
 import {verifyDatabaseBinding} from '../deployment'
 import {deployment} from '../deployment'
+import {readR36VersionedRows} from './r36-source-row-reuse'
 /** Private read-only source adapter. No business functions, Redis, signing or DML.
  * The connection adapter must start REPEATABLE READ READ ONLY on one physical
  * connection. Diagnostic owner reads can collect facts, never establish custody.
@@ -33,8 +34,8 @@ async function checkedRead<T>(db:R36ReadOnlySource,mode:'diagnostic'|'service',r
    const privileges=await tx.unsafe(`SELECT NOT (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls)
     AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid)
     AND NOT has_database_privilege(r.oid,current_database(),'CREATE')
-    AND NOT EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname IN ('public','r36_signing','r36_registration') AND has_schema_privilege(r.oid,n.oid,'CREATE'))
-    AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','r36_signing','r36_registration') AND c.relkind IN ('r','p','v','m','f') AND (has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') OR has_any_column_privilege(r.oid,c.oid,'INSERT,UPDATE,REFERENCES')))
+    AND NOT EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname IN ('public','r36_signing','r36_registration','r36_evidence_source') AND has_schema_privilege(r.oid,n.oid,'CREATE'))
+    AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','r36_signing','r36_registration','r36_evidence_source') AND c.relkind IN ('r','p','v','m','f') AND (has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') OR has_any_column_privilege(r.oid,c.oid,'INSERT,UPDATE,REFERENCES')))
     AND NOT EXISTS(SELECT 1 FROM pg_proc f JOIN pg_namespace n ON n.oid=f.pronamespace WHERE n.nspname IN ('public','r36_signing','r36_registration') AND has_function_privilege(r.oid,f.oid,'EXECUTE')) restricted
     FROM pg_roles r WHERE r.rolname=current_user`)
    if(privileges.length!==1||privileges[0].restricted!==true)throw Error('SOURCE_READONLY_ACL')
@@ -69,16 +70,26 @@ export async function readR36LiveSource(db:R36ReadOnlySource,mode:'diagnostic'|'
  return checkedRead(db,mode,async(tx,s)=>{
   const data={} as R36LiveSnapshot['rows'];let size=0
   const names=Object.keys(R36_SOURCE_QUERIES) as (keyof typeof R36_SOURCE_QUERIES)[]
+  // Include catalog identity and server lifetime: a rewrite, type/default change
+  // or server restart cannot make an old tuple version stand for different data.
+  const schemas=await tx.unsafe(`SELECT pg_postmaster_start_time()::text AS started,
+   md5(coalesce(string_agg(row_to_json(d)::text,',' ORDER BY d.oid,d.attnum),'')) AS schema
+   FROM (SELECT c.oid,c.relfilenode,CASE WHEN c.relkind='v' THEN pg_get_viewdef(c.oid) ELSE NULL END AS viewdef,a.attnum,a.attname,a.atttypid,a.atttypmod,a.attisdropped,a.atthasmissing,a.attmissingval,
+    (SELECT jsonb_agg(to_jsonb(e) ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid=a.atttypid) AS labels
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid
+    WHERE n.nspname IN ('public','r36_evidence_source') AND c.relname IN ('payment_create_intents','settlement_checkpoints','refund_checkpoints','transactions','receipts','refund_accounting_records','refund_audit_events','merchant_balances','financial_wallet_authorities','financial_wallet_authority_history','r36_wallet_execution_scopes','r36_legacy_right_holds')) d`)
+  if(schemas.length!==1||typeof schemas[0].started!=='string'||typeof schemas[0].schema!=='string')throw Error('SOURCE_VERSION_CATALOG')
+  const versionSession={...s,version_scope:JSON.stringify([s.database,s.branch,schemas[0]])}
   // Pipeline fixed independent SELECTs on the SAME checked physical snapshot.
   // No pool expansion, SQL change, row coercion or identity/ACL bypass.
   for(let offset=0;offset<names.length;offset+=4){
    const group=names.slice(offset,offset+4)
-   const results=await Promise.allSettled(group.map(name=>tx.unsafe(R36_SOURCE_QUERIES[name])))
+   const results=await Promise.allSettled(group.map(name=>readR36VersionedRows(db,tx,R36_SOURCE_QUERIES[name],versionSession)))
    for(let index=0;index<group.length;index++){
    const result=results[index];if(result.status==='rejected')throw result.reason
    const name=group[index],value=result.value
    if(!Array.isArray(value)||value.length>20000||value.some(r=>!r||typeof r!=='object'||Array.isArray(r)))throw Error('SOURCE_ROWS_BOUNDED')
-   size+=Buffer.byteLength(JSON.stringify(value));if(size>40_000_000)throw Error('SOURCE_BYTES_BOUNDED')
+   size+=Buffer.byteLength(JSON.stringify(value));if(size>96_000_000)throw Error('SOURCE_BYTES_BOUNDED')
    data[name]=name==='settlements'?value.map(row=>{if(row.financial_contract===null){const {financial_contract,...legacy}=row;return legacy}return row}):value
    }
   }

@@ -2047,7 +2047,7 @@ ALTER FUNCTION public.r36_renewal_registration_state(p_policy text, p_nonce text
 -- Name: r36_renewal_unspent(text); Type: FUNCTION; Schema: public; Owner: r36_owner
 --
 
-CREATE FUNCTION public.r36_renewal_unspent(p_nonce text) RETURNS boolean
+CREATE OR REPLACE FUNCTION public.r36_renewal_unspent(p_nonce text) RETURNS boolean
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'pg_catalog', 'pg_temp'
     AS $$
@@ -2058,9 +2058,10 @@ BEGIN
  WHERE q.nonce=p_nonce FOR UPDATE OF q;
  IF NOT FOUND OR EXISTS(SELECT 1 FROM public.r36_certificate_revocations WHERE payload_digest=original) THEN RETURN false; END IF;
  SELECT * INTO g FROM public.financial_wallet_activation WHERE network=b->>'network' AND source_wallet=b->>'sourceWallet' FOR UPDATE;
- IF NOT FOUND OR g.state<>'enabled' OR g.clearance_digest IS DISTINCT FROM b->>'clearanceDigest' THEN RETURN false; END IF;
+ IF NOT FOUND OR g.state<>'enabled' THEN RETURN false; END IF;
  SELECT * INTO a FROM public.financial_wallet_authorities WHERE network=g.network AND source_wallet=g.source_wallet FOR UPDATE;
  IF FOUND AND a.owner_payment_id IS DISTINCT FROM b->>'paymentId' THEN RETURN public.r36_unspent_successor(p_nonce); END IF;
+ IF g.clearance_digest IS DISTINCT FROM b->>'clearanceDigest' THEN RETURN false; END IF;
  IF NOT FOUND OR a.state<>'prepared' OR (a.owner_payment_id,a.operation_kind,a.owner_operation_id,a.prepared_tx_hash,a.prepared_sequence)
  IS DISTINCT FROM (b->>'paymentId',b->>'operationKind',b->>'operationId',b->>'preparedHash',b->>'preparedSequence') THEN RETURN false; END IF;
  IF EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts t WHERE t.network=a.network AND
@@ -2703,46 +2704,109 @@ ALTER FUNCTION public.r36_terminal_review_context(p_policy text, p_wallet text, 
 -- Name: r36_unspent_successor(text); Type: FUNCTION; Schema: public; Owner: r36_owner
 --
 
-CREATE FUNCTION public.r36_unspent_successor(p_nonce text) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-DECLARE b jsonb; original text; a public.financial_wallet_authorities; s public.settlement_checkpoints; l public.r36_lifecycle_approval_links; candidate jsonb;
+CREATE OR REPLACE FUNCTION public.r36_unspent_successor(p_nonce text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE b jsonb; original text; policy_id text; a public.financial_wallet_authorities;
+ s public.settlement_checkpoints; r public.refund_checkpoints;
+ l public.r36_lifecycle_approval_links; candidate jsonb; g public.financial_wallet_activation;
 BEGIN
  IF session_user NOT IN ('r36_registrar','r36_issuer') THEN RETURN false; END IF;
- SELECT q.binding,c.payload_digest INTO b,original FROM public.r36_certificate_requests q JOIN public.r36_certificate_receipts c USING(nonce) WHERE q.nonce=p_nonce FOR UPDATE OF q;
- IF NOT FOUND OR b->>'network'<>public.r36_network() OR b->>'operationKind'<>'settlement'
- OR EXISTS(SELECT 1 FROM public.r36_certificate_revocations WHERE payload_digest=original) THEN RETURN false; END IF;
- SELECT * INTO a FROM public.financial_wallet_authorities WHERE network=b->>'network' AND source_wallet=b->>'sourceWallet' FOR UPDATE;
- IF NOT FOUND OR a.state<>'prepared' OR a.owner_payment_id=b->>'paymentId' OR a.prepared_sequence::numeric+1<>(b->>'preparedSequence')::numeric THEN RETURN false; END IF;
+ SELECT q.binding,c.payload_digest,q.policy_digest INTO b,original,policy_id
+ FROM public.r36_certificate_requests q JOIN public.r36_certificate_receipts c USING(nonce)
+ WHERE q.nonce=p_nonce FOR UPDATE OF q;
+ IF NOT FOUND OR b->>'network' IS DISTINCT FROM public.r36_network()
+ OR b->>'operationKind' NOT IN ('settlement','refund')
+ OR EXISTS(SELECT 1 FROM public.r36_certificate_revocations WHERE payload_digest=original)
+ OR EXISTS(SELECT 1 FROM public.r36_legacy_right_holds h WHERE
+  b->>'paymentId'=ANY(h.identity_values) OR b->>'operationId'=ANY(h.identity_values)
+  OR b->>'preparedHash'=ANY(h.identity_values)) THEN RETURN false; END IF;
+ SELECT * INTO g FROM public.financial_wallet_activation
+ WHERE network=b->>'network' AND source_wallet=b->>'sourceWallet' FOR UPDATE;
+ IF NOT FOUND OR g.state<>'enabled' THEN RETURN false; END IF;
+ SELECT * INTO a FROM public.financial_wallet_authorities
+ WHERE network=g.network AND source_wallet=g.source_wallet FOR UPDATE;
+ IF NOT FOUND OR a.state<>'prepared' OR a.owner_payment_id=b->>'paymentId'
+ OR a.prepared_sequence::numeric+1<>(b->>'preparedSequence')::numeric
+ OR NOT EXISTS(SELECT 1 FROM public.financial_wallet_finality_seals f WHERE
+  (f.network,f.source_wallet,f.owner_payment_id,f.operation_kind,f.owner_operation_id,f.prepared_tx_hash,f.prepared_sequence)
+  =(a.network,a.source_wallet,a.owner_payment_id,a.operation_kind,a.owner_operation_id,a.prepared_tx_hash,a.prepared_sequence))
+ THEN RETURN false; END IF;
  SELECT * INTO l FROM public.r36_lifecycle_approval_links WHERE successor_nonce=p_nonce FOR SHARE;
- IF NOT FOUND OR l.next_clearance_digest IS DISTINCT FROM b->>'clearanceDigest' OR NOT EXISTS(
- SELECT 1 FROM public.r36_wallet_successor_requests x JOIN public.r36_signed_approval_consumptions v USING(approval_id)
- JOIN public.financial_wallet_rotation_approvals o USING(approval_id)
- JOIN public.r36_prior_closure_receipts c ON c.payload_digest=l.closure_digest
- WHERE x.approval_id=l.approval_id AND x.successor_nonce=p_nonce AND x.consumed_at IS NULL AND v.consumed_at IS NULL AND o.consumed_at IS NULL
- AND NOT c.revoked AND c.prior_payment=a.owner_payment_id AND c.prior_hash=a.prepared_tx_hash
- AND (v.network,v.wallet,v.prior_payment,v.kind,v.prior_operation,v.prior_hash,v.prior_sequence)
- =(a.network,a.source_wallet,a.owner_payment_id,a.operation_kind,a.owner_operation_id,a.prepared_tx_hash,a.prepared_sequence::numeric)) THEN RETURN false; END IF;
- IF NOT EXISTS(SELECT 1 FROM public.financial_wallet_activation WHERE network=a.network AND source_wallet=a.source_wallet AND state='enabled' AND clearance_digest=b->>'clearanceDigest') THEN RETURN false; END IF;
+ IF FOUND THEN
+  -- Already bound: retain the exact original unconsumed approval and clearance.
+  IF l.next_clearance_digest IS DISTINCT FROM b->>'clearanceDigest'
+  OR g.clearance_digest IS DISTINCT FROM b->>'clearanceDigest'
+  OR NOT EXISTS(SELECT 1 FROM public.r36_wallet_successor_requests x
+   JOIN public.r36_signed_approval_consumptions v USING(approval_id)
+   JOIN public.financial_wallet_rotation_approvals o USING(approval_id)
+   JOIN public.r36_prior_closure_receipts c ON c.payload_digest=l.closure_digest
+   WHERE x.approval_id=l.approval_id AND x.successor_nonce=p_nonce
+   AND x.consumed_at IS NULL AND v.consumed_at IS NULL AND o.consumed_at IS NULL
+   AND NOT c.revoked AND c.prior_payment=a.owner_payment_id AND c.prior_hash=a.prepared_tx_hash
+   AND (v.network,v.wallet,v.prior_payment,v.kind,v.prior_operation,v.prior_hash,v.prior_sequence)
+    =(a.network,a.source_wallet,a.owner_payment_id,a.operation_kind,a.owner_operation_id,a.prepared_tx_hash,a.prepared_sequence::numeric))
+  THEN RETURN false; END IF;
+ ELSE
+  -- Not bound: only renew evidence for the same unspent next identity. The
+  -- current clearance must still belong to the sealed prior owner; no transfer.
+  IF EXISTS(SELECT 1 FROM public.r36_wallet_successor_requests WHERE successor_nonce=p_nonce)
+  OR NOT EXISTS(SELECT 1 FROM public.r36_certificate_requests q
+   JOIN public.r36_certificate_receipts c USING(nonce)
+   WHERE q.policy_digest=policy_id AND q.binding->>'clearanceDigest'=g.clearance_digest
+   AND (q.binding->>'network',q.binding->>'sourceWallet',q.binding->>'paymentId',q.binding->>'operationKind',
+        q.binding->>'operationId',q.binding->>'preparedHash',q.binding->>'preparedSequence')
+    =(a.network,a.source_wallet,a.owner_payment_id,a.operation_kind,a.owner_operation_id,a.prepared_tx_hash,a.prepared_sequence)
+   AND NOT EXISTS(SELECT 1 FROM public.r36_certificate_revocations v WHERE v.payload_digest=c.payload_digest))
+  THEN RETURN false; END IF;
+ END IF;
  SELECT * INTO s FROM public.settlement_checkpoints WHERE payment_id=b->>'paymentId' FOR SHARE;
- IF NOT FOUND OR s.stage<>'a2u_created' OR s.u2a_identifier IS DISTINCT FROM b->>'piPaymentId' OR s.u2a_txid IS DISTINCT FROM b->>'u2aTxid'
- OR s.u2a_verified_at IS NULL OR s.u2a_completed_at IS NULL OR public.r36_contract_outgoing_stroops(s.payment_id,b->>'operationKind') IS DISTINCT FROM b->>'amountStroops'
- OR NOT public.r36_contract_valid(to_jsonb(s)) OR s.a2u_payment_id IS DISTINCT FROM b->>'operationId'
- OR s.a2u_to_address IS DISTINCT FROM b->>'destinationWallet' OR s.prepared_tx_hash IS NOT NULL OR s.prepared_sequence IS NOT NULL OR s.prepared_envelope_xdr IS NOT NULL
- OR s.a2u_txid IS NOT NULL OR s.horizon_confirmed_at IS NOT NULL OR s.pi_completed_at IS NOT NULL OR s.db_finalized_at IS NOT NULL THEN RETURN false; END IF;
- SELECT c.candidate INTO candidate FROM public.r36_prepared_evidence_candidates c WHERE c.payment_id=s.payment_id AND c.network=a.network AND c.source_wallet=a.source_wallet AND c.prepared_sequence=b->>'preparedSequence';
- IF NOT FOUND OR candidate->>'preparedHash' IS DISTINCT FROM b->>'preparedHash' OR candidate->>'signedEnvelopeSha256' IS DISTINCT FROM b->>'envelopeXdrTextSha256'
- OR candidate->'identity'->>'paymentId' IS DISTINCT FROM b->>'paymentId' OR candidate->'identity'->>'operationId' IS DISTINCT FROM b->>'operationId'
- OR candidate->'identity'->>'destinationWallet' IS DISTINCT FROM b->>'destinationWallet' OR candidate->'identity'->>'amountStroops' IS DISTINCT FROM b->>'amountStroops' THEN RETURN false; END IF;
- IF EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts WHERE network=a.network AND (owner_payment_id=s.payment_id OR source_wallet=a.source_wallet AND (prepared_tx_hash=b->>'preparedHash' OR prepared_sequence=b->>'preparedSequence')))
- OR EXISTS(SELECT 1 FROM public.financial_wallet_authority_history WHERE network=a.network AND source_wallet=a.source_wallet AND (owner_payment_id=s.payment_id OR prepared_tx_hash=b->>'preparedHash' OR prepared_sequence=b->>'preparedSequence'))
+ IF NOT FOUND OR s.u2a_identifier IS DISTINCT FROM b->>'piPaymentId' OR s.u2a_txid IS DISTINCT FROM b->>'u2aTxid'
+ OR s.u2a_verified_at IS NULL OR s.u2a_completed_at IS NULL OR NOT public.r36_contract_valid(to_jsonb(s))
+ OR public.r36_contract_outgoing_stroops(s.payment_id,b->>'operationKind') IS DISTINCT FROM b->>'amountStroops'
+ OR s.a2u_txid IS NOT NULL OR s.horizon_confirmed_at IS NOT NULL OR s.pi_completed_at IS NOT NULL
+ OR s.db_finalized_at IS NOT NULL THEN RETURN false; END IF;
+ SELECT c.candidate INTO candidate FROM public.r36_prepared_evidence_candidates c
+ WHERE c.payment_id=s.payment_id AND c.network=a.network AND c.source_wallet=a.source_wallet
+ AND c.prepared_sequence=b->>'preparedSequence';
+ IF NOT FOUND OR candidate->>'preparedHash' IS DISTINCT FROM b->>'preparedHash'
+ OR candidate->>'signedEnvelopeSha256' IS DISTINCT FROM b->>'envelopeXdrTextSha256'
+ OR candidate->'identity'->>'paymentId' IS DISTINCT FROM b->>'paymentId'
+ OR candidate->'identity'->>'operationKind' IS DISTINCT FROM b->>'operationKind'
+ OR candidate->'identity'->>'operationId' IS DISTINCT FROM b->>'operationId'
+ OR candidate->'identity'->>'destinationWallet' IS DISTINCT FROM b->>'destinationWallet'
+ OR candidate->'identity'->>'amountStroops' IS DISTINCT FROM b->>'amountStroops' THEN RETURN false; END IF;
+ IF b->>'operationKind'='settlement' THEN
+  IF s.stage<>'a2u_created' OR s.a2u_payment_id IS DISTINCT FROM b->>'operationId'
+  OR s.a2u_from_address IS DISTINCT FROM b->>'sourceWallet' OR s.a2u_to_address IS DISTINCT FROM b->>'destinationWallet'
+  OR s.prepared_tx_hash IS NOT NULL OR s.prepared_sequence IS NOT NULL OR s.prepared_envelope_xdr IS NOT NULL
+  OR EXISTS(SELECT 1 FROM public.refund_checkpoints WHERE payment_id=s.payment_id) THEN RETURN false; END IF;
+ ELSE
+  SELECT * INTO r FROM public.refund_checkpoints WHERE payment_id=s.payment_id AND refund_id=b->>'operationId';
+  IF NOT FOUND OR s.stage<>'payment_identity' OR r.status<>'pending' OR r.stage<>'wallet_submission_started'
+  OR r.refund_txid IS NOT NULL OR r.amount<>s.customer_amount OR r.payer_uid IS DISTINCT FROM s.payer_uid
+  OR candidate->'identity'->>'piPaymentId' IS DISTINCT FROM r.refund_payment_id
+  OR NOT EXISTS(SELECT 1 FROM public.refund_audit_events e WHERE e.payment_id=s.payment_id AND e.refund_id=r.refund_id
+   AND e.event_id='refund:'||r.refund_id||':blockchain_submission_started'
+   AND e.event_type='refund_blockchain_submission_started' AND e.actor_type='system' AND e.idempotency_key=r.idempotency_key
+   AND e.details=jsonb_build_object('refundPaymentId',r.refund_payment_id,'phase','blockchain_submission'))
+  -- The prepared audit is committed only with the successor wallet claim. A
+  -- different current owner plus such an audit is a conflict, not renewable.
+  OR EXISTS(SELECT 1 FROM public.refund_audit_events e WHERE e.payment_id=s.payment_id
+   AND e.event_type='refund_blockchain_submit_prepared')
+  THEN RETURN false; END IF;
+ END IF;
+ IF EXISTS(SELECT 1 FROM public.financial_wallet_submission_attempts WHERE network=a.network AND
+  (owner_payment_id=s.payment_id OR source_wallet=a.source_wallet AND (prepared_tx_hash=b->>'preparedHash' OR prepared_sequence=b->>'preparedSequence')))
+ OR EXISTS(SELECT 1 FROM public.financial_wallet_authority_history WHERE network=a.network AND source_wallet=a.source_wallet
+  AND (owner_payment_id=s.payment_id OR prepared_tx_hash=b->>'preparedHash' OR prepared_sequence=b->>'preparedSequence'))
  OR EXISTS(SELECT 1 FROM public.financial_wallet_finality_seals WHERE network=a.network AND owner_payment_id=s.payment_id)
- OR EXISTS(SELECT 1 FROM public.refund_checkpoints WHERE payment_id=s.payment_id)
  OR EXISTS(SELECT 1 FROM public.refund_accounting_records WHERE payment_id=s.payment_id)
  OR EXISTS(SELECT 1 FROM public.transactions WHERE payment_id=s.u2a_identifier)
  OR EXISTS(SELECT 1 FROM public.receipts WHERE u2a_identifier=s.u2a_identifier) THEN RETURN false; END IF;
- RETURN EXISTS(SELECT 1 FROM public.r36_independent_u2a_attestations t WHERE t.network=a.network AND t.source_wallet=a.source_wallet AND t.payment_id=s.payment_id AND t.operation_kind=b->>'operationKind' AND t.operation_id=b->>'operationId' AND t.prepared_tx_hash=b->>'preparedHash' AND t.prepared_sequence=b->>'preparedSequence' AND t.pi_payment_id=s.u2a_identifier AND t.u2a_txid=s.u2a_txid AND t.proof_digest=original AND t.status='verified');
+ RETURN EXISTS(SELECT 1 FROM public.r36_independent_u2a_attestations t WHERE t.network=a.network AND t.source_wallet=a.source_wallet
+  AND t.payment_id=s.payment_id AND t.operation_kind=b->>'operationKind' AND t.operation_id=b->>'operationId'
+  AND t.prepared_tx_hash=b->>'preparedHash' AND t.prepared_sequence=b->>'preparedSequence'
+  AND t.pi_payment_id=s.u2a_identifier AND t.u2a_txid=s.u2a_txid AND t.proof_digest=original AND t.status='verified');
 END $$;
 
 
@@ -7289,11 +7353,15 @@ BEGIN
   SELECT * INTO r FROM public.refund_checkpoints WHERE refund_id=b->>'operationId' AND payment_id=s.payment_id;
   IF NOT FOUND OR s.stage<>'payment_identity' OR r.status<>'pending' OR r.stage<>'wallet_submission_started'
   OR r.refund_txid IS NOT NULL OR r.payer_uid IS DISTINCT FROM s.payer_uid OR r.amount<>s.customer_amount
+  OR candidate->'identity'->>'piPaymentId' IS DISTINCT FROM r.refund_payment_id
   OR NOT EXISTS(SELECT 1 FROM public.refund_audit_events e WHERE e.payment_id=s.payment_id AND e.refund_id=r.refund_id
-   AND e.event_type='refund_blockchain_submit_prepared' AND e.actor_type='system' AND e.idempotency_key=r.idempotency_key
-   AND e.details->>'preparedHash'=b->>'preparedHash' AND e.details->>'preparedSequence'=b->>'preparedSequence'
-   AND e.details->>'refundPaymentId'=r.refund_payment_id
-   AND encode(sha256(convert_to(e.details->>'envelopeXdr','UTF8')),'hex')=b->>'envelopeXdrTextSha256')
+   AND e.event_id='refund:'||r.refund_id||':blockchain_submission_started'
+   AND e.event_type='refund_blockchain_submission_started' AND e.actor_type='system' AND e.idempotency_key=r.idempotency_key
+   AND e.details=jsonb_build_object('refundPaymentId',r.refund_payment_id,'phase','blockchain_submission'))
+  -- The prepared audit is committed only with the successor wallet claim. A
+  -- different current owner plus such an audit is a conflict, not renewable.
+  OR EXISTS(SELECT 1 FROM public.refund_audit_events e WHERE e.payment_id=s.payment_id
+   AND e.event_type='refund_blockchain_submit_prepared')
   THEN RETURN jsonb_build_object('initialIssuanceUnavailable',true); END IF;
  ELSE RETURN jsonb_build_object('initialIssuanceUnavailable',true); END IF;
  RETURN jsonb_build_object('initialIssuanceGeneration',CASE WHEN live THEN w.generation ELSE coalesce(w.generation,0)+1 END,
@@ -7590,3 +7658,59 @@ INSERT INTO public.r36_recovery_work(payment_id)
 GRANT EXECUTE ON FUNCTION public.r36_claim_recovery_work(integer),public.r36_finish_recovery_work(text,bigint,uuid) TO neondb_owner;
 
 DELETE FROM public.r36_recovery_work w WHERE w.lease_token IS NULL AND NOT public.r36_recovery_work_needed(w.payment_id);
+
+-- PLAN7 FAST: narrow versioned read-only projections.
+-- Lossless source reads only; no financial rows, execution privileges or guards change.
+SET LOCAL lock_timeout='3s';
+SET LOCAL statement_timeout='30s';
+CREATE SCHEMA IF NOT EXISTS r36_evidence_source AUTHORIZATION r36_owner;
+REVOKE ALL ON SCHEMA r36_evidence_source FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT USAGE ON SCHEMA r36_evidence_source TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.payment_create_intents WITH (security_barrier=true) AS SELECT payment_id,merchant_uid,merchant_id,customer_amount,note,created_at,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.payment_create_intents;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.payment_create_intents'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.payment_create_intents OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.payment_create_intents FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.payment_create_intents TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.settlement_checkpoints WITH (security_barrier=true) AS SELECT financial_contract,payment_id,stage,merchant_id,merchant_uid,payer_uid,customer_amount,merchant_amount,app_commission,u2a_identifier,u2a_txid,u2a_verified_at,u2a_completed_at,a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence,a2u_txid,horizon_fee_stroops,horizon_confirmed_at,pi_completed_at,db_finalized_at,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.settlement_checkpoints;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.settlement_checkpoints'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.settlement_checkpoints OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.settlement_checkpoints FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.settlement_checkpoints TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.refund_checkpoints WITH (security_barrier=true) AS SELECT refund_id,payment_id,idempotency_key,status,stage,payer_uid,payer_uid_verified_at,amount,currency,source_payment_status,source_settlement_state,refund_payment_id,refund_txid,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.refund_checkpoints;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.refund_checkpoints'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.refund_checkpoints OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.refund_checkpoints FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.refund_checkpoints TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.transactions WITH (security_barrier=true) AS SELECT id,payment_id,merchant_id,merchant_uid,amount,currency,status,reference,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.transactions;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.transactions'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.transactions OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.transactions FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.transactions TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.receipts WITH (security_barrier=true) AS SELECT id,transaction_id,merchant_id,merchant_uid,amount,currency,txid,u2a_identifier,u2a_txid,a2u_identifier,a2u_txid,customer_amount,merchant_amount,app_commission,horizon_fee_charged,app_net_impact,settlement_status,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.receipts;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.receipts'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.receipts OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.receipts FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.receipts TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.refund_accounting_records WITH (security_barrier=true) AS SELECT refund_id,payment_id,refund_payment_id,refund_txid,payer_uid,amount,horizon_fee_stroops,currency,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.refund_accounting_records;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.refund_accounting_records'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.refund_accounting_records OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.refund_accounting_records FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.refund_accounting_records TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.refund_audit_events WITH (security_barrier=true) AS SELECT event_id,refund_id,payment_id,event_type,actor_type,idempotency_key,details,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.refund_audit_events;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.refund_audit_events'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.refund_audit_events OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.refund_audit_events FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.refund_audit_events TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.merchant_balances WITH (security_barrier=true) AS SELECT merchant_id,settled,unsettled,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.merchant_balances;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.merchant_balances'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.merchant_balances OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.merchant_balances FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.merchant_balances TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.financial_wallet_authorities WITH (security_barrier=true) AS SELECT network,source_wallet,owner_payment_id,operation_kind,owner_operation_id,prepared_tx_hash,prepared_sequence,state,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.financial_wallet_authorities;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.financial_wallet_authorities'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.financial_wallet_authorities OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.financial_wallet_authorities FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.financial_wallet_authorities TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.financial_wallet_authority_history WITH (security_barrier=true) AS SELECT network,source_wallet,owner_payment_id,operation_kind,owner_operation_id,prepared_tx_hash,prepared_sequence,finality_evidence_digest,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.financial_wallet_authority_history;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.financial_wallet_authority_history'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.financial_wallet_authority_history OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.financial_wallet_authority_history FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.financial_wallet_authority_history TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.r36_wallet_execution_scopes WITH (security_barrier=true) AS SELECT scope_digest,policy_digest,source_wallet,scope_text,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.r36_wallet_execution_scopes;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.r36_wallet_execution_scopes'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.r36_wallet_execution_scopes OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.r36_wallet_execution_scopes FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.r36_wallet_execution_scopes TO r36_evidence_reader;
+CREATE OR REPLACE VIEW r36_evidence_source.r36_legacy_right_holds WITH (security_barrier=true) AS SELECT payment_id,network,kind,state,authorizes_new_rights,original_snapshot_sha256,held_at,tableoid AS __r36_table,ctid AS __r36_ctid,xmin AS __r36_xmin FROM public.r36_legacy_right_holds;
+DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.r36_legacy_right_holds'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.r36_legacy_right_holds OWNER TO %I',own); END $owner$;
+REVOKE ALL ON r36_evidence_source.r36_legacy_right_holds FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.r36_legacy_right_holds TO r36_evidence_reader;

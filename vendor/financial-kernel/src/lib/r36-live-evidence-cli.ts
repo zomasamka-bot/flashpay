@@ -15,7 +15,7 @@ const blocked=(reason:string):R36ProducedEvidence=>({outcome:'BLOCKED',reason,au
 const HOST=deployment().databaseHost
 export async function collectR36LiveCandidate(snapshot:R36LiveSnapshot,input:R36LiveCollectionRequest,piApiKey:string,fetcher:typeof fetch=fetch):Promise<R36ProducedEvidence>{
  try{
-  if(Buffer.byteLength(JSON.stringify(input))>48_000_000)return blocked('SOURCE_SIZE')
+  if(Buffer.byteLength(JSON.stringify(input))>128_000_000)return blocked('SOURCE_SIZE')
   const q=JSON.parse(JSON.stringify(input)) as R36LiveCollectionRequest
   const observed=JSON.parse(JSON.stringify(snapshot)) as R36LiveSnapshot;let d=observed.rows
   if(observed.session.read_only!=='on'||observed.session.isolation!=='repeatable read')return blocked('CONSISTENT_READONLY_SNAPSHOT_REQUIRED')

@@ -1,3 +1,4 @@
+import {decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {financialNetwork} from './financial-network'
 /** NOT_FOR_DEPLOY. Issuer-side two-phase lifecycle. No private key, financial POST,
  * wallet activation or Runtime enrollment. Signed evidence must be produced by the
@@ -41,7 +42,7 @@ function authenticate(context:Row,kind:string,subject:string,cutoff:string,envel
  const {p,profile,now}=policy(context)
  requireProof(obj(context.prior)&&obj(envelope)&&equalKeys(envelope,['text','manifest','signature']),'ENVELOPE')
  const e=envelope as Row,m=e.manifest
- requireProof(typeof e.text==='string'&&e.text.length<=2_000_000&&obj(m)&&equalKeys(m,fields)&&typeof e.signature==='string','ENVELOPE_FIELDS')
+ requireProof(typeof e.text==='string'&&Buffer.byteLength(e.text)<=R36_ARTIFACT_TEXT_BYTES&&obj(m)&&equalKeys(m,fields)&&typeof e.signature==='string','ENVELOPE_FIELDS')
  const v=m as Row
  requireProof(fields.every(k=>typeof v[k]==='string'&&/^[\x20-\x7e]{1,256}$/.test(v[k] as string))&&
   v.schema==='R36_INDEPENDENT_ARTIFACT_V1'&&v.kind===kind&&v.policyDigest===p.policy_digest&&v.subjectDigest===subject&&
@@ -58,7 +59,7 @@ function authenticate(context:Row,kind:string,subject:string,cutoff:string,envel
  const key=createPublicKey(root.publicKeyPem as string),sig=Buffer.from(e.signature as string,'base64')
  requireProof(key.asymmetricKeyType==='ed25519'&&sha(key.export({type:'spki',format:'der'}))===root.publicKeySpkiSha256&&sig.length===64&&
   sig.toString('base64')===e.signature&&verify(null,Buffer.from('FLASHpay:R36:INDEPENDENT_ARTIFACT:V1\n'+JSON.stringify(fields.map(k=>v[k]))),key,sig),'EVIDENCE_SIGNATURE')
- const body:unknown=JSON.parse(e.text as string);requireProof(obj(body),'EVIDENCE_BODY')
+ const body:unknown=decodeR36Artifact(e.text as string);requireProof(obj(body),'EVIDENCE_BODY')
  return {body:body as Row,issued:start,expires:Math.min(end,Number(root.revocationValidUntil),Number(p.valid_until),Number(p.revocation_valid_until))}
 }
 function stroops(v:unknown){
