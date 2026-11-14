@@ -16,7 +16,7 @@ import { toReceiptStatus } from "@/lib/receipt-presentation"
 import { useToast } from "@/hooks/use-toast"
 import { QRCode } from "@/components/qr-code"
 import { executePayment, isPaymentPaid, getPaymentFromServer } from "@/lib/operations"
-import { getPaymentUrl } from "@/lib/router"
+import { getPaymentUrl, getPaymentLink } from "@/lib/router"
 import { unifiedStore, useUnifiedStore } from "@/lib/unified-store"
 import type { Payment, RefundPresentation } from "@/lib/types"
 import { useI18n } from "@/components/i18n-provider"
@@ -50,6 +50,10 @@ export default function PaymentContentWithId({
   const refundAbortRef = useRef<AbortController | null>(null)
   const receiptIdentityRef = useRef<{ accessToken: string; uid: string; username: string } | null>(null)
   const [customerReceiptName, setCustomerReceiptName] = useState<string | null>(null)
+  const [restoredRequest, setRestoredRequest] = useState(false)
+  useEffect(() => {
+    setRestoredRequest(new URLSearchParams(window.location.search).get("restored") === "1")
+  }, [paymentId])
   const accountStore = useUnifiedStore()
   const account = accountStore.getMerchantState()
   const receiptAccessToken = receiptIdentityRef.current?.accessToken ?? account?.accessToken ?? null
@@ -481,6 +485,15 @@ export default function PaymentContentWithId({
         body: JSON.stringify({ paymentId, accessToken: startAccessToken }),
       })
       const startBody = await startResponse.json().catch(() => ({}))
+      if (startResponse.status === 409 && startBody?.code === "U2A_START_RESUME_REQUEST" &&
+          typeof startBody.resumePaymentId === "string" && startBody.resumePaymentId !== paymentId &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(startBody.resumePaymentId)) {
+        // Navigation only. Do not carry a lease, mutate this request, or call Pi.
+        // The original page reloads its durable amount and requires a fresh tap.
+        const hints = new URLSearchParams({entry: entryMode, lang: locale, restored: "1"})
+        window.location.replace(`${getPaymentLink(startBody.resumePaymentId)}?${hints}`)
+        return
+      }
       if (
         !startResponse.ok ||
         startBody?.success !== true ||
@@ -676,6 +689,14 @@ export default function PaymentContentWithId({
           </div>
           <h1 className="text-2xl font-bold mb-2">{t("pay.request")}</h1>
         </div>
+
+        {restoredRequest && payment.status === "pending" && (
+          <p role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+            {t("pay.originalRequestRestored", locale === "ar"
+              ? "تم فتح طلبك السابق المطابق. راجع التفاصيل ثم اضغط الدفع للمتابعة."
+              : "Your matching original request is open. Check the details, then tap Pay to continue.")}
+          </p>
+        )}
 
         {isPaid ? (
           <FlashPayReceiptCard accessToken={receiptAccessToken} receipt={{
