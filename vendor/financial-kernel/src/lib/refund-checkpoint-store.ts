@@ -714,11 +714,14 @@ export async function ensureRefundPreparedSubmit(
   const result = await withR36RestrictedPaymentTransaction(paymentId, async (tx) => {
     if (walletAuthority.paymentId !== paymentId || walletAuthority.operationId !== refundId ||
         walletAuthority.operationKind !== 'refund' || walletAuthority.preparedHash !== preparedHash ||
-        walletAuthority.preparedSequence !== preparedSequence ||
-        !(await claimPreparedWalletAuthority(walletAuthority, tx))) throw new Error('wallet_authority_conflict')
+        walletAuthority.preparedSequence !== preparedSequence)
+      throw Object.assign(new Error('Refund prepared identity mismatch'),{code:'R36_REFUND_PREPARED_IDENTITY_MISMATCH'})
+    if(!(await claimPreparedWalletAuthority(walletAuthority, tx)))
+      throw Object.assign(new Error('Refund prepared authority not admitted'),{code:'R36_REFUND_PREPARED_AUTHORITY_NOT_ADMITTED'})
     const inserted = await tx.unsafe(`SELECT * FROM public.r36_insert_refund_prepared_audit($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
       [refundId,paymentId,idempotencyKey,refundPaymentId,authorizationEventId,preparedEventId,blockchainEventId,details])
-    if (!Array.isArray(inserted) || inserted.length !== 1) throw new Error('refund_prepare_not_inserted')
+    if (!Array.isArray(inserted) || inserted.length !== 1)
+      throw Object.assign(new Error('Refund prepared checkpoint rejected'),{code:'R36_REFUND_PREPARED_CHECKPOINT_REJECTED'})
     return inserted
   })
   if (Array.isArray(result) && result.length === 1) {

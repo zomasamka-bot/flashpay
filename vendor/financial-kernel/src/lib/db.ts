@@ -147,10 +147,13 @@ export async function withR36RestrictedPaymentTransaction<T>(
   } catch (error) {
     const reportedCode = (error as {code?: unknown})?.code
     const code = typeof reportedCode === 'string' && (/^[0-9A-Z]{5}$/.test(reportedCode) ||
-      ['R36_PREPARED_AUTHORITY_NOT_ADMITTED','R36_PREPARED_CHECKPOINT_REJECTED'].includes(reportedCode))
+      ['R36_PREPARED_AUTHORITY_NOT_ADMITTED','R36_PREPARED_CHECKPOINT_REJECTED',
+       'R36_REFUND_PREPARED_IDENTITY_MISMATCH','R36_REFUND_PREPARED_AUTHORITY_NOT_ADMITTED',
+       'R36_REFUND_PREPARED_CHECKPOINT_REJECTED'].includes(reportedCode))
       ? reportedCode : 'R36_TRANSACTION_UNCLASSIFIED'
-    console.error('[R36] Restricted financial transaction failed closed',
-      { paymentId, code })
+    if(code==='R36_REFUND_PREPARED_AUTHORITY_NOT_ADMITTED')
+      console.info('[R36] Refund preparation held before submission',{paymentId,code})
+    else console.error('[R36] Restricted financial transaction failed closed',{paymentId,code})
     return null
   }
 }

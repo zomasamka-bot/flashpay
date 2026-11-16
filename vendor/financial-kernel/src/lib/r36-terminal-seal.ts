@@ -110,6 +110,10 @@ const selectTerminal = `SELECT jsonb_build_object(
     AND (SELECT count(*) FROM public.refund_audit_events z WHERE z.refund_id=r.refund_id AND z.event_type='refund_projection_finalized')=1))`
 
 export async function recordAdmittedTerminalSeal(subject:string|null,policy:string):Promise<'terminal_seal_recorded'|'terminal_presentation_recorded'|'terminal_seal_held'|null> {
+  return recordTerminalStep(subject,policy)
+}
+
+async function recordTerminalStep(subject:string|null,policy:string,sealed?:Terminal):Promise<'terminal_seal_recorded'|'terminal_presentation_recorded'|'terminal_seal_held'|null> {
   if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new'||policy!==process.env.R36_SCOPED_POLICY_DIGEST||
     !/^[0-9a-f]{64}$/.test(policy)||!serverConfig.piApiKey||
     (subject!==null&&!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(subject))) return 'terminal_seal_held'
@@ -119,6 +123,11 @@ export async function recordAdmittedTerminalSeal(subject:string|null,policy:stri
     if(rows.length!==1)return 'terminal_seal_held'
     const t=rows[0].terminal
     if(!t||t.network!==financialNetwork()||!t.piPaymentId||!/^[A-Za-z0-9_-]{1,128}$/.test(t.piPaymentId))return 'terminal_seal_held'
+    // Re-select after the seal commits: current policy/revocation, identity,
+    // accounting and XOR must still pass. This bounded second step can only
+    // finish presentation for the same sealed refund, never another operation.
+    if(sealed&&(!t.sealRecorded||t.operationKind!=='refund'||
+      (Object.keys(sealed) as (keyof Terminal)[]).some(k=>k!=='sealRecorded'&&t[k]!==sealed[k])))return 'terminal_seal_held'
     if(t.sealRecorded) {
       // The authenticated /refunds/status route already records this proof.
       // Recovery must finish that same durable presentation step after a crash;
@@ -150,7 +159,9 @@ export async function recordAdmittedTerminalSeal(subject:string|null,policy:stri
     const evidenceDigest=digest(JSON.stringify(['R36_TERMINAL_SEAL_V1',policy,t.network,t.sourceWallet,t.paymentId,t.operationKind,
       t.operationId,t.preparedHash,t.preparedSequence,t.destinationWallet,t.recipientUid,t.piPaymentId,t.amountStroops,
       t.fee,digest(t.envelope),t.certificateDigest,proof.ledger]))
-    return await recordWalletFinalitySeal({...t,horizonLedger:proof.ledger,horizonFeeStroops:t.fee,evidenceDigest,
-      verifiedBy:'r36-original-terminal-get-v1'})?'terminal_seal_recorded':'terminal_seal_held'
+    if(!await recordWalletFinalitySeal({...t,horizonLedger:proof.ledger,horizonFeeStroops:t.fee,evidenceDigest,
+      verifiedBy:'r36-original-terminal-get-v1'}))return 'terminal_seal_held'
+    if(t.operationKind==='refund')return await recordTerminalStep(t.paymentId,policy,t)??'terminal_seal_recorded'
+    return 'terminal_seal_recorded'
   }catch{return 'terminal_seal_held'}
 }
