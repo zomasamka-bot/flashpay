@@ -7,6 +7,7 @@ import {currentRecoveryRight,runWithRecoveryRight,type ScopedRecoveryRight} from
 import {reconcileScopedU2ACompletion} from './r36-u2a-completion'
 import {recordAdmittedTerminalSeal} from './r36-terminal-seal'
 import {observeUnrecordedInbound} from './r36-inbound-observation-recovery'
+import {continueR36ConfirmedOperation} from './r36-confirmed-continuation'
 
 const settlement = ['prepared','horizon_confirmed','pi_completed']
 const refund = ['wallet_submission_started','wallet_submission_confirmed','payment_checkpoint_updated','accounting_recorded','audit_recorded','completed_projection']
@@ -14,6 +15,24 @@ const refund = ['wallet_submission_started','wallet_submission_confirmed','payme
 // The request may narrow selection to one payment. It can never supply the
 // wallet, executor, hash, grant, budget, policy digest or historical cutover.
 export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'confirmed'|'admitted'='all') {
+  let selected:ScopedRecoveryRight|undefined
+  const result=await resumeAdmittedRecoveryStep(subject,mode,r=>{selected=r;return true})
+  if(!selected)return result
+  const first:ScopedRecoveryRight=selected
+  try{
+    return await continueR36ConfirmedOperation(first,result,{
+      step:select=>resumeAdmittedRecoveryStep(first.id,'confirmed',select),
+      seal:()=>recordAdmittedTerminalSeal(first.id,process.env.R36_SCOPED_POLICY_DIGEST!)
+    })
+  }catch(error){
+    // The durable first result remains valid. The existing work index retains
+    // unfinished reconciliation; never repeat a send after an uncertain reply.
+    console.warn('[Recovery confirmed continuation]',{code:error instanceof Error&&/^[A-Z0-9_]{1,96}$/.test(error.message)?error.message:'DEPENDENCY_UNAVAILABLE',financialOutcome:'verify_durable_result'})
+    return result
+  }
+}
+
+async function resumeAdmittedRecoveryStep(subject:string|null,mode:'all'|'confirmed'|'admitted',onSelected:(r:ScopedRecoveryRight)=>boolean) {
   const policy=process.env.R36_SCOPED_POLICY_DIGEST
   if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new' || !policy || !/^[0-9a-f]{64}$/.test(policy)) return 'configuration_held'
   const client=await getR36RestrictedClient()
@@ -93,6 +112,7 @@ export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'con
     (subject!==null&&r.id!==subject) || typeof r.spent!=='boolean' || !['settlement','refund'].includes(r.kind) || !/^[A-Za-z0-9_.:-]{1,128}$/.test(r.op) ||
     !/^G[A-Z2-7]{55}$/.test(r.wallet) || !/^[0-9a-f]{64}$/.test(r.hash) || !/^[1-9][0-9]{0,29}$/.test(r.seq) ||
     !(r.kind==='settlement'?settlement:refund).includes(r.stage)) throw Error('R36_SELECTION_MISMATCH')
+  if(!onSelected(r))return 'confirmed_continuation_unchanged'
   return runWithRecoveryRight(r,async()=>{
     // Only this committed prepared owner may use its scheduler identity.
     // Executors retain wallet locks, original finality and atomic first-POST checks.

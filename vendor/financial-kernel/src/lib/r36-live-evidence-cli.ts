@@ -8,7 +8,7 @@ import {readR36PreparedSource} from './r36-prepared-evidence-reader'
 import {readR36LiveSource,type R36LiveSnapshot} from './r36-live-source'
 import {produceR36LiveEvidence,type R36ProducedEvidence} from './r36-live-evidence-producer'
 import {collectR36InboundEvidence} from './r36-inbound-evidence-collector'
-import {scopeR36LiveSnapshot} from './r36-wallet-execution-scope'
+import {scopeR36CurrentSnapshot} from './r36-wallet-execution-scope'
 type CompleteInput=Parameters<typeof produceR36LiveEvidence>[0]
 export type R36LiveCollectionRequest=Omit<CompleteInput,'snapshot'|'inboundFinality'|'outboundPi'>&{payerWallet:string;finalityPolicyDigest:string}
 const blocked=(reason:string):R36ProducedEvidence=>({outcome:'BLOCKED',reason,authorizesFinancialRelease:false,authorizesSubmission:false,authorizesWalletActivation:false,independentCertification:false})
@@ -17,12 +17,10 @@ export async function collectR36LiveCandidate(snapshot:R36LiveSnapshot,input:R36
  try{
   if(Buffer.byteLength(JSON.stringify(input))>128_000_000)return blocked('SOURCE_SIZE')
   const q=JSON.parse(JSON.stringify(input)) as R36LiveCollectionRequest
-  const observed=JSON.parse(JSON.stringify(snapshot)) as R36LiveSnapshot;let d=observed.rows
+  const observed=JSON.parse(JSON.stringify(snapshot)) as R36LiveSnapshot;observed.checkpoint=snapshot.checkpoint;let d=observed.rows
   if(observed.session.read_only!=='on'||observed.session.isolation!=='repeatable read')return blocked('CONSISTENT_READONLY_SNAPSHOT_REQUIRED')
   if(q.executionScopeDigest!==undefined){
-   const scopes=(d.executionScopes??[]).filter(r=>r.scope_digest===q.executionScopeDigest&&r.source_wallet===q.sourceWallet)
-   if(scopes.length!==1)return blocked('APPROVED_EXECUTION_SCOPE_REQUIRED')
-   d=scopeR36LiveSnapshot(observed,String(scopes[0].scope_text),q.executionScopeDigest,q.sourceWallet).snapshot.rows
+   d=scopeR36CurrentSnapshot(observed,q.executionScopeDigest,q.sourceWallet).snapshot.rows
   }
   // Reject unresolved old rights before any provider work. No guessed isolation.
   if(d.refunds.some(r=>r.payment_id!==q.paymentId&&['pending','manual_review_required'].includes(String(r.status))&&

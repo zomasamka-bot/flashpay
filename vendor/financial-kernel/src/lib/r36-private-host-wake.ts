@@ -20,7 +20,7 @@ export function createPrivateHostWake(ports:Ports){
   if(!key||!/^[A-Za-z0-9_-]{64}$/.test(key)||!policy||!/^[0-9a-f]{64}$/.test(policy))return false
   // Completed checkpoint progress must reach the producer even inside the
   // short readiness cache. This is an operational wake, never a cached right.
-  if(reason!=='completion'&&ports.now()<freshUntil&&freshPolicy===policy)return true
+  if(reason!=='completion'&&reason!=='payer'&&ports.now()<freshUntil&&freshPolicy===policy)return true
   try{
    const protection=env.R36_HOST_DEPLOYMENT_BYPASS;if(!protection||protection.length<32||protection.length>512||!/^[A-Za-z0-9_-]+$/.test(protection))return false
    const body=JSON.stringify({schema:'R36_PRIVATE_WAKE_V1',reason}),stamp=String(ports.now())
@@ -36,6 +36,7 @@ export function createPrivateHostWake(ports:Ports){
   }catch{return false}
  }
  return async(reason:Reason)=>{
+  if(reason==='payer')return wake(reason)
   if(pending){
    // A new checkpoint may commit after the earlier wake was sent. Joining that
    // promise alone loses its progress signal. Coalesce exactly one follow-up;

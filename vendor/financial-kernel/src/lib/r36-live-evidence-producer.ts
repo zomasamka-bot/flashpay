@@ -14,7 +14,7 @@ import {R36_ADMISSION_FIELDS} from './r36-certificate-consumer'
 import {r36SnapshotDigest,reviewR36EvidenceSnapshot} from './r36-evidence-snapshot'
 import {numberToExactPositiveStroops} from './financial-amount-stroops'
 import type {R36LiveSnapshot,R36SourceRow as Row} from './r36-live-source'
-import {scopeR36LiveSnapshot} from './r36-wallet-execution-scope'
+import {scopeR36CurrentSnapshot} from './r36-wallet-execution-scope'
 const object=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v)
 const text=(v:unknown):v is string=>typeof v==='string'&&v.length>0
 const hex=(v:unknown):v is string=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v)
@@ -32,7 +32,7 @@ function one(rows:Row[],predicate:(v:Row)=>boolean,why:string):Row{const found=r
 function indexRows(rows:Row[],key:(r:Row)=>unknown):Map<unknown,Row[]>{const index=new Map<unknown,Row[]>();for(const row of rows){const k=key(row),group=index.get(k);if(group)group.push(row);else index.set(k,[row])}return index}
 const clone=<T>(v:T):T=>JSON.parse(JSON.stringify(v))
 export type R36ObservedHistory={network:FinancialNetwork;wallet:string;cutoffLedger:string;cutoffHash:string;
- sourceId:string;walletInventory:Row[];transactions:Row[];operations:Row[];accountAtCutoff:Row}
+ sourceId:string;checkpointDigest?:string;originalCursor?:string;walletInventory:Row[];transactions:Row[];operations:Row[];accountAtCutoff:Row}
 /** All records are original observations (retained prefix plus a bounded delta).
  * Empty pagination and successful arithmetic do not establish independent coverage.
  */
@@ -66,7 +66,7 @@ export function normalizeR36ObservedHistory(input:R36ObservedHistory):Row{
   uint(String(h.accountAtCutoff.last_modified_ledger))&&BigInt(String(h.accountAtCutoff.last_modified_ledger))<=BigInt(h.cutoffLedger),'ACCOUNT_SCOPE')
  const native=one(h.accountAtCutoff.balances as Row[],b=>b.asset_type==='native','NATIVE_BALANCE_REQUIRED')
  const snapshot:Row={schema:'R36_COMPLETE_WALLET_SNAPSHOT_V1',network:h.network,wallet:h.wallet,cutoffLedger:h.cutoffLedger,cutoffHash:h.cutoffHash,
-  walletInventory:clone(h.walletInventory),genesis,transactions,closingBalanceStroops:amount(native.balance),closingSequence:String(h.accountAtCutoff.sequence)}
+  walletInventory:clone(h.walletInventory),genesis,transactions,...(h.checkpointDigest?{checkpointDigest:h.checkpointDigest}:{}),originalCursor:h.originalCursor??String(h.transactions.at(-1)!.paging_token),closingBalanceStroops:amount(native.balance),closingSequence:String(h.accountAtCutoff.sequence)}
  snapshot.coverage={schema:'R36_PROVIDER_CUTOFF_ATTESTATION_V1',sourceId:h.sourceId,genesisHash:genesis.hash,cutoffLedger:h.cutoffLedger,cutoffHash:h.cutoffHash,transactionsDigest:hash(transactions)}
  return {schema:'R36_COMPLETE_HISTORY_V1',network:h.network,sourceWallet:h.wallet,cutoffLedger:h.cutoffLedger,genesisLedger:genesis.ledger,cutoffHash:h.cutoffHash,
   transactionsDigest:hash(transactions),operationsDigest:hash(transactions.map(t=>t.operationId)),controlledWalletsInventoryDigest:hash(h.walletInventory),continuityProofDigest:hash(snapshot.coverage),snapshot}
@@ -82,10 +82,9 @@ export type R36ProducedEvidence={outcome:'UNSIGNED_CANDIDATE_REQUIRES_CUSTODIAN'
 export function produceR36LiveEvidence(input:Input):R36ProducedEvidence{
  try{
   requireFact(Buffer.byteLength(JSON.stringify(input))<=128_000_000,'SOURCE_SIZE')
-  const q=clone(input);let scopedEvidence:Row|undefined
+  const q=clone(input);q.snapshot.checkpoint=input.snapshot.checkpoint;let scopedEvidence:Row|undefined
   if(q.executionScopeDigest!==undefined){
-   const scope=one(q.snapshot.rows.executionScopes??[],r=>r.scope_digest===q.executionScopeDigest&&r.source_wallet===q.sourceWallet,'APPROVED_EXECUTION_SCOPE_REQUIRED')
-   const scoped=scopeR36LiveSnapshot(q.snapshot,String(scope.scope_text),q.executionScopeDigest,q.sourceWallet);q.snapshot=scoped.snapshot;scopedEvidence=scoped.evidence
+   const scoped=scopeR36CurrentSnapshot(q.snapshot,q.executionScopeDigest,q.sourceWallet);q.snapshot=scoped.snapshot;scopedEvidence=scoped.evidence
   }
   const d=q.snapshot.rows
   requireFact(hex(q.nonce)&&wallet(q.sourceWallet)&&['settlement','refund'].includes(q.kind)&&
@@ -144,7 +143,7 @@ export function produceR36LiveEvidence(input:Input):R36ProducedEvidence{
   artifacts.clearance={schema:'R36_WALLET_CLEARANCE_V1',network:financialNetwork(),sourceWallet:q.sourceWallet,cutoffLedger:binding.cutoffLedger,currentRightsDigest:artifacts.accounting.currentRightsDigest,authorityDisposition:'CLEARED_FOR_BOUND_INTENT',...Object.fromEntries(['walletHistoryDigest','accountingDigest','exceptionsDigest','exceptionIsolationDigest'].map(k=>[k,binding[k]]))}
   binding.clearanceDigest=bytesHash(encodeR36Artifact(artifacts.clearance))
   requireFact(R36_ADMISSION_FIELDS.every(k=>text(binding[k])),'PRODUCER_BINDING_INCOMPLETE')
-  const review=reviewR36EvidenceSnapshot(binding,artifacts)
+  const review=reviewR36EvidenceSnapshot(binding,artifacts,input.snapshot.checkpoint)
   requireFact(review.outcome==='VERIFIED_SNAPSHOT','PRODUCER_'+review.reason)
   return {outcome:'UNSIGNED_CANDIDATE_REQUIRES_CUSTODIAN',reason:'ORIGINAL_FACTS_COMPOSED_NO_TRUST_ATTESTATION',binding,artifacts,sourceDigest:hash(q),...flags}
  }catch(e){return {outcome:'BLOCKED',reason:e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'PRODUCER_SOURCE_OR_PROOF_INVALID',...flags}}
@@ -161,8 +160,7 @@ function composeWalletEvidence(input:Pick<Input,'snapshot'|'histories'|'sourceWa
  const q={...input,exceptions:clone(input.exceptions)};let scopedEvidence:Row|undefined
  requireFact(q.snapshot.session.read_only==='on'&&q.snapshot.session.isolation==='repeatable read','CONSISTENT_READONLY_SNAPSHOT_REQUIRED')
  if(q.executionScopeDigest!==undefined){
-  const scope=one(q.snapshot.rows.executionScopes??[],r=>r.scope_digest===q.executionScopeDigest&&r.source_wallet===q.sourceWallet,'APPROVED_EXECUTION_SCOPE_REQUIRED')
-  const scoped=scopeR36LiveSnapshot(q.snapshot,String(scope.scope_text),q.executionScopeDigest,q.sourceWallet);q.snapshot=scoped.snapshot;scopedEvidence=scoped.evidence
+   const scoped=scopeR36CurrentSnapshot(q.snapshot,q.executionScopeDigest,q.sourceWallet);q.snapshot=scoped.snapshot;scopedEvidence=scoped.evidence
  }
  const d=q.snapshot.rows,histories=normalized??q.histories.map(normalizeR36ObservedHistory),primary=one(histories,h=>h.sourceWallet===q.sourceWallet,'PRIMARY_HISTORY_REQUIRED')
  const inventory=(primary.snapshot as Row).walletInventory as Row[]
@@ -203,6 +201,7 @@ function composeWalletEvidence(input:Pick<Input,'snapshot'|'histories'|'sourceWa
     obligations.push({paymentId:r.payment_id,sourceWallet:bindings[0].source_wallet,originalBindingDigest:hash(bindings[0]),disposition:'PROVED_OTHER_WALLET'})
    }
    requireFact(!d.settlements.some(v=>v.payment_id!==q.paymentId&&v.a2u_from_address===walletId&&['a2u_created','prepared','horizon_confirmed','pi_completed'].includes(String(v.stage))),'UNRESOLVED_SETTLEMENT_RIGHT')
+   if(input.snapshot.checkpoint)for(const b of d.merchantBalances){const known=input.snapshot.checkpoint.credits.find(c=>c.merchantId===b.merchant_id);if(known){requireFact(!merchantUids.has(String(b.merchant_id))||merchantUids.get(String(b.merchant_id))===known.merchantUid,'CHECKPOINT_MERCHANT_IDENTITY');merchantUids.set(String(b.merchant_id),String(known.merchantUid))}else if(!merchantUids.has(String(b.merchant_id)))requireFact(amount(b.settled)==='0','UNMAPPED_CHANGED_MERCHANT_BALANCE')}
    const merchantBalances=[...merchantUids.entries()].map(([id,uid])=>{const b=one(balancesByMerchant.get(id)??[],v=>v.merchant_id===id,'MERCHANT_BALANCE_CARDINALITY');return{merchantUid:uid,creditStroops:amount(b.settled)}})
    const snapshot={schema:'R36_ACCOUNTING_SNAPSHOT_V1',entries,merchantBalances,openObligations:obligations},rights=hash(obligations)
    const records=q.exceptions.records.filter(e=>e.sourceWallet===walletId).map(({sourceWallet,...r})=>r)
@@ -211,8 +210,8 @@ function composeWalletEvidence(input:Pick<Input,'snapshot'|'histories'|'sourceWa
    const isolated:Row={schema:'R36_EXCEPTION_ISOLATION_V1',exceptionIds:exceptions.ids,records:isolation,disposition:'ISOLATED_NO_CURRENT_RIGHTS_IMPACT',currentRightsDigest:rights,evidenceDigest:hash(isolation)}
    const accounting:Row={schema:'R36_ACCOUNTING_CLEARANCE_V1',network:financialNetwork(),sourceWallet:walletId,cutoffLedger:history.cutoffLedger,unbalancedStroops:'0',duplicateFinancialKeys:[],xorViolations:[],snapshot,
     pgSnapshotDigest:hash(snapshot),currentRightsDigest:rights,ledgerInventoryDigest:history.transactionsDigest,
-    reconciliationDigest:hash({history:history.transactionsDigest,accounting:hash(snapshot),exceptions:exceptions.recordsDigest,isolation:isolated.evidenceDigest,scope:[financialNetwork(),walletId,history.cutoffLedger]})}
-   if(scopedEvidence){const scope=JSON.parse(String(scopedEvidence.scopeText));const dual=scope.schema==='R36_CLEAN_NETWORK_EXECUTION_SCOPE_V2'&&financialIncomingWallet()!==q.sourceWallet;requireFact(dual?histories.length===2&&[q.sourceWallet,financialIncomingWallet()].includes(String(walletId)):walletId===q.sourceWallet&&histories.length===1,'EXECUTION_SCOPE_WALLET_INVENTORY');if(walletId===q.sourceWallet)accounting.executionScope=scopedEvidence}
+    reconciliationDigest:hash({...((history.snapshot as Row).checkpointDigest?{checkpoint:(history.snapshot as Row).checkpointDigest}:{}),history:history.transactionsDigest,accounting:hash(snapshot),exceptions:exceptions.recordsDigest,isolation:isolated.evidenceDigest,scope:[financialNetwork(),walletId,history.cutoffLedger]})}
+   if(scopedEvidence){const scope=scopedEvidence.schema==='R36_CHECKPOINT_EXECUTION_SCOPE_V1'?{}:JSON.parse(String(scopedEvidence.scopeText));const dual=scope.schema==='R36_CLEAN_NETWORK_EXECUTION_SCOPE_V2'&&financialIncomingWallet()!==q.sourceWallet;requireFact(dual?histories.length===2&&[q.sourceWallet,financialIncomingWallet()].includes(String(walletId)):walletId===q.sourceWallet&&histories.length===1,'EXECUTION_SCOPE_WALLET_INVENTORY');if(walletId===q.sourceWallet)accounting.executionScope=scopedEvidence}
    groups.push({wallet_history:history,accounting,exceptions,exception_isolation:isolated})
   }
   const allEntries=groups.flatMap(g=>(g.accounting.snapshot as Row).entries as Row[])

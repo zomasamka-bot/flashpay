@@ -13,7 +13,7 @@ const units=(v:unknown)=>{if(typeof v==='number'){const x=numberToExactPositiveS
 export function produceR36TerminalEvidence(input:{context:Row;snapshot:R36LiveSnapshot;histories:R36ObservedHistory[];outboundPi:Row;exceptions:{records:Row[];isolation:Row[]};executionScopeDigest?:string}){
  try{
   if(Buffer.byteLength(JSON.stringify(input))>128_000_000)throw Error('TERMINAL_SOURCE_SIZE')
-  const q=JSON.parse(JSON.stringify(input)) as typeof input,c=q.context,prior=c.prior as Row,seal=c.seal as Row,t=c.terminal as Row,p=c.policy as Row;
+  const q=JSON.parse(JSON.stringify(input)) as typeof input;q.snapshot.checkpoint=input.snapshot.checkpoint;const c=q.context,prior=c.prior as Row,seal=c.seal as Row,t=c.terminal as Row,p=c.policy as Row;
   must(object(prior)&&object(seal)&&object(t)&&object(p)&&object(p.worker_profile)&&typeof c.contextDigest==='string'&&/^[0-9a-f]{64}$/.test(c.contextDigest),'TERMINAL_PROTECTED_CONTEXT')
   const wallet=String(prior.source_wallet),paymentId=String(prior.owner_payment_id),kind=String(prior.operation_kind),profile=p.worker_profile as Row
   must(prior.network===financialNetwork()&&/^G[A-Z2-7]{55}$/.test(wallet)&&['settlement','refund'].includes(kind)&&
@@ -29,7 +29,7 @@ export function produceR36TerminalEvidence(input:{context:Row;snapshot:R36LiveSn
   }
   const artifacts=composeR36OriginalWalletEvidence({snapshot:q.snapshot,histories:q.histories,sourceWallet:wallet,paymentId:subjectPayment,exceptions:q.exceptions,executionScopeDigest:q.executionScopeDigest});
   const history=artifacts.wallet_history.snapshot as Row,rows=history.transactions as Row[];
-  const matches=rows.filter(x=>object(x.input)&&x.input.preparedHash===prior.prepared_tx_hash);must(matches.length===1,'TERMINAL_HISTORY_CARDINALITY')
+  const matches=rows.filter(x=>object(x.input)&&x.input.preparedHash===prior.prepared_tx_hash);const old=input.snapshot.checkpoint?.checkpoint.terminalTransaction;if(matches.length===0&&old&&object(old.input)&&old.input.preparedHash===prior.prepared_tx_hash)matches.push(old);must(matches.length===1,'TERMINAL_HISTORY_CARDINALITY')
   const h=matches[0].input as Row,r=matches[0].record as Row,pi=q.outboundPi
   must(pi.network===financialNetwork()&&pi.identifier===t.piPaymentId&&pi.direction==='app_to_user'&&pi.user_uid===t.recipientUid&&pi.from_address===wallet&&pi.to_address===h.destinationWallet&&units(pi.amount)===t.amountStroops&&
    object(pi.status)&&pi.status.developer_approved===true&&pi.status.developer_completed===true&&pi.status.transaction_verified===true&&pi.status.cancelled===false&&pi.status.user_cancelled===false&&
@@ -37,7 +37,7 @@ export function produceR36TerminalEvidence(input:{context:Row;snapshot:R36LiveSn
   const proof=verifyR36IndependentHorizonRecord(h as R36HorizonProofInput,r)
   must(proof.outcome==='PROVEN'&&proof.ledger===seal.horizon_ledger&&h.preparedSequence===prior.prepared_sequence&&h.expectedFeeStroops===seal.horizon_fee_stroops&&units(h.amount)===t.amountStroops,'TERMINAL_ORIGINAL_HORIZON_MISMATCH')
   const binding={network:financialNetwork(),sourceWallet:wallet,paymentId,operationKind:kind,operationId:prior.owner_operation_id,preparedHash:prior.prepared_tx_hash,preparedSequence:prior.prepared_sequence,amountStroops:t.amountStroops,feeStroops:seal.horizon_fee_stroops,receiptId:t.receiptId,entryId:t.entryId,cutoffLedger:artifacts.wallet_history.cutoffLedger};
-  const review=reviewR36TerminalSnapshot(binding,artifacts);must(review.outcome==='VERIFIED_SNAPSHOT','TERMINAL_ACCOUNTING_'+review.reason)
+  const review=reviewR36TerminalSnapshot(binding,artifacts,input.snapshot.checkpoint);must(review.outcome==='VERIFIED_SNAPSHOT','TERMINAL_ACCOUNTING_'+review.reason)
   artifacts.clearance={schema:'R36_TERMINAL_FINALITY_V1',contextDigest:c.contextDigest,finalityPolicyDigest:profile.finalityPolicyDigest,piRecord:pi,horizonInput:h,horizonRecord:r}
   return {outcome:'UNSIGNED_TERMINAL_REQUIRES_CUSTODIAN' as const,contextDigest:c.contextDigest,cutoffLedger:artifacts.wallet_history.cutoffLedger,artifacts,review,...flags}
  }catch(e){return{outcome:'BLOCKED' as const,reason:e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'TERMINAL_SOURCE_INVALID',...flags}}

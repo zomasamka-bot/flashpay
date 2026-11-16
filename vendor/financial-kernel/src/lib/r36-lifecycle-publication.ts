@@ -1,10 +1,10 @@
-import {readR36LifecycleBytes,storeR36LifecycleBytes} from './r36-lifecycle-storage'
+import {readR36LifecycleBytes,storeR36LifecycleBytes,releaseR36ArchivedPrior} from './r36-lifecycle-storage'
 import {encodeR36Artifact,decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {financialNetwork} from './financial-network'
 /** Private durable lifecycle observations. New observations may renew PRIOR
  * evidence; an exact successor nonce is frozen once. Never signs a transaction. */
 import {createHash,createPrivateKey,createPublicKey,sign,verify,randomUUID} from 'node:crypto'
-import {lstat,realpath,open,link,unlink,readFile} from 'node:fs/promises'
+import {lstat,realpath,open,link,unlink,readFile,mkdir} from 'node:fs/promises'
 import path from 'node:path'
 import {assertR36PublicationPolicyCurrent as current,r36PublicationRoot as rootFor,r36PublicationPolicyIdentity as identity,r36ArtifactSignatureBytes as bytes,type R36PublicationPolicy} from './r36-evidence-publication'
 type Row=Record<string,unknown>
@@ -26,7 +26,12 @@ export async function publishR36LifecycleJob(input:{kind:'prior'|'bound';context
   // It is a different attestation, never a new payment/signing nonce or resend.
   const job=q.kind==='prior'?sha(subject+'\n'+rawDigest+'\n'+JSON.stringify(q.request)+'\n'+Math.floor(now()/30)):q.context.boundRenewal===true?sha(String(q.context.successorNonce)+'\n'+String(q.context.closureDigest)):String(q.context.successorNonce)
   must(hex(job),'LIFECYCLE_JOB_IDENTITY')
-  const file=path.join(base,'lifecycle-'+q.kind+'-'+job+'.json')
+  let directory=base
+  if(q.kind==='prior'){
+   directory=path.join(base,'prior');await mkdir(directory,{mode:0o700,recursive:true})
+   const d=await lstat(directory);must(d.isDirectory()&&!d.isSymbolicLink()&&(d.mode&0o077)===0,'LIFECYCLE_STORAGE_PRIVATE')
+  }
+  const file=path.join(directory,'lifecycle-'+q.kind+'-'+job+'.json')
   async function read():Promise<Row|null>{const raw=await readR36LifecycleBytes(file);return raw?JSON.parse(raw.toString('utf8')):null}
   async function fresh(){const c=await ports.refresh(),p=policy(c);must((q.kind==='prior'?c.contextDigest:c.bindingDigest)===subject&&identity(p)===scope,'LIFECYCLE_POLICY_CHANGED');current(p,now());return p}
   let stored=await read(),p=pr
@@ -52,6 +57,13 @@ export async function publishR36LifecycleJob(input:{kind:'prior'|'bound';context
   }
   const out=await ports.submit({...q.request,subjectDigest:subject,bundle})
   must(['RECORDED','REPLAYED'].includes(String(out.outcome))&&hex(out.proofDigest)&&out.financialAuthority===false&&out.financialSubmission===false,'LIFECYCLE_ISSUER_NOT_CONFIRMED_RETRY_SAME_JOB')
+  if(q.kind==='prior'&&obj(out.archive)&&out.archive.schema==='R36_PRIOR_ARCHIVE_ACK_V1'&&out.archive.policyDigest===p.policyDigest&&
+   out.archive.proofDigest===out.proofDigest&&out.archive.bundleSha256===sha(JSON.stringify(bundle))){
+   // Cleanup cannot invalidate a successfully committed proof. A failed unlink
+   // retains a redundant copy; it never creates another financial attempt.
+   try{await releaseR36ArchivedPrior(file,Buffer.from(JSON.stringify(stored),'utf8'))}
+   catch{console.warn('[R36 storage]',{phase:'committed_prior_copy_retained'})}
+  }
   return {...out,evidenceIssuedAt:Math.max(...ks.map(k=>Number(((bundle[k] as Row).manifest as Row).issuedAt)))}
  }catch(e){return{outcome:'BLOCKED',reason:e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'LIFECYCLE_PUBLICATION_FAILED',financialAuthority:false,financialSubmission:false}}
 }

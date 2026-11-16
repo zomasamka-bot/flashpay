@@ -1,3 +1,5 @@
+import {readR36IndexedCheckpoint,readR36IndexedRows} from './r36-source-index'
+import type {R36CheckpointContext} from './r36-certified-history'
 import {financialNetwork} from './financial-network'
 import {verifyDatabaseBinding} from '../deployment'
 import {deployment} from '../deployment'
@@ -22,7 +24,7 @@ export const R36_SOURCE_QUERIES={
  executionScopes:`SELECT scope_digest,policy_digest,source_wallet,scope_text FROM public.r36_wallet_execution_scopes ORDER BY scope_digest LIMIT 101`,
  legacyHolds:`SELECT payment_id,network,kind,state,authorizes_new_rights,original_snapshot_sha256,to_char(held_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS held_at FROM public.r36_legacy_right_holds ORDER BY payment_id LIMIT 20001`,
 } as const
-export type R36LiveSnapshot={session:R36SourceRow;rows:{-readonly [K in keyof typeof R36_SOURCE_QUERIES]:R36SourceRow[]};custody:'UNSIGNED_DIAGNOSTIC'|'READONLY_SERVICE_NOT_CERTIFIED'}
+export type R36LiveSnapshot={session:R36SourceRow;rows:{-readonly [K in keyof typeof R36_SOURCE_QUERIES]:R36SourceRow[]};custody:'UNSIGNED_DIAGNOSTIC'|'READONLY_SERVICE_NOT_CERTIFIED';checkpoint?:R36CheckpointContext}
 async function checkedRead<T>(db:R36ReadOnlySource,mode:'diagnostic'|'service',read:(tx:{unsafe(sql:string):Promise<R36SourceRow[]>},session:R36SourceRow)=>Promise<T>):Promise<T>{
  if(mode!=='diagnostic'&&mode!=='service')throw Error('SOURCE_MODE')
  return db.beginReadOnly(async tx=>{
@@ -66,8 +68,10 @@ export async function readR36LifecycleHead(db:R36ReadOnlySource,wallet:string){
   return {authority,completed:terminal_checkpoint}
  })
 }
-export async function readR36LiveSource(db:R36ReadOnlySource,mode:'diagnostic'|'service'):Promise<R36LiveSnapshot>{
+export async function readR36LiveSource(db:R36ReadOnlySource,mode:'diagnostic'|'service',paymentId?:string):Promise<R36LiveSnapshot>{
  return checkedRead(db,mode,async(tx,s)=>{
+  const checkpoint=mode==='service'?await readR36IndexedCheckpoint(tx,paymentId):undefined
+  if(checkpoint)return{session:s,rows:await readR36IndexedRows(tx),checkpoint,custody:'READONLY_SERVICE_NOT_CERTIFIED'}
   const data={} as R36LiveSnapshot['rows'];let size=0
   const names=Object.keys(R36_SOURCE_QUERIES) as (keyof typeof R36_SOURCE_QUERIES)[]
   // Include catalog identity and server lifetime: a rewrite, type/default change

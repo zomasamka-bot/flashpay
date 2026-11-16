@@ -1,3 +1,4 @@
+import {resolveR36HistoryCheckpoint} from './r36-certified-history'
 import {decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {validateMerchantFeeQuote} from './merchant-fee-contract'
 import {financialIncomingWallet} from './financial-network'
@@ -150,8 +151,9 @@ export async function runR36CertificateWorker(db:R36CertificateDatabase,nonce:st
   if(a.schema!=='R36_ACCOUNTING_CLEARANCE_V1'||a.unbalancedStroops!=='0'||!Array.isArray(a.duplicateFinancialKeys)||a.duplicateFinancialKeys.length!==0||!Array.isArray(a.xorViolations)||a.xorViolations.length!==0||!['pgSnapshotDigest','reconciliationDigest','currentRightsDigest'].every(k=>typeof a[k]==='string'&&hex.test(a[k] as string))||a.ledgerInventoryDigest!==h.transactionsDigest)return fail('ACCOUNTING_NOT_CLEARED')
   if(x.schema!=='R36_HISTORICAL_EXCEPTIONS_V1'||!ids(x.ids)||typeof x.recordsDigest!=='string'||!hex.test(x.recordsDigest)||s.schema!=='R36_EXCEPTION_ISOLATION_V1'||!ids(s.exceptionIds)||JSON.stringify(s.exceptionIds)!==JSON.stringify(x.ids)||s.currentRightsDigest!==a.currentRightsDigest||s.disposition!=='ISOLATED_NO_CURRENT_RIGHTS_IMPACT'||typeof s.evidenceDigest!=='string'||!hex.test(s.evidenceDigest))return fail('EXCEPTION_RIGHTS_ISOLATION_MISSING')
   if(g.schema!=='R36_WALLET_CLEARANCE_V1'||g.authorityDisposition!=='CLEARED_FOR_BOUND_INTENT'||g.currentRightsDigest!==a.currentRightsDigest||!['walletHistoryDigest','accountingDigest','exceptionsDigest','exceptionIsolationDigest'].every(k=>g[k]===b[k]))return fail('WALLET_CLEARANCE_MISMATCH')
-  const snapshotReview=reviewR36EvidenceSnapshot(b,artifacts)
-  assertR36ExecutionScopePolicy(profile,artifacts,String(b.sourceWallet))
+  const checkpoint=await resolveR36HistoryCheckpoint(tx,String(p.policyDigest),String(b.sourceWallet),artifacts,profile,String(b.u2aTxid))
+  const snapshotReview=reviewR36EvidenceSnapshot(b,artifacts,checkpoint)
+  assertR36ExecutionScopePolicy(profile,artifacts,String(b.sourceWallet),checkpoint)
   if(snapshotReview.outcome!=='VERIFIED_SNAPSHOT')return fail('SNAPSHOT_'+snapshotReview.reason)
   if(replay)return consumeR36AdmissionCertificate({begin:fn=>fn(tx)},c.receipt)
   const manifest={schema:'R36_ADMISSION_CERTIFICATE_V1',purpose:'INITIAL_PREPARED_ADMISSION',issuerId:p.issuerId,keyId:p.keyId,policyDigest:p.policyDigest,...b,issuedAt:String(issued),expiresAt:String(expires)} as Record<string,unknown>

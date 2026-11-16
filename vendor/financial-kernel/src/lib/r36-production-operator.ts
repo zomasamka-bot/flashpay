@@ -61,11 +61,11 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
        r.rolcanlogin AND NOT (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls)
        AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member = r.oid)
        AND NOT has_database_privilege(r.oid,current_database(),'CREATE')
-       AND NOT EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname IN ('public','r36_signing')
+       AND NOT EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname IN ('public','r36_signing','r36_evidence_source','r36_registration')
                        AND has_schema_privilege(r.oid,n.oid,'CREATE')) AS restricted,
        NOT EXISTS (
          SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-         WHERE n.nspname IN ('public','r36_signing') AND c.relkind IN ('r','p','v','m','f')
+         WHERE n.nspname IN ('public','r36_signing','r36_evidence_source','r36_registration') AND c.relkind IN ('r','p','v','m','f')
            AND (has_table_privilege(r.oid,c.oid,'UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')
                 OR has_table_privilege(r.oid,c.oid,'INSERT') AND NOT
                     ($2='r36_issuer' AND n.nspname='public' AND c.relname='r36_independent_u2a_attestations')
@@ -83,7 +83,8 @@ export async function checkProductionTransaction(tx: Tx, c: Pick<Config, 'mode' 
                  (('r36_certificate_context','text'),('r36_record_certificate','text, text, jsonb, text'),('r36_revoke_certificate','text, text'),('r36_register_successor_binding','text'),
                   ('r36_terminal_review_context','text, text, text'),('r36_record_prior_closure','text, text, text, text, text, bigint, bigint'),
                   ('r36_bound_lifecycle_context','text, text'),('r36_record_bound_lifecycle','text, text, text, text, bigint, bigint'),('r36_revoke_prior_closure','text, text'),
-                  ('r36_lifecycle_job_receipt','text, text, text, text, text, text'),('r36_observe_owner_policy','text'),('r36_bind_initial_clearance','text'))
+                  ('r36_current_prior_observation','text, text, text, text'),('r36_history_checkpoint_context','text, text, text, jsonb, text'),('r36_publish_history_fact','text, text, text, text, text, text, text, text, text'),
+                  ('r36_closed_archive','text, text, text, text'),('r36_lifecycle_job_receipt','text, text, text, text, text, text'),('r36_observe_owner_policy','text'),('r36_bind_initial_clearance','text'))
              OR $2='r36_signer' AND n.nspname='r36_signing' AND
                (f.proname,oidvectortypes(f.proargtypes)) IN (('context','text'),('record','text, text'))
            )

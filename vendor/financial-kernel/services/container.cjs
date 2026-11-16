@@ -19,12 +19,22 @@ async function main(){const c=await input();const configured=c.kernelDeployment;
   const sql=postgres(c.databaseUrl,{max:1,prepare:false,connect_timeout:8,idle_timeout:30,ssl:{rejectUnauthorized:true,servername:host,minVersion:'TLSv1.2'},onnotice:()=>{},connection:{application_name:'flashpay_r36_readonly_dispatcher',default_transaction_read_only:true,statement_timeout:30000,lock_timeout:3000}});
   const db={beginReadOnly:fn=>trace.run('database_snapshot',()=>sql.begin('isolation level repeatable read read only',async q=>({value:await fn({unsafe:s=>q.unsafe(s)})})).then(x=>x.value))};
   const snapshot=await verifyR36ReadOnlySource(db);if(snapshot.custody!=='READONLY_SERVICE_NOT_CERTIFIED')throw Error('READONLY_CUSTODY');
+  // Preserve the original naive-timestamp interpretation, pinned in the
+  // immutable source format. Fresh applications use their enrolled format;
+  // an older installation keeps its existing process timezone until enrolled.
+  const sourceZone=await db.beginReadOnly(async tx=>{const installed=await tx.unsafe("SELECT to_regclass('r36_evidence_source.installation') IS NOT NULL installed");if(installed[0]?.installed!==true)return null;const rows=await tx.unsafe("SELECT to_jsonb(i)->>'source_timezone' zone FROM r36_evidence_source.installation i WHERE singleton");if(rows.length!==1)throw Error('SOURCE_FORMAT_REQUIRED');return rows[0].zone});
+  if(sourceZone!==null){if(!['UTC','Africa/Cairo'].includes(sourceZone))throw Error('SOURCE_TIMEZONE_UNQUALIFIED');process.env.TZ=sourceZone}
   const read=createR36ReadProxyFetch(c.provider),fetcher=(input,init)=>trace.run('provider_read',()=>read(input,init)),register=createR36RegistrarClient(c.registrar),observeOriginal=createR36RegistryObserver(c.issuer,c.config.registrarPolicyDigest),observe=signal=>trace.run('registry_observation',()=>observeOriginal(signal)),lifecycleOriginal=createR36LifecycleClient(c.issuer),lifecycle=(body,signal)=>trace.run(['prior_context','bound_context','record_prior','record_bound'].includes(body.action)?body.action:'lifecycle',()=>lifecycleOriginal(body,signal)),automatic=createR36AutomaticLifecycle(db,c.config,{fetcher,observe,lifecycle,register:b=>trace.run('registrar',()=>register(b,AbortSignal.timeout(135000)))});
   const {createProducerScheduler}=require('/tools/producer-scheduler.cjs'),{runProducerCycle}=require('/tools/producer-cycle.cjs');
+  let archival;
   const scheduler=createProducerScheduler({set:setTimeout,clear:clearTimeout,fail:()=>process.exit(2),cycle:async()=>{
+   const ingress=require('/tools/ingress-wake.cjs').readIngressTicket(c.ingressTicket);
    console.log(JSON.stringify({producerCycle:"started",at:new Date().toISOString()}));
    const {result:x,lifecycle:l,timing}=await runProducerCycle({automatic,dispatch:()=>dispatchR36EvidenceCycle(db,c.config,{fetcher,register:automatic.register,observeOwnerRegistry:observe})});
-   console.log(JSON.stringify({lifecycleStatus:l.status,lifecycleReason:l.reason,dispatchStatus:x.status,policies:x.policies,jobs:x.jobs,published:x.published,held:x.held,reasons:x.reasons,timing,at:new Date().toISOString(),financialAuthority:false}));
+   console.log(JSON.stringify({ingress,lifecycleStatus:l.status,lifecycleReason:l.reason,dispatchStatus:x.status,policies:x.policies,jobs:x.jobs,published:x.published,held:x.held,reasons:x.reasons,timing,at:new Date().toISOString(),financialAuthority:false}));
+   // At most one bounded archive task runs behind the completed financial
+   // cycle. Continuous traffic cannot starve cleanup; it grants no authority.
+   if(!archival)archival=automatic.housekeeping().then(a=>{if(a.released)console.log(JSON.stringify({phase:'CLOSED_LOCAL_COPIES_ARCHIVED',...a,financialAuthority:false}))}).catch(()=>console.warn('[R36 storage] redundant local copies retained')).finally(()=>{archival=undefined});
    return x.policies?15000:600000;
   }});
   process.on('SIGUSR1',()=>scheduler.kick());

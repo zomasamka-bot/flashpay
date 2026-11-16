@@ -1,3 +1,5 @@
+import {archiveR36ClosedEvidence} from './r36-closed-evidence-archival'
+import {archiveR36PriorJobs} from './r36-prior-job-archival'
 import {financialNetwork} from './financial-network'
 import {generalOperationPolicy} from "./r36-operation-policy"
 /** Private producer orchestration. All durable writes stay in the separately
@@ -18,7 +20,8 @@ function requireFact(v:unknown,s:string):asserts v{if(!v)throw Error(s)}
 export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchConfig,ports:{fetcher:typeof fetch;observe(signal:AbortSignal):Promise<void>;lifecycle(body:Row,signal:AbortSignal):Promise<Row>;register(binding:Row):Promise<R36CertificateResult>}){
  let prior:{context:Row;proofDigest:string;cutoffLedger:string;expiresAt:number}|undefined
  const call=(body:Row)=>ports.lifecycle(body,AbortSignal.timeout(70000))
- async function context(body:Row){await ports.observe(AbortSignal.timeout(8000));const r=await call(body);if(body.action==='prior_context'&&r.outcome==='BLOCKED'&&r.reason==='LIFECYCLE_CONTEXT_UNAVAILABLE')throw Error('AUTOMATIC_TERMINAL_FACTS_PENDING');requireFact(r.outcome==='CONTEXT'&&obj(r.context)&&obj(r.context.policy)&&r.context.policy.policy_digest===c.registrarPolicyDigest,'AUTOMATIC_LIFECYCLE_CONTEXT');return r.context as Row}
+ async function contextState(body:Row){await ports.observe(AbortSignal.timeout(8000));const r=await call(body);if(body.action==='prior_context'&&r.outcome==='BLOCKED'&&r.reason==='LIFECYCLE_CONTEXT_UNAVAILABLE')throw Error('AUTOMATIC_TERMINAL_FACTS_PENDING');requireFact(r.outcome==='CONTEXT'&&obj(r.context)&&obj(r.context.policy)&&r.context.policy.policy_digest===c.registrarPolicyDigest,'AUTOMATIC_LIFECYCLE_CONTEXT');return {context:r.context as Row,closureCurrent:r.closureCurrent===true}}
+ async function context(body:Row){return (await contextState(body)).context}
  async function facts(p:Row){
   requireFact(hex(p.liveEvidenceInputsSha256),'AUTOMATIC_FACTS_NOT_BOUND')
   const dir=await realpath(c.factsDirectory),file=path.join(dir,c.registrarPolicyDigest+'.json'),s=await lstat(file)
@@ -46,24 +49,26 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
    if(!a){prior=undefined;return{status:'FIRST_CERTIFICATE_PATH_READY'}}
    if(!head.completed){prior=undefined;return{status:'WAITING_FOR_ORIGINAL_TERMINAL_CHECKPOINT'}}
    if(successor)requireFact(successor.sourceWallet===wallet&&hex(successor.nonce),'AUTOMATIC_SUCCESSOR_IDENTITY')
-   const request={action:'prior_context',wallet,paymentId:a.owner_payment_id,...(successor?{nonce:successor.nonce}:{})},ctx=await context(request)
-   // An idle wallet has no successor to bind. Keep the original protected
-   // context/terminal-fact checks above, but do not persist another identical
-   // closure every idle cycle. register(binding) still proves and records the
-   // full fresh closure before an actual successor can acquire authority.
-   if(!successor)return{status:'WAITING_FOR_SUCCESSOR'}
+   // A durable, short operational request makes ingress preparation independent
+   // of the successor certificate. This hint never supplies financial authority.
+   if(!successor){
+    const demand=await db.beginReadOnly(tx=>tx.unsafe("SELECT 1 FROM public.r36_ingress_readiness_work WHERE policy_digest='"+c.registrarPolicyDigest+"' AND source_wallet='"+wallet+"' AND requested_until>clock_timestamp()"))
+    if(demand.length===0)return{status:'WAITING_FOR_SUCCESSOR'}
+   }
+   const request={action:'prior_context',wallet,paymentId:a.owner_payment_id,...(successor?{nonce:successor.nonce}:{})},state=await contextState(request),ctx=state.context
+   if(!successor&&state.closureCurrent)return{status:'PRIOR_CLOSURE_CURRENT'}
    const f=await facts(profile)
    // Independent read-only acquisitions may overlap. Nothing is published or
    // accepted until every source succeeds and the original joint review passes.
-   const [snapshot,histories,outboundPi]=await Promise.all([
-    readR36LiveSource(db,'service'),
-    appendR36LiveHistories(f.histories as Parameters<typeof appendR36LiveHistories>[0],profile.liveHistoryPolicy,ports.fetcher),
+   const snapshot=await readR36LiveSource(db,'service')
+   const [histories,outboundPi]=await Promise.all([
+    appendR36LiveHistories(f.histories as Parameters<typeof appendR36LiveHistories>[0],profile.liveHistoryPolicy,ports.fetcher,snapshot.checkpoint),
     piRecord((ctx.terminal as Row).piPaymentId)
    ])
    const as=snapshot.rows.authorities.filter(x=>x.network===financialNetwork()&&x.source_wallet===wallet)
    requireFact(as.length===1&&Object.keys(a).every(k=>as[0][k]===a[k]),'AUTOMATIC_AUTHORITY_CHANGED')
    const completed=a.operation_kind==='settlement'?snapshot.rows.settlements.some(s=>s.payment_id===a.owner_payment_id&&s.stage==='db_finalized'):snapshot.rows.refunds.some(r=>r.payment_id===a.owner_payment_id&&r.refund_id===a.owner_operation_id&&r.status==='completed'&&r.stage==='audit_recorded')
-   requireFact(completed,'AUTOMATIC_TERMINAL_CHANGED')
+   requireFact(completed||snapshot.checkpoint&&snapshot.checkpoint.checkpoint.terminalEntry.paymentId===a.owner_payment_id&&snapshot.checkpoint.checkpoint.terminalEntry.transactionHash===a.prepared_tx_hash,'AUTOMATIC_TERMINAL_CHANGED')
    const made=produceR36TerminalEvidence({context:ctx,snapshot,histories,outboundPi,exceptions:f.exceptions as {records:Row[];isolation:Row[]},executionScopeDigest:profile.executionScopeDigest as string})
    requireFact(made.outcome==='UNSIGNED_TERMINAL_REQUIRES_CUSTODIAN'&&made.artifacts,'AUTOMATIC_TERMINAL_EVIDENCE_'+('reason'in made?made.reason:'MISSING'))
    const r=await publishR36LifecycleJob({kind:'prior',context:ctx,cutoffLedger:String(made.cutoffLedger),artifacts:made.artifacts!,privateKeyPem:c.custodianPrivateKeyPem,jobDirectory:c.jobDirectory,request:{...request,action:'record_prior'}},{refresh:()=>context(request),submit:call})
@@ -72,7 +77,7 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
    // this local observation never becomes a financial authority.
    requireFact(Number.isSafeInteger(r.evidenceIssuedAt),'AUTOMATIC_OBSERVATION_TIME')
    prior={context:ctx,proofDigest:String(r.proofDigest),cutoffLedger:String(made.cutoffLedger),expiresAt:Number(r.evidenceIssuedAt)+60}
-   return{status:'PRIOR_CLOSURE_RECORDED',proofDigest:r.proofDigest}
+   return{status:'PRIOR_CLOSURE_RECORDED',proofDigest:r.proofDigest,...(r.checkpoint?{checkpoint:r.checkpoint}:{})}
   }catch(e){if(e instanceof Error&&e.message==='AUTOMATIC_TERMINAL_FACTS_PENDING'){prior=undefined;return{status:'WAITING_FOR_ORIGINAL_TERMINAL_FACTS'}}return{status:'AUTOMATIC_LIFECYCLE_HELD',reason:e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'AUTOMATIC_SOURCE_UNAVAILABLE'}}
  }
  let registeredStatus:Row|undefined
@@ -109,5 +114,15 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
     authorizesFinancialRelease:false,authorizesWalletActivation:false,authorizesRotation:false}
   }
  }
- return{prepare,register,beginCycle,cycleResult,registeredResult}
+ async function housekeeping(){
+  const archive=async(body:Row)=>{
+   const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined
+   try{return await Promise.race([ports.lifecycle(body,controller.signal),new Promise<Row>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('ARCHIVE_DEADLINE'))},1000)})])}
+   finally{if(timer)clearTimeout(timer)}
+  }
+  const closed=await archiveR36ClosedEvidence(c.jobDirectory,c.artifactDirectory,c.registrarPolicyDigest,archive)
+  const prior=await archiveR36PriorJobs(c.jobDirectory,c.registrarPolicyDigest,archive)
+  return{checked:closed.checked+prior.checked,released:closed.released+prior.released,retained:closed.retained+prior.retained}
+ }
+ return{prepare,register,beginCycle,cycleResult,registeredResult,housekeeping}
 }

@@ -5,7 +5,7 @@ import {verifyR36EvidenceCandidate,type R36Candidate} from './r36-prepared-evide
 export async function readR36PreparedSource(db:R36ReadOnlySource,paymentId:string){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(paymentId))throw Error('PREPARED_SOURCE_IDENTITY')
  return db.beginReadOnly(async tx=>{
-  const snapshot=await readR36LiveSource({beginReadOnly:fn=>fn(tx)},'service')
+  const snapshot=await readR36LiveSource({beginReadOnly:fn=>fn(tx)},'service',paymentId)
   // UUID grammar above excludes all SQL syntax. The source port accepts fixed SQL only.
   const rows=await tx.unsafe(`SELECT candidate FROM public.r36_prepared_evidence_candidates WHERE payment_id='${paymentId}' LIMIT 2`)
   if(rows.length!==1)throw Error('PREPARED_SOURCE_CARDINALITY')

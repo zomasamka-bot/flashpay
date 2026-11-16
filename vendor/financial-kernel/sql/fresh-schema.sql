@@ -7714,3 +7714,803 @@ CREATE OR REPLACE VIEW r36_evidence_source.r36_legacy_right_holds WITH (security
 DO $owner$ DECLARE own text; BEGIN SELECT r.rolname INTO STRICT own FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE c.oid='public.r36_legacy_right_holds'::regclass; EXECUTE format('ALTER VIEW r36_evidence_source.r36_legacy_right_holds OWNER TO %I',own); END $owner$;
 REVOKE ALL ON r36_evidence_source.r36_legacy_right_holds FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
 GRANT SELECT ON r36_evidence_source.r36_legacy_right_holds TO r36_evidence_reader;
+
+-- O2-1 ingress readiness (operational only)
+-- Operational demand only. No admission, certificate, wallet or money is changed.
+CREATE TABLE IF NOT EXISTS public.r36_ingress_readiness_work (
+ policy_digest text NOT NULL REFERENCES public.r36_certificate_policies(policy_digest),
+ source_wallet text NOT NULL CHECK (source_wallet ~ '^G[A-Z2-7]{55}$'),
+ requested_until timestamptz NOT NULL,
+ PRIMARY KEY(policy_digest,source_wallet)
+);
+ALTER TABLE public.r36_ingress_readiness_work OWNER TO r36_owner;
+REVOKE ALL ON public.r36_ingress_readiness_work FROM PUBLIC,r36_runtime,r36_issuer,r36_registrar,r36_signer,r36_evidence_reader;
+GRANT SELECT ON public.r36_ingress_readiness_work TO r36_evidence_reader;
+
+CREATE OR REPLACE FUNCTION public.r36_request_ingress_readiness(p_policy text,p_payment text,p_uid text,p_role text)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $body$
+DECLARE intake public.r36_payment_intake; policy public.r36_certificate_policies;
+BEGIN
+ IF session_user<>'r36_runtime' OR current_setting('transaction_isolation')<>'read committed'
+ OR p_role IS NULL OR p_uid IS NULL OR p_role NOT IN ('merchant','payer') OR length(p_uid) NOT BETWEEN 1 AND 128 THEN RETURN false; END IF;
+ SELECT * INTO policy FROM public.r36_certificate_policies WHERE policy_digest=p_policy;
+ IF NOT FOUND OR NOT policy.enabled OR policy.revoked OR NOT public.r36_general_policy(policy.worker_profile)
+ -- A wake may be needed to refresh the revocation observation itself. This
+ -- operational hint grants no right; issuance and use still require freshness.
+ OR extract(epoch FROM clock_timestamp()) NOT BETWEEN policy.valid_from AND policy.valid_until-1 THEN RETURN false; END IF;
+ SELECT * INTO intake FROM public.r36_payment_intake WHERE policy_digest=p_policy AND payment_id=p_payment;
+ IF NOT FOUND OR intake.source_wallet IS DISTINCT FROM public.r36_policy_wallet(policy.worker_profile)
+ OR (p_role='merchant' AND intake.merchant_uid IS DISTINCT FROM p_uid)
+ OR (p_role='payer' AND intake.payer_uid IS NOT NULL AND intake.payer_uid IS DISTINCT FROM p_uid)
+ OR intake.payer_pi_payment_id IS NOT NULL THEN RETURN false; END IF;
+ INSERT INTO public.r36_ingress_readiness_work(policy_digest,source_wallet,requested_until)
+ VALUES(p_policy,intake.source_wallet,clock_timestamp()+interval '60 seconds')
+ ON CONFLICT(policy_digest,source_wallet) DO UPDATE SET requested_until=EXCLUDED.requested_until;
+ RETURN true;
+END $body$;
+ALTER FUNCTION public.r36_request_ingress_readiness(text,text,text,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_request_ingress_readiness(text,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_request_ingress_readiness(text,text,text,text) TO r36_runtime;
+
+-- A scheduling observation only. The original runtime clearance still checks
+-- the seal, accounting, current policy/revocation and exact receipt at use.
+CREATE OR REPLACE FUNCTION public.r36_current_prior_observation(p_policy text,p_wallet text,p_payment text,p_context text)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $body$
+DECLARE c jsonb;
+BEGIN
+ IF session_user<>'r36_issuer' OR current_setting('transaction_isolation')<>'read committed' THEN RETURN false; END IF;
+ c:=public.r36_terminal_review_context(p_policy,p_wallet,p_payment);
+ IF c IS NULL OR c->>'contextDigest' IS DISTINCT FROM p_context THEN RETURN false; END IF;
+ RETURN EXISTS(SELECT 1 FROM public.r36_prior_closure_receipts r
+  JOIN public.financial_wallet_finality_seals s ON s.network=r.network AND s.source_wallet=r.source_wallet AND s.prepared_tx_hash=r.prior_hash
+  WHERE r.policy_digest=p_policy AND r.network=public.r36_network() AND r.source_wallet=p_wallet AND r.prior_payment=p_payment
+  AND r.context_digest=p_context AND r.evidence_digest=s.evidence_digest AND NOT r.revoked
+  AND r.issued_at>=floor(extract(epoch FROM s.sealed_at)) AND r.issued_at<=extract(epoch FROM clock_timestamp())
+  AND r.expires_at>extract(epoch FROM clock_timestamp())+10);
+END $body$;
+ALTER FUNCTION public.r36_current_prior_observation(text,text,text,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_current_prior_observation(text,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_current_prior_observation(text,text,text,text) TO r36_issuer;
+
+-- O2-1 exact archive retention and lookup
+-- Preserve exact historical artifacts. Indexing changes no acceptance rule.
+CREATE INDEX IF NOT EXISTS r36_prior_archive_bundle_idx ON public.r36_prior_closure_receipts
+ (policy_digest,source_wallet,prior_payment,(md5((evidence_text::jsonb->'artifacts')::text)))
+ WHERE NOT revoked;
+CREATE INDEX IF NOT EXISTS r36_prior_current_scope_idx ON public.r36_prior_closure_receipts
+ (policy_digest,source_wallet,prior_payment,context_digest,expires_at DESC) WHERE NOT revoked;
+CREATE OR REPLACE FUNCTION public.r36_lifecycle_job_receipt(p_kind text, p_policy text, p_wallet text, p_subject text, p_aux text, p_text text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'pg_temp'
+    AS $$
+DECLARE v jsonb;r record;BEGIN
+ IF session_user<>'r36_issuer' OR p_text IS NULL OR length(p_text)>12000000 THEN RETURN NULL; END IF;
+ v=p_text::jsonb;
+ IF p_kind='prior_closure' THEN
+  SELECT c.payload_digest,c.policy_digest INTO r FROM public.r36_prior_closure_receipts c
+  JOIN public.r36_certificate_policies p ON p.policy_digest=c.policy_digest
+  WHERE c.policy_digest=p_policy AND c.source_wallet=p_wallet AND c.prior_payment=p_subject
+  AND NOT c.revoked AND p.enabled AND NOT p.revoked
+  AND md5((c.evidence_text::jsonb->'artifacts')::text)=md5(v::text)
+  AND c.evidence_text::jsonb->'artifacts'=v
+  ORDER BY c.verified_at DESC LIMIT 1;
+ ELSIF p_kind='bound_successor' THEN
+  SELECT l.approval_id AS payload_digest,c.policy_digest INTO r FROM public.r36_lifecycle_approval_links l
+  JOIN public.r36_prior_closure_receipts c ON c.payload_digest=l.closure_digest
+  JOIN public.r36_certificate_policies p ON p.policy_digest=c.policy_digest
+  JOIN public.r36_certificate_receipts receipt ON receipt.nonce=l.successor_nonce
+  WHERE l.successor_nonce=p_subject AND l.closure_digest=p_aux AND l.evidence_text::jsonb=v
+  AND NOT c.revoked AND p.enabled AND NOT p.revoked
+  AND NOT EXISTS(SELECT 1 FROM public.r36_certificate_revocations WHERE payload_digest=receipt.payload_digest);
+ ELSE RETURN NULL; END IF;
+ IF NOT FOUND THEN RETURN NULL; END IF;
+ RETURN jsonb_build_object('proofDigest',r.payload_digest,'policyDigest',r.policy_digest,'scope','HISTORICAL_RECORD_ONLY');
+END $$;
+CREATE OR REPLACE FUNCTION public.r36_preserve_prior_archive() RETURNS trigger
+ LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $body$
+BEGIN
+ IF TG_OP<>'UPDATE' THEN RAISE EXCEPTION 'IMMUTABLE_PRIOR_ARCHIVE'; END IF;
+ IF (to_jsonb(NEW)-'revoked') IS DISTINCT FROM (to_jsonb(OLD)-'revoked') OR (OLD.revoked AND NOT NEW.revoked)
+ THEN RAISE EXCEPTION 'IMMUTABLE_PRIOR_ARCHIVE'; END IF;
+ RETURN NEW;
+END $body$;
+ALTER FUNCTION public.r36_preserve_prior_archive() OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_preserve_prior_archive() FROM PUBLIC;
+DO $install$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.r36_prior_closure_receipts'::regclass AND tgname='r36_preserve_prior_archive') THEN
+  CREATE TRIGGER r36_preserve_prior_archive BEFORE UPDATE OR DELETE ON public.r36_prior_closure_receipts FOR EACH ROW EXECUTE FUNCTION public.r36_preserve_prior_archive();
+  CREATE TRIGGER r36_preserve_prior_archive_no_truncate BEFORE TRUNCATE ON public.r36_prior_closure_receipts FOR EACH STATEMENT EXECUTE FUNCTION public.r36_preserve_prior_archive();
+ END IF;
+END $install$;
+
+-- O2-1: permanent certified history and immutable closed evidence archive
+-- Separate, protected proof-format enrollment. Never mutate the original policy.
+CREATE TABLE IF NOT EXISTS public.r36_history_enrollments (
+ policy_digest text NOT NULL REFERENCES public.r36_certificate_policies(policy_digest),source_wallet text NOT NULL,
+ version text NOT NULL CHECK(version='R36_CERTIFIED_HISTORY_CHECKPOINT_V1'),approval_digest text NOT NULL CHECK(approval_digest ~ '^[0-9a-f]{64}$'),
+ revoked boolean NOT NULL DEFAULT false,PRIMARY KEY(policy_digest,source_wallet)
+);
+ALTER TABLE public.r36_history_enrollments OWNER TO r36_owner;
+REVOKE ALL ON public.r36_history_enrollments FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON public.r36_history_enrollments TO r36_issuer,r36_evidence_reader;
+-- Historical fact index only. Activation is separate and cannot occur merely
+-- because a digest or a syntactically valid checkpoint has been supplied.
+CREATE TABLE IF NOT EXISTS public.r36_history_checkpoints (
+ digest text PRIMARY KEY CHECK(digest ~ '^[0-9a-f]{64}$'),
+ policy_digest text NOT NULL REFERENCES public.r36_certificate_policies(policy_digest),
+ source_wallet text NOT NULL CHECK(source_wallet ~ '^G[A-Z2-7]{55}$'),
+ parent_digest text REFERENCES public.r36_history_checkpoints(digest),
+ closure_digest text NOT NULL REFERENCES public.r36_prior_closure_receipts(payload_digest),
+ cutoff_ledger numeric(30,0) NOT NULL, closing_sequence numeric(30,0) NOT NULL,
+ checkpoint_text text NOT NULL CHECK(octet_length(checkpoint_text)<=100000),
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ revoked boolean NOT NULL DEFAULT false,
+ CHECK(digest=encode(sha256(convert_to(checkpoint_text,'UTF8')),'hex'))
+);
+ALTER TABLE public.r36_history_checkpoints OWNER TO r36_owner;
+CREATE INDEX IF NOT EXISTS r36_history_checkpoints_parent ON public.r36_history_checkpoints(parent_digest);
+CREATE INDEX IF NOT EXISTS r36_history_checkpoints_closure ON public.r36_history_checkpoints(closure_digest);
+CREATE TABLE IF NOT EXISTS public.r36_history_activated (
+ digest text PRIMARY KEY REFERENCES public.r36_history_checkpoints(digest),
+ policy_digest text NOT NULL,source_wallet text NOT NULL,epoch bigint NOT NULL CHECK(epoch>0),
+ source_protection_digest text NOT NULL CHECK(source_protection_digest ~ '^[0-9a-f]{64}$'),
+ activated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE(policy_digest,source_wallet,epoch)
+);
+ALTER TABLE public.r36_history_activated OWNER TO r36_owner;
+CREATE TABLE IF NOT EXISTS public.r36_history_checkpoint_heads (
+ policy_digest text NOT NULL,source_wallet text NOT NULL,
+ digest text NOT NULL REFERENCES public.r36_history_activated(digest),
+ PRIMARY KEY(policy_digest,source_wallet)
+);
+ALTER TABLE public.r36_history_checkpoint_heads OWNER TO r36_owner;
+-- Capture the approved opening balances once. Later checkpoints never reload
+-- the complete immutable execution-scope baseline to look up one merchant.
+CREATE TABLE IF NOT EXISTS public.r36_history_opening_scopes (
+ policy_digest text NOT NULL,source_wallet text NOT NULL,scope_digest text NOT NULL,
+ checkpoint_digest text NOT NULL REFERENCES public.r36_history_activated(digest),
+ PRIMARY KEY(policy_digest,source_wallet)
+);
+ALTER TABLE public.r36_history_opening_scopes OWNER TO r36_owner;
+REVOKE ALL ON public.r36_history_opening_scopes FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+CREATE TABLE IF NOT EXISTS public.r36_history_opening_balances (
+ policy_digest text NOT NULL,source_wallet text NOT NULL,merchant_id text NOT NULL,
+ opening_stroops numeric(30,0) NOT NULL CHECK(opening_stroops>=0),
+ opening_unsettled_stroops numeric(30,0) NOT NULL CHECK(opening_unsettled_stroops>=0),
+ checkpoint_digest text NOT NULL REFERENCES public.r36_history_activated(digest),
+ PRIMARY KEY(policy_digest,source_wallet,merchant_id)
+);
+ALTER TABLE public.r36_history_opening_balances OWNER TO r36_owner;
+ALTER TABLE public.r36_history_opening_balances ADD COLUMN IF NOT EXISTS opening_unsettled_stroops numeric(30,0) NOT NULL DEFAULT 0 CHECK(opening_unsettled_stroops>=0);
+REVOKE ALL ON public.r36_history_opening_balances FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON public.r36_history_opening_balances TO r36_evidence_reader;
+CREATE TABLE IF NOT EXISTS public.r36_history_credit_totals (
+ policy_digest text NOT NULL,source_wallet text NOT NULL,merchant_uid text NOT NULL,merchant_id text NOT NULL,opening_stroops numeric(30,0) NOT NULL CHECK(opening_stroops>=0),
+ epoch bigint NOT NULL CHECK(epoch>0),credit_stroops numeric(30,0) NOT NULL CHECK(credit_stroops>=0),
+ checkpoint_digest text NOT NULL REFERENCES public.r36_history_activated(digest),
+ PRIMARY KEY(policy_digest,source_wallet,merchant_uid,epoch)
+);
+ALTER TABLE public.r36_history_credit_totals OWNER TO r36_owner;
+ALTER TABLE public.r36_history_credit_totals ADD COLUMN IF NOT EXISTS merchant_id text NOT NULL;
+ALTER TABLE public.r36_history_credit_totals ADD COLUMN IF NOT EXISTS opening_stroops numeric(30,0) NOT NULL CHECK(opening_stroops>=0);
+REVOKE ALL ON public.r36_history_checkpoints,public.r36_history_activated,public.r36_history_checkpoint_heads,public.r36_history_credit_totals FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON public.r36_history_checkpoints,public.r36_history_activated,public.r36_history_checkpoint_heads,public.r36_history_credit_totals TO r36_evidence_reader;
+CREATE OR REPLACE FUNCTION public.r36_store_history_checkpoint(p_policy text,p_wallet text,p_closure text,p_text text,p_digest text) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE c jsonb;p public.r36_certificate_policies;r public.r36_prior_closure_receipts;parent public.r36_history_checkpoints;old public.r36_history_checkpoints;n bigint;
+BEGIN
+ IF session_user<>'r36_issuer' OR p_text IS NULL OR octet_length(p_text)>100000 OR p_digest IS DISTINCT FROM encode(sha256(convert_to(p_text,'UTF8')),'hex') THEN RAISE EXCEPTION 'CHECKPOINT_ISSUER_REQUIRED'; END IF;
+ c=p_text::jsonb;n=floor(extract(epoch FROM clock_timestamp()))::bigint;
+ SELECT * INTO p FROM public.r36_certificate_policies WHERE policy_digest=p_policy FOR SHARE;
+ IF NOT FOUND OR NOT p.enabled OR p.revoked OR p.valid_from>n OR p.valid_until<=n OR p.revocation_checked_at>n OR p.revocation_valid_until<=n
+ OR NOT EXISTS(SELECT 1 FROM public.r36_history_enrollments WHERE policy_digest=p_policy AND source_wallet=p_wallet AND NOT revoked) THEN RAISE EXCEPTION 'CHECKPOINT_POLICY'; END IF;
+ SELECT * INTO r FROM public.r36_prior_closure_receipts WHERE payload_digest=p_closure FOR SHARE;
+ IF NOT FOUND OR r.revoked OR r.policy_digest<>p_policy OR r.source_wallet<>p_wallet THEN RAISE EXCEPTION 'CHECKPOINT_ORIGINAL_CLOSURE'; END IF;
+ IF c->>'applicationId' IS DISTINCT FROM (SELECT application_id FROM public.kernel_deployment_identity WHERE singleton) OR c->>'schema' IS DISTINCT FROM 'R36_CERTIFIED_HISTORY_CHECKPOINT_V1' OR c->>'network' IS DISTINCT FROM public.r36_network()
+ OR c->>'policyDigest' IS DISTINCT FROM p_policy OR c->>'sourceWallet' IS DISTINCT FROM p_wallet OR c->>'closureDigest' IS DISTINCT FROM p_closure
+ OR c->>'executionScopeDigest' IS DISTINCT FROM p.worker_profile->>'executionScopeDigest'
+ OR c->'terminalTransaction'->'input'->>'preparedHash' IS DISTINCT FROM r.prior_hash
+ OR c->'terminalEntry'->>'paymentId' IS DISTINCT FROM r.prior_payment
+ OR c->>'closingSequence' IS DISTINCT FROM c->'terminalTransaction'->'input'->>'preparedSequence'
+ OR coalesce(c->>'cutoffLedger','') !~ '^[1-9][0-9]{0,29}$' OR coalesce(c->>'closingSequence','') !~ '^[1-9][0-9]{0,29}$'
+ THEN RAISE EXCEPTION 'CHECKPOINT_CLOSURE_BINDING'; END IF;
+ SELECT * INTO old FROM public.r36_history_checkpoints WHERE digest=p_digest;
+ IF FOUND THEN
+  IF NOT old.revoked AND old.checkpoint_text=p_text AND old.closure_digest=p_closure AND old.policy_digest=p_policy AND old.source_wallet=p_wallet THEN RETURN 'REPLAYED'; END IF;
+  RAISE EXCEPTION 'CHECKPOINT_REPLAY_CONFLICT';
+ END IF;
+ -- A newly certified fact must originate from a current original review.
+ -- Replaying its identical committed fact above does not extend any authority.
+ IF r.issued_at>n OR r.expires_at<=n THEN RAISE EXCEPTION 'CHECKPOINT_CLOSURE_EXPIRED'; END IF;
+ IF c->>'parentDigest' IS NOT NULL THEN
+  SELECT * INTO parent FROM public.r36_history_checkpoints WHERE digest=c->>'parentDigest' FOR SHARE;
+  IF NOT FOUND OR parent.revoked OR parent.policy_digest<>p_policy OR parent.source_wallet<>p_wallet
+  OR parent.cutoff_ledger>=(c->>'cutoffLedger')::numeric OR parent.closing_sequence>=(c->>'closingSequence')::numeric
+  OR NOT EXISTS(SELECT 1 FROM public.r36_history_checkpoint_heads h WHERE h.policy_digest=p_policy AND h.source_wallet=p_wallet AND h.digest=parent.digest)
+  THEN RAISE EXCEPTION 'CHECKPOINT_PARENT'; END IF;
+ ELSIF EXISTS(SELECT 1 FROM public.r36_history_checkpoint_heads WHERE policy_digest=p_policy AND source_wallet=p_wallet) THEN RAISE EXCEPTION 'CHECKPOINT_PARENT_REQUIRED'; END IF;
+ INSERT INTO public.r36_history_checkpoints(digest,policy_digest,source_wallet,parent_digest,closure_digest,cutoff_ledger,closing_sequence,checkpoint_text)
+ VALUES(p_digest,p_policy,p_wallet,c->>'parentDigest',p_closure,(c->>'cutoffLedger')::numeric,(c->>'closingSequence')::numeric,p_text);
+ RETURN 'RECORDED';
+END $$;
+ALTER FUNCTION public.r36_store_history_checkpoint(text,text,text,text,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_store_history_checkpoint(text,text,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_store_history_checkpoint(text,text,text,text,text) TO r36_issuer;
+CREATE TABLE IF NOT EXISTS public.r36_history_network_records (
+ source_wallet text NOT NULL,tx_hash text NOT NULL,operation_id text NOT NULL,ledger numeric(30,0) NOT NULL,
+ direction text NOT NULL CHECK(direction IN ('incoming','outgoing')),record_text text NOT NULL CHECK(octet_length(record_text)<=100000),
+ checkpoint_digest text NOT NULL REFERENCES public.r36_history_checkpoints(digest),
+ PRIMARY KEY(source_wallet,tx_hash),UNIQUE(source_wallet,operation_id)
+);
+ALTER TABLE public.r36_history_network_records OWNER TO r36_owner;
+REVOKE ALL ON public.r36_history_network_records FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON public.r36_history_network_records TO r36_evidence_reader;
+DROP FUNCTION IF EXISTS public.r36_history_checkpoint_context(text,text,text,jsonb);
+CREATE OR REPLACE FUNCTION public.r36_history_checkpoint_context(p_policy text,p_wallet text,p_digest text,p_merchants jsonb,p_inbound text DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE c public.r36_history_checkpoints;a public.r36_history_activated;credits jsonb;inbound jsonb;
+BEGIN
+ IF session_user NOT IN ('r36_issuer','r36_registrar') OR p_merchants IS NULL OR jsonb_typeof(p_merchants)<>'array' OR jsonb_array_length(p_merchants)>20000 THEN RETURN NULL; END IF;
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_merchants) v WHERE jsonb_typeof(v)<>'string' OR (v#>>'{}') !~ '^[A-Za-z0-9_.:-]{1,128}$')
+ OR (SELECT count(*)<>count(DISTINCT v) FROM jsonb_array_elements(p_merchants) v) THEN RETURN NULL; END IF;
+ SELECT * INTO c FROM public.r36_history_checkpoints WHERE digest=p_digest AND policy_digest=p_policy AND source_wallet=p_wallet AND NOT revoked;
+ IF NOT FOUND THEN RETURN NULL; END IF;
+ SELECT * INTO a FROM public.r36_history_activated WHERE digest=c.digest AND policy_digest=p_policy AND source_wallet=p_wallet;
+ IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM public.r36_certificate_policies WHERE policy_digest=p_policy AND enabled AND NOT revoked AND EXISTS(SELECT 1 FROM public.r36_history_enrollments WHERE policy_digest=p_policy AND source_wallet=p_wallet AND NOT revoked))
+ OR NOT EXISTS(SELECT 1 FROM public.r36_prior_closure_receipts WHERE payload_digest=c.closure_digest AND NOT revoked) THEN RETURN NULL; END IF;
+ SELECT coalesce(jsonb_agg(jsonb_build_object('merchantUid',m.uid,'creditStroops',coalesce(b.credit_stroops,0)::text,'merchantId',b.merchant_id,'openingStroops',b.opening_stroops::text) ORDER BY m.uid),'[]'::jsonb) INTO credits
+ FROM (SELECT value AS uid FROM jsonb_array_elements_text(p_merchants)) m
+ LEFT JOIN LATERAL (SELECT credit_stroops,merchant_id,opening_stroops FROM public.r36_history_credit_totals t WHERE t.policy_digest=p_policy AND t.source_wallet=p_wallet AND t.merchant_uid=m.uid AND t.epoch<=a.epoch ORDER BY t.epoch DESC LIMIT 1) b ON true;
+ IF p_inbound IS NOT NULL THEN SELECT n.record_text::jsonb INTO inbound FROM public.r36_history_network_records n JOIN public.r36_history_checkpoints cp ON cp.digest=n.checkpoint_digest JOIN public.r36_history_activated ca ON ca.digest=cp.digest WHERE n.source_wallet=p_wallet AND n.tx_hash=p_inbound AND cp.policy_digest=p_policy AND NOT cp.revoked AND ca.epoch<=a.epoch AND n.direction='incoming'; END IF;
+ RETURN jsonb_build_object('digest',c.digest,'checkpointText',c.checkpoint_text,'credits',credits,'inbound',inbound);
+END $$;
+ALTER FUNCTION public.r36_history_checkpoint_context(text,text,text,jsonb,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_history_checkpoint_context(text,text,text,jsonb,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_history_checkpoint_context(text,text,text,jsonb,text) TO r36_issuer;
+CREATE OR REPLACE FUNCTION public.r36_preserve_history_checkpoint() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $$
+BEGIN
+ IF TG_OP='UPDATE' AND TG_TABLE_NAME IN ('r36_history_checkpoints','r36_history_enrollments') THEN
+  IF to_jsonb(NEW)-'revoked'=to_jsonb(OLD)-'revoked' AND NOT (OLD.revoked AND NOT NEW.revoked) THEN RETURN NEW; END IF;
+ END IF;
+ RAISE EXCEPTION 'IMMUTABLE_HISTORY_CHECKPOINT';
+END $$;
+ALTER FUNCTION public.r36_preserve_history_checkpoint() OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_preserve_history_checkpoint() FROM PUBLIC;
+DO $$ DECLARE t text; BEGIN
+ FOREACH t IN ARRAY ARRAY['r36_history_enrollments','r36_history_checkpoints','r36_history_activated','r36_history_credit_totals','r36_history_network_records','r36_history_opening_balances','r36_history_opening_scopes'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_preserve_history_checkpoint' AND tgrelid=('public.'||t)::regclass) THEN
+   EXECUTE format('CREATE TRIGGER r36_preserve_history_checkpoint BEFORE UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.r36_preserve_history_checkpoint()',t);
+   EXECUTE format('CREATE TRIGGER r36_preserve_history_checkpoint_truncate BEFORE TRUNCATE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.r36_preserve_history_checkpoint()',t);
+  END IF;
+ END LOOP;
+END $$;
+CREATE OR REPLACE FUNCTION public.r36_revoke_dependent_history() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+BEGIN
+ IF NEW.revoked AND NOT OLD.revoked THEN
+  WITH RECURSIVE affected(digest) AS (
+   SELECT digest FROM public.r36_history_checkpoints WHERE closure_digest=NEW.payload_digest
+   UNION SELECT c.digest FROM public.r36_history_checkpoints c JOIN affected a ON c.parent_digest=a.digest
+  ) UPDATE public.r36_history_checkpoints SET revoked=true WHERE digest IN (SELECT digest FROM affected) AND NOT revoked;
+ END IF;
+ RETURN NEW;
+END $$;
+ALTER FUNCTION public.r36_revoke_dependent_history() OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_revoke_dependent_history() FROM PUBLIC;
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_revoke_dependent_history' AND tgrelid='public.r36_prior_closure_receipts'::regclass) THEN
+  CREATE TRIGGER r36_revoke_dependent_history AFTER UPDATE OF revoked ON public.r36_prior_closure_receipts FOR EACH ROW EXECUTE FUNCTION public.r36_revoke_dependent_history();
+ END IF;
+END $$;
+
+
+CREATE INDEX IF NOT EXISTS r36_history_credit_merchant_id ON public.r36_history_credit_totals(policy_digest,source_wallet,merchant_id,epoch DESC);
+
+-- Revoke descendants in one set operation, not one recursive trigger call per
+-- historical payment. A direct administrative revocation cannot leave a child usable.
+CREATE OR REPLACE FUNCTION public.r36_revoke_checkpoint_descendants() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM new_history n JOIN old_history o USING(digest) WHERE n.revoked AND NOT o.revoked) THEN RETURN NULL; END IF;
+ WITH RECURSIVE affected(digest) AS (
+  SELECT n.digest FROM new_history n JOIN old_history o USING(digest) WHERE n.revoked AND NOT o.revoked
+  UNION SELECT c.digest FROM public.r36_history_checkpoints c JOIN affected a ON c.parent_digest=a.digest
+ ) UPDATE public.r36_history_checkpoints SET revoked=true WHERE digest IN (SELECT digest FROM affected) AND NOT revoked;
+ RETURN NULL;
+END $$;
+ALTER FUNCTION public.r36_revoke_checkpoint_descendants() OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_revoke_checkpoint_descendants() FROM PUBLIC;
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_revoke_checkpoint_descendants' AND tgrelid='public.r36_history_checkpoints'::regclass) THEN
+  CREATE TRIGGER r36_revoke_checkpoint_descendants AFTER UPDATE ON public.r36_history_checkpoints
+  REFERENCING OLD TABLE AS old_history NEW TABLE AS new_history FOR EACH STATEMENT EXECUTE FUNCTION public.r36_revoke_checkpoint_descendants();
+ END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION r36_registration.history_context(p_policy text,p_nonce text,p_wallet text,p_digest text,p_merchants jsonb,p_inbound text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+BEGIN
+ IF session_user<>'r36_registrar' OR p_nonce !~ '^[0-9a-f]{64}$' OR p_digest !~ '^[0-9a-f]{64}$' OR p_inbound !~ '^[0-9a-f]{64}$'
+ OR NOT EXISTS(SELECT 1 FROM public.r36_certificate_policies p WHERE p.policy_digest=p_policy AND p.enabled AND NOT p.revoked AND coalesce(p.worker_profile->'generalOperation'->>'sourceWallet',p.worker_profile->'recoveryPilot'->'ingress'->>'sourceWallet')=p_wallet)
+ THEN RETURN NULL; END IF;
+ RETURN public.r36_history_checkpoint_context(p_policy,p_wallet,p_digest,p_merchants,p_inbound);
+END $$;
+ALTER FUNCTION r36_registration.history_context(text,text,text,text,jsonb,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION r36_registration.history_context(text,text,text,text,jsonb,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION r36_registration.history_context(text,text,text,text,jsonb,text) TO r36_registrar;
+REVOKE EXECUTE ON FUNCTION public.r36_store_history_checkpoint(text,text,text,text,text) FROM r36_issuer;
+
+-- One-time compatibility for an already activated, independently certified root.
+-- Never repeated per operation, including an empty opening-balance set.
+DO $$ DECLARE r record;s jsonb;BEGIN
+ FOR r IN SELECT c.* FROM public.r36_history_checkpoints c JOIN public.r36_history_activated a USING(digest)
+ WHERE c.parent_digest IS NULL AND NOT c.revoked AND NOT EXISTS(SELECT 1 FROM public.r36_history_opening_scopes o WHERE o.policy_digest=c.policy_digest AND o.source_wallet=c.source_wallet) LOOP
+  SELECT x.scope_text::jsonb INTO s FROM public.r36_wallet_execution_scopes x
+  WHERE x.policy_digest=r.policy_digest AND x.source_wallet=r.source_wallet AND x.scope_digest=r.checkpoint_text::jsonb->>'executionScopeDigest'
+  AND x.scope_digest=encode(sha256(convert_to(x.scope_text,'UTF8')),'hex');
+  IF s IS NULL OR jsonb_typeof(s->'baseline'->'merchantBalances') IS DISTINCT FROM 'array' THEN RAISE EXCEPTION 'CHECKPOINT_OPENING_SCOPE_REQUIRED'; END IF;
+  INSERT INTO public.r36_history_opening_balances(policy_digest,source_wallet,merchant_id,opening_stroops,opening_unsettled_stroops,checkpoint_digest)
+  SELECT r.policy_digest,r.source_wallet,b->>'merchant_id',(b->>'settled')::numeric*10000000,(b->>'unsettled')::numeric*10000000,r.digest FROM jsonb_array_elements(s->'baseline'->'merchantBalances') b;
+  INSERT INTO public.r36_history_opening_scopes VALUES(r.policy_digest,r.source_wallet,r.checkpoint_text::jsonb->>'executionScopeDigest',r.digest);
+ END LOOP;
+END $$;
+
+-- Exact source projections and a bounded work index. Original financial rows
+-- remain in their original tables. Closed rows cannot change financially.
+-- Install in one transaction before checkpoint enrollment; no authority is granted.
+CREATE SCHEMA IF NOT EXISTS r36_evidence_source AUTHORIZATION r36_owner;
+CREATE TABLE IF NOT EXISTS r36_evidence_source.installation (singleton boolean PRIMARY KEY CHECK(singleton),version text NOT NULL,source_timezone text NOT NULL DEFAULT 'UTC' CHECK(source_timezone IN ('UTC','Africa/Cairo')));
+ALTER TABLE r36_evidence_source.installation ADD COLUMN IF NOT EXISTS source_timezone text NOT NULL DEFAULT 'UTC' CHECK(source_timezone IN ('UTC','Africa/Cairo'));
+ALTER TABLE r36_evidence_source.installation OWNER TO r36_owner;
+REVOKE ALL ON r36_evidence_source.installation FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.installation TO r36_evidence_reader;
+CREATE TABLE IF NOT EXISTS r36_evidence_source.work (
+ kind text NOT NULL,row_key jsonb NOT NULL,projection jsonb NOT NULL,
+ PRIMARY KEY(kind,row_key)
+);
+CREATE TABLE IF NOT EXISTS r36_evidence_source.closed_rows (
+ kind text NOT NULL,row_key jsonb NOT NULL,checkpoint_digest text NOT NULL REFERENCES public.r36_history_checkpoints(digest),
+ PRIMARY KEY(kind,row_key)
+);
+CREATE TABLE IF NOT EXISTS r36_evidence_source.closed_payments (
+ payment_id text PRIMARY KEY,u2a_identifier text UNIQUE,transaction_id text UNIQUE,refund_id text UNIQUE,
+ checkpoint_digest text NOT NULL REFERENCES public.r36_history_checkpoints(digest)
+);
+ALTER TABLE r36_evidence_source.work OWNER TO r36_owner;
+ALTER TABLE r36_evidence_source.closed_rows OWNER TO r36_owner;
+ALTER TABLE r36_evidence_source.closed_payments OWNER TO r36_owner;
+REVOKE ALL ON r36_evidence_source.work,r36_evidence_source.closed_rows,r36_evidence_source.closed_payments FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+GRANT USAGE ON SCHEMA r36_evidence_source TO r36_evidence_reader,r36_issuer;
+GRANT SELECT ON r36_evidence_source.work TO r36_issuer;
+GRANT SELECT ON r36_evidence_source.work,r36_evidence_source.closed_rows,r36_evidence_source.closed_payments TO r36_evidence_reader;
+CREATE OR REPLACE FUNCTION r36_evidence_source.iso_naive(p_value timestamp,p_zone text) RETURNS text LANGUAGE plpgsql STABLE STRICT SET search_path=pg_catalog,pg_temp AS $$
+DECLARE guessed timestamptz;chosen timestamptz;BEGIN
+ IF p_zone NOT IN ('UTC','Africa/Cairo') THEN RAISE EXCEPTION 'HISTORY_SOURCE_TIMEZONE_UNQUALIFIED'; END IF;
+ guessed=p_value AT TIME ZONE p_zone;
+ -- Match the original JavaScript Date parsing: choose the earlier instant
+ -- in an overlap; use the pre-transition offset for a skipped local hour.
+ SELECT min(v) INTO chosen FROM (VALUES(guessed-interval '1 hour'),(guessed),(guessed+interval '1 hour')) x(v) WHERE v AT TIME ZONE p_zone=p_value;
+ RETURN to_char(coalesce(chosen,guessed) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+END $$;
+ALTER FUNCTION r36_evidence_source.iso_naive(timestamp,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION r36_evidence_source.iso_naive(timestamp,text) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION r36_evidence_source.project(p_kind text,p_row jsonb) RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $$
+DECLARE v jsonb;source_zone text;BEGIN SELECT source_timezone INTO source_zone FROM r36_evidence_source.installation WHERE singleton;source_zone=coalesce(source_zone,nullif(current_setting('flashpay.history_source_timezone',true),''),'UTC');IF source_zone NOT IN ('UTC','Africa/Cairo') THEN RAISE EXCEPTION 'HISTORY_SOURCE_TIMEZONE_UNQUALIFIED'; END IF;CASE p_kind
+WHEN 'intents' THEN SELECT to_jsonb(p) INTO v FROM (SELECT payment_id,merchant_uid,merchant_id,customer_amount::text AS customer_amount,note,CASE WHEN pg_typeof(created_at)='timestamp without time zone'::regtype THEN r36_evidence_source.iso_naive(created_at::timestamp,source_zone) ELSE to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS created_at FROM jsonb_populate_record(NULL::public.payment_create_intents,p_row) r) p;
+WHEN 'settlements' THEN SELECT to_jsonb(p) INTO v FROM (SELECT financial_contract,payment_id,stage,merchant_id,merchant_uid,payer_uid,customer_amount::text AS customer_amount,merchant_amount::text AS merchant_amount,app_commission::text AS app_commission,u2a_identifier,u2a_txid,CASE WHEN pg_typeof(u2a_verified_at)='timestamp without time zone'::regtype THEN r36_evidence_source.iso_naive(u2a_verified_at::timestamp,source_zone) ELSE to_char(u2a_verified_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS u2a_verified_at,CASE WHEN pg_typeof(u2a_completed_at)='timestamp without time zone'::regtype THEN r36_evidence_source.iso_naive(u2a_completed_at::timestamp,source_zone) ELSE to_char(u2a_completed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS u2a_completed_at,a2u_payment_id,a2u_from_address,a2u_to_address,prepared_envelope_xdr,prepared_tx_hash,prepared_sequence::text AS prepared_sequence,a2u_txid,horizon_fee_stroops::text AS horizon_fee_stroops,CASE WHEN pg_typeof(horizon_confirmed_at)='timestamp without time zone'::regtype THEN r36_evidence_source.iso_naive(horizon_confirmed_at::timestamp,source_zone) ELSE to_char(horizon_confirmed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS horizon_confirmed_at,CASE WHEN pg_typeof(pi_completed_at)='timestamp without time zone'::regtype THEN r36_evidence_source.iso_naive(pi_completed_at::timestamp,source_zone) ELSE to_char(pi_completed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS pi_completed_at,CASE WHEN pg_typeof(db_finalized_at)='timestamp without time zone'::regtype THEN r36_evidence_source.iso_naive(db_finalized_at::timestamp,source_zone) ELSE to_char(db_finalized_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS db_finalized_at FROM jsonb_populate_record(NULL::public.settlement_checkpoints,p_row) r) p;
+WHEN 'refunds' THEN SELECT to_jsonb(p) INTO v FROM (SELECT refund_id,payment_id,idempotency_key,status,stage,payer_uid,CASE WHEN pg_typeof(payer_uid_verified_at)='timestamp without time zone'::regtype THEN r36_evidence_source.iso_naive(payer_uid_verified_at::timestamp,source_zone) ELSE to_char(payer_uid_verified_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END AS payer_uid_verified_at,amount::text AS amount,currency,source_payment_status,source_settlement_state,refund_payment_id,refund_txid FROM jsonb_populate_record(NULL::public.refund_checkpoints,p_row) r) p;
+WHEN 'transactions' THEN SELECT to_jsonb(p) INTO v FROM (SELECT id::text AS id,payment_id,merchant_id,merchant_uid,amount::text AS amount,currency,status,reference FROM jsonb_populate_record(NULL::public.transactions,p_row) r) p;
+WHEN 'receipts' THEN SELECT to_jsonb(p) INTO v FROM (SELECT id::text AS id,transaction_id::text AS transaction_id,merchant_id,merchant_uid,amount::text AS amount,currency,txid,u2a_identifier,u2a_txid,a2u_identifier,a2u_txid,customer_amount::text AS customer_amount,merchant_amount::text AS merchant_amount,app_commission::text AS app_commission,horizon_fee_charged::text AS horizon_fee_charged,app_net_impact::text AS app_net_impact,settlement_status FROM jsonb_populate_record(NULL::public.receipts,p_row) r) p;
+WHEN 'refundAccounting' THEN SELECT to_jsonb(p) INTO v FROM (SELECT refund_id,payment_id,refund_payment_id,refund_txid,payer_uid,amount::text AS amount,horizon_fee_stroops::text AS horizon_fee_stroops,currency FROM jsonb_populate_record(NULL::public.refund_accounting_records,p_row) r) p;
+WHEN 'refundAudit' THEN SELECT to_jsonb(p) INTO v FROM (SELECT event_id,refund_id,payment_id,event_type,actor_type,idempotency_key,details FROM jsonb_populate_record(NULL::public.refund_audit_events,p_row) r WHERE event_type IN ('refund_blockchain_submit_prepared','refund_blockchain_submit_authorized','refund_projection_finalized')) p;
+WHEN 'merchantBalances' THEN SELECT to_jsonb(p) INTO v FROM (SELECT merchant_id,settled::text AS settled,unsettled::text AS unsettled FROM jsonb_populate_record(NULL::public.merchant_balances,p_row) r) p;
+WHEN 'authorities' THEN SELECT to_jsonb(p) INTO v FROM (SELECT network,source_wallet,owner_payment_id,operation_kind,owner_operation_id,prepared_tx_hash,prepared_sequence,state FROM jsonb_populate_record(NULL::public.financial_wallet_authorities,p_row) r) p;
+WHEN 'authorityHistory' THEN SELECT to_jsonb(p) INTO v FROM (SELECT network,source_wallet,owner_payment_id,operation_kind,owner_operation_id,prepared_tx_hash,prepared_sequence,finality_evidence_digest FROM jsonb_populate_record(NULL::public.financial_wallet_authority_history,p_row) r) p;
+WHEN 'executionScopes' THEN SELECT to_jsonb(p) INTO v FROM (SELECT scope_digest,policy_digest,source_wallet,scope_text FROM jsonb_populate_record(NULL::public.r36_wallet_execution_scopes,p_row) r) p;
+WHEN 'legacyHolds' THEN SELECT to_jsonb(p) INTO v FROM (SELECT payment_id,network,kind,state,authorizes_new_rights,original_snapshot_sha256,to_char(held_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS held_at FROM jsonb_populate_record(NULL::public.r36_legacy_right_holds,p_row) r) p;
+ELSE RAISE EXCEPTION 'HISTORY_SOURCE_KIND'; END CASE; IF p_kind='settlements' AND v->'financial_contract'='null'::jsonb THEN v=v-'financial_contract'; END IF; RETURN v; END $$;
+CREATE OR REPLACE FUNCTION r36_evidence_source.row_key(p_kind text,p_row jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $$
+BEGIN CASE p_kind
+WHEN 'intents' THEN RETURN jsonb_build_array(p_row->>'payment_id');
+WHEN 'settlements' THEN RETURN jsonb_build_array(p_row->>'payment_id');
+WHEN 'refunds' THEN RETURN jsonb_build_array(p_row->>'refund_id');
+WHEN 'transactions' THEN RETURN jsonb_build_array(p_row->>'id');
+WHEN 'receipts' THEN RETURN jsonb_build_array(p_row->>'id');
+WHEN 'refundAccounting' THEN RETURN jsonb_build_array(p_row->>'refund_id');
+WHEN 'refundAudit' THEN RETURN jsonb_build_array(p_row->>'event_id');
+WHEN 'merchantBalances' THEN RETURN jsonb_build_array(p_row->>'merchant_id');
+WHEN 'authorities' THEN RETURN jsonb_build_array(p_row->>'network',p_row->>'source_wallet');
+WHEN 'authorityHistory' THEN RETURN jsonb_build_array(p_row->>'network',p_row->>'source_wallet',p_row->>'prepared_tx_hash');
+WHEN 'executionScopes' THEN RETURN jsonb_build_array(p_row->>'scope_digest');
+WHEN 'legacyHolds' THEN RETURN jsonb_build_array(p_row->>'payment_id');
+ELSE RAISE EXCEPTION 'HISTORY_SOURCE_KIND'; END CASE; END $$;
+CREATE OR REPLACE FUNCTION r36_evidence_source.track() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE k text=TG_ARGV[0];oldp jsonb;newp jsonb;oldkey jsonb;newkey jsonb;closed boolean;
+BEGIN
+ IF TG_OP='TRUNCATE' THEN RAISE EXCEPTION 'HISTORY_SOURCE_TRUNCATE_DENIED'; END IF;
+ -- Original financial writers use READ COMMITTED. A fixed old writer snapshot
+ -- must not miss a seal committed while waiting for the publication fence.
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'HISTORY_SOURCE_WRITE_ISOLATION_REQUIRED'; END IF;
+ LOCK TABLE r36_evidence_source.work IN ROW EXCLUSIVE MODE;
+ IF TG_OP<>'INSERT' THEN oldp=r36_evidence_source.project(k,to_jsonb(OLD));oldkey=r36_evidence_source.row_key(k,to_jsonb(OLD)); END IF;
+ IF TG_OP<>'DELETE' THEN newp=r36_evidence_source.project(k,to_jsonb(NEW));newkey=r36_evidence_source.row_key(k,to_jsonb(NEW)); END IF;
+ IF oldp IS NOT NULL AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows WHERE closed_rows.kind=k AND row_key=oldkey) THEN
+  IF TG_OP<>'UPDATE' OR newkey IS DISTINCT FROM oldkey OR newp IS DISTINCT FROM oldp THEN RAISE EXCEPTION 'CLOSED_FINANCIAL_SOURCE_IMMUTABLE'; END IF;
+  RETURN NEW;
+ END IF;
+ IF newp IS NOT NULL THEN
+  IF EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows WHERE closed_rows.kind=k AND row_key=newkey) THEN RAISE EXCEPTION 'CLOSED_FINANCIAL_SOURCE_REINSERT'; END IF;
+  IF (k IN ('intents','settlements','refunds','refundAccounting','refundAudit') AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments c WHERE c.payment_id=newp->>'payment_id'))
+  OR (k='settlements' AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments c WHERE c.u2a_identifier=newp->>'u2a_identifier'))
+  OR (k='transactions' AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments c WHERE c.u2a_identifier=newp->>'payment_id'))
+  OR (k='receipts' AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments c WHERE c.transaction_id=newp->>'transaction_id' OR c.u2a_identifier=newp->>'u2a_identifier'))
+  THEN RAISE EXCEPTION 'CLOSED_PAYMENT_CANNOT_GAIN_NEW_FINANCIAL_ROWS'; END IF;
+ END IF;
+ IF oldkey IS NOT NULL AND (newp IS NULL OR oldkey IS DISTINCT FROM newkey) THEN DELETE FROM r36_evidence_source.work w WHERE w.kind=k AND w.row_key=oldkey; END IF;
+ IF newp IS NOT NULL THEN
+  INSERT INTO r36_evidence_source.work(kind,row_key,projection) VALUES(k,newkey,newp)
+  ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection WHERE work.projection IS DISTINCT FROM EXCLUDED.projection;
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END $$;
+ALTER FUNCTION r36_evidence_source.project(text,jsonb) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION r36_evidence_source.project(text,jsonb) FROM PUBLIC;
+ALTER FUNCTION r36_evidence_source.row_key(text,jsonb) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION r36_evidence_source.row_key(text,jsonb) FROM PUBLIC;
+ALTER FUNCTION r36_evidence_source.track() OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION r36_evidence_source.track() FROM PUBLIC;
+-- Locks prevent trigger/backfill races. A repeat install never resurrects closed work.
+LOCK TABLE public.payment_create_intents IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.settlement_checkpoints IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.refund_checkpoints IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.transactions IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.receipts IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.refund_accounting_records IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.refund_audit_events IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.merchant_balances IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.financial_wallet_authorities IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.financial_wallet_authority_history IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.r36_wallet_execution_scopes IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.r36_legacy_right_holds IN SHARE ROW EXCLUSIVE MODE;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.payment_create_intents'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.payment_create_intents FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('intents');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.payment_create_intents FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('intents');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'intents',r36_evidence_source.row_key('intents',to_jsonb(r)),p.v FROM public.payment_create_intents r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('intents',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='intents' AND c.row_key=r36_evidence_source.row_key('intents',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.settlement_checkpoints'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.settlement_checkpoints FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('settlements');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.settlement_checkpoints FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('settlements');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'settlements',r36_evidence_source.row_key('settlements',to_jsonb(r)),p.v FROM public.settlement_checkpoints r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('settlements',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='settlements' AND c.row_key=r36_evidence_source.row_key('settlements',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.refund_checkpoints'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.refund_checkpoints FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('refunds');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.refund_checkpoints FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('refunds');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'refunds',r36_evidence_source.row_key('refunds',to_jsonb(r)),p.v FROM public.refund_checkpoints r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('refunds',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='refunds' AND c.row_key=r36_evidence_source.row_key('refunds',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.transactions'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.transactions FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('transactions');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.transactions FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('transactions');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'transactions',r36_evidence_source.row_key('transactions',to_jsonb(r)),p.v FROM public.transactions r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('transactions',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='transactions' AND c.row_key=r36_evidence_source.row_key('transactions',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.receipts'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.receipts FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('receipts');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.receipts FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('receipts');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'receipts',r36_evidence_source.row_key('receipts',to_jsonb(r)),p.v FROM public.receipts r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('receipts',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='receipts' AND c.row_key=r36_evidence_source.row_key('receipts',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.refund_accounting_records'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.refund_accounting_records FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('refundAccounting');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.refund_accounting_records FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('refundAccounting');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'refundAccounting',r36_evidence_source.row_key('refundAccounting',to_jsonb(r)),p.v FROM public.refund_accounting_records r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('refundAccounting',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='refundAccounting' AND c.row_key=r36_evidence_source.row_key('refundAccounting',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.refund_audit_events'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.refund_audit_events FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('refundAudit');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.refund_audit_events FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('refundAudit');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'refundAudit',r36_evidence_source.row_key('refundAudit',to_jsonb(r)),p.v FROM public.refund_audit_events r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('refundAudit',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='refundAudit' AND c.row_key=r36_evidence_source.row_key('refundAudit',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.merchant_balances'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.merchant_balances FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('merchantBalances');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.merchant_balances FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('merchantBalances');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'merchantBalances',r36_evidence_source.row_key('merchantBalances',to_jsonb(r)),p.v FROM public.merchant_balances r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('merchantBalances',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='merchantBalances' AND c.row_key=r36_evidence_source.row_key('merchantBalances',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.financial_wallet_authorities'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.financial_wallet_authorities FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('authorities');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.financial_wallet_authorities FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('authorities');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'authorities',r36_evidence_source.row_key('authorities',to_jsonb(r)),p.v FROM public.financial_wallet_authorities r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('authorities',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='authorities' AND c.row_key=r36_evidence_source.row_key('authorities',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.financial_wallet_authority_history'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.financial_wallet_authority_history FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('authorityHistory');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.financial_wallet_authority_history FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('authorityHistory');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'authorityHistory',r36_evidence_source.row_key('authorityHistory',to_jsonb(r)),p.v FROM public.financial_wallet_authority_history r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('authorityHistory',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='authorityHistory' AND c.row_key=r36_evidence_source.row_key('authorityHistory',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.r36_wallet_execution_scopes'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.r36_wallet_execution_scopes FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('executionScopes');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.r36_wallet_execution_scopes FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('executionScopes');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'executionScopes',r36_evidence_source.row_key('executionScopes',to_jsonb(r)),p.v FROM public.r36_wallet_execution_scopes r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('executionScopes',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='executionScopes' AND c.row_key=r36_evidence_source.row_key('executionScopes',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='r36_track_history_source' AND tgrelid='public.r36_legacy_right_holds'::regclass) THEN
+ CREATE TRIGGER r36_track_history_source AFTER INSERT OR UPDATE OR DELETE ON public.r36_legacy_right_holds FOR EACH ROW EXECUTE FUNCTION r36_evidence_source.track('legacyHolds');
+ CREATE TRIGGER r36_track_history_truncate BEFORE TRUNCATE ON public.r36_legacy_right_holds FOR EACH STATEMENT EXECUTE FUNCTION r36_evidence_source.track('legacyHolds');
+ END IF; END $$;
+ INSERT INTO r36_evidence_source.work(kind,row_key,projection)
+ SELECT 'legacyHolds',r36_evidence_source.row_key('legacyHolds',to_jsonb(r)),p.v FROM public.r36_legacy_right_holds r CROSS JOIN LATERAL (SELECT r36_evidence_source.project('legacyHolds',to_jsonb(r)) v) p
+ WHERE p.v IS NOT NULL AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.installation WHERE singleton) AND NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows c WHERE c.kind='legacyHolds' AND c.row_key=r36_evidence_source.row_key('legacyHolds',to_jsonb(r)))
+ ON CONFLICT ON CONSTRAINT work_pkey DO UPDATE SET projection=EXCLUDED.projection;
+GRANT SELECT ON r36_evidence_source.payment_create_intents TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.settlement_checkpoints TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.refund_checkpoints TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.transactions TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.receipts TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.refund_accounting_records TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.refund_audit_events TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.merchant_balances TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.financial_wallet_authorities TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.financial_wallet_authority_history TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.r36_wallet_execution_scopes TO r36_evidence_reader;
+GRANT SELECT ON r36_evidence_source.r36_legacy_right_holds TO r36_evidence_reader;
+INSERT INTO r36_evidence_source.installation(singleton,version,source_timezone) VALUES(true,'R36_SOURCE_INDEX_V1',coalesce(nullif(current_setting('flashpay.history_source_timezone',true),''),'UTC')) ON CONFLICT(singleton) DO NOTHING;
+DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='r36_evidence_source.installation'::regclass AND tgname='r36_preserve_source_format') THEN
+ CREATE TRIGGER r36_preserve_source_format BEFORE UPDATE OR DELETE ON r36_evidence_source.installation FOR EACH ROW EXECUTE FUNCTION public.r36_preserve_history_checkpoint();
+ CREATE TRIGGER r36_preserve_source_format_truncate BEFORE TRUNCATE ON r36_evidence_source.installation FOR EACH STATEMENT EXECUTE FUNCTION public.r36_preserve_history_checkpoint();
+ END IF; END $$;
+
+-- Issuer commits an already independently reviewed fact plus its source seal.
+-- No payment, certificate, wallet permission or transfer is created here.
+CREATE OR REPLACE FUNCTION public.r36_activate_history_checkpoint(p_digest text,p_rows_text text,p_network_text text,p_entries_text text,p_credits_text text)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE c public.r36_history_checkpoints;p public.r36_certificate_policies;point jsonb;rows jsonb;net jsonb;entries jsonb;credits jsonb;
+ head text;ep bigint;item jsonb;source_kind text;k jsonb;cp jsonb;balance jsonb;prior_credit public.r36_history_credit_totals;opening numeric;scope jsonb;
+BEGIN
+ IF session_user<>'r36_issuer' THEN RAISE EXCEPTION 'CHECKPOINT_ISSUER_REQUIRED'; END IF;
+ SELECT * INTO c FROM public.r36_history_checkpoints WHERE digest=p_digest AND NOT revoked FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'CHECKPOINT_NOT_CERTIFIED'; END IF;
+ SELECT * INTO p FROM public.r36_certificate_policies WHERE policy_digest=c.policy_digest FOR SHARE;
+ IF NOT FOUND OR NOT p.enabled OR p.revoked OR NOT EXISTS(SELECT 1 FROM public.r36_history_enrollments WHERE policy_digest=c.policy_digest AND source_wallet=c.source_wallet AND NOT revoked)
+ OR p.valid_until<=extract(epoch FROM clock_timestamp()) OR p.revocation_valid_until<=extract(epoch FROM clock_timestamp()) THEN RAISE EXCEPTION 'CHECKPOINT_POLICY'; END IF;
+ point=c.checkpoint_text::jsonb;
+ IF encode(sha256(convert_to(p_rows_text,'UTF8')),'hex') IS DISTINCT FROM point->>'sourceRowsDigest'
+ OR encode(sha256(convert_to(p_network_text,'UTF8')),'hex') IS DISTINCT FROM point->>'deltaHistoryDigest'
+ OR encode(sha256(convert_to(p_entries_text,'UTF8')),'hex') IS DISTINCT FROM point->>'deltaAccountingDigest'
+ OR octet_length(p_rows_text)>96000000 OR octet_length(p_network_text)>96000000 OR octet_length(p_entries_text)>16000000 OR octet_length(p_credits_text)>4000000 THEN RAISE EXCEPTION 'CHECKPOINT_SOURCE_BINDING'; END IF;
+ IF EXISTS(SELECT 1 FROM public.r36_history_activated WHERE digest=p_digest) THEN RETURN 'REPLAYED'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM public.r36_prior_closure_receipts WHERE payload_digest=c.closure_digest AND NOT revoked AND expires_at>extract(epoch FROM clock_timestamp())) THEN RAISE EXCEPTION 'CHECKPOINT_CLOSURE_NOT_CURRENT'; END IF;
+ -- Writers acquire ROW EXCLUSIVE before reading closed keys. This prevents a
+ -- writer that started before publication from slipping past the new seal.
+ LOCK TABLE r36_evidence_source.work IN SHARE ROW EXCLUSIVE MODE;
+ SELECT digest INTO head FROM public.r36_history_checkpoint_heads WHERE policy_digest=c.policy_digest AND source_wallet=c.source_wallet FOR UPDATE;
+ IF head IS DISTINCT FROM c.parent_digest THEN RAISE EXCEPTION 'CHECKPOINT_HEAD_CHANGED'; END IF;
+ IF EXISTS(SELECT 1 FROM public.r36_history_checkpoint_heads WHERE policy_digest<>c.policy_digest OR source_wallet<>c.source_wallet) THEN RAISE EXCEPTION 'CHECKPOINT_MULTI_SCOPE_NOT_ENROLLED'; END IF;
+ rows=p_rows_text::jsonb;net=p_network_text::jsonb;entries=p_entries_text::jsonb;credits=p_credits_text::jsonb;
+ IF jsonb_typeof(rows)<>'object' OR jsonb_typeof(net)<>'array' OR jsonb_typeof(entries)<>'array' OR jsonb_typeof(credits)<>'array' OR jsonb_array_length(net)>40000 OR jsonb_array_length(entries)>20000 OR jsonb_array_length(credits)>20000 THEN RAISE EXCEPTION 'CHECKPOINT_SOURCE_SHAPE'; END IF;
+ IF (SELECT count(*) FROM jsonb_object_keys(rows))<>12 OR EXISTS(SELECT 1 FROM jsonb_each(rows) e WHERE e.key NOT IN ('intents','settlements','refunds','transactions','receipts','refundAccounting','refundAudit','merchantBalances','authorities','authorityHistory','executionScopes','legacyHolds') OR jsonb_typeof(e.value)<>'array' OR jsonb_array_length(e.value)>20000) THEN RAISE EXCEPTION 'CHECKPOINT_SOURCE_KINDS'; END IF;
+ -- Compare sets in BOTH directions, including row identities and exact values.
+ IF (SELECT sum(jsonb_array_length(value)) FROM jsonb_each(rows))<>(SELECT count(*) FROM r36_evidence_source.work) THEN RAISE EXCEPTION 'CHECKPOINT_SOURCE_CHANGED'; END IF;
+ FOR source_kind,item IN SELECT e.key,v.value FROM jsonb_each(rows) e CROSS JOIN LATERAL jsonb_array_elements(e.value) v LOOP
+  k=r36_evidence_source.row_key(source_kind,item);
+  IF NOT EXISTS(SELECT 1 FROM r36_evidence_source.work w WHERE w.kind=source_kind AND w.row_key=k AND w.projection=item) THEN RAISE EXCEPTION 'CHECKPOINT_SOURCE_CHANGED'; END IF;
+ END LOOP;
+ IF EXISTS(SELECT 1 FROM jsonb_each(rows) e CROSS JOIN LATERAL jsonb_array_elements(e.value) v GROUP BY e.key,r36_evidence_source.row_key(e.key,v.value) HAVING count(*)<>1) THEN RAISE EXCEPTION 'CHECKPOINT_SOURCE_DUPLICATE'; END IF;
+ ep=coalesce((SELECT epoch FROM public.r36_history_activated WHERE digest=head),0)+1;
+ IF head IS NULL THEN
+ SELECT scope_text::jsonb INTO scope FROM public.r36_wallet_execution_scopes WHERE scope_digest=p.worker_profile->>'executionScopeDigest' AND policy_digest=c.policy_digest AND source_wallet=c.source_wallet;
+ IF scope IS NULL THEN RAISE EXCEPTION 'CHECKPOINT_SCOPE'; END IF;
+ ELSIF NOT EXISTS(SELECT 1 FROM public.r36_history_opening_scopes o WHERE o.policy_digest=c.policy_digest AND o.source_wallet=c.source_wallet AND o.scope_digest=point->>'executionScopeDigest') THEN RAISE EXCEPTION 'CHECKPOINT_OPENING_SCOPE_REQUIRED';
+ END IF;
+ -- Global uniqueness survives dropping the closed prefix from later reviews.
+ FOR item IN SELECT value FROM jsonb_array_elements(net) LOOP
+  IF item->'input'->>'sourceWallet'<>c.source_wallet AND item->'input'->>'destinationWallet'<>c.source_wallet THEN RAISE EXCEPTION 'CHECKPOINT_NETWORK_SCOPE'; END IF;
+  IF (item->'record'->>'ledger')::numeric>c.cutoff_ledger OR (head IS NOT NULL AND (item->'record'->>'ledger')::numeric<=(SELECT cutoff_ledger FROM public.r36_history_checkpoints WHERE digest=head)) THEN RAISE EXCEPTION 'CHECKPOINT_NETWORK_RANGE'; END IF;
+  INSERT INTO public.r36_history_network_records(source_wallet,tx_hash,operation_id,ledger,direction,record_text,checkpoint_digest)
+  VALUES(c.source_wallet,item->'input'->>'preparedHash',item->>'operationId',(item->'record'->>'ledger')::numeric,CASE WHEN item->'input'->>'sourceWallet'=c.source_wallet THEN 'outgoing' ELSE 'incoming' END,item::text,c.digest);
+ END LOOP;
+ -- Every newly closed payment remains indexed against later settlement/refund
+ -- overlap, receipt duplication and reuse of the original inbound identifier.
+ FOR item IN SELECT value FROM jsonb_array_elements(entries) LOOP
+  SELECT value INTO cp FROM jsonb_array_elements(rows->'settlements') WHERE value->>'payment_id'=item->>'paymentId';
+  IF cp IS NULL OR (item->>'kind'='settlement' AND (cp->>'stage'<>'db_finalized' OR cp->>'a2u_txid' IS DISTINCT FROM item->>'transactionHash'))
+  OR (item->>'kind'='refund' AND (cp->>'stage'<>'payment_identity' OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(rows->'refunds') r WHERE r->>'refund_id'=item->>'operationId' AND r->>'payment_id'=item->>'paymentId' AND r->>'status'='completed' AND r->>'stage'='audit_recorded' AND r->>'refund_txid'=item->>'transactionHash')))
+  OR item->>'kind' NOT IN ('settlement','refund') THEN RAISE EXCEPTION 'CHECKPOINT_TERMINAL_SOURCE'; END IF;
+  INSERT INTO r36_evidence_source.closed_payments(payment_id,u2a_identifier,transaction_id,refund_id,checkpoint_digest)
+  VALUES(item->>'paymentId',cp->>'u2a_identifier',CASE WHEN item->>'kind'='settlement' THEN item->>'entryId' END,CASE WHEN item->>'kind'='refund' THEN item->>'operationId' END,c.digest);
+ END LOOP;
+ INSERT INTO public.r36_history_activated(digest,policy_digest,source_wallet,epoch,source_protection_digest) VALUES(c.digest,c.policy_digest,c.source_wallet,ep,point->>'sourceRowsDigest');
+ IF head IS NULL THEN
+  INSERT INTO public.r36_history_opening_balances(policy_digest,source_wallet,merchant_id,opening_stroops,opening_unsettled_stroops,checkpoint_digest)
+  SELECT c.policy_digest,c.source_wallet,b->>'merchant_id',(b->>'settled')::numeric*10000000,(b->>'unsettled')::numeric*10000000,c.digest
+  FROM jsonb_array_elements(scope->'baseline'->'merchantBalances') b;
+  INSERT INTO public.r36_history_opening_scopes VALUES(c.policy_digest,c.source_wallet,point->>'executionScopeDigest',c.digest);
+ END IF;
+ FOR item IN SELECT value FROM jsonb_array_elements(credits) LOOP
+  IF jsonb_typeof(item)<>'object' OR item->>'merchantUid' !~ '^[A-Za-z0-9_.:-]{1,128}$' OR item->>'creditStroops' !~ '^(0|[1-9][0-9]{0,29})$' THEN RAISE EXCEPTION 'CHECKPOINT_CREDIT_SHAPE'; END IF;
+  SELECT value INTO balance FROM jsonb_array_elements(rows->'merchantBalances') b WHERE b->>'merchant_id'=item->>'merchantId';
+  IF balance IS NULL THEN RAISE EXCEPTION 'CHECKPOINT_CREDIT_SOURCE'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(rows->'settlements') r WHERE r->>'merchant_id'=item->>'merchantId' AND r->>'merchant_uid'=item->>'merchantUid') AND NOT EXISTS(SELECT 1 FROM public.r36_history_credit_totals t WHERE t.policy_digest=c.policy_digest AND t.source_wallet=c.source_wallet AND t.merchant_id=item->>'merchantId' AND t.merchant_uid=item->>'merchantUid') THEN RAISE EXCEPTION 'CHECKPOINT_CREDIT_IDENTITY'; END IF;
+  SELECT * INTO prior_credit FROM public.r36_history_credit_totals t WHERE t.policy_digest=c.policy_digest AND t.source_wallet=c.source_wallet AND t.merchant_uid=item->>'merchantUid' ORDER BY epoch DESC LIMIT 1;
+  IF FOUND THEN opening=prior_credit.opening_stroops;IF prior_credit.merchant_id IS DISTINCT FROM item->>'merchantId' THEN RAISE EXCEPTION 'CHECKPOINT_MERCHANT_IDENTITY'; END IF;
+  ELSE SELECT b.opening_stroops INTO opening FROM public.r36_history_opening_balances b WHERE b.policy_digest=c.policy_digest AND b.source_wallet=c.source_wallet AND b.merchant_id=item->>'merchantId';opening=coalesce(opening,0); END IF;
+  IF (balance->>'settled')::numeric*10000000<>opening+(item->>'creditStroops')::numeric
+  OR (item->>'creditStroops')::numeric<>coalesce(prior_credit.credit_stroops,0)+coalesce((SELECT sum((e->>'amountStroops')::numeric) FROM jsonb_array_elements(entries) e WHERE e->>'kind'='settlement' AND e->>'merchantUid'=item->>'merchantUid'),0)
+  THEN RAISE EXCEPTION 'CHECKPOINT_CREDIT_RECONCILIATION'; END IF;
+  INSERT INTO public.r36_history_credit_totals(policy_digest,source_wallet,merchant_uid,merchant_id,opening_stroops,epoch,credit_stroops,checkpoint_digest)
+  VALUES(c.policy_digest,c.source_wallet,item->>'merchantUid',item->>'merchantId',opening,ep,(item->>'creditStroops')::numeric,c.digest);
+ END LOOP;
+ INSERT INTO r36_evidence_source.closed_rows(kind,row_key,checkpoint_digest)
+ SELECT w.kind,w.row_key,c.digest FROM r36_evidence_source.work w WHERE
+ (w.kind IN ('intents','settlements','refunds','refundAccounting','refundAudit') AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments x WHERE x.checkpoint_digest=c.digest AND x.payment_id=w.projection->>'payment_id'))
+ OR (w.kind='transactions' AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments x WHERE x.checkpoint_digest=c.digest AND x.u2a_identifier=w.projection->>'payment_id'))
+ OR (w.kind='receipts' AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments x WHERE x.checkpoint_digest=c.digest AND x.transaction_id=w.projection->>'transaction_id'))
+ OR (w.kind='authorityHistory' AND EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments x WHERE x.payment_id=w.projection->>'owner_payment_id'))
+ OR (head IS NULL AND (w.kind IN ('executionScopes','legacyHolds') OR EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(scope->'baseline'->w.kind,'[]'::jsonb)) b WHERE b=w.projection AND w.kind NOT IN ('merchantBalances','authorities'))));
+ DELETE FROM r36_evidence_source.work w WHERE EXISTS(SELECT 1 FROM r36_evidence_source.closed_rows x WHERE x.kind=w.kind AND x.row_key=w.row_key)
+ OR (w.kind='merchantBalances' AND (EXISTS(SELECT 1 FROM jsonb_array_elements(credits) b WHERE b->>'merchantId'=w.projection->>'merchant_id') OR (head IS NULL AND EXISTS(SELECT 1 FROM jsonb_array_elements(scope->'baseline'->'merchantBalances') b WHERE b=w.projection))));
+ INSERT INTO public.r36_history_checkpoint_heads(policy_digest,source_wallet,digest) VALUES(c.policy_digest,c.source_wallet,c.digest)
+ ON CONFLICT(policy_digest,source_wallet) DO UPDATE SET digest=EXCLUDED.digest;
+ RETURN 'ACTIVATED';
+END $$;
+ALTER FUNCTION public.r36_activate_history_checkpoint(text,text,text,text,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_activate_history_checkpoint(text,text,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_activate_history_checkpoint(text,text,text,text,text) TO r36_issuer;
+
+CREATE OR REPLACE FUNCTION public.r36_publish_history_fact(p_policy text,p_wallet text,p_closure text,p_point text,p_digest text,p_rows text,p_network text,p_entries text,p_credits text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE v text;BEGIN
+ IF session_user<>'r36_issuer' THEN RAISE EXCEPTION 'CHECKPOINT_ISSUER_REQUIRED'; END IF;
+ BEGIN
+  v=public.r36_store_history_checkpoint(p_policy,p_wallet,p_closure,p_point,p_digest);
+  IF v NOT IN ('RECORDED','REPLAYED') THEN RAISE EXCEPTION 'CHECKPOINT_STORE'; END IF;
+  v=public.r36_activate_history_checkpoint(p_digest,p_rows,p_network,p_entries,p_credits);
+  IF v NOT IN ('ACTIVATED','REPLAYED') THEN RAISE EXCEPTION 'CHECKPOINT_ACTIVATION'; END IF;
+  RETURN jsonb_build_object('status','CHECKPOINT_COMMITTED','digest',p_digest);
+ EXCEPTION WHEN OTHERS THEN
+  -- PostgreSQL rolls back this subtransaction, including every source seal and
+  -- the candidate. The previously verified closure outside it is unchanged.
+  RETURN jsonb_build_object('status','DEFERRED_EXISTING_GUARDS_RETAINED','reason',CASE WHEN SQLERRM ~ '^[A-Z0-9_]{1,100}$' THEN SQLERRM ELSE 'CHECKPOINT_PUBLICATION_FAILED' END,'sqlState',SQLSTATE);
+ END;
+END $$;
+ALTER FUNCTION public.r36_publish_history_fact(text,text,text,text,text,text,text,text,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_publish_history_fact(text,text,text,text,text,text,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_publish_history_fact(text,text,text,text,text,text,text,text,text) TO r36_issuer;
+REVOKE EXECUTE ON FUNCTION public.r36_activate_history_checkpoint(text,text,text,text,text) FROM r36_issuer;
+
+-- Original closed-operation evidence moves to immutable durable storage before
+-- removing any redundant working file. These functions grant no send right.
+CREATE TABLE IF NOT EXISTS public.r36_closed_evidence_work (
+ nonce text PRIMARY KEY,policy_digest text NOT NULL,payment_id text NOT NULL,jobs jsonb NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),available_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE IF NOT EXISTS public.r36_closed_evidence_archives (
+ policy_digest text NOT NULL,job_key text NOT NULL,nonce text NOT NULL,payment_id text NOT NULL,
+ raw_text text NOT NULL CHECK(octet_length(raw_text)<=29000000),
+ raw_digest text NOT NULL CHECK(raw_digest=encode(sha256(convert_to(raw_text,'UTF8')),'hex')),
+ archived_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(policy_digest,job_key)
+);
+CREATE TABLE IF NOT EXISTS public.r36_closed_archive_installation(singleton boolean PRIMARY KEY CHECK(singleton));
+CREATE TABLE IF NOT EXISTS public.r36_closed_evidence_released(policy_digest text NOT NULL,job_key text NOT NULL,PRIMARY KEY(policy_digest,job_key),FOREIGN KEY(policy_digest,job_key) REFERENCES public.r36_closed_evidence_archives(policy_digest,job_key));
+ALTER TABLE public.r36_closed_archive_installation OWNER TO r36_owner;
+ALTER TABLE public.r36_closed_evidence_released OWNER TO r36_owner;
+REVOKE ALL ON public.r36_closed_archive_installation,public.r36_closed_evidence_released FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+CREATE INDEX IF NOT EXISTS r36_closed_evidence_due ON public.r36_closed_evidence_work(policy_digest,available_at,nonce);
+ALTER TABLE public.r36_closed_evidence_work OWNER TO r36_owner;
+ALTER TABLE public.r36_closed_evidence_archives OWNER TO r36_owner;
+REVOKE ALL ON public.r36_closed_evidence_work,public.r36_closed_evidence_archives FROM PUBLIC,r36_runtime,r36_issuer,r36_signer,r36_registrar,r36_evidence_reader;
+CREATE INDEX IF NOT EXISTS r36_archive_request_payment ON public.r36_certificate_requests(policy_digest,(binding->>'paymentId'));
+CREATE OR REPLACE FUNCTION public.r36_queue_closed_evidence() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE q record;j jsonb;
+BEGIN
+ FOR q IN SELECT r.* FROM public.r36_certificate_requests r JOIN public.r36_certificate_receipts c USING(nonce) WHERE r.binding->>'paymentId'=NEW.payment_id LOOP
+  SELECT jsonb_agg(jsonb_build_object('key',key,'kind',kind) ORDER BY key) INTO j FROM (
+   SELECT q.nonce||'.json' key,'admission' kind
+   UNION SELECT q.nonce||'.renewal-'||generation::text||'.json','admission' FROM public.r36_admission_renewal_receipts WHERE nonce=q.nonce
+   UNION SELECT 'lifecycle-bound-'||q.nonce||'.json','bound' WHERE EXISTS(SELECT 1 FROM public.r36_lifecycle_approval_links WHERE successor_nonce=q.nonce)
+   UNION SELECT 'lifecycle-bound-'||encode(sha256(convert_to(q.nonce||E'\n'||closure_digest,'UTF8')),'hex')||'.json','bound' FROM public.r36_bound_renewal_receipts WHERE successor_nonce=q.nonce
+  ) x;
+  INSERT INTO public.r36_closed_evidence_work(nonce,policy_digest,payment_id,jobs) VALUES(q.nonce,q.policy_digest,NEW.payment_id,j) ON CONFLICT DO NOTHING;
+ END LOOP;
+ RETURN NEW;
+END $$;
+ALTER FUNCTION public.r36_queue_closed_evidence() OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_queue_closed_evidence() FROM PUBLIC;
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='r36_evidence_source.closed_payments'::regclass AND tgname='r36_queue_closed_evidence') THEN
+  CREATE TRIGGER r36_queue_closed_evidence AFTER INSERT ON r36_evidence_source.closed_payments FOR EACH ROW EXECUTE FUNCTION public.r36_queue_closed_evidence();
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.r36_closed_evidence_archives'::regclass AND tgname='r36_preserve_closed_archive') THEN
+  CREATE TRIGGER r36_preserve_closed_archive BEFORE UPDATE OR DELETE ON public.r36_closed_evidence_archives FOR EACH ROW EXECUTE FUNCTION public.r36_preserve_history_checkpoint();
+  CREATE TRIGGER r36_preserve_closed_archive_truncate BEFORE TRUNCATE ON public.r36_closed_evidence_archives FOR EACH STATEMENT EXECUTE FUNCTION public.r36_preserve_history_checkpoint();
+ END IF;
+END $$;
+CREATE OR REPLACE FUNCTION public.r36_closed_archive(p_policy text,p_action text,p_job text,p_raw text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
+DECLARE w public.r36_closed_evidence_work;r public.r36_certificate_requests;b jsonb;d text;existing public.r36_closed_evidence_archives;kind text;
+BEGIN
+ IF session_user<>'r36_issuer' OR p_policy !~ '^[a-f0-9]{64}$' THEN RAISE EXCEPTION 'ARCHIVE_ISSUER_REQUIRED'; END IF;
+ IF p_action='pending' THEN
+  RETURN coalesce((SELECT jsonb_agg(x) FROM (SELECT pending_work.nonce,pending_work.payment_id AS "paymentId",j->>'key' AS "jobKey",j->>'kind' AS kind,(SELECT rr.evidence_not_before::text FROM public.r36_admission_renewal_requests rr WHERE rr.nonce=pending_work.nonce AND j->>'key'=pending_work.nonce||'.renewal-'||rr.generation::text||'.json') AS "evidenceFloor"
+   FROM public.r36_closed_evidence_work pending_work CROSS JOIN LATERAL jsonb_array_elements(pending_work.jobs) j
+   WHERE pending_work.policy_digest=p_policy AND pending_work.available_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM public.r36_closed_evidence_released a WHERE a.policy_digest=pending_work.policy_digest AND a.job_key=j->>'key')
+   ORDER BY pending_work.available_at,pending_work.nonce,j->>'key' LIMIT 4) x),'[]'::jsonb);
+ END IF;
+ IF p_action='defer' THEN
+  UPDATE public.r36_closed_evidence_work SET available_at=clock_timestamp()+interval '15 minutes' WHERE policy_digest=p_policy AND EXISTS(SELECT 1 FROM jsonb_array_elements(jobs) j WHERE j->>'key'=p_job);
+  RETURN jsonb_build_object('deferred',true);
+ END IF;
+ IF p_action='lookup' OR p_action='released' THEN
+  SELECT * INTO existing FROM public.r36_closed_evidence_archives WHERE policy_digest=p_policy AND job_key=p_job;
+  IF NOT FOUND THEN RETURN NULL; END IF;
+  IF p_action='released' THEN
+   IF p_raw IS DISTINCT FROM existing.raw_digest THEN RAISE EXCEPTION 'ARCHIVE_RELEASE_BINDING'; END IF;
+   INSERT INTO public.r36_closed_evidence_released VALUES(p_policy,p_job) ON CONFLICT DO NOTHING;
+   DELETE FROM public.r36_closed_evidence_work q WHERE q.policy_digest=p_policy AND q.nonce=existing.nonce AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(q.jobs) j WHERE NOT EXISTS(SELECT 1 FROM public.r36_closed_evidence_released a WHERE a.policy_digest=q.policy_digest AND a.job_key=j->>'key'));
+  END IF;
+  RETURN jsonb_build_object('schema','R36_CLOSED_ARCHIVE_ACK_V1','policyDigest',p_policy,'jobKey',p_job,'rawDigest',existing.raw_digest,'bytes',octet_length(existing.raw_text),'scope','HISTORICAL_RECORD_ONLY');
+ END IF;
+ IF p_action<>'retain' OR p_job !~ '^([a-f0-9]{64}(\.renewal-[1-9][0-9]*)?|lifecycle-bound-[a-f0-9]{64})\.json$' OR p_raw IS NULL OR octet_length(p_raw)>29000000 THEN RAISE EXCEPTION 'ARCHIVE_REQUEST'; END IF;
+ d=encode(sha256(convert_to(p_raw,'UTF8')),'hex');
+ SELECT * INTO existing FROM public.r36_closed_evidence_archives WHERE policy_digest=p_policy AND job_key=p_job;
+ IF FOUND THEN
+  IF existing.raw_text IS DISTINCT FROM p_raw OR existing.raw_digest IS DISTINCT FROM d THEN RAISE EXCEPTION 'ARCHIVE_IMMUTABLE_CONFLICT'; END IF;
+ ELSE
+  SELECT * INTO w FROM public.r36_closed_evidence_work WHERE policy_digest=p_policy AND EXISTS(SELECT 1 FROM jsonb_array_elements(jobs) j WHERE j->>'key'=p_job) FOR UPDATE;
+  IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM r36_evidence_source.closed_payments WHERE payment_id=w.payment_id) THEN RAISE EXCEPTION 'ARCHIVE_CLOSED_ORIGINAL_REQUIRED'; END IF;
+  SELECT * INTO r FROM public.r36_certificate_requests WHERE nonce=w.nonce AND policy_digest=p_policy AND binding->>'paymentId'=w.payment_id;
+  IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM public.r36_certificate_receipts WHERE nonce=w.nonce) THEN RAISE EXCEPTION 'ARCHIVE_CERTIFICATE_REQUIRED'; END IF;
+  SELECT j->>'kind' INTO kind FROM jsonb_array_elements(w.jobs) j WHERE j->>'key'=p_job;
+  b=p_raw::jsonb;
+  IF kind='admission' THEN
+   IF b->>'schema' IS DISTINCT FROM 'R36_IMMUTABLE_PUBLICATION_V1' OR b->>'policyDigest' IS DISTINCT FROM p_policy OR b->'binding' IS DISTINCT FROM (CASE WHEN b ? 'renewalGeneration' THEN (SELECT binding FROM public.r36_admission_renewal_requests rr WHERE rr.nonce=w.nonce AND rr.generation=(b->>'renewalGeneration')::int AND p_job=w.nonce||'.renewal-'||rr.generation::text||'.json') ELSE r.binding END) THEN RAISE EXCEPTION 'ARCHIVE_ADMISSION_IDENTITY'; END IF;
+  ELSIF kind='bound' THEN
+   IF b->>'schema' IS DISTINCT FROM 'R36_LIFECYCLE_PUBLICATION_V1' OR b->'request'->>'action' IS DISTINCT FROM 'record_bound' OR b->'request'->>'nonce' IS DISTINCT FROM w.nonce OR b->'bundle'->'clearance'->'manifest'->>'policyDigest' IS DISTINCT FROM p_policy THEN RAISE EXCEPTION 'ARCHIVE_BOUND_IDENTITY'; END IF;
+  ELSE RAISE EXCEPTION 'ARCHIVE_KIND'; END IF;
+  INSERT INTO public.r36_closed_evidence_archives(policy_digest,job_key,nonce,payment_id,raw_text,raw_digest) VALUES(p_policy,p_job,w.nonce,w.payment_id,p_raw,d);
+ END IF;
+ RETURN jsonb_build_object('schema','R36_CLOSED_ARCHIVE_ACK_V1','policyDigest',p_policy,'jobKey',p_job,'rawDigest',d,'bytes',octet_length(p_raw),'scope','HISTORICAL_RECORD_ONLY');
+END $$;
+ALTER FUNCTION public.r36_closed_archive(text,text,text,text) OWNER TO r36_owner;
+REVOKE ALL ON FUNCTION public.r36_closed_archive(text,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.r36_closed_archive(text,text,text,text) TO r36_issuer;
+-- Existing closed roots are backfilled once; normal processing is trigger-fed.
+DO $$ DECLARE cp record;q record;j jsonb;BEGIN
+ IF NOT EXISTS(SELECT 1 FROM public.r36_closed_archive_installation WHERE singleton) THEN
+  FOR cp IN SELECT payment_id FROM r36_evidence_source.closed_payments LOOP
+   FOR q IN SELECT r.* FROM public.r36_certificate_requests r JOIN public.r36_certificate_receipts c USING(nonce) WHERE r.binding->>'paymentId'=cp.payment_id LOOP
+    SELECT jsonb_agg(jsonb_build_object('key',key,'kind',kind) ORDER BY key) INTO j FROM (
+     SELECT q.nonce||'.json' key,'admission' kind
+     UNION SELECT q.nonce||'.renewal-'||generation::text||'.json','admission' FROM public.r36_admission_renewal_receipts WHERE nonce=q.nonce
+     UNION SELECT 'lifecycle-bound-'||q.nonce||'.json','bound' WHERE EXISTS(SELECT 1 FROM public.r36_lifecycle_approval_links WHERE successor_nonce=q.nonce)
+     UNION SELECT 'lifecycle-bound-'||encode(sha256(convert_to(q.nonce||E'\n'||closure_digest,'UTF8')),'hex')||'.json','bound' FROM public.r36_bound_renewal_receipts WHERE successor_nonce=q.nonce
+    ) x;
+    INSERT INTO public.r36_closed_evidence_work(nonce,policy_digest,payment_id,jobs) VALUES(q.nonce,q.policy_digest,cp.payment_id,j) ON CONFLICT DO NOTHING;
+   END LOOP;
+  END LOOP;
+  INSERT INTO public.r36_closed_archive_installation(singleton) VALUES(true);
+ END IF;
+END $$;

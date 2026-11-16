@@ -58,6 +58,7 @@ export async function registerR36CertificateRequest(db:R36CertificateDatabase,po
    // A read-only adapter deliberately stops at signOnce: no real signer or SQL writer
    // is reachable. Original verifier validates all seven signed artifacts and snapshots.
    const review=await runR36CertificateWorker({begin:fn=>fn({unsafe:async(q,v)=>{
+    if(q==='SELECT public.r36_history_checkpoint_context($1,$2,$3,$4::text::jsonb,$5) AS context'&&v?.length===5&&v[0]===policyDigest&&v[1]===b.sourceWallet&&v[4]===b.u2aTxid)return tx.unsafe('SELECT r36_registration.history_context($1,$2,$3,$4,$5::text::jsonb,$6) AS context',[policyDigest,b.nonce,b.sourceWallet,v[2],v[3],b.u2aTxid])
     if(q!=='SELECT public.r36_certificate_context($1) AS context'||v?.length!==1||v[0]!==b.nonce)throw Error('READ_ONLY_REVIEW')
     return [{context:{binding:b,policy:p,nowSeconds:now,requestCreatedAt:issued,receipt:null,...(c.renewalGeneration===undefined?{}:{renewalGeneration:c.renewalGeneration,evidenceNotBefore:c.evidenceNotBefore})}}]
    }})},b.nonce,{readEvidence,signOnce:async request=>{approved={...request};throw Error('REVIEW_END_BEFORE_SIGNING')}})

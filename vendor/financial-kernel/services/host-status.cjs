@@ -14,4 +14,4 @@ console.log(JSON.stringify({boot:boot&&{id:boot.id,startedAt:boot.startedAt},ali
 notification:notification&&{active:notification.active===true,hostBootId:notification.hostBootId,startedAt:notification.startedAt},state:state&&{
  hostBootId:state.hostBootId,running:state.running,heartbeatAt:state.heartbeatAt,readyAt:state.readyAt,
  configuredPolicyDigest:state.configuredPolicyDigest,generation:state.generation,services:state.services?.map(s=>s.result),startupTiming:state.startupTiming
-},dispatch:dispatch&&{at:dispatch.at,dispatchStatus:dispatch.dispatchStatus,lifecycleStatus:dispatch.lifecycleStatus,held:dispatch.held,policies:dispatch.policies,timing:dispatch.timing}}));
+},dispatch:dispatch&&{ingress:dispatch.ingress,at:dispatch.at,dispatchStatus:dispatch.dispatchStatus,lifecycleStatus:dispatch.lifecycleStatus,held:dispatch.held,policies:dispatch.policies,timing:dispatch.timing}}));

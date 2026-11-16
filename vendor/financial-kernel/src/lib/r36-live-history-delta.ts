@@ -1,3 +1,4 @@
+import {assertR36CheckpointContext,type R36CheckpointContext} from './r36-certified-history'
 import {financialHorizonOrigin,financialNetwork} from './financial-network'
 /** Append original Horizon observations to a policy-pinned history prefix.
  * Read-only acquisition; does not certify completeness, sign, or authorize money.
@@ -52,33 +53,41 @@ function currentOperations(fetcher:typeof fetch){
  * final page is never treated as completeness; a short/empty page is required.
  * The independent financial reviewer and its total-history bounds remain intact.
  */
-export async function appendR36LiveHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:typeof fetch):Promise<R36ObservedHistory>{
- return appendHistory(prefix,policy,fetcher,4)
+export async function appendR36LiveHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:typeof fetch,checkpoint?:R36CheckpointContext):Promise<R36ObservedHistory>{
+ return appendHistory(prefix,policy,fetcher,4,checkpoint)
 }
-async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:typeof fetch,operationWidth:number):Promise<R36ObservedHistory>{
+async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:typeof fetch,operationWidth:number,checkpoint?:R36CheckpointContext):Promise<R36ObservedHistory>{
  must(object(policy),'LIVE_HISTORY_POLICY')
  const paginated=policy.schema==='R36_HORIZON_PAGINATED_DELTA_V2'
  must(Object.keys(policy).sort().join(',')===(paginated?'maxNewTransactions,maxPages,schema':'maxNewTransactions,schema')&&
   (paginated||policy.schema==='R36_HORIZON_BOUNDED_DELTA_V1')&&Number.isSafeInteger(policy.maxNewTransactions)&&Number(policy.maxNewTransactions)>=1&&
   Number(policy.maxNewTransactions)<=(paginated?40000:200)&&(!paginated||(Number.isSafeInteger(policy.maxPages)&&Number(policy.maxPages)>=1&&Number(policy.maxPages)<=201)), 'LIVE_HISTORY_POLICY')
- const cursorKey=createHash('sha256').update(JSON.stringify([prefix,policy])).digest('hex')
+ const sealed=checkpoint?assertR36CheckpointContext(checkpoint,checkpoint.digest,prefix.wallet):undefined
+ if(sealed)must(prefix.transactions[0]?.hash===sealed.genesisHash&&prefix.network===sealed.network,'LIVE_HISTORY_CHECKPOINT_GENESIS')
+ const base=sealed?{...prefix,checkpointDigest:checkpoint!.digest,transactions:prefix.transactions.slice(0,1),operations:prefix.operations.slice(0,1),cutoffLedger:sealed.cutoffLedger,cutoffHash:sealed.cutoffHash,walletInventory:prefix.walletInventory.map(w=>({...w,lastLedger:sealed.cutoffLedger}))}:prefix
+ const cursorKey=createHash('sha256').update(JSON.stringify([base,policy])).digest('hex')
  let cursors=historyCursors.get(fetcher);if(!cursors){cursors=new Map();historyCursors.set(fetcher,cursors)}
  const retained=cursors.get(cursorKey)
- const h=JSON.parse(JSON.stringify(retained?.history??prefix)) as R36ObservedHistory
+ const h=JSON.parse(JSON.stringify(retained?.history??base)) as R36ObservedHistory
  must(h.network===financialNetwork()&&/^G[A-Z2-7]{55}$/.test(h.wallet)&&h.transactions.length>0&&h.transactions.length<=40001&&h.transactions.length===h.operations.length&&uint(h.cutoffLedger)&&hex(h.cutoffHash),'LIVE_HISTORY_PREFIX')
  const tail=h.transactions[h.transactions.length-1];must(uint(tail.paging_token)&&hex(tail.hash),'LIVE_HISTORY_ORIGINAL_CURSOR_REQUIRED')
  const before=await read(fetcher,'/accounts/'+h.wallet)
  must(before.account_id===h.wallet&&uint(String(before.last_modified_ledger)),'LIVE_HISTORY_ACCOUNT')
- if(retained){
+ if(retained||sealed){
   const anchor=await read(fetcher,'/ledgers/'+h.cutoffLedger)
   must(String(anchor.sequence)===h.cutoffLedger&&anchor.hash===h.cutoffHash&&BigInt(String(before.last_modified_ledger))>=BigInt(h.cutoffLedger),'LIVE_HISTORY_RETAINED_CUTOFF_CHANGED')
  }
- const seen=new Set(h.transactions.map(t=>t.hash));let cursor=BigInt(tail.paging_token)
+ // A sealed idle observation contains only the genesis witness. Its last
+ // array item is NOT the certified cursor. Keep the original Horizon cursor
+ // across warm idle reads as well as a cold start; never reread the prefix.
+ const resume=sealed?(retained?h.originalCursor:sealed.originalCursor):tail.paging_token
+ must(uint(resume)&&(!sealed||BigInt(resume)>=BigInt(sealed.originalCursor)),'LIVE_HISTORY_ORIGINAL_CURSOR_REQUIRED')
+ const seen=new Set(h.transactions.map(t=>t.hash));let cursor=BigInt(resume)
  const cache=currentOperations(fetcher),observed=new Map<string,Row>()
  let added=0,complete=false
  for(let pageNumber=0;pageNumber<(paginated?Number(policy.maxPages):1);pageNumber++){
   const page=records(await read(fetcher,'/accounts/'+h.wallet+'/transactions?order=asc&limit=200&include_failed=true&cursor='+cursor))
-  must(page.length<=200&&(paginated||page.length<200)&&h.transactions.length-prefix.transactions.length+page.length<=Number(policy.maxNewTransactions)&&h.transactions.length+page.length<=40001,'LIVE_HISTORY_DELTA_BOUND')
+  must(page.length<=200&&(paginated||page.length<200)&&h.transactions.length-base.transactions.length+page.length<=Number(policy.maxNewTransactions)&&h.transactions.length+page.length<=40001,'LIVE_HISTORY_DELTA_BOUND')
   for(const t of page){
    must(hex(t.hash)&&!seen.has(t.hash)&&uint(t.paging_token)&&BigInt(t.paging_token)>cursor&&Number(t.operation_count)===1&&typeof t.successful==='boolean'&&uint(String(t.ledger))&&BigInt(String(t.ledger))<=BigInt(String(before.last_modified_ledger)),'LIVE_HISTORY_DELTA_IDENTITY')
    seen.add(t.hash);cursor=BigInt(t.paging_token)
@@ -98,7 +107,7 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
    h.transactions.push(...batch);h.operations.push(...operations)
   }
   added+=page.length
-  must(h.transactions.length-prefix.transactions.length<(paginated?Number(policy.maxPages):1)*200,'LIVE_HISTORY_PAGINATION_INCOMPLETE')
+  must(h.transactions.length-base.transactions.length<(paginated?Number(policy.maxPages):1)*200,'LIVE_HISTORY_PAGINATION_INCOMPLETE')
   if(page.length<200){complete=true;break}
  }
  must(complete,'LIVE_HISTORY_PAGINATION_INCOMPLETE')
@@ -107,7 +116,7 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
  const cutoff=BigInt(String(after.last_modified_ledger))>BigInt(h.cutoffLedger)?String(after.last_modified_ledger):h.cutoffLedger,ledger=await read(fetcher,'/ledgers/'+cutoff)
  must(String(ledger.sequence)===cutoff&&hex(ledger.hash),'LIVE_HISTORY_CUTOFF')
  if(cutoff===h.cutoffLedger)must(ledger.hash===h.cutoffHash,'LIVE_HISTORY_PINNED_CUTOFF_CHANGED')
- h.cutoffLedger=cutoff;h.cutoffHash=ledger.hash;h.accountAtCutoff=after
+ h.cutoffLedger=cutoff;h.cutoffHash=ledger.hash;h.accountAtCutoff=after;h.originalCursor=cursor.toString()
  const inventory=h.walletInventory.filter(x=>x.wallet===h.wallet);must(inventory.length===1,'LIVE_HISTORY_INVENTORY');inventory[0].lastLedger=cutoff
  // No entries from a failed or incomplete observation can escape this call.
  for(const [key,body] of observed){
@@ -123,7 +132,8 @@ async function appendHistory(prefix:R36ObservedHistory,policy:unknown,fetcher:ty
  return h
 }
 
-export async function appendR36LiveHistories(prefixes:R36ObservedHistory[],policy:unknown,fetcher:typeof fetch):Promise<R36ObservedHistory[]>{
+export async function appendR36LiveHistories(prefixes:R36ObservedHistory[],policy:unknown,fetcher:typeof fetch,checkpoint?:R36CheckpointContext):Promise<R36ObservedHistory[]>{
+ if(checkpoint)must(prefixes.length===1,'CHECKPOINT_MULTI_WALLET_NOT_ENROLLED')
  must(Array.isArray(prefixes)&&prefixes.length>0&&prefixes.length<=32,'LIVE_HISTORY_SCOPE')
  const out:R36ObservedHistory[]=[]
  // Two independent wallet observations at most, each with two operation reads.
@@ -131,7 +141,7 @@ export async function appendR36LiveHistories(prefixes:R36ObservedHistory[],polic
  // its own before/after consistency check and the final full inventory check.
  for(let offset=0;offset<prefixes.length;offset+=2){
   const group=prefixes.slice(offset,offset+2)
-  const results=await Promise.allSettled(group.map(prefix=>appendHistory(prefix,policy,fetcher,group.length===1?4:2)))
+  const results=await Promise.allSettled(group.map(prefix=>appendHistory(prefix,policy,fetcher,group.length===1?4:2,checkpoint)))
   for(const result of results){if(result.status==='rejected')throw result.reason;out.push(result.value)}
  }
  const inventory:Row[]=out[0].walletInventory.map(x=>{const matches=out.filter(h=>h.wallet===x.wallet);must(matches.length===1,'LIVE_HISTORY_SCOPE');return {...x,lastLedger:matches[0].cutoffLedger}})

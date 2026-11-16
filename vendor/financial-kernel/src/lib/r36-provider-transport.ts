@@ -68,7 +68,11 @@ export function createR36LifecycleClient(config:R36ProviderEndpoint){
  const issuer=endpoint(config)
  return async(body:Record<string,unknown>,signal:AbortSignal):Promise<Record<string,unknown>>=>{
   const r=await request(issuer,'/r36/v1/lifecycle','POST',body,signal,70000) as Record<string,unknown>|null
-  if(!r||r.schema!=='R36_LIFECYCLE_RESPONSE_V1'||!['CONTEXT','RECORDED','REPLAYED','BLOCKED'].includes(String(r.outcome))||r.financialAuthority!==false||r.financialSubmission!==false)throw Error('LIFECYCLE_RESPONSE_INVALID')
+  // Archive acknowledgements are valid only for the matching archive action.
+  // They cannot stand in for a lifecycle decision or grant financial authority.
+  const outcomes=body.action==='closed_archive'?['ARCHIVE_RESPONSE','BLOCKED']:
+   body.action==='archive_prior'?['ARCHIVED','BLOCKED']:['CONTEXT','RECORDED','REPLAYED','BLOCKED']
+  if(!r||r.schema!=='R36_LIFECYCLE_RESPONSE_V1'||!outcomes.includes(String(r.outcome))||r.financialAuthority!==false||r.financialSubmission!==false)throw Error('LIFECYCLE_RESPONSE_INVALID')
   return r
  }
 }

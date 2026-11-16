@@ -51,7 +51,7 @@ export async function checkRegistrationTransaction(tx:Tx){
  NOT EXISTS(SELECT 1 FROM pg_proc f JOIN pg_namespace n ON n.oid=f.pronamespace
  WHERE (n.nspname IN ('r36_registration','r36_signing') OR n.nspname='public' AND f.proname LIKE 'r36_%')
  AND has_function_privilege(r.oid,f.oid,'EXECUTE') AND NOT(n.nspname='r36_registration'
- AND (f.proname,oidvectortypes(f.proargtypes)) IN (('context','text, text'),('enroll','text, jsonb, text, text, bigint, bigint, text')))) AS function_scope,
+ AND (f.proname,oidvectortypes(f.proargtypes)) IN (('context','text, text'),('history_context','text, text, text, text, jsonb, text'),('enroll','text, jsonb, text, text, bigint, bigint, text')))) AS function_scope,
  has_function_privilege(r.oid,'r36_registration.context(text,text)','EXECUTE') AND
  has_function_privilege(r.oid,'r36_registration.enroll(text,jsonb,text,text,bigint,bigint,text)','EXECUTE') AS registration_available
  FROM pg_roles r WHERE r.rolname=current_user`,[productionR36Branch])
@@ -69,6 +69,7 @@ export function scopeRegistrationTransaction(tx:Tx,policyDigest:string,nonce:str
   }
   if(q==='SELECT r36_registration.enroll($1,$2::text::jsonb,$3,$4,$5,$6,$7) AS outcome'&&v?.length===7&&
    reviewed&&v[0]===policyDigest&&typeof v[1]==='string'&&JSON.parse(v[1]).nonce===nonce)return tx.unsafe(q,v)
+  if(q==='SELECT r36_registration.history_context($1,$2,$3,$4,$5::text::jsonb,$6) AS context'&&reviewed&&v?.length===6&&v[0]===policyDigest&&v[1]===nonce)return tx.unsafe(q,v)
   throw Error('REGISTRATION_QUERY_SCOPE')
  }}
 }

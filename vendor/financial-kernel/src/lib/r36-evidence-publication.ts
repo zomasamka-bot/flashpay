@@ -1,3 +1,4 @@
+import type {R36CheckpointContext} from './r36-certified-history'
 import {encodeR36Artifact,decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {financialNetwork} from './financial-network'
 /** Private collector -> immutable signed artifacts -> registrar handoff.
@@ -60,7 +61,7 @@ async function storeBundle(file:string,b:Bundle):Promise<Bundle>{
  }finally{await f.close().catch(()=>{});await unlink(tmp).catch(()=>{})}
  const saved=await readBundle(file);must(saved,'PUBLICATION_COMMIT_MISSING');return saved!
 }
-function validate(b:Bundle,candidate:string,p:R36PublicationPolicy,sourceRowsDigest:string,now:number){
+function validate(b:Bundle,candidate:string,p:R36PublicationPolicy,sourceRowsDigest:string,now:number,checkpoint?:R36CheckpointContext){
  current(p,now);must(b.schema==='R36_IMMUTABLE_PUBLICATION_V1'&&b.candidateDigest===candidate&&b.policyDigest===p.policyDigest&&b.policySnapshotDigest===policyIdentity(p)&&b.sourceRowsDigest===sourceRowsDigest,'PUBLICATION_FROZEN_SOURCE_CONFLICT')
  must(Object.keys(b.binding).length===R36_ADMISSION_FIELDS.length&&R36_ADMISSION_FIELDS.every(k=>typeof b.binding[k]==='string')&&b.binding.nonce===r36PublicationNonce(candidate,p.policyDigest)&&b.binding.network===financialNetwork(),'PUBLICATION_BINDING')
  const subject=sha(JSON.stringify(R36_ADMISSION_FIELDS.map(k=>b.binding[k]))),bodies:Record<string,Row>={}
@@ -70,13 +71,13 @@ function validate(b:Bundle,candidate:string,p:R36PublicationPolicy,sourceRowsDig
   const sig=Buffer.from(e.signature,'base64');must(sig.length===64&&sig.toString('base64')===e.signature&&verify(null,bytes(m),r.publicKeyPem,sig),'PUBLICATION_SIGNATURE')
   bodies[kind]=decodeR36Artifact(e.text)
  }
- must(reviewR36EvidenceSnapshot(b.binding,bodies).outcome==='VERIFIED_SNAPSHOT','PUBLICATION_FINANCIAL_EVIDENCE_INVALID')
+ must(reviewR36EvidenceSnapshot(b.binding,bodies,checkpoint).outcome==='VERIFIED_SNAPSHOT','PUBLICATION_FINANCIAL_EVIDENCE_INVALID')
 }
 /** Persist the entire reviewed bundle before publishing the first artifact.
  * The existing registrar owns DB registration/sign-once; it rechecks live policy.
  * A timeout or restart reuses the exact nonce and bytes, never creates a replacement.
  */
-export async function publishR36LiveEvidenceJob(input:{candidateDigest:string;sourceRowsDigest:string;policy:R36PublicationPolicy;custodianPrivateKeyPem:string;jobDirectory:string;artifactDirectory:string;renewal?:{generation:number;evidenceNotBefore:number}},
+export async function publishR36LiveEvidenceJob(input:{candidateDigest:string;sourceRowsDigest:string;checkpoint?:R36CheckpointContext;policy:R36PublicationPolicy;custodianPrivateKeyPem:string;jobDirectory:string;artifactDirectory:string;renewal?:{generation:number;evidenceNotBefore:number}},
  ports:{collect(nonce:string):Promise<R36ProducedEvidence>;register(binding:Row):Promise<R36CertificateResult>;refreshPolicy?(signal:AbortSignal):Promise<R36PublicationPolicy>;now?:()=>number}):Promise<R36CertificateResult>{
  try{
   const c={...input,policy:clone(input.policy)},now=ports.now??(()=>Math.floor(Date.now()/1000));must(hex(c.candidateDigest)&&hex(c.sourceRowsDigest),'PUBLICATION_SOURCE_IDENTITY')
@@ -99,7 +100,7 @@ export async function publishR36LiveEvidenceJob(input:{candidateDigest:string;so
    const result=clone(produced),binding=result.binding!,raw=result.artifacts!,key=createPrivateKey(c.custodianPrivateKeyPem),pin=sha(createPublicKey(key).export({type:'spki',format:'der'}));must(key.asymmetricKeyType==='ed25519'&&binding.nonce===nonce,'PUBLICATION_CUSTODIAN_KEY')
    // Capture this operation's real issuance time, then read genuine later
    // revocation observations. Never replace it with an old observation's time.
-   const at=now();await refresh();current(c.policy,now());must(reviewR36EvidenceSnapshot(binding,raw).outcome==='VERIFIED_SNAPSHOT','PUBLICATION_FINANCIAL_EVIDENCE_INVALID')
+   const at=now();await refresh();current(c.policy,now());must(reviewR36EvidenceSnapshot(binding,raw,c.checkpoint).outcome==='VERIFIED_SNAPSHOT','PUBLICATION_FINANCIAL_EVIDENCE_INVALID')
    b={...(c.renewal?{renewalGeneration:c.renewal.generation}:{}),schema:'R36_IMMUTABLE_PUBLICATION_V1',candidateDigest:c.candidateDigest,policyDigest:c.policy.policyDigest,policySnapshotDigest:policyIdentity(c.policy),sourceRowsDigest:c.sourceRowsDigest,binding,artifacts:{} as Record<Kind,Envelope>}
    const subject=sha(JSON.stringify(R36_ADMISSION_FIELDS.map(k=>binding[k])))
    for(const kind of R36_WORKER_KINDS){const root=rootFor(c.policy,kind,now());must(root.publicKeySpkiSha256===pin,'PUBLICATION_CUSTODIAN_NOT_APPROVED')
@@ -111,16 +112,16 @@ export async function publishR36LiveEvidenceJob(input:{candidateDigest:string;so
     const manifest={schema:'R36_INDEPENDENT_ARTIFACT_V1',kind,policyDigest:c.policy.policyDigest,subjectDigest:subject,artifactDigest:sha(text),issuerId:root.issuerId,keyId:root.keyId,network:String(binding.network),sourceWallet:String(binding.sourceWallet),cutoffLedger:String(binding.cutoffLedger),issuedAt:String(issued),expiresAt:String(expires)}
     b.artifacts[kind]={text,manifest,signature:sign(null,bytes(manifest),key).toString('base64')}
    }
-   validate(b,c.candidateDigest,c.policy,c.sourceRowsDigest,now());b=await storeBundle(file,b)
+   validate(b,c.candidateDigest,c.policy,c.sourceRowsDigest,now(),c.checkpoint);b=await storeBundle(file,b)
   }
   if(c.renewal){
    must(b.renewalGeneration===c.renewal.generation,'PUBLICATION_RENEWAL_GENERATION')
    for(const kind of R36_WORKER_KINDS)must(Number(b.artifacts[kind].manifest.issuedAt)>=c.renewal.evidenceNotBefore,'PUBLICATION_RENEWAL_EVIDENCE_STALE')
   }
-  validate(b,c.candidateDigest,c.policy,c.sourceRowsDigest,now())
+  validate(b,c.candidateDigest,c.policy,c.sourceRowsDigest,now(),c.checkpoint)
   for(const kind of R36_WORKER_KINDS){const e=b.artifacts[kind];await publishR36Artifact(artifacts,kind,e.manifest.artifactDigest,e,c.renewal?.evidenceNotBefore)}
   await refresh()
-  validate(b,c.candidateDigest,c.policy,c.sourceRowsDigest,now())
+  validate(b,c.candidateDigest,c.policy,c.sourceRowsDigest,now(),c.checkpoint)
   const r=await ports.register(clone(b.binding));must(['RECORDED','REPLAYED'].includes(r.outcome)&&hex(r.certificateDigest)&&r.authorizesFinancialRelease===false&&r.authorizesRotation===false&&r.authorizesWalletActivation===false,'PUBLICATION_REGISTRAR_NOT_CONFIRMED_RETRY_SAME_BUNDLE')
   return {outcome:r.outcome,reason:'PUBLISHED_AND_REGISTERED_SUBJECT_TO_ORIGINAL_FINANCIAL_GUARDS',certificateDigest:r.certificateDigest,authorizesFinancialRelease:false,authorizesRotation:false,authorizesWalletActivation:false}
  }catch(e){return denied((e as NodeJS.ErrnoException)?.code==='ENOSPC'?'PUBLICATION_STORAGE_FULL':e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'PUBLICATION_FAILED_CLOSED_RETRY_SAME_BUNDLE')}

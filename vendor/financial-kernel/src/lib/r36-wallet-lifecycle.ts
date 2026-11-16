@@ -1,3 +1,5 @@
+import {publishR36HistoryCheckpoint} from './r36-history-publication'
+import {resolveR36HistoryCheckpoint} from './r36-certified-history'
 import {decodeR36Artifact,R36_ARTIFACT_TEXT_BYTES} from './r36-artifact-codec'
 import {financialNetwork} from './financial-network'
 /** NOT_FOR_DEPLOY. Issuer-side two-phase lifecycle. No private key, financial POST,
@@ -19,7 +21,7 @@ const kinds=['wallet_history','accounting','exceptions','exception_isolation','c
 const equalKeys=(v:Row,keys:readonly string[])=>Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k))
 const requireProof=(v:unknown,reason:string)=>{if(!v)throw Error(reason)}
 const flags={authorizesFinancialRelease:false,authorizesWalletActivation:false,authorizesSubmission:false,authorizesRotation:false} as const
-type Result={outcome:'BLOCKED'|'RECORDED'|'REPLAYED';reason:string;proofDigest?:string}&typeof flags
+type Result={outcome:'BLOCKED'|'RECORDED'|'REPLAYED';reason:string;proofDigest?:string;checkpoint?:Row}&typeof flags
 const blocked=(reason:string):Result=>({outcome:'BLOCKED',reason,...flags})
 function freezeInput(input:unknown):unknown{
  const text=JSON.stringify(input);if(typeof text!=='string'||text.length>12_000_000)throw Error('EVIDENCE_SIZE')
@@ -98,14 +100,16 @@ export async function certifyR36PriorClosure(db:R36CertificateDatabase,policyDig
     q.status.cancelled===false&&q.status.user_cancelled===false&&obj(q.transaction)&&q.transaction.txid===prior.prepared_tx_hash&&q.transaction.verified===true,'PI_TERMINAL_IDENTITY')
    const horizon=verifyR36IndependentHorizonRecord(h as R36HorizonProofInput,hr as Row)
    requireProof(horizon.outcome==='PROVEN'&&horizon.ledger===seal.horizon_ledger&&BigInt(cutoffLedger)>=BigInt(String(seal.horizon_ledger)),'TERMINAL_HORIZON')
-   assertR36ExecutionScopePolicy(profile,artifacts,wallet)
+   const checkpoint=await resolveR36HistoryCheckpoint(tx,policyDigest,wallet,artifacts,profile)
+   assertR36ExecutionScopePolicy(profile,artifacts,wallet,checkpoint)
    const review=reviewR36TerminalSnapshot({network:financialNetwork(),sourceWallet:wallet,paymentId,operationKind:prior.operation_kind,
     operationId:prior.owner_operation_id,preparedHash:prior.prepared_tx_hash,preparedSequence:prior.prepared_sequence,
-    amountStroops:terminal.amountStroops,feeStroops:seal.horizon_fee_stroops,receiptId:terminal.receiptId,entryId:terminal.entryId,cutoffLedger},artifacts)
+    amountStroops:terminal.amountStroops,feeStroops:seal.horizon_fee_stroops,receiptId:terminal.receiptId,entryId:terminal.entryId,cutoffLedger},artifacts,checkpoint)
    requireProof(review.outcome==='VERIFIED_SNAPSHOT','TERMINAL_SNAPSHOT_'+review.reason)
    // Bind the separately supplied finality record to the exact record in full history.
    const history=artifacts.wallet_history.snapshot as Row
    const records=(history.transactions as Row[]).filter(t=>obj(t.input)&&t.input.preparedHash===prior.prepared_tx_hash)
+   if(checkpoint&&records.length===0&&obj(checkpoint.checkpoint.terminalTransaction.input)&&checkpoint.checkpoint.terminalTransaction.input.preparedHash===prior.prepared_tx_hash)records.push(checkpoint.checkpoint.terminalTransaction)
    requireProof(records.length===1&&JSON.stringify(records[0].input)===JSON.stringify(h)&&JSON.stringify(records[0].record)===JSON.stringify(hr),'TERMINAL_HISTORY_FINALITY_CONFLICT')
    const issued=Math.max(...proofs.map(v=>v.issued)),expires=Math.min(...proofs.map(v=>v.expires),issued+Number(p.max_age_seconds))
    requireProof(issued>=Math.floor(Date.parse(String(seal.sealed_at))/1000)&&expires>now,'CLOSURE_VALIDITY')
@@ -113,7 +117,8 @@ export async function certifyR36PriorClosure(db:R36CertificateDatabase,policyDig
    const out=await tx.unsafe('SELECT public.r36_record_prior_closure($1,$2,$3,$4,$5,$6,$7) AS outcome',[policyDigest,wallet,paymentId,text,digest,issued,expires])
    const outcome=out.length===1?out[0].outcome:null
    if(outcome!=='RECORDED'&&outcome!=='REPLAYED')throw Error('CLOSURE_COMMIT')
-   return {outcome,reason:'PRIOR_ONLY_CLOSURE_NO_SUCCESSOR_AUTHORITY',proofDigest:digest,...flags}
+   const published=await publishR36HistoryCheckpoint(tx,policyDigest,wallet,digest,artifacts,profile,checkpoint)
+   return {outcome,reason:'PRIOR_ONLY_CLOSURE_NO_SUCCESSOR_AUTHORITY',proofDigest:digest,checkpoint:published,...flags}
   })
  }catch(e){return blocked(e instanceof Error&&/^[A-Z0-9_]+$/.test(e.message)?e.message:'CLOSURE_FAILED')}
 }

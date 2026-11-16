@@ -1,3 +1,4 @@
+import {assertR36CheckpointContext,type R36CheckpointContext} from './r36-certified-history'
 import {type FinancialNetwork,financialNetwork} from './financial-network'
 /** A new-wallet accounting boundary, not disposition of historical rights.
  * Protected enrollment pins the complete opening records and genesis evidence.
@@ -38,6 +39,22 @@ export function parseR36ExecutionScope(text:unknown,digest:unknown,wallet:unknow
  must(s.baseline.settlements.filter(r=>['a2u_created','prepared','horizon_confirmed','pi_completed'].includes(String(r.stage))).every(r=>r.a2u_from_address!==wallet&&s.legacyHolds.some(h=>h.kind==='settlement'&&h.payment_id===r.payment_id)),'SCOPE_UNHELD_SETTLEMENT')
  return s
 }
+/** An activated checkpoint seals the opening scope and all closed source rows.
+ * The current signed artifact references that protected fact, never a summary
+ * supplied by the caller. Open/delta rows still receive the original checks. */
+export function scopeR36CurrentSnapshot(snapshot:R36LiveSnapshot,scopeDigest:string,wallet:string):{snapshot:R36LiveSnapshot;evidence:Row}{
+ if(snapshot.checkpoint){
+  const anchor=snapshot.checkpoint,c=assertR36CheckpointContext(anchor,anchor.digest,wallet)!
+  must(c.executionScopeDigest===scopeDigest,'CHECKPOINT_EXECUTION_SCOPE')
+  const copy=JSON.parse(JSON.stringify(snapshot)) as R36LiveSnapshot;copy.checkpoint=anchor
+  const openings=new Map((anchor.openingBalances??[]).map(r=>[String(r.merchantId),r]))
+  copy.rows.merchantBalances=copy.rows.merchantBalances.map(r=>{const base=openings.get(String(r.merchant_id));if(!base)return r;const settled=units(r.settled)-BigInt(String(base.settled)),unsettled=units(r.unsettled)-BigInt(String(base.unsettled));must(settled>=0n&&unsettled>=0n,'SCOPE_OPENING_BALANCE_REDUCED');return{...r,settled:pi(settled),unsettled:pi(unsettled)}})
+  return{snapshot:copy,evidence:{schema:'R36_CHECKPOINT_EXECUTION_SCOPE_V1',scopeDigest,checkpointDigest:anchor.digest,sourceRowsDigest:hash(snapshot.rows),oldRightsFinanciallyCleared:false}}
+ }
+ const scopes=snapshot.rows.executionScopes.filter(r=>r.scope_digest===scopeDigest&&r.source_wallet===wallet)
+ must(scopes.length===1,'APPROVED_EXECUTION_SCOPE_REQUIRED')
+ return scopeR36LiveSnapshot(snapshot,String(scopes[0].scope_text),scopeDigest,wallet)
+}
 export function scopeR36LiveSnapshot(snapshot:R36LiveSnapshot,scopeText:string,scopeDigest:string,wallet:string):{snapshot:R36LiveSnapshot;evidence:Row}{
  const s=parseR36ExecutionScope(scopeText,scopeDigest,wallet),copy=JSON.parse(JSON.stringify(snapshot)) as R36LiveSnapshot,d=copy.rows as Record<string,Row[]>
  must(snapshot.session.read_only==='on'&&snapshot.session.isolation==='repeatable read','SCOPE_CONSISTENT_SOURCE')
@@ -57,8 +74,9 @@ export function scopeR36LiveSnapshot(snapshot:R36LiveSnapshot,scopeText:string,s
 /** Worker and terminal reviewer call this after authenticating the signed body.
  * A signed scope is still rejected unless the protected policy pins it exactly.
  */
-export function assertR36ExecutionScopePolicy(profile:Row,artifacts:Record<string,Row>,wallet:string):void{
+export function assertR36ExecutionScopePolicy(profile:Row,artifacts:Record<string,Row>,wallet:string,anchor?:R36CheckpointContext):void{
  const e=artifacts.accounting?.executionScope
+ if(anchor){const c=assertR36CheckpointContext(anchor,(artifacts.wallet_history?.snapshot as Row)?.checkpointDigest,wallet)!;must(c.executionScopeDigest===profile.executionScopeDigest&&object(e)&&e.schema==='R36_CHECKPOINT_EXECUTION_SCOPE_V1'&&e.scopeDigest===c.executionScopeDigest&&e.checkpointDigest===anchor.digest&&hex(e.sourceRowsDigest)&&e.oldRightsFinanciallyCleared===false,'CHECKPOINT_SCOPE_POLICY');return}
  if(profile.executionScopeDigest===undefined){must(e===undefined,'SCOPE_NOT_APPROVED');return}
  must(hex(profile.executionScopeDigest)&&object(e)&&e.schema==='R36_APPROVED_EXECUTION_SCOPE_BINDING_V1'&&e.scopeDigest===profile.executionScopeDigest&&e.oldRightsFinanciallyCleared===false&&hex(e.sourceRowsDigest),'SCOPE_POLICY_BINDING')
  const s=parseR36ExecutionScope(e.scopeText,e.scopeDigest,wallet)

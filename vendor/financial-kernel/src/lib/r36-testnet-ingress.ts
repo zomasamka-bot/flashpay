@@ -33,13 +33,25 @@ async function invoke(action:'reserve'|'bind'|'verify'|'inbound'|'approval', inp
     return null
   }
 }
+// Verified callers can request preparation, never bypass financial admission.
+async function requestIngressReadiness(paymentId:string,uid:string,role:'merchant'|'payer') {
+  const policy=process.env.R36_SCOPED_POLICY_DIGEST
+  if(!testnetIngressEnabled()||!policy||!/^[0-9a-f]{64}$/.test(policy))return
+  try {
+    const db=await getR36RestrictedClient();if(!db)return
+    await db.unsafe('SELECT public.r36_request_ingress_readiness($1,$2,$3,$4)',[policy,paymentId,uid,role])
+  }catch { console.warn('[R36 ingress]',{phase:'readiness_request_unavailable'}) }
+}
 export async function reserveTestnetCreation(input:{paymentId:string;createIntentId:string;merchantUid:string;merchantId:string;amount:number;note:string;merchantWallet?:string}) {
   const amountStroops=stroops(input.amount)
   if(!amountStroops) return null
   const {amount,note,...identity}=input
-  return invoke('reserve',{...identity,merchantWallet:input.merchantWallet??'',walletContract:'PI_PAYMENT_DTO_V1',amountStroops,noteDigest:createHash('sha256').update(note).digest('hex')})
+  const id=await invoke('reserve',{...identity,merchantWallet:input.merchantWallet??'',walletContract:'PI_PAYMENT_DTO_V1',amountStroops,noteDigest:createHash('sha256').update(note).digest('hex')})
+  if(id)await requestIngressReadiness(id,input.merchantUid,'merchant')
+  return id
 }
 export async function bindTestnetPayer(paymentId:string,payerUid:string,payerWallet?:string) {
+  await requestIngressReadiness(paymentId,payerUid,'payer')
   if(!await ensurePrivateTrustHost('payer'))return false
   return await invoke('bind',{paymentId,payerUid,payerWallet:payerWallet??''}) === paymentId
 }

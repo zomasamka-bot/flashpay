@@ -37,6 +37,20 @@ export async function storeR36LifecycleBytes(file:string,raw:Buffer):Promise<Buf
  }finally{await h.close().catch(()=>{});await unlink(temp).catch(()=>{})}
  const saved=await readR36LifecycleBytes(file);must(saved?.equals(raw));return saved!
 }
+/** Retire only a redundant, byte-exact local PRIOR job after authenticated
+ * durable archive confirmation. A lost confirmation retains the local copy.
+ * The bound-successor one-shot job is deliberately outside this operation. */
+export async function releaseR36ArchivedPrior(file:string,expected:Buffer){
+ must(/^lifecycle-prior-[a-f0-9]{64}\.json$/.test(path.basename(file)))
+ const raw=await readR36LifecycleBytes(file);if(!raw)return
+ must(raw.equals(expected))
+ for(const name of [file,file+'.gz']){
+  const bytes=await readBytes(name);if(!bytes)continue
+  must((name.endsWith('.gz')?unpack(bytes):bytes).equals(expected))
+  await unlink(name)
+ }
+ await syncDirectory(file)
+}
 /** Run before any producer starts, with exclusive custody of its existing
  * volume. Preserve every old bundle; unlink plaintext only AFTER the exact
  * compressed copy has been fsynced, reopened and compared byte for byte. A
