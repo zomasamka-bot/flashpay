@@ -156,7 +156,12 @@ export async function preparePendingRefundEvidence(subject:string|null) {
   let c=await select(subject)
   if(c===null||c?.kind!=='refund'||c.phase!=='preparation_only')return 'no_pending_refund_evidence'
   validate(c,subject)
-  if(c.piCreated===false&&['eligibility_verified','intent_created','wallet_submission_started'].includes(c.stage)){
+  const initialId=c.id,initialOp=c.op,seen=new Set<string>()
+  // Only advance a newly committed original preparation stage. An unchanged,
+  // ambiguous or competing stage never retries Pi creation or grants a send.
+  for(let n=0;n<3&&c.piCreated===false&&['eligibility_verified','intent_created','wallet_submission_started'].includes(c.stage);n++){
+    const key=JSON.stringify([c.id,c.op,c.stage,c.piCreated]);if(seen.has(key))return 'refund_preparation_held'
+    seen.add(key)
     // The original orchestrator re-reads identity, pending state, retirement,
     // projection and one-shot Pi-create authority. It passes NULL send authority.
     // No reset or alternate identity is created when an earlier create is unclear.
@@ -166,10 +171,12 @@ export async function preparePendingRefundEvidence(subject:string|null) {
     // Another worker may have advanced the original right. Do not inherit it,
     // switch payments, or fall back to execution from this preparation-only path.
     if(next===null)return 'refund_preparation_advanced'
-    validate(next,c.id,c.op)
+    validate(next,initialId,initialOp)
     if(next.kind!=='refund'||next.phase!=='preparation_only')throw Error('R36_PREPARATION_SELECTION_MISMATCH')
+    const rank=(x:{stage:string;piCreated:boolean})=>x.piCreated===true?3:['eligibility_verified','intent_created','wallet_submission_started'].indexOf(x.stage)
+    if(rank(next)<=rank(c))return 'refund_preparation_held'
     c=next
-    if(c.stage!=='wallet_submission_started'||c.piCreated!==true)return 'refund_preparation_invoked'
+    if(c.piCreated!==true&&seen.has(JSON.stringify([c.id,c.op,c.stage,c.piCreated])))return 'refund_preparation_held'
   }
   if(c.stage!=='wallet_submission_started'||c.piCreated!==true)return 'no_pending_refund_evidence'
   const result=await executeRefundBlockchain(c.op,{paymentId:c.id,refundId:c.op},'evidence_only')

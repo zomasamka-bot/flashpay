@@ -9,8 +9,9 @@ let alive=false;
 if(boot&&state?.hostBootId===boot.id&&Number.isSafeInteger(state.pid)&&state.pid>1){
  try{process.kill(state.pid,0);alive=true}catch{}
 }
+let storage=null;try{const v=fs.statfsSync('/data/r36');storage={freeBytes:v.bavail*v.bsize,requiredHeadroomBytes:134217728}}catch{}
 // Return only operational metadata. Never include TLS material or database URLs.
-console.log(JSON.stringify({boot:boot&&{id:boot.id,startedAt:boot.startedAt},alive,
+console.log(JSON.stringify({storage,boot:boot&&{id:boot.id,startedAt:boot.startedAt},alive,
 notification:notification&&{active:notification.active===true,hostBootId:notification.hostBootId,startedAt:notification.startedAt},state:state&&{
  hostBootId:state.hostBootId,running:state.running,heartbeatAt:state.heartbeatAt,readyAt:state.readyAt,
  configuredPolicyDigest:state.configuredPolicyDigest,generation:state.generation,services:state.services?.map(s=>s.result),startupTiming:state.startupTiming

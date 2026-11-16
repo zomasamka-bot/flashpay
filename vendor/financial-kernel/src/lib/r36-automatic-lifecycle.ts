@@ -117,7 +117,7 @@ export function createR36AutomaticLifecycle(db:R36ReadOnlySource,c:R36DispatchCo
  async function housekeeping(){
   const archive=async(body:Row)=>{
    const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined
-   try{return await Promise.race([ports.lifecycle(body,controller.signal),new Promise<Row>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('ARCHIVE_DEADLINE'))},1000)})])}
+   try{return await Promise.race([ports.lifecycle(body,controller.signal),new Promise<Row>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('ARCHIVE_DEADLINE'))},8000)})])}
    finally{if(timer)clearTimeout(timer)}
   }
   const closed=await archiveR36ClosedEvidence(c.jobDirectory,c.artifactDirectory,c.registrarPolicyDigest,archive)

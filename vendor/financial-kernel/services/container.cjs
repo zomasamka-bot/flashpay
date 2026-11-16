@@ -26,19 +26,30 @@ async function main(){const c=await input();const configured=c.kernelDeployment;
   if(sourceZone!==null){if(!['UTC','Africa/Cairo'].includes(sourceZone))throw Error('SOURCE_TIMEZONE_UNQUALIFIED');process.env.TZ=sourceZone}
   const read=createR36ReadProxyFetch(c.provider),fetcher=(input,init)=>trace.run('provider_read',()=>read(input,init)),register=createR36RegistrarClient(c.registrar),observeOriginal=createR36RegistryObserver(c.issuer,c.config.registrarPolicyDigest),observe=signal=>trace.run('registry_observation',()=>observeOriginal(signal)),lifecycleOriginal=createR36LifecycleClient(c.issuer),lifecycle=(body,signal)=>trace.run(['prior_context','bound_context','record_prior','record_bound'].includes(body.action)?body.action:'lifecycle',()=>lifecycleOriginal(body,signal)),automatic=createR36AutomaticLifecycle(db,c.config,{fetcher,observe,lifecycle,register:b=>trace.run('registrar',()=>register(b,AbortSignal.timeout(135000)))});
   const {createProducerScheduler}=require('/tools/producer-scheduler.cjs'),{runProducerCycle}=require('/tools/producer-cycle.cjs');
-  let archival;
+  let financialCycleActive=false;
+  const housekeeping=require('/tools/housekeeping-scheduler.cjs').createHousekeepingScheduler({
+   now:Date.now,set:setTimeout,clear:clearTimeout,canRun:()=>!financialCycleActive,pass:()=>automatic.housekeeping(),
+   report:a=>{if(a.released)console.log(JSON.stringify({phase:'CLOSED_LOCAL_COPIES_ARCHIVED',...a,financialAuthority:false}))},
+   failed:()=>console.warn('[R36 storage] redundant local copies retained')});
+  const space=()=>{const v=fs.statfsSync(c.config.jobDirectory);return v.bavail*v.bsize>=134217728};
   const scheduler=createProducerScheduler({set:setTimeout,clear:clearTimeout,fail:()=>process.exit(2),cycle:async()=>{
    const ingress=require('/tools/ingress-wake.cjs').readIngressTicket(c.ingressTicket);
    console.log(JSON.stringify({producerCycle:"started",at:new Date().toISOString()}));
+   // Leave headroom for the bounded seven-artifact publication and durable
+   // completion metadata. Cleanup may free space; it cannot invent authority.
+   if(!space()){
+    await housekeeping.kick();
+    if(!space()){console.log(JSON.stringify({ingress,lifecycleStatus:'STORAGE_CAPACITY_HELD',dispatchStatus:'STORAGE_CAPACITY_HELD',jobs:0,published:0,held:1,policies:1,at:new Date().toISOString(),financialAuthority:false}));return 5000}
+   }
+   financialCycleActive=true;
+   try{
    const {result:x,lifecycle:l,timing}=await runProducerCycle({automatic,dispatch:()=>dispatchR36EvidenceCycle(db,c.config,{fetcher,register:automatic.register,observeOwnerRegistry:observe})});
    console.log(JSON.stringify({ingress,lifecycleStatus:l.status,lifecycleReason:l.reason,dispatchStatus:x.status,policies:x.policies,jobs:x.jobs,published:x.published,held:x.held,reasons:x.reasons,timing,at:new Date().toISOString(),financialAuthority:false}));
-   // At most one bounded archive task runs behind the completed financial
-   // cycle. Continuous traffic cannot starve cleanup; it grants no authority.
-   if(!archival)archival=automatic.housekeeping().then(a=>{if(a.released)console.log(JSON.stringify({phase:'CLOSED_LOCAL_COPIES_ARCHIVED',...a,financialAuthority:false}))}).catch(()=>console.warn('[R36 storage] redundant local copies retained')).finally(()=>{archival=undefined});
    return x.policies?15000:600000;
+   }finally{financialCycleActive=false;void housekeeping.kick()}
   }});
   process.on('SIGUSR1',()=>scheduler.kick());
-  process.once('SIGTERM',()=>{scheduler.stop();void sql.end({timeout:2}).finally(()=>process.exit(0))});console.log('READONLY_PRODUCER_READY');await scheduler.start();return
+  process.once('SIGTERM',()=>{scheduler.stop();housekeeping.stop();void sql.end({timeout:2}).finally(()=>process.exit(0))});console.log('READONLY_PRODUCER_READY');await scheduler.start();return
  }
  if(c.mode==='proxy'){if(!/^\d+\.\d+\.\d+\.\d+$/.test(c.ip))throw Error('TARGET');relay(5432,c.ip,5432);console.log('FIXED_DATABASE_PROXY_READY');return}
  if(c.mode==='probe'){

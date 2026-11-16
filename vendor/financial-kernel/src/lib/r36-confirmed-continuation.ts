@@ -11,9 +11,11 @@ const key=(r:Right)=>JSON.stringify([r.id,r.kind,r.op,r.wallet,r.hash,r.seq,r.st
 const same=(a:Right,b:Right)=>['id','kind','op','wallet','hash','seq'].every(k=>a[k as keyof Right]===b[k as keyof Right])
 export async function continueR36ConfirmedOperation(first:Right,result:string,ports:{step(select:Select):Promise<string>;seal():Promise<string|null>;now?:()=>number}):Promise<string>{
  if(!progressed.has(result))return result
- const now=ports.now??Date.now,deadline=now()+15000,seen=new Set([key(first)])
+ const now=ports.now??Date.now,deadline=now()+60000,seen=new Set([key(first)])
  let last=result,selected=false
  // Five refund checkpoints plus a final selector read; no polling or sleeps.
+ // A slow verified Pi completion must not force the remaining accounting steps
+ // to wait for a later wake. The six-stage bound and exact selectors remain.
  for(let n=0;n<6&&now()<deadline;n++){
   selected=false
   const next=await ports.step(r=>{

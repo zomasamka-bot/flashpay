@@ -3,6 +3,18 @@
 // decision. This module never receives a wallet key, a payment body or a DB role.
 const fs=require('node:fs'),path=require('node:path');
 const ENDPOINT=require('/kernel/dist/deployment.js').deployment().publicOrigin+'/api/recovery/new-intents';
+const progressed=new Set(['preparation_invoked','inbound_observation_invoked','refund_invoked','refund_finalization_invoked','refund_projection_invoked','settlement_invoked','terminal_seal_recorded','terminal_presentation_recorded']);
+// Interpret the actual bounded endpoint contract, including partial failure.
+// This is a scheduling hint only; no body supplies a financial right.
+function readDelivery(status,body){
+ if(!body||typeof body!=='object')return{status,dispatch:undefined};
+ if(typeof body.dispatch==='string'&&/^[a-z_]+$/.test(body.dispatch))return{status,dispatch:body.dispatch};
+ if(body.scope!=='bounded_due_work'||!Number.isSafeInteger(body.selected)||body.selected<0||body.selected>8||!Array.isArray(body.outcomes)||body.outcomes.length>16)return{status,dispatch:undefined};
+ if(body.outcomes.some(x=>!x||!Number.isInteger(x.status)||x.status<200||x.status>599||typeof x.dispatch!=='string'))return{status,dispatch:undefined};
+ if(body.outcomes.some(x=>x.status===200&&progressed.has(x.dispatch)))return{status,dispatch:'bounded_progress'};
+ if(body.selected>0)return{status,dispatch:'bounded_pending'};
+ return{status,dispatch:'bounded_empty'};
+}
 function createWake(ports){let busy=false;return{async pulse(event,policy){
  if(busy||!policy)return{status:'NO_CERTIFICATE_EVENT'};
  busy=true;try{
@@ -18,16 +30,23 @@ function createWake(ports){let busy=false;return{async pulse(event,policy){
   if(pending&&(pending.until<=now||pending.attempts>=12))pending=null;
   if(!published&&!terminalPending&&!pending)return{status:'NO_CERTIFICATE_EVENT'};
   if(prior&&now-prior.lastAttemptAt<5000)return{status:'EVENT_WAKE_COALESCED'};
-  const day=new Date(now).toISOString().slice(0,10),count=prior?.day===day?prior.count:0;if(count>=60)return{status:'EVENT_WAKE_DAILY_LIMIT'};
+  // A permanent daily ceiling stranded otherwise valid work after 60 wakes.
+  // Keep a rolling budget, the five-second coalescing and per-continuation bound.
+  const windowMs=600000,priorWindow=prior?.windowStartedAt;
+  if(priorWindow!==undefined&&(!Number.isFinite(priorWindow)||priorWindow>now))return{status:'EVENT_WAKE_STATE_HELD'};
+  const sameWindow=priorWindow!==undefined&&now-priorWindow<windowMs;
+  const windowStartedAt=sameWindow?priorWindow:now,count=sameWindow?prior.count:0;
+  if(count>=60)return{status:'EVENT_WAKE_RATE_LIMIT'};
+  const day=new Date(now).toISOString().slice(0,10);
   // This is a durable notification continuation, never a financial permission.
   // Every wake re-enters the unchanged SQL selector and original executors. A
   // confirmed preparation changes the frozen evidence snapshot legitimately;
   // subsequent checkpoint work must not depend on issuing the same proof again.
-  const next={day,count:count+1,lastAttemptAt:now,pending:pending?{...pending,attempts:pending.attempts+1}:{policy,startedAt:now,until:now+600000,attempts:1}};
+  const next={day,windowStartedAt,count:count+1,lastAttemptAt:now,pending:pending?{...pending,attempts:pending.attempts+1}:{policy,startedAt:now,until:now+600000,attempts:1}};
   ports.save(next);
   try{
    const r=await ports.send(ENDPOINT);
-   const more=r.status===200&&['preparation_invoked','refund_invoked','refund_finalization_invoked','refund_projection_invoked','settlement_invoked','terminal_seal_recorded','terminal_seal_held','executor_held'].includes(r.dispatch);
+   const more=r.status===200&&(r.dispatch===undefined||['preparation_invoked','refund_invoked','refund_finalization_invoked','refund_projection_invoked','settlement_invoked','terminal_seal_recorded','terminal_seal_held','executor_held','terminal_presentation_recorded','bounded_progress','bounded_pending'].includes(r.dispatch));
    if(r.status===200&&!more)ports.save({...next,pending:null});
    return{status:r.status===200?'EVENT_WAKE_DELIVERED':'EVENT_WAKE_REJECTED',httpStatus:r.status,dispatch:r.dispatch,continuation:more,at:new Date(now).toISOString()};
   }catch{return{status:'EVENT_WAKE_DELIVERY_UNCERTAIN',at:new Date(now).toISOString()}}
@@ -44,9 +63,9 @@ function production(root,load){
   activity(true);
   try{
   const response=await fetch(ENDPOINT,{method:'POST',headers:{'x-flashpay-transient-recovery-secret':credential.secret},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(90000)});
-  const body=await response.json().catch(()=>null);return{status:response.status,dispatch:typeof body?.dispatch==='string'&&/^[a-z_]+$/.test(body.dispatch)?body.dispatch:undefined};
+  const body=await response.json().catch(()=>null);return readDelivery(response.status,body);
   }finally{activity(false)}
  }});
  return {...wake,deliveryActive:()=>delivering};
 }
-module.exports={createWake,production,ENDPOINT};
+module.exports={createWake,production,ENDPOINT,readDelivery};

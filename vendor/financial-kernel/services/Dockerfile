@@ -3,7 +3,7 @@
 FROM node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 COPY dependencies /node_modules
 COPY package /kernel
-COPY package/services/container.cjs package/services/producer-scheduler.cjs package/services/producer-cycle.cjs package/services/phase-trace.cjs package/services/ingress-wake.cjs /tools/
+COPY package/services/container.cjs package/services/producer-scheduler.cjs package/services/producer-cycle.cjs package/services/phase-trace.cjs package/services/ingress-wake.cjs package/services/housekeeping-scheduler.cjs /tools/
 USER 10001:10001
 ENTRYPOINT []
 CMD ["node", "/tools/container.cjs"]
