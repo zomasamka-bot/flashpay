@@ -1,5 +1,6 @@
 "use client"
-import { shareOrDownloadFile } from "@/lib/browser-actions"
+import { useFileExport } from "@/components/file-export"
+import { csvCell } from "@/lib/export-csv"
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -53,6 +54,7 @@ function getSettlementCategory(status: SettlementStatus): "settled" | "processin
 }
 
 export default function TransactionsPage() {
+  const {exportFile, exportPanel, exportBusy} = useFileExport()
   const { t, locale } = useI18n()
   const router = useRouter()
   const merchant = useMerchant()
@@ -137,11 +139,7 @@ export default function TransactionsPage() {
     }
 
     // Helper function to escape CSV cell values
-    const escapeCsvCell = (cell: unknown): string => {
-      const value = cell === null || cell === undefined ? "" : String(cell)
-      const escaped = value.replace(/"/g, '""')
-      return `"${escaped}"`
-    }
+    const escapeCsvCell = csvCell
 
     // Build CSV content
     const headers = ["Reference", "Amount (π)", "Date", "Status", "Description"]
@@ -163,7 +161,7 @@ export default function TransactionsPage() {
       type: "text/csv;charset=utf-8",
     })
 
-    await shareOrDownloadFile(file, t("transactions.export"))
+    await exportFile(file, t("transactions.export"))
 
   }
 
@@ -178,6 +176,7 @@ export default function TransactionsPage() {
           <BackButton />
         </div>
 
+        {exportPanel}
         {/* Payment Summary */}
         {summary && (
           <Card>
@@ -240,7 +239,7 @@ export default function TransactionsPage() {
               onChange={(e) => setFilterAmount(e.target.value)}
               className="flex-1"
             />
-            <Button onClick={handleExport} variant="outline" size="sm">
+            <Button onClick={handleExport} disabled={exportBusy || !filteredTransactions.length} variant="outline" size="sm">
               <Download className="h-4 w-4 mr-2" />
               {t("transactions.export")}
             </Button>

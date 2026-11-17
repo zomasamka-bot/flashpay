@@ -1,7 +1,8 @@
 "use client"
 
 import { UIMessage } from "@/components/ui-message"
-import { shareOrDownloadFile } from "@/lib/browser-actions"
+import { useFileExport } from "@/components/file-export"
+import { csvCell } from "@/lib/export-csv"
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -64,6 +65,7 @@ interface MerchantDashboardSummary {
 }
 
 export default function MerchantPaymentsPage() {
+  const {exportFile, exportPanel, exportBusy} = useFileExport()
   const { t, locale } = useI18n()
   const router = useRouter()
   const merchant = useMerchant()
@@ -359,17 +361,7 @@ export default function MerchantPaymentsPage() {
     }
   }
 
-  const formatCSVCell = (value: unknown): string => {
-    let str = value == null ? "" : String(value)
-    // Escape formulas by prefixing with single quote
-    if (/^[=+\-@]/.test(str.trimStart())) {
-      str = "'" + str
-    }
-    // Escape double quotes by doubling them
-    str = str.replace(/"/g, '""')
-    // Always quote the cell
-    return '"' + str + '"'
-  }
+  const formatCSVCell = csvCell
 
   const exportToCSV = async () => {
     try {
@@ -421,7 +413,7 @@ export default function MerchantPaymentsPage() {
       const filename = `payments-export-${new Date().toISOString().split("T")[0]}.csv`
       const file = new File([bomContent], filename, { type: "text/csv;charset=utf-8" })
 
-      await shareOrDownloadFile(file, t("dashboard.export"))
+      await exportFile(file, t("dashboard.export"))
     } catch (err) {
       if (err && typeof err === "object" && (err as any).name === "AbortError") {
         // User cancelled share, silently ignore
@@ -711,7 +703,7 @@ export default function MerchantPaymentsPage() {
                 onClick={exportToCSV}
                 variant="outline"
                 className="gap-2"
-                disabled={loading || exporting || !!error}
+                disabled={loading || exporting || exportBusy || !!error || !filteredPayments.length}
               >
                 {exporting ? (
                   <>
@@ -726,6 +718,7 @@ export default function MerchantPaymentsPage() {
                 )}
               </Button>
             </div>
+            {exportPanel}
             {exportError && (
               <div className="p-3 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded text-sm">
                 {exportError}

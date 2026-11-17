@@ -17,6 +17,7 @@ import { authenticateMerchant } from "@/lib/pi-sdk"
 import { QRCode } from "@/components/qr-code"
 import { usePaymentById, usePaymentStats } from "@/lib/use-payments"
 import { useLoadPaymentHistory } from "@/lib/use-load-payment-history"
+import { UserWallet } from "@/components/user-wallet"
 import { useMerchant } from "@/lib/use-merchant"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CustomerPaymentView } from "@/components/customer-payment-view"
@@ -555,6 +556,7 @@ export default function HomePage() {
               <span>@{merchantSetup.piUsername}</span>
             </div>
           </div>
+          <UserWallet />
         </div>
 
         {/* QR Payment View */}
@@ -701,6 +703,7 @@ export default function HomePage() {
               <span>@{merchantSetup.piUsername}</span>
             </div>
           </div>
+          <UserWallet />
         </div>
       )}
 

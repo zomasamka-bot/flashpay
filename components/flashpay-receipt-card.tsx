@@ -1,5 +1,5 @@
 "use client"
-import { copyText, isShareCancelled, downloadFile } from "@/lib/browser-actions"
+import { copyText, isShareCancelled, downloadFile, openExternalUrl } from "@/lib/browser-actions"
 
 import {formatReceiptAmount} from "@/lib/receipt-presentation"
 
@@ -24,8 +24,7 @@ function formatDateTime(value: string, locale: string, unavailable: string): str
 
 
 type PiNativeBridge = {
-  shareFile?: (file: File) => Promise<unknown> | unknown
-  openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
+    openShareDialog?: (title: string, message: string) => Promise<unknown> | unknown
   openUrlInSystemBrowser?: (url: string) => Promise<unknown> | unknown
 }
 
@@ -68,6 +67,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
   const [sharing, setSharing] = useState(false)
   const [shareError, setShareError] = useState<string | null>(null)
   const sharedPdfUrlRef = useRef<string | null>(null)
+  const sharedPdfExpiresRef = useRef(0)
   const sharedPdfPromiseRef = useRef<Promise<string> | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -129,6 +129,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       .catch(() => { if (!cancelled) setPdfFailed(true) })
     return () => { cancelled = true }
   }, [
+    accessToken,
     receipt.flashPayPaymentId,
     receipt.merchantName,
     receipt.customerName,
@@ -153,7 +154,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
   }
 
   const ensureSharedPdfUrl = async (): Promise<string> => {
-    if (sharedPdfUrlRef.current) return sharedPdfUrlRef.current
+    if (sharedPdfUrlRef.current && Date.now() < sharedPdfExpiresRef.current) return sharedPdfUrlRef.current
     if (sharedPdfPromiseRef.current) return sharedPdfPromiseRef.current
     if (!pdfFile || !accessToken) throw new Error("Authenticated PDF link unavailable")
 
@@ -171,6 +172,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       if (typeof payload.url !== "string" || !payload.url.startsWith("https://")) {
         throw new Error("Receipt PDF link missing")
       }
+      sharedPdfExpiresRef.current = Date.now() + 55 * 60_000
       sharedPdfUrlRef.current = payload.url
       return payload.url
     }).finally(() => {
@@ -205,22 +207,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
       const pi = getPiNativeBridge()
       const failures: string[] = []
 
-      // Pi Browser's native file-sharing capability is the authoritative path inside
-      // Pi Browser. It hands the real PDF File to the phone's native share sheet and
-      // avoids Android Web Share/WebView differences.
-      if (typeof pi?.shareFile === "function") {
-        try {
-          await pi.shareFile(pdfFile)
-          return
-        } catch (error) {
-          if (isAbortError(error)) return
-          failures.push(`pi-pdf: ${shareErrorMessage(error)}`)
-        }
-      }
-
-      // Standards-based fallback for Safari/Chrome and Pi Browser builds that do not
-      // expose Pi.shareFile yet. canShare() is intentionally not the sole gate because
-      // embedded WebViews can report file support incorrectly.
+      // Use documented browser file sharing; otherwise prepare an authorized HTTPS link.
       if (typeof navigator.share === "function") {
         try {
           await navigator.share({ files: [pdfFile] })
@@ -316,7 +303,7 @@ export function FlashPayReceiptCard({ receipt, accessToken }: { receipt: FlashPa
 
         {copyFailed && <div className="print:hidden text-sm" role="status"><p>{t("actions.manualCopy")}</p><input readOnly aria-label={t("receipt.flashpayId")} value={receipt.flashPayPaymentId} onFocus={(e) => e.currentTarget.select()} className="w-full rounded border p-2" /></div>}
         {fallbackUrl && <div className="print:hidden space-y-2">
-          <a href={fallbackUrl} target="_blank" rel="noopener noreferrer" className="block break-all underline">{t("actions.openPdf")}</a>
+          <Button variant="outline" onClick={()=>void openExternalUrl(fallbackUrl).catch(()=>setShareError(t("actions.manualCopy")))}>{t("actions.openPdf")}</Button>
           <Button variant="outline" onClick={async () => {
             try {
               const pi = getPiNativeBridge()

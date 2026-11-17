@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
 
+import { UserWallet } from "@/components/user-wallet"
 import { getReceiptLink, ROUTES } from "@/lib/router"
 import { useOwnerUid } from "@/lib/use-owner-uid"
 import { config } from "@/lib/config"
@@ -402,6 +403,7 @@ function ProfileContent() {
           </Card>
         )}
 
+        <UserWallet />
         {/* Profile Summary */}
         <Card>
           <CardHeader>

@@ -31,10 +31,6 @@ export function downloadFile(file: File): void {
 }
 
 export async function shareOrDownloadFile(file: File, title: string): Promise<"shared" | "cancelled" | "downloaded"> {
-  const pi = window.Pi as (typeof window.Pi & { shareFile?: (file: File) => unknown }) | undefined
-  if (typeof pi?.shareFile === "function") {
-    try { await pi.shareFile(file); return "shared" } catch (error) { if (isShareCancelled(error)) return "cancelled" }
-  }
   if (typeof navigator.share === "function") {
     try {
       if (!navigator.canShare || navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title }); return "shared" }
@@ -43,9 +39,11 @@ export async function shareOrDownloadFile(file: File, title: string): Promise<"s
   downloadFile(file); return "downloaded"
 }
 
-export function openExternalUrl(value: string): void {
+export async function openExternalUrl(value: string): Promise<void> {
   const url = new URL(value)
   if (url.protocol !== "https:") throw new Error("HTTPS_REQUIRED")
+  const pi = window.Pi as typeof window.Pi & { openUrlInSystemBrowser?: (url: string) => Promise<void> }
+  if (typeof pi?.openUrlInSystemBrowser === "function") { try { await pi.openUrlInSystemBrowser(url.href); return } catch { window.location.assign(url.href); return } }
   // Opening before any await retains the click's user activation.
   const tab = window.open(url.href, "_blank")
   if (tab) tab.opener = null

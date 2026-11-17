@@ -8,7 +8,9 @@ import { UIMessage } from "@/components/ui-message"
 
 
 
-import { useEffect, useState, useCallback } from "react"
+import Link from "next/link"
+import { useI18n } from "@/components/i18n-provider"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { config } from "@/lib/config"
 import type { SystemState } from "@/lib/system-control"
@@ -22,13 +24,17 @@ import { OwnerOperationsHeader } from "@/components/owner-operations-header"
 
 function ControlPanelContent() {
   const router = useRouter()
+  const {locale} = useI18n(); const ar = locale === "ar"
+  const [reason,setReason] = useState("")
+  const [confirmed,setConfirmed] = useState(false)
+  const pending = useRef(false)
   const { uidData } = useOwnerUid()
   const [mounted, setMounted] = useState(false)
   const [systemState, setSystemState] = useState<SystemState | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [isToggling] = useState(false)
+  const [isToggling,setIsToggling] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success] = useState<string | null>(null)
+  const [success,setSuccess] = useState<string | null>(null)
 
   useEffect(() => setMounted(true), [])
 
@@ -59,6 +65,18 @@ function ControlPanelContent() {
 
   useEffect(() => { void fetchSystemState() }, [fetchSystemState])
 
+  const toggle = async () => {
+    if (!systemState || !uidData.accessToken || !confirmed || !reason.trim() || pending.current) return
+    pending.current=true;setIsToggling(true);setError(null);setSuccess(null)
+    try {
+      const response=await fetch("/api/control/system",{method:"POST",headers:{Authorization:`Bearer ${uidData.accessToken}`,"Content-Type":"application/json"},body:JSON.stringify({action:systemState.killSwitchEnabled?"disable":"enable",expectedRevision:systemState.revision,reason:reason.trim()})})
+      const data=await response.json()
+      if(!response.ok){if(response.status===409&&data.state)setSystemState(data.state);throw new Error(ar?"تعذر الحفظ أو تغيرت الحالة؛ حدّثها قبل إعادة المحاولة.":"Save failed or state changed; refresh before retrying.")}
+      setSystemState(data.state);setReason("");setSuccess(ar?"تم حفظ حالة التشغيل من الخادم.":"Server control state saved.")
+    }catch(e){setError(e instanceof Error?e.message:"Control unavailable")}
+    finally{setConfirmed(false);pending.current=false;setIsToggling(false)}
+  }
+
   if (!mounted || uidData.status !== "success" || uidData.uid !== config.ownerUid) return null
 
   if (isLoading) {
@@ -85,10 +103,18 @@ function ControlPanelContent() {
               <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground"><div> <UIMessage text={"Revision"} /> <span className="font-mono text-foreground">{systemState.revision}</span></div><div> <UIMessage text={"Updated"} /> <span className="text-foreground">{new Date(systemState.lastToggleTime).toLocaleString()}</span></div></div>
               {systemState.killSwitchEnabled && systemState.expiresAt && <Alert><AlertTriangle className="h-4 w-4" /><AlertDescription> <UIMessage text={"Emergency control has an explicit 24-hour safety expiry:"} /> {new Date(systemState.expiresAt).toLocaleString()} <UIMessage text={". Deactivate manually when the incident is resolved."} /> </AlertDescription></Alert>}
             </> : <Alert variant="destructive"><AlertDescription> <UIMessage text={"Control state is unknown. Writes are blocked."} /> </AlertDescription></Alert>}
+            {systemState && <div className="space-y-3 rounded-lg border p-4">
+              <h2 className="font-semibold">{ar?"إيقاف التطبيق للصيانة / إعادة التشغيل":"Pause app for maintenance / resume"}</h2>
+              <p className="text-sm text-muted-foreground">{ar?"يتحكم في إتاحة التطبيق للمستخدمين. لا يلغي الحقوق ولا يفرض تسوية أو استردادًا.":"Controls application availability for users. It does not cancel rights or force a settlement or refund."}</p>
+              <label className="block text-sm">{ar?"سبب التغيير":"Reason for change"}<textarea maxLength={240} value={reason} disabled={isToggling} onChange={e=>{setReason(e.target.value);setConfirmed(false)}} className="mt-1 block w-full rounded border bg-background p-2"/></label>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={confirmed} disabled={isToggling} onChange={e=>setConfirmed(e.target.checked)}/>{systemState.killSwitchEnabled?(ar?"أؤكد إعادة إتاحة التطبيق للمستخدمين":"Confirm resuming user access"):(ar?"أؤكد إيقاف إتاحة التطبيق للمستخدمين مؤقتًا":"Confirm temporarily pausing user access")}</label>
+              <Button className="w-full" variant={systemState.killSwitchEnabled?"default":"destructive"} onClick={()=>void toggle()} disabled={isToggling||!reason.trim()||!confirmed}>{isToggling?(ar?"جارٍ حفظ التغيير…":"Saving…"):systemState.killSwitchEnabled?(ar?"إعادة تشغيل التطبيق":"Resume application"):(ar?"إيقاف التطبيق مؤقتًا":"Pause application")}</Button>
+            </div>}
             <Button variant="outline" className="w-full" onClick={() => void fetchSystemState()} disabled={isToggling}><RefreshCw className="h-4 w-4 mr-2" /> <UIMessage text={"Refresh canonical state"} /> </Button>
           </CardContent>
         </Card>
 
+        <div className="grid gap-3 sm:grid-cols-2"><Button asChild variant="outline"><Link href="/emergency">{ar?"التعافي والعمليات المعلقة":"Recovery and pending payments"}</Link></Button><Button asChild variant="outline"><Link href="/operations">{ar?"صحة النظام ومساحات التخزين":"System health and storage"}</Link></Button></div>
         <div className="text-center text-xs text-muted-foreground"><p> <UIMessage text={"CONTROL PLANE MAY OBSERVE FINANCIAL TRUTH; IT MUST NEVER INVENT OR BYPASS FINANCIAL TRUTH."} /> </p></div>
       </div>
     </main>
