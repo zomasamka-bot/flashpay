@@ -32,7 +32,7 @@ export async function claimRefundIdentityRecovery(input:{refundId:string;payment
      AND (s.certification_hold IS NULL OR s.certification_hold='dr11_refund')
      AND r.policy_digest=${policy} AND r.retired_by_payment_id IS NULL AND r.payer_uid=c.payer_uid AND r.payer_wallet IS NOT NULL
      AND r.amount_stroops=c.amount*10000000 AND p.enabled AND NOT p.revoked
-     AND p.worker_profile->'recoveryPilot'->>'schema'='FLASHPAY_TESTNET_NEW_RIGHTS_V1'
+     AND public.r36_policy_subject(p.worker_profile,r)
      AND extract(epoch FROM clock_timestamp()) BETWEEN p.valid_from AND least(p.valid_until,p.revocation_valid_until)-1
      AND NOT EXISTS(SELECT 1 FROM r36_legacy_right_holds WHERE payment_id=c.payment_id)
      AND NOT EXISTS(SELECT 1 FROM refund_automatic_retirements WHERE refund_id=c.refund_id OR payment_id=c.payment_id)
