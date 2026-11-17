@@ -1,3 +1,4 @@
+import {recordPiCreateCooldown} from './pi-create-backpressure'
 import {financialNetwork} from './financial-network'
 import {currentRecoveryRight} from './r36-recovery-scope'
 import { readPiA2UQueueAdmission } from './pi-a2u-queue-admission'
@@ -353,7 +354,11 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
     const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, recovered.payment.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: recovered.payment.identifier, recovered: true } })
     return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: recovered.payment.identifier } : { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
   }
-  if (!response || !response.ok) return reconcileAfterUncertainty()
+  if (!response || !response.ok) {
+    const failure=await response?.clone().json().catch(()=>null)
+    if(response?.status===429||failure?.error==='too_many_payments'||failure?.code==='too_many_payments')await recordPiCreateCooldown(response?.headers.get('retry-after')??null)
+    return reconcileAfterUncertainty()
+  }
   const body: unknown = await response.json().catch(() => null)
   if (!isRecord(body) || typeof body.identifier !== 'string') return reconcileAfterUncertainty()
   const verified = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: body.identifier })

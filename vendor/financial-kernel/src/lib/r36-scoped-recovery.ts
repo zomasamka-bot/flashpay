@@ -2,7 +2,7 @@ import 'server-only'
 import {getR36RestrictedClient} from './db'
 import {executeA2URecovery} from './a2u-recovery-service'
 import {executeRefundBlockchain,executeRefundFinalProjection} from './refund-executor'
-import {runAutomaticRefundPreparationStep,runAutomaticRefundFinalizationStep} from './refund-auto-orchestrator'
+import {ensureAutomaticRefundIntent,runAutomaticRefundPreparationStep,runAutomaticRefundFinalizationStep} from './refund-auto-orchestrator'
 import {currentRecoveryRight,runWithRecoveryRight,type ScopedRecoveryRight} from './r36-recovery-scope'
 import {reconcileScopedU2ACompletion} from './r36-u2a-completion'
 import {recordAdmittedTerminalSeal} from './r36-terminal-seal'
@@ -92,7 +92,14 @@ async function resumeAdmittedRecoveryStep(subject:string|null,mode:'all'|'confir
       (['u2a_completion','certification_recovery'].includes(candidate.phase)&&(candidate.kind!=='settlement'||candidate.stage!=='payment_identity'))) throw Error('R36_PREPARATION_SELECTION_MISMATCH')
     if(candidate.phase==='u2a_completion' || (candidate.phase==='certification_recovery' && process.env.VERCEL_ENV==='production')) return reconcileScopedU2ACompletion(candidate.id)
     if(candidate.kind==='settlement') {
-      await executeA2URecovery(candidate.id,candidate.id)
+      const result=await executeA2URecovery(candidate.id,candidate.id)
+      // Original recovery proved eligibility, but an eligibility result is not
+      // a persisted refund intent. Hand off only this selected payment; the
+      // original intent service rechecks payer, XOR, locks and durable evidence.
+      if(result.paymentId===candidate.id&&result.state==='refund_pending_eligible'){
+        const intent=await ensureAutomaticRefundIntent(candidate.id)
+        console.info('[Recovery refund handoff]',{paymentId:candidate.id,outcome:intent.outcome,reason:intent.reason??null,fundsSubmission:false})
+      }
     } else if(candidate.piCreated) {
       await executeRefundBlockchain(candidate.op,{paymentId:candidate.id,refundId:candidate.op})
     } else {

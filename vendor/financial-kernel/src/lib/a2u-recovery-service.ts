@@ -184,6 +184,17 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
     if (reconciliation.outcome !== "CONFIRMED_NONE") return "MANUAL_REVIEW"
     // A Redis-observed Pi A2U identity must never be downgraded into refund eligibility.
     if (latest.a2uPaymentId) return "MANUAL_REVIEW"
+    // An empty provider list cannot retire a consumed create claim. Match the
+    // original refund-intent XOR guard BEFORE advertising refund eligibility.
+    // This changes presentation only; no claim is reset and no send is allowed.
+    const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
+    if(authority.outcome!=='CLEAR'||authority.refundActive)return 'MANUAL_REVIEW'
+    if(authority.settlementActive){
+      if(latest.payerRefundEligible===true||latest.refundStatus==='pending')
+        await persistCheckpointMerged(paymentId,{status:'paid_to_app',settlementFailureState:'held',refundStatus:'manual_review_required',payerRefundEligible:false})
+      console.warn('[Recovery provider identity held]',{paymentId,code:latest.a2uErrorCode??'create_claim_unresolved',refundEligible:false,createClaimRetained:true})
+      return 'MANUAL_REVIEW'
+    }
 
     const refundPending = markRefundPendingAfterFailedSettlement(
       mode === 6 ? { ...latest, status: "settlement_failed" } : latest,

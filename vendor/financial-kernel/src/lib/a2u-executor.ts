@@ -1,3 +1,4 @@
+import {piCreateCooldown,recordPiCreateCooldown} from './pi-create-backpressure'
 import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
 import {financialNetwork,financialHorizonOrigin} from './financial-network'
 import {withPreparedTrace,observePreparedRefusal} from './r36-prepared-trace'
@@ -754,6 +755,10 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     }
     console.log("[R101-6 A2U Stage1] ✓ Durable merchant/U2A authority verified upstream")
 
+    // Wait BEFORE consuming one-shot create authority. Reconciliation/completion
+    // of existing identities remains independent of this operational cooldown.
+    if(await piCreateCooldown()!=='READY')return {ok:false,error:'Pi create temporarily deferred',userFacingStatus:'settlement_pending',retryable:true,retryAfterMs:60_000,errorCode:'pi_create_cooldown'}
+
     // FIN-5: PostgreSQL must prove this payment was born under the guarded
     // create generation and atomically claim its one allowed Pi create attempt.
     // Legacy/replayed/uncertain claims fail closed before any network POST.
@@ -802,6 +807,9 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
         errorData = { raw: errorText }
       }
 
+      const rateLimited=createResponse.status===429||codeIsTooManyPayments(errorData,errorText)
+      if(rateLimited)await recordPiCreateCooldown(createResponse.headers.get('retry-after'))
+      console.warn('[A2U provider response]',{paymentId:ctx.paymentId,httpStatus:createResponse.status,code:rateLimited?'too_many_payments':'provider_rejected',retryAfter:createResponse.headers.get('retry-after'),createClaimRetained:true})
       // Handle ongoing_payment_found
       if (errorData.code === "ongoing_payment_found" || errorText.includes("ongoing_payment")) {
         const ongoingPaymentId = errorData.payment?.identifier || errorData.identifier || errorData.payment_id
@@ -873,7 +881,6 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       }
 
       console.error("[DR-22 FINANCIAL EVENT]", { event: "a2u_create_failed", paymentId: ctx.paymentId, stage: "pi_create", httpStatus: createResponse.status, errorCode, rateLimited: createResponse.status === 429 || codeIsTooManyPayments(errorData, errorText), failClosed: true })
-      const rateLimited = createResponse.status === 429 || codeIsTooManyPayments(errorData, errorText)
       const retryable = responseStatusRetryable(createResponse.status) || rateLimited
       const retryAfterMs = retryable ? parseRetryAfterMs(createResponse.headers.get("retry-after"), Date.now()) : undefined
       return {
