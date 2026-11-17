@@ -1,3 +1,6 @@
+import {createHash} from 'node:crypto'
+import {recoverSettlementIdentityCreation,observeSettlementIdentityCreation} from './db'
+import {readPiA2UQueueAdmission} from './pi-a2u-queue-admission'
 import {piCreateCooldown,recordPiCreateCooldown} from './pi-create-backpressure'
 import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
 import {financialNetwork,financialHorizonOrigin} from './financial-network'
@@ -289,9 +292,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
         settlementFailureState: "none",
       }
-      // Preserve the existing Redis checkpoint first. Then require the exact same
-      // Stage1 identity to become durable in PostgreSQL before Stage2 can execute.
-      ctx.payment = await persistCheckpointMerged(ctx.paymentId, {...stage1Updates,...(ctx.payment.financialContract?{financialContract:ctx.payment.financialContract}:{})})
+      // Select the immutable identity in PostgreSQL before publishing it to Redis.
+      // A late or competing response cannot overwrite the selected identity.
       const durableStage1 = await recordSettlementA2UCreatedCheckpoint({
         paymentId: ctx.paymentId,
         merchantId: ctx.payment.merchantId,
@@ -308,6 +310,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         console.error("[A2U Stage1] Durable checkpoint not proven:", durableStage1.outcome)
         return { ok: false, status: "settlement_pending", error: "A2U Stage1 durable checkpoint not proven" }
       }
+      ctx.payment = await persistCheckpointMerged(ctx.paymentId, {...stage1Updates,refundStatus:'not_started',payerRefundEligible:false,...(ctx.payment.financialContract?{financialContract:ctx.payment.financialContract}:{})})
     }
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
@@ -770,10 +773,15 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       u2aTxid: ctx.payment.u2aTxid ?? "",
       payerUid: ctx.payment.payerUid ?? "",
     })
+    let recoveryGeneration:number|undefined
     if (createAttempt.outcome !== "RECORDED") {
-      return { ok:false, error:"Durable A2U create attempt authority unavailable", userFacingStatus:"manual_review_required", retryable:false, errorCode:"a2u_create_attempt_authority_unavailable" }
-    }
-    console.log("[FIN-5 A2U CREATE ATTEMPT] durable one-shot claim recorded", { paymentId: ctx.paymentId, attemptedAt: createAttempt.attemptedAt })
+      if(createAttempt.outcome!=='CONFLICT'||!ctx.isRecovery||await readPiA2UQueueAdmission()!=='EMPTY')
+        return {ok:false,error:'Identity creation remains guarded',userFacingStatus:'settlement_pending',retryable:true,retryAfterMs:60_000,errorCode:'identity_recovery_wait'}
+      const claim=await recoverSettlementIdentityCreation({paymentId:ctx.paymentId,merchantUid:ctx.merchantUid,customerAmount:ctx.customerAmount,u2aIdentifier:ctx.payment.piPaymentId??'',u2aTxid:ctx.payment.u2aTxid??'',payerUid:ctx.payment.payerUid??''},true)
+      if(claim.outcome!=='RECORDED')return {ok:false,error:'Identity recovery not due or not proven',userFacingStatus:'settlement_pending',retryable:true,retryAfterMs:60_000,errorCode:'identity_recovery_wait'}
+      recoveryGeneration=claim.generation
+      console.info('[Pi identity recovery] scheduled',{paymentId:ctx.paymentId,generation:recoveryGeneration,financialAuthority:false})
+    }else console.log("[FIN-5 A2U CREATE ATTEMPT] durable one-shot claim recorded", { paymentId: ctx.paymentId, attemptedAt: createAttempt.attemptedAt })
 
     // Create A2U payment
     const requestBody = {
@@ -808,6 +816,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       }
 
       const rateLimited=createResponse.status===429||codeIsTooManyPayments(errorData,errorText)
+      if(recoveryGeneration!==undefined)await observeSettlementIdentityCreation({paymentId:ctx.paymentId,generation:recoveryGeneration,httpStatus:createResponse.status,code:typeof errorData.error==='string'?errorData.error.slice(0,100):typeof errorData.code==='string'?errorData.code.slice(0,100):'provider_error',requestId:(createResponse.headers.get('x-request-id')??'').slice(0,128),sha256:createHash('sha256').update(errorText).digest('hex')})
       if(rateLimited)await recordPiCreateCooldown(createResponse.headers.get('retry-after'))
       console.warn('[A2U provider response]',{paymentId:ctx.paymentId,httpStatus:createResponse.status,code:rateLimited?'too_many_payments':'provider_rejected',retryAfter:createResponse.headers.get('retry-after'),createClaimRetained:true})
       // Handle ongoing_payment_found
@@ -873,8 +882,9 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
         return {
           ok: false,
           error: rateLimitedAmbiguous ? "Pi rate-limited an ambiguous A2U create; exact identity is not proven" : "Pi failed an ambiguous A2U create; exact identity is not proven",
-          userFacingStatus: "manual_review_required",
-          retryable: false,
+          userFacingStatus: rateLimitedAmbiguous?"settlement_pending":"manual_review_required",
+          retryable: rateLimitedAmbiguous,
+          retryAfterMs: rateLimitedAmbiguous?15*60_000:undefined,
           errorCode: rateLimitedAmbiguous ? "a2u_rate_limited_post_ambiguous" : "a2u_failed_post_reconciliation_confirmed_none",
           errorBody: errorText.slice(0, 2000),
         }

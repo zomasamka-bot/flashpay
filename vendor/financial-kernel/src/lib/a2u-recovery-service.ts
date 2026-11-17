@@ -1,3 +1,4 @@
+import {recoverSettlementIdentityCreation} from './db'
 import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
 import {financialNetwork} from './financial-network'
 import { readDurableSettlementProjection } from "./settlement-durable-projection"
@@ -101,7 +102,7 @@ function isPiCompletedDbPendingCheckpoint(payment: Payment | null): payment is P
   return payment.status === "settlement_pending" && payment.piCompleted === true && payment.piCompletionPending === false && payment.horizonSuccessFlag === true && payment.requiresDbReconciliation === true && payment.dbRecorded !== true && a2uPaymentIdValid && a2uTxidValid && amountsValid && feeValid && netValid
 }
 
-async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customerAmount: number, merchantUid: string): Promise<"FOUND" | "CONFIRMED_NONE" | "INDETERMINATE" | "MANUAL_REVIEW"> {
+async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customerAmount: number, merchantUid: string): Promise<"FOUND" | "CONFIRMED_NONE" | "INDETERMINATE" | "MANUAL_REVIEW" | "CREATE_RETRY_READY"> {
   const lockKey = `flashpay:payment:operation:${paymentId}`
   const lockToken = randomUUID()
   if (await redis.set(lockKey, lockToken, { nx: true, ex: 600 }) !== "OK") return "MANUAL_REVIEW"
@@ -190,6 +191,11 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
     const authority=await verifySettlementRefundAuthorityExclusion(paymentId)
     if(authority.outcome!=='CLEAR'||authority.refundActive)return 'MANUAL_REVIEW'
     if(authority.settlementActive){
+      const recovery=await recoverSettlementIdentityCreation({paymentId,merchantUid,customerAmount,u2aIdentifier:latest.piPaymentId??'',u2aTxid:latest.u2aTxid??'',payerUid:latest.payerUid??''},false)
+      if(recovery.outcome==='READY'){
+        await persistCheckpointMerged(paymentId,{status:'paid_to_app',settlementFailureState:'retryable',refundStatus:'not_started',payerRefundEligible:false,nextRetryAt:new Date().toISOString()})
+        return 'CREATE_RETRY_READY'
+      }
       if(latest.payerRefundEligible===true||latest.refundStatus==='pending')
         await persistCheckpointMerged(paymentId,{status:'paid_to_app',settlementFailureState:'held',refundStatus:'manual_review_required',payerRefundEligible:false})
       console.warn('[Recovery provider identity held]',{paymentId,code:latest.a2uErrorCode??'create_claim_unresolved',refundEligible:false,createClaimRetained:true})
@@ -693,6 +699,7 @@ export async function executeA2URecovery(
       return { status: "manual_review_required", state: "a2u_reconciliation_merchant_uid_missing", paymentId, details: { error: "Merchant UID is required for scoped A2U reconciliation" } }
     }
     const commitResult = await commitRecoverySettlement(paymentId, 6, payment.customerAmount, payment.merchantUid)
+    if (commitResult === "CREATE_RETRY_READY") return {status:"pending_pi_complete",state:"identity_creation_recovery_ready",paymentId,details:{}}
     if (commitResult === "FOUND") return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { error: "A2U evidence reconciled under payment lock" } }
     if (commitResult === "INDETERMINATE") return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: "A2U reconciliation remained indeterminate" } }
     if (commitResult === "CONFIRMED_NONE") return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "Refund intent may now be created" } }
@@ -726,6 +733,7 @@ export async function executeA2URecovery(
       return { status: "manual_review_required", state: "a2u_reconciliation_merchant_uid_missing", paymentId, details: { error: "Merchant UID is required for scoped A2U reconciliation" } }
     }
     const commitResult = await commitRecoverySettlement(paymentId, 7, payment.customerAmount, payment.merchantUid)
+    if (commitResult === "CREATE_RETRY_READY") return {status:"pending_pi_complete",state:"identity_creation_recovery_ready",paymentId,details:{}}
     if (commitResult === "FOUND") return { status: "manual_review_required", state: "a2u_found_reused_from_stage1_reconciliation", paymentId, details: { error: "A2U evidence reconciled under payment lock" } }
     if (commitResult === "INDETERMINATE") return { status: "manual_review_required", state: "a2u_reconciliation_indeterminate", paymentId, details: { error: "A2U reconciliation remained indeterminate" } }
     if (commitResult === "CONFIRMED_NONE") return { status: "manual_review_required", state: "refund_pending_eligible", paymentId, details: { error: "No merchant transfer evidence; refund intent may be created" } }
