@@ -1,3 +1,4 @@
+import {beginPriorWork,readyPriorWork,acknowledgePriorWork,finishPriorWork,priorWorkLocation} from './r36-prior-work-index'
 /** Lossless private storage for immutable prior-closure bundles. Compression
  * changes no signed bytes, nonce, certificate, accounting fact or send right. */
 import {constants} from 'node:fs'
@@ -26,8 +27,10 @@ export async function readR36LifecycleBytes(file:string):Promise<Buffer|null>{
 }
 export async function storeR36LifecycleBytes(file:string,raw:Buffer):Promise<Buffer>{
  must(raw.length>0&&raw.length<=LIMIT)
+ const indexed=/^lifecycle-prior-[a-f0-9]{64}\.json$/.test(path.basename(file))
+ const ticket=indexed?beginPriorWork(file,hash(raw)):undefined
  const existing=await readR36LifecycleBytes(file)
- if(existing){must(existing.equals(raw));return existing}
+ if(existing){must(existing.equals(raw));if(ticket)readyPriorWork(file,ticket);return existing}
  const packed=gzipSync(raw,{level:6});must(packed.length<=LIMIT&&unpack(packed).equals(raw))
  const temp=file+'.'+randomUUID()+'.gz.tmp',h=await open(temp,'wx',0o600)
  try{
@@ -35,21 +38,23 @@ export async function storeR36LifecycleBytes(file:string,raw:Buffer):Promise<Buf
   try{await link(temp,file+'.gz')}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e}
   await syncDirectory(file)
  }finally{await h.close().catch(()=>{});await unlink(temp).catch(()=>{})}
- const saved=await readR36LifecycleBytes(file);must(saved?.equals(raw));return saved!
+ const saved=await readR36LifecycleBytes(file);must(saved?.equals(raw));if(ticket)readyPriorWork(file,ticket);return saved!
 }
 /** Retire only a redundant, byte-exact local PRIOR job after authenticated
  * durable archive confirmation. A lost confirmation retains the local copy.
  * The bound-successor one-shot job is deliberately outside this operation. */
 export async function releaseR36ArchivedPrior(file:string,expected:Buffer){
  must(/^lifecycle-prior-[a-f0-9]{64}\.json$/.test(path.basename(file)))
- const raw=await readR36LifecycleBytes(file);if(!raw)return
- must(raw.equals(expected))
+ const work=acknowledgePriorWork(file,hash(expected));if(!work)return
+ const raw=await readR36LifecycleBytes(file)
+ if(raw)must(raw.equals(expected))
  for(const name of [file,file+'.gz']){
   const bytes=await readBytes(name);if(!bytes)continue
   must((name.endsWith('.gz')?unpack(bytes):bytes).equals(expected))
   await unlink(name)
  }
  await syncDirectory(file)
+ finishPriorWork(priorWorkLocation(file).root,work)
 }
 /** Run before any producer starts, with exclusive custody of its existing
  * volume. Preserve every old bundle; unlink plaintext only AFTER the exact

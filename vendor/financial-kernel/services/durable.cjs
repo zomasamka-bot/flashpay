@@ -54,10 +54,12 @@ function start(name,c,ready){c.kernelDeployment={raw:process.env.KERNEL_DEPLOYME
 async function finish(code){if(closing)return;closing=true;try{await cleanup()}catch{state.cleanup='FAILED'}savePhases();state.running=false;state.stoppedAt=new Date().toISOString();saved('DURABLE_STATUS',state);process.exit(code)}
 async function run(){
  const startupAt=Date.now(),timing={};const lock=inspectLock();await cleanup();
- // Before readers/writers start, retain old immutable closure bytes in a
- // verified lossless representation. No database or financial action occurs.
- const storage=await require('/kernel/dist/lib/r36-lifecycle-storage.js').compactR36PriorBundles(path.join(root,'jobs'));
- if(storage.files)saved('STORAGE_COMPACTION',storage);
+ // The operational index is imported once before any writer starts. Later
+ // cold starts read its marker, without enumerating historical job names.
+ const priorIndex=require('/kernel/dist/lib/r36-prior-work-index.js');
+ const storage=await priorIndex.importPriorWork(path.join(root,'jobs'));
+ const recoveredWriters=priorIndex.recoverPriorWriters(path.join(root,'jobs'));
+ if(storage.imported||recoveredWriters)saved('STORAGE_INDEX',{...storage,recoveredWriters});
  const keys=await tlsIdentities();timing.identityAndCleanupMs=Date.now()-startupAt;
  const credentials={};for(const role of ['r36_signer','r36_issuer','r36_registrar','r36_evidence_reader']){const c=databaseSecret('get',role);if(c.role!==role||c.host!==host||c.database!==deployment.databaseName||!/^[A-Za-z0-9_-]{64}$/.test(c.password))throw Error('CREDENTIAL_TARGET');credentials[role]=c}
  const image=lock.image,ip=(await dns.lookup(host,{family:4})).address;

@@ -8,7 +8,7 @@ import { claimPreparedWalletAuthority, claimFirstWalletSubmission, type WalletAu
 import { currentRecoveryRight } from './r36-recovery-scope'
 import { redis, isRedisConfigured } from "./redis"
 import { serverConfig } from "./server-config"
-import { withAtomicSettlementPreparedAuthority, recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1, claimSettlementA2UCreateAttempt, claimSettlementPiMutationAttempt } from "./db"
+import { hasPreparedCertificate, withAtomicSettlementPreparedAuthority, recordA2UTransactionAtomic, recordSettlementA2UCreatedCheckpoint, recordSettlementPreparedCheckpoint, recordSettlementHorizonCheckpoint, recordSettlementPiCompletedCheckpoint, recordSettlementDbFinalizedCheckpoint, getSettlementCheckpointAuthoritative, recordSettlementA2UOngoingObservation, retireCancelledSettlementA2UStage1, claimSettlementA2UCreateAttempt, claimSettlementPiMutationAttempt } from "./db"
 import { buildA2USuccessResponse } from "./a2u-response"
 import { validateFinancialData } from "./financial-validation"
 import { acquirePiWalletIntentSubmitLock, acquirePiWalletSubmitLock, readPiWalletIntent, releasePiWalletIntent, replacePiWalletIntent } from "./pi-wallet-submit-lock"
@@ -87,7 +87,7 @@ type Stage1Result =
 
 type Stage2Result = 
   | { ok: true; data: { txidFromHorizon: string; horizonFeeCharged: number } }
-  | { ok: false; error: string; userFacingStatus: string; waitCode?: 'R36_SCOPED_CONTINUATION_REQUIRED' }
+  | { ok: false; error: string; userFacingStatus: string; waitCode?: 'R36_SCOPED_CONTINUATION_REQUIRED' | 'R36_WAITING_FOR_CERTIFICATE' }
 
 type Stage3Result = 
   | { ok: true }
@@ -436,7 +436,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     const signResult = await stage2SignAndSubmit(ctx)
     console.log("[P7B TIMING] executeA2U Stage2/Horizon", { paymentId: ctx.paymentId, durationMs: Date.now() - stage2TimingStartedAt })
     if (!signResult.ok) {
-      if (signResult.waitCode === 'R36_SCOPED_CONTINUATION_REQUIRED') {
+      if (signResult.waitCode) {
         console.info('[R36 settlement handoff] prepared_waiting_for_scoped_selector', { paymentId: ctx.paymentId, code: signResult.waitCode })
       } else {
         console.error("[DR41 STAGE2 DIAGNOSTIC] stage2_result_failed", { paymentId: ctx.paymentId, userFacingStatus: signResult.userFacingStatus, error: signResult.error })
@@ -967,7 +967,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
 
 type Stage2PreparedResult =
   | { ok: true; transaction: StellarSDK.Transaction; preparedHash: string; preparedSequence: string }
-  | { ok: false; error: string; userFacingStatus: string }
+  | { ok: false; error: string; userFacingStatus: string; waitCode?: 'R36_WAITING_FOR_CERTIFICATE' }
 
 async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair: StellarSDK.Keypair, appPublicKey: string, horizonServer: StellarSDK.Horizon.Server, toAddress: string, amount: number, a2uPaymentId: string): Promise<Stage2PreparedResult> {
   console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_enter", { paymentId: ctx.paymentId, amount, exactStroops: numberToExactPositiveStroops(amount), hasToAddress: typeof toAddress === "string" && toAddress.length > 0, hasA2UPaymentId: typeof a2uPaymentId === "string" && a2uPaymentId.length > 0 })
@@ -1014,6 +1014,11 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   // R36: claim and prepared evidence must share ONE PostgreSQL transaction.
   // Redis is updated only AFTER this transaction commits successfully.
   const traceInput:WalletAuthorityClaim={network:financialNetwork(),sourceWallet:appPublicKey,paymentId:ctx.paymentId,operationKind:'settlement',operationId:a2uPaymentId,preparedHash,preparedSequence}
+  if (process.env.FLASHPAY_RECOVERY_SCOPE === 'admitted_new' && !currentRecoveryRight() &&
+      await hasPreparedCertificate(traceInput) === false) {
+    return {ok:false,userFacingStatus:'settlement_pending',
+      error:'Evidence prepared; awaiting independent certificate',waitCode:'R36_WAITING_FOR_CERTIFICATE'}
+  }
   const durablePrepared = await withPreparedTrace(traceInput,async()=>{
    const result = await withAtomicSettlementPreparedAuthority(ctx.paymentId, async (tx) => {
     const owned = await claimPreparedWalletAuthority({network:financialNetwork(), sourceWallet:appPublicKey,
@@ -1151,7 +1156,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const horizonServer = new StellarSDK.Horizon.Server(financialHorizonOrigin(), { allowHttp: false })
     const prepared = await prepareStage2UnderHeldWalletLock(ctx, appKeypair, appPublicKey, horizonServer, toAddress, amount, a2uPaymentId)
     if (!prepared.ok) {
-      console.error("[DR41 STAGE2 DIAGNOSTIC] prepare_failed", { paymentId: ctx.paymentId, error: prepared.error, userFacingStatus: prepared.userFacingStatus })
+      if(!prepared.waitCode)console.error("[DR41 STAGE2 DIAGNOSTIC] prepare_failed", { paymentId: ctx.paymentId, error: prepared.error, userFacingStatus: prepared.userFacingStatus })
       return prepared
     }
     console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_succeeded", { paymentId: ctx.paymentId, preparedHash: prepared.preparedHash, preparedSequence: prepared.preparedSequence })

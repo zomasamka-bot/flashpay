@@ -344,10 +344,10 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
       return { outcome: 'blocked', reason: createAttempt.outcome === 'INDETERMINATE' ? 'refund_create_attempt_uncertain' : 'refund_create_reconcile_only' }
   }
   const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
-  console.warn('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false, body: await response?.clone().json().catch(() => null) })
+  ;(response?.ok?console.info:console.warn)('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false })
   const reconcileAfterUncertainty = async (): Promise<RefundExecutionResult> => {
     const recovered = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
-    console.warn('[refunds/executor] reconcileAfterUncertainty:', { outcome: recovered.outcome, payment: recovered.payment })
+    console.warn('[refunds/executor] reconcileAfterUncertainty:', { refundId, outcome: recovered.outcome })
     if (recovered.outcome !== 'FOUND' || !recovered.payment || recovered.payment.status.cancelled || recovered.payment.status.user_cancelled) return { outcome: 'blocked', reason: recovered.payment?.status.cancelled || recovered.payment?.status.user_cancelled ? 'refund_cancelled' : 'refund_create_uncertain' }
     if (checkpoint.refundPaymentId && checkpoint.refundPaymentId !== recovered.payment.identifier) return { outcome: 'blocked', reason: 'refund_id_conflict' }
     const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, recovered.payment.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: recovered.payment.identifier, recovered: true } })
@@ -357,7 +357,7 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
   const body: unknown = await response.json().catch(() => null)
   if (!isRecord(body) || typeof body.identifier !== 'string') return reconcileAfterUncertainty()
   const verified = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: body.identifier })
-  console.warn('[refunds/executor] verified reconciliation:', { outcome: verified.outcome, payment: verified.payment })
+  ;(verified.outcome==='FOUND'?console.info:console.warn)('[refunds/executor] verified reconciliation:', { refundId, outcome: verified.outcome })
   if (verified.outcome !== 'FOUND' || !verified.payment || verified.payment.identifier !== body.identifier) return { outcome: 'blocked', reason: 'refund_create_uncertain' }
   if (verified.payment.status.cancelled || verified.payment.status.user_cancelled) return { outcome: 'blocked', reason: 'refund_cancelled' }
   const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, body.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: body.identifier } })

@@ -405,7 +405,7 @@ export async function POST(request: NextRequest) {
     if (dr11Hold.outcome === "HELD" && !dr11DurableRefund) return NextResponse.json({ error: "DR11 durable refund authority unavailable" }, { status: 503 })
     if (dr11DurableRefund) {
       if (dr11DurableRefund.paymentId !== preFlashPaymentId || dr11DurableRefund.payerUid !== verifiedPayerUid || dr11DurableRefund.amount !== 0.1 || dr11DurableRefund.status !== "pending" || dr11DurableRefund.stage !== "intent_created" || dr11DurableRefund.lastErrorCode !== "dr11_live_hold" || dr11DurableRefund.lastErrorMessage !== "awaiting_owner_concurrent_harness" || !dr11DurableRefund.nextRetryAt) return NextResponse.json({ error: "DR11 durable refund authority conflict" }, { status: 409 })
-      console.warn("[DR61 DR11 DURABLE REFUND AUTHORITY] intent and automatic-drain hold committed atomically", { paymentId: preFlashPaymentId, refundId: dr11DurableRefund.refundId, settlementAuthorityCreated: false })
+      console.info("[DR61 DR11 DURABLE REFUND AUTHORITY] intent and automatic-drain hold committed atomically", { paymentId: preFlashPaymentId, refundId: dr11DurableRefund.refundId, settlementAuthorityCreated: false })
     }
 
     console.log("[P7B TIMING] U2A Pi verify/complete", { paymentId: piPaymentId, durationMs: Date.now() - u2aPiTimingStartedAt })
@@ -650,7 +650,7 @@ export async function POST(request: NextRequest) {
         console.error("[DR60 DR11 REFUND AUTHORITY] durable intent/hold unavailable after projection", { paymentId: flashPaymentId })
         return NextResponse.json({ error: "DR11 durable refund authority unavailable after projection" }, { status: 503 })
       }
-      console.warn("[DR60 DR11 REFUND AUTHORITY] pristine intent held", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, amount: finalPiAmount, settlementQueued: false, authority: "postgres" })
+      console.info("[DR60 DR11 REFUND AUTHORITY] pristine intent held", { paymentId: flashPaymentId, refundId: dr11DurableRefund.refundId, amount: finalPiAmount, settlementQueued: false, authority: "postgres" })
     }
 
     // A production qualification wake carries this payment across the HTTP boundary.

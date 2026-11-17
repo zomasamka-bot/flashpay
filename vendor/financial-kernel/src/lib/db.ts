@@ -3130,3 +3130,18 @@ export async function readPreparedTraceObservation(input: import('./financial-wa
   })
  }catch{return null}
 }
+
+/** Scheduling hint only: missing evidence waits before the atomic authority
+ * transaction. Presence grants nothing; all current guards still run there. */
+export async function hasPreparedCertificate(input: import('./financial-wallet-authority').WalletAuthorityClaim):Promise<boolean|null> {
+ try {
+  const client=await getPostgresClient();if(!client)return null
+  const rows=await client.unsafe(`SELECT EXISTS (
+   SELECT 1 FROM public.r36_certificate_requests q JOIN public.r36_certificate_receipts c USING(nonce)
+   WHERE q.policy_digest=$8 AND q.binding->>'network'=$1 AND q.binding->>'sourceWallet'=$2
+    AND q.binding->>'paymentId'=$3 AND q.binding->>'operationKind'=$4 AND q.binding->>'operationId'=$5
+    AND q.binding->>'preparedHash'=$6 AND q.binding->>'preparedSequence'=$7
+  ) AS present`,[input.network,input.sourceWallet,input.paymentId,input.operationKind,input.operationId,input.preparedHash,input.preparedSequence,process.env.R36_SCOPED_POLICY_DIGEST??''])
+  return rows.length===1&&typeof rows[0].present==='boolean'?rows[0].present:null
+ }catch{return null}
+}
