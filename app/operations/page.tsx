@@ -1,5 +1,6 @@
 "use client"
 
+import { StorageHealth } from "@/components/storage-health"
 import { UIMessage } from "@/components/ui-message"
 /**
  * Operations Console Dashboard
@@ -212,6 +213,8 @@ export default function OperationsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {isOwner && <StorageHealth accessToken={uidData.accessToken} />}
 
         {/* Platform Statistics */}
         <Card>
