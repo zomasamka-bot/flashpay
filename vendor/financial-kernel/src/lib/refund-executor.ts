@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+import {claimRefundIdentityRecovery,observeRefundIdentityRecovery} from './refund-identity-recovery'
 import {recordPiCreateCooldown} from './pi-create-backpressure'
 import {financialNetwork} from './financial-network'
 import {currentRecoveryRight} from './r36-recovery-scope'
@@ -340,9 +342,15 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
     checkpoint = attempt.checkpoint
   }
   const createAttempt = await claimRefundCreateAttempt({ refundId, paymentId: checkpoint.paymentId, idempotencyKey: checkpoint.idempotencyKey })
+  let recoveryGeneration:number|undefined
   if (createAttempt.outcome !== 'RECORDED') {
-    if (createAttempt.outcome !== 'REPLAYED' || !await claimRejectedRefundCreateRecovery({refundId,paymentId:checkpoint.paymentId,idempotencyKey:checkpoint.idempotencyKey}))
-      return { outcome: 'blocked', reason: createAttempt.outcome === 'INDETERMINATE' ? 'refund_create_attempt_uncertain' : 'refund_create_reconcile_only' }
+    if (createAttempt.outcome !== 'REPLAYED') return {outcome:'blocked',reason:createAttempt.outcome==='INDETERMINATE'?'refund_create_attempt_uncertain':'refund_create_reconcile_only'}
+    if (!await claimRejectedRefundCreateRecovery({refundId,paymentId:checkpoint.paymentId,idempotencyKey:checkpoint.idempotencyKey})) {
+      const recovery=await claimRefundIdentityRecovery({refundId,paymentId:checkpoint.paymentId,idempotencyKey:checkpoint.idempotencyKey,payerUid:checkpoint.payerUid,amount:checkpoint.amount})
+      if(recovery.outcome!=='RECORDED')return {outcome:'blocked',reason:'refund_create_reconcile_only'}
+      recoveryGeneration=recovery.generation
+      console.info('[Refund identity recovery] scheduled',{refundId,generation:recoveryGeneration,financialAuthority:false})
+    }
   }
   const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
   ;(response?.ok?console.info:console.warn)('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false })
@@ -355,8 +363,11 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
     return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: recovered.payment.identifier } : { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
   }
   if (!response || !response.ok) {
-    const failure=await response?.clone().json().catch(()=>null)
-    if(response?.status===429||failure?.error==='too_many_payments'||failure?.code==='too_many_payments')await recordPiCreateCooldown(response?.headers.get('retry-after')??null)
+    const failureText=response?await response.clone().text().catch(()=>''):''
+    let failure:any=null;try{failure=JSON.parse(failureText)}catch{}
+    const rateLimited=response?.status===429||failure?.error==='too_many_payments'||failure?.code==='too_many_payments'
+    if(recoveryGeneration!==undefined)await observeRefundIdentityRecovery({refundId,paymentId:checkpoint.paymentId,generation:recoveryGeneration,httpStatus:response?.status??null,code:rateLimited?'too_many_payments':typeof failure?.error==='string'?failure.error.slice(0,100):response?'provider_rejected':'transport_unknown',requestId:(response?.headers.get('x-request-id')??'').slice(0,128),sha256:createHash('sha256').update(failureText).digest('hex')})
+    if(rateLimited)await recordPiCreateCooldown(response?.headers.get('retry-after')??null)
     return reconcileAfterUncertainty()
   }
   const body: unknown = await response.json().catch(() => null)
