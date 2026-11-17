@@ -29,7 +29,7 @@ function createWake(ports){let busy=false;return{async pulse(event,policy){
   if(pending&& (pending.policy!==policy||!Number.isFinite(pending.startedAt)||!Number.isFinite(pending.until)||pending.startedAt>now||pending.until!==pending.startedAt+600000||!Number.isSafeInteger(pending.attempts)||pending.attempts<1||pending.attempts>12))return{status:'EVENT_WAKE_STATE_HELD'};
   if(pending&&(pending.until<=now||pending.attempts>=12))pending=null;
   if(!published&&!terminalPending&&!pending)return{status:'NO_CERTIFICATE_EVENT'};
-  if(prior&&now-prior.lastAttemptAt<5000)return{status:'EVENT_WAKE_COALESCED'};
+  if(prior&&now-prior.lastAttemptAt<5000)return{status:'EVENT_WAKE_COALESCED',retryAfterMs:5000-(now-prior.lastAttemptAt)};
   // A permanent daily ceiling stranded otherwise valid work after 60 wakes.
   // Keep a rolling budget, the five-second coalescing and per-continuation bound.
   const windowMs=600000,priorWindow=prior?.windowStartedAt;

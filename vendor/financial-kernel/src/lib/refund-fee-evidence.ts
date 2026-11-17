@@ -32,10 +32,17 @@ export async function readRefundHorizonFee(refundId: string): Promise<RefundFeeE
     typeof checkpoint.refundTxid !== "string" || checkpoint.refundTxid.length === 0) return { outcome: "INDETERMINATE" }
   const refundPaymentId = checkpoint.refundPaymentId
   const refundTxid = checkpoint.refundTxid
-  const reconciliation = await reconcileRefundWithPi({
+  // The confirmed checkpoint pins the transaction. Read independent sources
+  // together; retain fresh Pi completion/cancellation and exact Horizon checks.
+  const [reconciliation, horizon] = await Promise.all([reconcileRefundWithPi({
     paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey,
     payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId,
-  })
+  }), (async () => {
+    try {
+      const response = await fetch(`${HORIZON_BASE}/transactions/${encodeURIComponent(refundTxid)}`, { method: "GET", cache: "no-store" })
+      return { ok: response.ok, status: response.status, body: response.ok ? await response.json() as unknown : null }
+    } catch { return { ok: false, status: 0, body: null } }
+  })()])
   ;(reconciliation.outcome==='FOUND'?console.info:console.warn)('[refunds/fee-evidence] Pi reconciliation:', { refundId, outcome: reconciliation.outcome })
   if (reconciliation.outcome !== "FOUND" || !reconciliation.payment || reconciliation.payment.identifier !== refundPaymentId ||
     reconciliation.payment.user_uid !== checkpoint.payerUid || reconciliation.payment.amount !== checkpoint.amount ||
@@ -44,10 +51,9 @@ export async function readRefundHorizonFee(refundId: string): Promise<RefundFeeE
     reconciliation.payment.transaction.txid !== refundTxid || reconciliation.payment.transaction.verified !== true ||
     reconciliation.payment.status.transaction_verified !== true) return { outcome: "INDETERMINATE" }
   try {
-    const response = await fetch(`${HORIZON_BASE}/transactions/${encodeURIComponent(refundTxid)}`, { method: "GET", cache: "no-store" })
-    ;(response.ok?console.info:console.warn)('[refunds/fee-evidence] Horizon response:', { refundId, status:response.status, ok:response.ok })
-    if (!response.ok) return { outcome: "INDETERMINATE" }
-    const body: unknown = await response.json()
+    ;(horizon.ok?console.info:console.warn)('[refunds/fee-evidence] Horizon response:', { refundId, status:horizon.status, ok:horizon.ok })
+    if (!horizon.ok) return { outcome: "INDETERMINATE" }
+    const body = horizon.body
     if (!isRecord(body) || body.successful !== true || body.id !== refundTxid || body.hash !== refundTxid ||
       body.source_account !== reconciliation.payment.from_address || body.memo_type !== "text" || body.memo !== refundPaymentId ||
       body.operation_count !== 1) return { outcome: "INDETERMINATE" }

@@ -192,8 +192,11 @@ export async function submitRefundBlockchainOnce(input: Input, mode: "execute" |
   let baseFee: Awaited<ReturnType<Horizon.Server["fetchBaseFee"]>>
   try {
     server = new Horizon.Server(HORIZON_URL)
-    source = await server.loadAccount(input.payment.from_address)
-    baseFee = await server.fetchBaseFee()
+    // Independent preparation reads; the original live authority and ownership
+    // checks still run immediately before the one-shot submission.
+    ;[source, baseFee] = await Promise.all([
+      server.loadAccount(input.payment.from_address), server.fetchBaseFee(),
+    ])
   } catch (error) {
     return { outcome: "FAILED", code: "source_load_failed", message: error instanceof Error ? error.message : "Refund source loading failed" }
   }

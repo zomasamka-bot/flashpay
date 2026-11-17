@@ -28,14 +28,18 @@ export async function readRefundPresentationBlockchain(checkpoint: RefundCheckpo
   if (!hasConfirmedStage(checkpoint) || typeof paymentId !== "string" || paymentId.trim().length === 0 || typeof txid !== "string" || txid.trim().length === 0) return { outcome: "INDETERMINATE" }
 
   try {
-    const reconciliation = await reconcileRefundWithPi({
+    // Observe both sources now; neither response alone can certify a receipt.
+    const [reconciliation, horizonBody] = await Promise.all([reconcileRefundWithPi({
       paymentId: checkpoint.paymentId,
       refundId: checkpoint.refundId,
       idempotencyKey: checkpoint.idempotencyKey,
       payerUid: checkpoint.payerUid,
       amount: checkpoint.amount,
       refundPaymentId: paymentId,
-    })
+    }), (async (): Promise<unknown> => {
+      const response = await fetch(`${financialHorizonOrigin()}/transactions/${encodeURIComponent(txid)}`, { cache: "no-store" })
+      return response.ok ? response.json() : null
+    })()])
     if (reconciliation.outcome !== "FOUND" || !reconciliation.payment) return { outcome: "INDETERMINATE" }
     const payment = reconciliation.payment
     const status = payment.status
@@ -48,9 +52,6 @@ export async function readRefundPresentationBlockchain(checkpoint: RefundCheckpo
       payment.transaction?.txid !== txid
     ) return { outcome: "INDETERMINATE" }
 
-    const horizonResponse = await fetch(`${financialHorizonOrigin()}/transactions/${encodeURIComponent(txid)}`, { cache: "no-store" })
-    if (!horizonResponse.ok) return { outcome: "INDETERMINATE" }
-    const horizonBody: unknown = await horizonResponse.json()
     const transactionAt = extractRefundHorizonTransactionAt(horizonBody, txid)
     if (!transactionAt) return { outcome: "INDETERMINATE" }
 

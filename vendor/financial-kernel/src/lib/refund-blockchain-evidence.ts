@@ -126,8 +126,12 @@ export async function verifyRefundBlockchainEvidence(input: Input): Promise<Refu
     txid = confirmedTxid
   }
 
-  const txResult = await getJson(`/transactions/${encodeURIComponent(txid)}`)
-  const operationsResult = await getJson(`/transactions/${encodeURIComponent(txid)}/operations`)
+  // Both immutable reads target the same already-identified transaction.
+  // Acceptance still requires every transaction and operation check below.
+  const [txResult, operationsResult] = await Promise.all([
+    getJson(`/transactions/${encodeURIComponent(txid)}`),
+    getJson(`/transactions/${encodeURIComponent(txid)}/operations`),
+  ])
   if (!txResult.ok || !operationsResult.ok || !isRecord(txResult.body) || !isRecord(operationsResult.body)) return { outcome: "INDETERMINATE" }
 
   const tx = txResult.body
