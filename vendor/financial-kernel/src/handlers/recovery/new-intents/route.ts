@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto"
 import { after, NextRequest, NextResponse } from "next/server"
 import { query } from "../../../lib/db"
 import {ensurePrivateTrustHost} from "../../../lib/r36-private-host-wake"
+import {wakePrivateArchive} from "../../../lib/r36-private-archive-wake"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -201,11 +202,16 @@ export async function GET(request: NextRequest) {
   const auth = request.headers.get("authorization")
   if (!auth?.startsWith("Bearer ") || !matches(process.env.CRON_SECRET, auth.slice(7)))
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+  // The existing scheduler drains archive work even when no payment is pending.
+  // Run after the response; archive availability cannot block the money path.
+  if (!new URL(request.url).search) after(wakePrivateArchive)
   return observe(request)
 }
 
 export async function POST(request: NextRequest) {
   if (!matches(process.env.FLASHPAY_TRANSIENT_RECOVERY_SECRET, request.headers.get("x-flashpay-transient-recovery-secret")))
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+  // QStash uses an unscoped POST. Per-payment callbacks do not start archival.
+  if (!new URL(request.url).search) after(wakePrivateArchive)
   return observe(request)
 }
