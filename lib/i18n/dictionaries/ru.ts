@@ -463,6 +463,8 @@ const messages = {
   "wallet.show": "Показать кошелёк",
   "wallet.refresh": "Обновить кошелёк",
   "wallet.loading": "Загрузка кошелька…",
+  "wallet.select": "Выберите кошелёк",
+  "wallet.addressUnavailable": "Pi не вернула адрес кошелька. Обновите, чтобы повторить.",
   "wallet.permission": "Подключитесь к Pi повторно, чтобы разрешить доступ к адресу.",
   "wallet.networkMissing": "Кошелёк недоступен в текущей сети приложения.",
   "wallet.unavailable": "Кошелёк недоступен. Обновите данные.",

@@ -463,6 +463,8 @@ const messages = {
   "wallet.show": "वॉलेट दिखाएँ",
   "wallet.refresh": "वॉलेट अपडेट करें",
   "wallet.loading": "वॉलेट पढ़ा जा रहा है…",
+  "wallet.select": "अपना वॉलेट चुनें",
+  "wallet.addressUnavailable": "Pi ने वॉलेट का पता नहीं दिया। फिर कोशिश करने के लिए रीफ़्रेश करें।",
   "wallet.permission": "वॉलेट पता पढ़ने की अनुमति देने के लिए Pi से फिर जुड़ें।",
   "wallet.networkMissing": "ऐप के वर्तमान नेटवर्क पर यह वॉलेट उपलब्ध नहीं है।",
   "wallet.unavailable": "वॉलेट उपलब्ध नहीं है। फिर अपडेट करें।",

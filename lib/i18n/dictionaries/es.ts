@@ -463,6 +463,8 @@ const messages = {
   "wallet.show": "Mostrar cartera",
   "wallet.refresh": "Actualizar cartera",
   "wallet.loading": "Leyendo cartera…",
+  "wallet.select": "Selecciona tu cartera",
+  "wallet.addressUnavailable": "Pi no ha devuelto una dirección de cartera. Actualiza para reintentar.",
   "wallet.permission": "Vuelve a conectar Pi para permitir el acceso a la dirección.",
   "wallet.networkMissing": "La cartera no está disponible en la red actual de la aplicación.",
   "wallet.unavailable": "Cartera no disponible. Intenta actualizar.",

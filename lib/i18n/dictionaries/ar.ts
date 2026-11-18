@@ -463,6 +463,8 @@ const messages = {
   "wallet.show": "إظهار المحفظة",
   "wallet.refresh": "تحديث المحفظة",
   "wallet.loading": "جارٍ قراءة المحفظة…",
+  "wallet.select": "اختر محفظتك",
+  "wallet.addressUnavailable": "لم تُرجع Pi عنوان محفظة. اضغط تحديث للمحاولة مجددًا.",
   "wallet.permission": "أعد الاتصال بـPi للسماح بقراءة عنوان محفظتك.",
   "wallet.networkMissing": "المحفظة غير متاحة على شبكة التطبيق الحالية.",
   "wallet.unavailable": "تعذرت قراءة المحفظة. جرّب التحديث.",

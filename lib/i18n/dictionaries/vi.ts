@@ -463,6 +463,8 @@ const messages = {
   "wallet.show": "Hiện ví",
   "wallet.refresh": "Làm mới ví",
   "wallet.loading": "Đang đọc ví…",
+  "wallet.select": "Chọn ví của bạn",
+  "wallet.addressUnavailable": "Pi chưa trả về địa chỉ ví. Hãy làm mới để thử lại.",
   "wallet.permission": "Kết nối lại Pi để cho phép đọc địa chỉ ví.",
   "wallet.networkMissing": "Ví không khả dụng trên mạng hiện tại của ứng dụng.",
   "wallet.unavailable": "Ví không khả dụng. Hãy làm mới.",

@@ -463,6 +463,8 @@ const messages = {
   "wallet.show": "Show wallet",
   "wallet.refresh": "Refresh wallet",
   "wallet.loading": "Reading wallet…",
+  "wallet.select": "Select your wallet",
+  "wallet.addressUnavailable": "Pi has not returned a wallet address. Refresh to try again.",
   "wallet.permission": "Reconnect to Pi to allow access to your wallet address.",
   "wallet.networkMissing": "This wallet is not available on the app’s current network.",
   "wallet.unavailable": "Wallet unavailable. Try refreshing.",

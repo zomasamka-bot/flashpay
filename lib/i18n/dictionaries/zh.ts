@@ -463,6 +463,8 @@ const messages = {
   "wallet.show": "显示钱包",
   "wallet.refresh": "刷新钱包",
   "wallet.loading": "正在读取钱包…",
+  "wallet.select": "选择你的钱包",
+  "wallet.addressUnavailable": "Pi 尚未返回钱包地址。请刷新后重试。",
   "wallet.permission": "请重新连接 Pi 并允许读取钱包地址。",
   "wallet.networkMissing": "当前应用网络上无法读取此钱包。",
   "wallet.unavailable": "钱包暂不可用，请刷新。",
