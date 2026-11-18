@@ -1,3 +1,4 @@
+import {readFinancialTrace} from "../../../lib/financial-trace-store"
 import { type NextRequest, NextResponse } from "next/server"
 import { verifyOwnerAuthorizationHeader } from "../../../lib/owner-server-auth"
 import { isRedisConfigured, redis } from "../../../lib/redis"
@@ -72,6 +73,7 @@ export async function GET(request: NextRequest) {
 
   const paymentId = new URL(request.url).searchParams.get("paymentId")
   if (!validPaymentId(paymentId)) return NextResponse.json({ error: "Invalid Payment ID" }, { status: 400 })
+  if(new URL(request.url).searchParams.get("trace")==="1") return NextResponse.json({paymentId,trace:await readFinancialTrace(paymentId),authorizesFinancialAction:false},{headers:{"Cache-Control":"private, no-store"}})
 
   try {
     const raw = await redis.get<unknown>(`payment:${paymentId}`)

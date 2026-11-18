@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import {createHash} from 'node:crypto'
 import {recoverSettlementIdentityCreation,observeSettlementIdentityCreation} from './db'
 import {readPiA2UQueueAdmission} from './pi-a2u-queue-admission'
@@ -118,6 +119,8 @@ type ExecutorResult =
   | { ok: false; status: string; error: string }
 
 export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> {
+return traceFinancial("settlement.executeA2U",()=>({paymentId:ctx.paymentId}),async()=>{
+
   const executeA2UTimingStartedAt = Date.now()
 
   if (!ctx.paymentId || typeof ctx.paymentId !== 'string') {
@@ -638,6 +641,8 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   console.log("[A2U Executor] ===== ALL STAGES COMPLETE - SETTLEMENT PENDING =====")
   console.log("[P7B TIMING] executeA2U total", { paymentId: ctx.paymentId, durationMs: Date.now() - executeA2UTimingStartedAt })
   return { ok: true, status: "settlement_pending" }
+
+});
 }
 
 function responseStatusRetryable(status: number): boolean {
@@ -663,6 +668,8 @@ function parseRetryAfterMs(value: string | null, now: number): number | undefine
 }
 
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
+return traceFinancial("settlement.stage1CreateA2U",()=>({paymentId:ctx.paymentId}),async()=>{
+
   try {
 
     if (ctx.merchantAuthority !== "durable_u2a") {
@@ -703,7 +710,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       },
     }
 
-    const createResponse = await fetch("https://api.minepi.com/v2/payments", {
+    const createResponse = await tracedFinancialFetch("https://api.minepi.com/v2/payments", {
       method: "POST", signal: AbortSignal.timeout(12000),
       headers: {
         Authorization: `Key ${serverConfig.piApiKey}`,
@@ -873,6 +880,8 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
 
     return { ok: false, error: "A2U creation network outcome is ambiguous", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_network_reconciliation_confirmed_none", errorBody: String(error).slice(0, 2000) }
   }
+
+});
 }
 
 type Stage2PreparedResult =
@@ -880,6 +889,8 @@ type Stage2PreparedResult =
   | { ok: false; error: string; userFacingStatus: string; waitCode?: 'R36_WAITING_FOR_CERTIFICATE' }
 
 async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair: StellarSDK.Keypair, appPublicKey: string, horizonServer: StellarSDK.Horizon.Server, toAddress: string, amount: number, a2uPaymentId: string): Promise<Stage2PreparedResult> {
+return traceFinancial("settlement.prepareStage2UnderHeldWalletLock",()=>({paymentId:ctx.paymentId}),async()=>{
+
   console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_enter", { paymentId: ctx.paymentId, amount, exactStroops: numberToExactPositiveStroops(amount), hasToAddress: typeof toAddress === "string" && toAddress.length > 0, hasA2UPaymentId: typeof a2uPaymentId === "string" && a2uPaymentId.length > 0 })
   const sourceAccount = await horizonServer.loadAccount(appPublicKey)
   console.log("[DR41 STAGE2 DIAGNOSTIC] source_account_loaded", { paymentId: ctx.paymentId, sourceSequence: sourceAccount.sequence })
@@ -960,6 +971,8 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   console.log("[DR41 STAGE2 DIAGNOSTIC] wallet_intent_read", { paymentId: ctx.paymentId, state: preparedOwner.state, kind: preparedOwner.state === "present" ? preparedOwner.owner.kind : null, ownerMatchesPayment: preparedOwner.state === "present" ? preparedOwner.owner.paymentId === ctx.paymentId : false })
   if (preparedOwner.state !== "present" || preparedOwner.owner.kind !== "settlement_prepared" || preparedOwner.owner.paymentId !== ctx.paymentId || preparedOwner.owner.preparedHash !== preparedHash || preparedOwner.owner.preparedSequence !== preparedSequence) return { ok: false, error: "Pi wallet prepared intent unavailable", userFacingStatus: "settlement_pending" }
   return { ok: true, transaction, preparedHash, preparedSequence }
+
+});
 }
 
 type Stage2MoveResult =
@@ -967,6 +980,8 @@ type Stage2MoveResult =
   | { ok: false; error: string; userFacingStatus: string }
 
 async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.Server, transaction: StellarSDK.Transaction, preparedHash: string, verifyOwned: () => Promise<boolean>, authority: WalletAuthorityClaim): Promise<Stage2MoveResult> {
+return traceFinancial("settlement.submit.moveStage2UnderHeldWalletLock",()=>({paymentId:authority.paymentId}),async()=>{
+
   if (!await verifyOwned()) return { ok: false, error: "Settlement wallet submit ownership lost", userFacingStatus: "settlement_pending" }
   if (transaction.source !== authority.sourceWallet || transaction.sequence !== authority.preparedSequence ||
       Buffer.from(transaction.hash()).toString('hex') !== preparedHash || preparedHash !== authority.preparedHash ||
@@ -976,6 +991,8 @@ async function moveStage2UnderHeldWalletLock(horizonServer: StellarSDK.Horizon.S
   const txidFromHorizon = submitResult.hash
   if (txidFromHorizon !== preparedHash) return { ok: false, error: "Horizon returned a different transaction hash", userFacingStatus: "error" }
   return { ok: true, txidFromHorizon }
+
+});
 }
 
 type Stage2FinalizeResult =
@@ -983,6 +1000,8 @@ type Stage2FinalizeResult =
   | { ok: false; status: "settlement_pending"; error: string }
 
 async function finalizeStage2AfterMove(ctx: ExecutorContext, txidFromHorizon: string, horizonFeeCharged: number): Promise<Stage2FinalizeResult> {
+return traceFinancial("settlement.finalizeStage2AfterMove",()=>({paymentId:ctx.paymentId}),async()=>{
+
   const stage2Updates = {
     status: "settlement_pending" as const,
     a2uTxid: txidFromHorizon,
@@ -1010,9 +1029,13 @@ async function finalizeStage2AfterMove(ctx: ExecutorContext, txidFromHorizon: st
     }
   }
   return { ok: true }
+
+});
 }
 
 async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> {
+return traceFinancial("settlement.stage2SignAndSubmit",()=>({paymentId:ctx.paymentId}),async()=>{
+
   let walletLock: { release: () => Promise<void>; verifyOwned: () => Promise<boolean> } | null = null
   try {
 
@@ -1193,6 +1216,8 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       }
     }
   }
+
+});
 }
 
 type RecoveredHorizonDurabilityResult =
@@ -1396,6 +1421,8 @@ async function ensureRecoveredHorizonDurability(
 }
 
 async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txidFromHorizon: string): Promise<Stage3Result> {
+return traceFinancial("settlement.stage3CompletePi",()=>({paymentId:ctx.paymentId}),async()=>{
+
   const verifyCompletionIdentity = (value: unknown): value is PiA2UPayment => {
     if (!isReconciledPiA2UPayment(value) || !isPiA2UPayment(value)) return false
     const md = isRecord(value.metadata) ? value.metadata : null
@@ -1437,7 +1464,7 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
     }
     console.log("[A2U Stage3] Calling Pi /v2/payments/complete")
 
-    const response = await fetch(`https://api.minepi.com/v2/payments/${a2uPaymentId}/complete`, {
+    const response = await tracedFinancialFetch(`https://api.minepi.com/v2/payments/${a2uPaymentId}/complete`, {
       method: "POST", signal: AbortSignal.timeout(12000),
       headers: {
         Authorization: `Key ${serverConfig.piApiKey}`,
@@ -1479,9 +1506,13 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
     }
     return { ok: false, error: "Pi /complete transport outcome unverified", userFacingStatus: "settlement_pending" }
   }
+
+});
 }
 
 async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string): Promise<Stage4Result> {
+return traceFinancial("settlement.stage4ReconcileDB",()=>({paymentId:ctx.paymentId}),async()=>{
+
   try {
     console.log("[A2U Stage4] Reconciling database")
 
@@ -1565,6 +1596,8 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     console.error("[A2U Stage4] Exception:", error)
     return { ok: false, error: String(error), userFacingStatus: "error" }
   }
+
+});
 }
 
 export async function persistCheckpointMerged(
@@ -1746,7 +1779,7 @@ export async function persistCheckpointMerged(
 
 async function fetchA2UPayment(a2uPaymentId: string): Promise<PiA2UPayment | null> {
   try {
-    const response = await fetch(`https://api.minepi.com/v2/payments/${a2uPaymentId}`, {
+    const response = await tracedFinancialFetch(`https://api.minepi.com/v2/payments/${a2uPaymentId}`, {
       method: "GET",
       headers: {
         Authorization: `Key ${serverConfig.piApiKey}`,

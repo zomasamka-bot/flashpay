@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import {financialNetwork} from './financial-network'
 import {preparedTraceEvent,preparedTraceError} from './r36-prepared-trace'
 import 'server-only'
@@ -43,19 +44,29 @@ async function requestIngressReadiness(paymentId:string,uid:string,role:'merchan
   }catch { console.warn('[R36 ingress]',{phase:'readiness_request_unavailable'}) }
 }
 export async function reserveTestnetCreation(input:{paymentId:string;createIntentId:string;merchantUid:string;merchantId:string;amount:number;note:string;merchantWallet?:string}) {
+return traceFinancial("trust.reserveTestnetCreation",()=>({paymentId:input.paymentId}),async()=>{
+
   const amountStroops=stroops(input.amount)
   if(!amountStroops) return null
   const {amount,note,...identity}=input
   const id=await invoke('reserve',{...identity,merchantWallet:input.merchantWallet??'',walletContract:'PI_PAYMENT_DTO_V1',amountStroops,noteDigest:createHash('sha256').update(note).digest('hex')})
   if(id)await requestIngressReadiness(id,input.merchantUid,'merchant')
   return id
+
+});
 }
 export async function bindTestnetPayer(paymentId:string,payerUid:string,payerWallet?:string) {
+return traceFinancial("trust.bindTestnetPayer",()=>({paymentId}),async()=>{
+
   await requestIngressReadiness(paymentId,payerUid,'payer')
   if(!await ensurePrivateTrustHost('payer'))return false
   return await invoke('bind',{paymentId,payerUid,payerWallet:payerWallet??''}) === paymentId
+
+});
 }
 export async function verifyTestnetInbound(payment:unknown) {
+return traceFinancial("trust.verifyTestnetInbound",()=>({}),async()=>{
+
   if(!payment || typeof payment!=='object')return false
   const p=payment as Record<string,unknown>,meta=p.metadata as {paymentId?:unknown}|undefined
   const amountStroops=stroops(p.amount)
@@ -69,12 +80,16 @@ export async function verifyTestnetInbound(payment:unknown) {
     s.developer_approved!==true||s.transaction_verified!==true||s.cancelled!==false||s.user_cancelled!==false||
     typeof s.developer_completed!=='boolean'||!/^G[A-Z2-7]{55}$/.test(p.from_address)||!/^G[A-Z2-7]{55}$/.test(p.to_address))return false
   return await invoke('inbound',{...identity,piPaymentId:p.identifier,txid:t.txid})===meta.paymentId
+
+});
 }
 
 // Pi approval precedes wallet signing; its canonical from_address may still be
 // empty. This is only a bounded pretransaction admission, never proof of an
 // incoming transfer. Completion and every financial executor retain exact verify.
 export async function verifyTestnetApproval(payment:unknown) {
+return traceFinancial("trust.verifyTestnetApproval",()=>({}),async()=>{
+
   if(!payment || typeof payment!=='object') return false
   const p=payment as Record<string,unknown>,meta=p.metadata as {paymentId?:unknown}|undefined
   const s=p.status as Record<string,unknown>|undefined
@@ -95,11 +110,15 @@ export async function verifyTestnetApproval(payment:unknown) {
     typeof s.developer_approved!=='boolean' || s.transaction_verified!==false || s.developer_completed!==false) return false
   return await invoke('approval',{paymentId:meta.paymentId,payerUid:p.user_uid,
     fromAddress:p.from_address,toAddress:p.to_address,amountStroops})===meta.paymentId
+
+});
 }
 
 // Bootstrap only a fully certified initial preparation. A new executor must
 // subsequently obtain the durable selector's scoped right before first send.
 export async function admitInitialTestnetPrepared(input:WalletAuthorityClaim, tx?:{unsafe:(sql:string,values:unknown[])=>Promise<unknown[]>}) {
+return traceFinancial("trust.admitInitialTestnetPrepared",()=>({paymentId:input.paymentId}),async()=>{
+
   const policy=process.env.R36_SCOPED_POLICY_DIGEST
   if(!tx || !testnetIngressEnabled() || currentRecoveryRight() || !policy || !/^[0-9a-f]{64}$/.test(policy)) {
     preparedTraceEvent('initial_precondition_rejected',{hasTransaction:!!tx,ingressEnabled:testnetIngressEnabled(),scopedRightPresent:!!currentRecoveryRight(),policyConfigured:!!policy&&/^[0-9a-f]{64}$/.test(policy)});return false
@@ -111,6 +130,8 @@ export async function admitInitialTestnetPrepared(input:WalletAuthorityClaim, tx
     preparedTraceEvent(admitted?'initial_sql_admitted':'initial_sql_rejected',{rowCount:rows.length,admissionPresent:rows.length===1&&!!(rows[0] as {admission?:unknown})?.admission})
     return admitted
   } catch(error) {preparedTraceError('initial_sql_exception',error);return false}
+
+});
 }
 
 export async function readOperationSettings():Promise<{mode:'general'|'pilot';maxAmountPi:number}|null>{

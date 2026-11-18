@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import "server-only"
 
 import { getRefundCheckpointReadOnly } from "./refund-checkpoint-store"
@@ -23,6 +24,8 @@ import type {
 } from "./types"
 
 export async function readRefundPresentation(refundId: string, suppliedCheckpoint?: RefundCheckpoint, suppliedProof?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationProofReadResult }, suppliedPersistence?: { refundId: string; paymentId: string; idempotencyKey: string; result: RefundPresentationPersistenceReadResult }, proofMode: "read" | "record" = "read"): Promise<RefundPresentationReadResult> {
+return traceFinancial("refund.receipt.readRefundPresentation",()=>({refundId}),async()=>{
+
   try {
     if (suppliedCheckpoint && suppliedCheckpoint.refundId !== refundId) return { outcome: "INDETERMINATE" }
     const checkpointResult: RefundCheckpointReadOnly = suppliedCheckpoint && suppliedCheckpoint.stage === "audit_recorded" && suppliedCheckpoint.status === "completed"
@@ -191,4 +194,6 @@ export async function readRefundPresentation(refundId: string, suppliedCheckpoin
   } catch {
     return { outcome: "INDETERMINATE" }
   }
+
+});
 }

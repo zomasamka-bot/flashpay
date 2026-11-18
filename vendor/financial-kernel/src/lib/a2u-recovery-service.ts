@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import {recoverSettlementIdentityCreation} from './db'
 import {financialAmountsMatch,paymentFinancialAmountsMatch,settlementTarget,contractCommission,netImpact,financialContractFromRow} from './payment-financial-contract'
 import {financialNetwork} from './financial-network'
@@ -103,6 +104,8 @@ function isPiCompletedDbPendingCheckpoint(payment: Payment | null): payment is P
 }
 
 async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customerAmount: number, merchantUid: string): Promise<"FOUND" | "CONFIRMED_NONE" | "INDETERMINATE" | "MANUAL_REVIEW" | "CREATE_RETRY_READY"> {
+return traceFinancial("settlement.recovery.commitRecoverySettlement",()=>({paymentId}),async()=>{
+
   const lockKey = `flashpay:payment:operation:${paymentId}`
   const lockToken = randomUUID()
   if (await redis.set(lockKey, lockToken, { nx: true, ex: 600 }) !== "OK") return "MANUAL_REVIEW"
@@ -229,6 +232,8 @@ async function commitRecoverySettlement(paymentId: string, mode: 6 | 7, customer
       console.warn("[A2U Recovery] Failed to release payment operation lock", error)
     }
   }
+
+});
 }
 
 
@@ -265,6 +270,8 @@ export async function executeA2URecovery(
   paymentId: string,
   schedulerWalletPaymentId?: string | null
 ): Promise<RecoveryResult> {
+return traceFinancial("settlement.recovery.executeA2URecovery",()=>({paymentId}),async()=>{
+
   console.log("[A2U Recovery] 🔍 Starting orchestrator for:", paymentId)
 
   const durableAuthority = await verifySettlementRefundAuthorityExclusion(paymentId)
@@ -763,6 +770,8 @@ export async function executeA2URecovery(
       error: `Unknown recovery state for status: ${payment.status}`,
     },
   }
+
+});
 }
 
 /**

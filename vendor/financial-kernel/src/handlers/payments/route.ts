@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "../../lib/financial-trace"
 import {requiresTestnetIngress,testnetIngressEnabled,reserveTestnetCreation,readOperationSettings} from "../../lib/r36-testnet-ingress"
 import { after, type NextRequest, NextResponse } from "next/server"
 import {observeIntakePolicy} from "../../lib/r36-intake-observation"
@@ -48,6 +49,8 @@ export async function OPTIONS() {
 
 // POST /api/payments - Create a new payment
 export async function POST(request: NextRequest) {
+return traceFinancial("request.create.POST",()=>({}),async()=>{
+
   if (requiresTestnetIngress() && !testnetIngressEnabled())
     return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
 
@@ -93,6 +96,7 @@ export async function POST(request: NextRequest) {
     console.log("[API] PAYMENT CREATION REQUEST RECEIVED")
     const body = await request.json()
     const { amount, note, accessToken, createIntentId } = body
+    bindFinancialTrace({intentId:createIntentId})
     const normalizedNote = note || ""
     if (typeof createIntentId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(createIntentId)) {
       return NextResponse.json({ error: "Valid createIntentId is required", code: "CREATE_INTENT_REQUIRED" }, { status: 400, headers: corsHeaders })
@@ -136,7 +140,7 @@ export async function POST(request: NextRequest) {
     }
     
     const piMeTimingStartedAt = Date.now()
-    const verifyResponse = await fetch("https://api.minepi.com/v2/me", {
+    const verifyResponse = await tracedFinancialFetch("https://api.minepi.com/v2/me", {
       method: "GET",cache:"no-store",redirect:"error",signal:AbortSignal.timeout(10000),
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -231,6 +235,7 @@ export async function POST(request: NextRequest) {
       console.info("[R36 create admission]", {phase:"reservation",path:reservation.path,admitted:Boolean(reservation.id),elapsedMs:Date.now()-admissionStartedAt})
       if (!reservation.id) return NextResponse.json({error:"Payment admission temporarily unavailable; your saved request is unchanged",code:"PAYMENT_ADMISSION_UNAVAILABLE"},{status:503,headers:corsHeaders})
       paymentId = reservation.id
+    bindFinancialTrace({paymentId})
     }
     let durableCreatedAt = new Date().toISOString()
 
@@ -286,6 +291,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Payment durability unavailable", code: "PAYMENT_INTENT_INDETERMINATE" }, { status: 503, headers: corsHeaders })
     }
     paymentId = durableIdentity.paymentId
+    bindFinancialTrace({paymentId})
     durableCreatedAt = durableIdentity.createdAt
     payment.id = paymentId
     payment.createdAt = durableCreatedAt
@@ -539,6 +545,8 @@ return 1
       }
     }
   }
+
+});
 }
 
 // GET /api/payments?id={paymentId} - Retrieve a payment by ID

@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import {financialHorizonOrigin,financialNetwork} from './financial-network'
 import { prepareR36EvidenceCandidate } from "./r36-prepared-evidence"
 import { getPiSigningSeed } from "./pi-wallet-signing-config"
@@ -104,6 +105,8 @@ export function evaluateRefundPreparedRecoveryEvidence(input: { checkpoint: Refu
 }
 
 export async function readRefundPreparedRecoveryEvidence(input: Pick<Input, "checkpoint" | "payment">): Promise<ReturnType<typeof evaluateRefundPreparedRecoveryEvidence>> {
+return traceFinancial("refund.chain.readRefundPreparedRecoveryEvidence",()=>({paymentId:input.checkpoint.paymentId,refundId:input.checkpoint.refundId}),async()=>{
+
   const blocked: { outcome: "BLOCKED"; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } = { outcome: "BLOCKED", reference: null, moneyMovementProven: false, authorizesFinancialAction: false }
   if (!isExactInput(input)) return blocked
   try {
@@ -114,6 +117,8 @@ export async function readRefundPreparedRecoveryEvidence(input: Pick<Input, "che
   } catch {
     return blocked
   }
+
+});
 }
 
 export function evaluateRefundPreparedReplayPreGate(input: { sourcePayment: Payment; payment: RefundPiPayment; prepared: Awaited<ReturnType<typeof readRefundPreparedSubmitState>>; evidence: ReturnType<typeof evaluateRefundPreparedRecoveryEvidence> }): { outcome: "ELIGIBLE_EXACT_REPLAY"; prepared: Extract<Awaited<ReturnType<typeof readRefundPreparedSubmitState>>, { state: "present" }>; observedSourceSequence: string; reference: Extract<ReturnType<typeof evaluateRefundPreparedRecoveryEvidence>, { outcome: "PREPARED_IS_NEXT" }>["reference"]; moneyMovementProven: false; authorizesFinancialAction: false } | { outcome: "BLOCKED"; prepared: null; observedSourceSequence: null; reference: null; moneyMovementProven: false; authorizesFinancialAction: false } {
@@ -123,6 +128,8 @@ export function evaluateRefundPreparedReplayPreGate(input: { sourcePayment: Paym
 }
 
 export async function submitRefundPreparedStoredXdrOnce(input: { payment: RefundPiPayment; gate: ReturnType<typeof evaluateRefundPreparedReplayPreGate>; verifyOwned: () => Promise<boolean> }): Promise<RefundBlockchainSubmitResult> {
+return traceFinancial("refund.chain.submitRefundPreparedStoredXdrOnce",()=>({}),async()=>{
+
   const blocked: RefundBlockchainSubmitResult = { outcome: "FAILED", code: "invalid_input", message: "Refund transaction is not an eligible exact replay" }
   if (input.gate.outcome !== "ELIGIBLE_EXACT_REPLAY" || input.payment.status.transaction_verified !== false || input.payment.status.developer_completed !== false || input.gate.prepared.state !== "present" || input.gate.reference.preparedHash !== input.gate.prepared.preparedHash || input.gate.reference.preparedSequence !== input.gate.prepared.preparedSequence || input.gate.reference.refundPaymentId !== input.payment.identifier || input.gate.reference.fromAddress !== input.payment.from_address || input.gate.reference.toAddress !== input.payment.to_address || input.gate.reference.amount !== input.payment.amount) return blocked
   try {
@@ -170,9 +177,13 @@ export async function submitRefundPreparedStoredXdrOnce(input: { payment: Refund
     }
     return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
   }
+
+});
 }
 
 export async function submitRefundBlockchainOnce(input: Input, mode: "execute" | "evidence_only" = "execute"): Promise<RefundBlockchainSubmitResult | { outcome: "EVIDENCE_PREPARED" }> {
+return traceFinancial("refund.chain.submitRefundBlockchainOnce",()=>({paymentId:input.checkpoint.paymentId,refundId:input.checkpoint.refundId}),async()=>{
+
   if (mode !== "execute" && mode !== "evidence_only") return { outcome: "FAILED", code: "invalid_input", message: "Invalid refund preparation mode" }
   if (mode === "evidence_only" && !await input.verifyOwned()) return { outcome: "FAILED", code: "submit_failed", message: "Refund preparation ownership lost" }
   if (!isExactInput(input) || input.payment.status.transaction_verified !== false || input.payment.status.developer_completed !== false) return { outcome: "FAILED", code: "invalid_input", message: "Refund input is not an eligible unsent Testnet refund" }
@@ -265,4 +276,6 @@ export async function submitRefundBlockchainOnce(input: Input, mode: "execute" |
     }
     return { outcome: "FAILED", code: "submit_failed", message: error instanceof Error ? error.message : "Refund transaction submission failed" }
   }
+
+});
 }

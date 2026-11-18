@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "../../../lib/financial-trace"
 import {buildDurableSettlementReceipt} from "../../../lib/durable-receipt"
 import {readRefundPresentation} from "../../../lib/refund-presentation-reader"
 import { type NextRequest, NextResponse } from "next/server"
@@ -71,7 +72,7 @@ async function resolveLegacyFlashPayId(receipt: ReceiptRow, merchantUsername: st
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 5000)
   try {
-    const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(piPaymentId)}`, {
+    const response = await tracedFinancialFetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(piPaymentId)}`, {
       headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" },
       cache: "no-store",
       signal: controller.signal,
@@ -173,10 +174,13 @@ async function readHistoricalReceipt(transactionId: string, merchantUsername: st
  * Compatibility fallback: legacy transaction ID, but still resolves and returns the canonical FlashPay ID before presentation.
  */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+return traceFinancial("receipt.read.GET",()=>({}),async()=>{
+
   if (!process.env.DATABASE_URL) return NextResponse.json({ error: "Transaction storage not configured" }, { status: 503 })
 
   try {
     const { id } = await params
+    bindFinancialTrace({paymentId:id})
     if (!id) return NextResponse.json({ error: "FlashPay ID required" }, { status: 400 })
 
     const verifiedMerchant = await authorizeFromHeader(request.headers.get("authorization"))
@@ -270,4 +274,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     console.error("[Receipts API] Error:", error)
     return NextResponse.json({ error: "Failed to fetch receipt" }, { status: 500 })
   }
+
+});
 }

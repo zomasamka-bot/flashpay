@@ -1,12 +1,17 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import 'server-only'
 import {redis,isRedisConfigured} from './redis'
 const key='flashpay:recovery:pi-create-backpressure:v1'
 export async function piCreateCooldown():Promise<'READY'|'WAIT'|'UNAVAILABLE'>{
+return traceFinancial("provider.admission.piCreateCooldown",()=>({}),async()=>{
+
  if(!isRedisConfigured)return 'UNAVAILABLE'
  try{const v=await redis.get<unknown>(key);if(v===null)return 'READY'
  const until=typeof v==='number'?v:typeof v==='string'&&/^[0-9]+$/.test(v)?Number(v):NaN
  return Number.isSafeInteger(until)&&until>=0?(until>Date.now()?'WAIT':'READY'):'UNAVAILABLE'
  }catch{return 'UNAVAILABLE'}
+
+});
 }
 // App-scoped provider rejection remains app-scoped. Respect explicit Retry-After;
 // otherwise back off 30s..15m with jitter. This never grants financial authority.

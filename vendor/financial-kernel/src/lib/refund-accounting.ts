@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import "server-only"
 
 import { redis, isRedisConfigured } from "./redis"
@@ -23,10 +24,13 @@ function paymentFromRedis(value: unknown): Payment | null {
 }
 
 export async function recordRefundAccounting(refundId: string): Promise<AccountingResult> {
+return traceFinancial("refund.accounting.recordRefundAccounting",()=>({refundId}),async()=>{
+
   if (!refundId || !isRedisConfigured || !(await verifyRefundAccountingSchema())) return { outcome: "INDETERMINATE" }
   const initial = await getRefundCheckpointAuthoritative(refundId)
   if (!initial || !await ensurePaymentOperationLock(initial.paymentId, refundId)) return { outcome: "INDETERMINATE" }
   const checkpoint = await getRefundCheckpointAuthoritative(refundId)
+    bindFinancialTrace({paymentId:checkpoint?.paymentId,refundId})
   if (!checkpoint || checkpoint.paymentId !== initial.paymentId || checkpoint.stage !== "payment_checkpoint_updated" || checkpoint.status !== "pending" ||
     typeof checkpoint.refundPaymentId !== "string" || checkpoint.refundPaymentId.length === 0 ||
     typeof checkpoint.refundTxid !== "string" || checkpoint.refundTxid.length === 0) return { outcome: "INDETERMINATE" }
@@ -119,6 +123,8 @@ export async function recordRefundAccounting(refundId: string): Promise<Accounti
   } catch {
     return { outcome: "INDETERMINATE" }
   }
+
+});
 }
 
 export type { AccountingResult }

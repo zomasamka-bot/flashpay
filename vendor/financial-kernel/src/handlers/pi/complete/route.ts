@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "../../../lib/financial-trace"
 import {financialNetwork} from '../../../lib/financial-network'
 import {originalRefundCertificationEnabled} from "../../../lib/r36-operation-policy"
 import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetInbound} from "../../../lib/r36-testnet-ingress"
@@ -56,6 +57,8 @@ function buildDr11DurableRefundPendingResponse(input: {
  * Never overwrites stale payment state over newer checkpoint.
  */
 export async function POST(request: NextRequest) {
+return traceFinancial("u2a.complete.POST",()=>({}),async()=>{
+
   if (requiresTestnetIngress() && !testnetIngressEnabled())
     return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
 
@@ -91,7 +94,7 @@ export async function POST(request: NextRequest) {
     console.log("[Pi Complete] === STAGE 1: U2A VERIFICATION ===")
 
     const u2aPiTimingStartedAt = Date.now()
-    const piResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+    const piResponse = await tracedFinancialFetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
       method: "GET",
       headers: {
         "Authorization": `Key ${serverConfig.piApiKey}`,
@@ -148,6 +151,7 @@ export async function POST(request: NextRequest) {
     const rawPrePaymentId = piPayment.metadata?.paymentId
     if (typeof rawPrePaymentId !== "string" || rawPrePaymentId.length === 0 || rawPrePaymentId !== rawPrePaymentId.trim()) return NextResponse.json({ error: "Invalid payment metadata" }, { status: 400 })
     const preFlashPaymentId = rawPrePaymentId
+    bindFinancialTrace({paymentId:preFlashPaymentId,piId:piPaymentId})
     if (requiresTestnetIngress() && !await verifyTestnetInbound(piPayment))
       return NextResponse.json({error:"Testnet payment admission mismatch",code:"TESTNET_INGRESS_HELD"},{status:503})
     const preStoredPayment = await redis.get(`payment:${preFlashPaymentId}`)
@@ -207,7 +211,7 @@ export async function POST(request: NextRequest) {
       // reconcile by exact GET. A non-2xx response or thrown transport error is not
       // proof that Pi did not complete the payment, and must never trigger a blind POST retry.
       try {
-        const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
+        const completeResponse = await tracedFinancialFetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
           method: "POST", signal: AbortSignal.timeout(12000),
           headers: {
             "Authorization": `Key ${serverConfig.piApiKey}`,
@@ -235,7 +239,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Refetch payment to validate developer_completed=true after every POST outcome.
-      const refetchResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
+      const refetchResponse = await tracedFinancialFetch(`https://api.minepi.com/v2/payments/${piPaymentId}`, {
         method: "GET",
         headers: {
           "Authorization": `Key ${serverConfig.piApiKey}`,
@@ -362,7 +366,7 @@ export async function POST(request: NextRequest) {
             try {
               const url = new URL("/api/recovery/new-intents", `https://${host}`)
               url.searchParams.set("paymentId", preFlashPaymentId)
-              const response = await fetch(url, { method: "POST", headers: { "x-flashpay-transient-recovery-secret": secret }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(12000) })
+              const response = await tracedFinancialFetch(url, { method: "POST", headers: { "x-flashpay-transient-recovery-secret": secret }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(12000) })
               if (!response.ok) console.warn("[U2A PROJECTION RECOVERY] wake held", { paymentId: preFlashPaymentId, status: response.status })
             } catch { console.warn("[U2A PROJECTION RECOVERY] wake unavailable; durable recovery remains queued", { paymentId: preFlashPaymentId }) }
           })
@@ -668,7 +672,7 @@ export async function POST(request: NextRequest) {
               if (observeNewIntents) immediateDrainRequestUrl.searchParams.set("paymentId", flashPaymentId)
               else immediateDrainRequestUrl.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
               const immediateDrainUrl = immediateDrainRequestUrl.toString()
-              const response = await fetch(immediateDrainUrl, {
+              const response = await tracedFinancialFetch(immediateDrainUrl, {
                 method: "POST", signal: AbortSignal.timeout(12000),
                 headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
                 cache: "no-store",
@@ -711,4 +715,6 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
+
+});
 }

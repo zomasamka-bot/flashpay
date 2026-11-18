@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import 'server-only'
 import {getR36RestrictedClient} from './db'
 import {executeA2URecovery} from './a2u-recovery-service'
@@ -15,8 +16,10 @@ const refund = ['wallet_submission_started','wallet_submission_confirmed','payme
 // The request may narrow selection to one payment. It can never supply the
 // wallet, executor, hash, grant, budget, policy digest or historical cutover.
 export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'confirmed'|'admitted'='all') {
+return traceFinancial("recovery.resumeAdmittedRecovery",()=>({paymentId:subject}),async()=>{
+
   let selected:ScopedRecoveryRight|undefined
-  const result=await resumeAdmittedRecoveryStep(subject,mode,r=>{selected=r;return true})
+  const result=await resumeAdmittedRecoveryStep(subject,mode,r=>{selected=r;bindFinancialTrace({paymentId:r.id});return true})
   if(!selected)return result
   const first:ScopedRecoveryRight=selected
   try{
@@ -30,6 +33,8 @@ export async function resumeAdmittedRecovery(subject:string|null,mode:'all'|'con
     console.warn('[Recovery confirmed continuation]',{code:error instanceof Error&&/^[A-Z0-9_]{1,96}$/.test(error.message)?error.message:'DEPENDENCY_UNAVAILABLE',financialOutcome:'verify_durable_result'})
     return result
   }
+
+});
 }
 
 async function resumeAdmittedRecoveryStep(subject:string|null,mode:'all'|'confirmed'|'admitted',onSelected:(r:ScopedRecoveryRight)=>boolean) {
@@ -146,6 +151,8 @@ async function resumeAdmittedRecoveryStep(subject:string|null,mode:'all'|'confir
 // inferred from readiness or from a candidate, and evidence_only stops before
 // prepared authority/signing/submission. The ordinary admitted path stays above.
 export async function preparePendingRefundEvidence(subject:string|null) {
+return traceFinancial("recovery.preparePendingRefundEvidence",()=>({paymentId:subject}),async()=>{
+
   const policy=process.env.R36_SCOPED_POLICY_DIGEST
   if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new'||!policy||!/^[0-9a-f]{64}$/.test(policy)||currentRecoveryRight())return 'preparation_held'
   const client=await getR36RestrictedClient()
@@ -188,4 +195,6 @@ export async function preparePendingRefundEvidence(subject:string|null) {
   if(c.stage!=='wallet_submission_started'||c.piCreated!==true)return 'no_pending_refund_evidence'
   const result=await executeRefundBlockchain(c.op,{paymentId:c.id,refundId:c.op},'evidence_only')
   return result.outcome==='blocked'&&result.reason==='prepared_evidence_only'?'refund_evidence_prepared':'refund_evidence_held'
+
+});
 }

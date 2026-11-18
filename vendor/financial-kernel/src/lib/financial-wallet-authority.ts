@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import {financialNetwork} from './financial-network'
 import {withPreparedTrace,preparedTraceEvent,preparedTraceError,tracePreparedScope} from './r36-prepared-trace'
 import {admitInitialTestnetPrepared} from './r36-testnet-ingress'
@@ -124,7 +125,11 @@ export async function checkR36SchemaAdmission(db: { unsafe: (sql: string, values
 }
 
 export async function claimPreparedWalletAuthority(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
+return traceFinancial("wallet.guard.claimPreparedWalletAuthority",()=>({paymentId:input.paymentId}),async()=>{
+
   return withPreparedTrace(input,()=>claimPreparedWalletAuthorityTraced(input,tx))
+
+});
 }
 
 async function claimPreparedWalletAuthorityTraced(input: WalletAuthorityClaim, tx?: { unsafe: (sql: string, values: unknown[]) => Promise<unknown[]> }): Promise<boolean> {
@@ -171,6 +176,8 @@ async function claimPreparedWalletAuthorityTraced(input: WalletAuthorityClaim, t
  * Read-only. Does not grant/reassign authority, or authorize retry.
  */
 export async function verifyPreparedWalletAuthority(input: WalletAuthorityClaim): Promise<boolean> {
+return traceFinancial("wallet.guard.verifyPreparedWalletAuthority",()=>({paymentId:input.paymentId}),async()=>{
+
   if (input.network !== financialNetwork() || !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !input.paymentId || !input.operationId || !['settlement','refund'].includes(input.operationKind) ||
       !/^[0-9a-f]{64}$/.test(input.preparedHash) || !/^[1-9][0-9]*$/.test(input.preparedSequence)) return false
@@ -183,6 +190,8 @@ export async function verifyPreparedWalletAuthority(input: WalletAuthorityClaim)
       input.operationId,input.preparedHash,input.preparedSequence])
     return Array.isArray(rows) && rows.length === 1 && (rows[0] as {owned: number})?.owned === 1
   } catch { return false }
+
+});
 }
 
 
@@ -193,6 +202,8 @@ export async function verifyPreparedWalletAuthority(input: WalletAuthorityClaim)
  * wallet's historical outstanding movements and explicitly enabled its gate.
  */
 export async function claimFirstWalletSubmission(input: WalletAuthorityClaim): Promise<boolean> {
+return traceFinancial("wallet.guard.claimFirstWalletSubmission",()=>({paymentId:input.paymentId}),async()=>{
+
   if (!matchesRecoveryClaim(input)) return false
   if (input.network !== financialNetwork() || !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !input.paymentId || input.paymentId.trim() !== input.paymentId ||
@@ -214,6 +225,8 @@ export async function claimFirstWalletSubmission(input: WalletAuthorityClaim): P
        input.operationId,input.preparedHash,input.preparedSequence])
     return Array.isArray(rows) && rows.length === 1 && (rows[0] as {claimed: boolean})?.claimed === true
   } catch { return false }
+
+});
 }
 
 
@@ -227,6 +240,8 @@ export async function recordWalletFinalitySeal(input: WalletAuthorityClaim & {
   horizonLedger: string; horizonFeeStroops: string;
   evidenceDigest: string; verifiedBy: string;
 }): Promise<boolean> {
+return traceFinancial("wallet.guard.recordWalletFinalitySeal",()=>({paymentId:input.paymentId}),async()=>{
+
   if (input.network !== financialNetwork() || !/^G[A-Z2-7]{55}$/.test(input.sourceWallet) ||
       !input.paymentId || !input.operationId ||
       !['settlement', 'refund'].includes(input.operationKind) ||
@@ -293,4 +308,6 @@ export async function recordWalletFinalitySeal(input: WalletAuthorityClaim & {
        input.evidenceDigest,input.verifiedBy])
     return Array.isArray(existing) && existing.length === 1 && (existing[0] as {exact:number}).exact === 1
   } catch { return false }
+
+});
 }

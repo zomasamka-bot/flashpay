@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import 'server-only'
 import {piCreateCooldown} from './pi-create-backpressure'
 import { serverConfig } from './server-config'
@@ -9,11 +10,13 @@ export type PiA2UQueueObservation = 'EMPTY' | 'BUSY' | 'UNAVAILABLE'
 // This GET is a precollection check, not finality, a lock or financial authority.
 // Never cancel, complete, adopt or resend a returned payment here.
 export async function readPiA2UQueueAdmission(): Promise<PiA2UQueueObservation> {
+return traceFinancial("provider.queue.readPiA2UQueueAdmission",()=>({}),async()=>{
+
   const cooldown=await piCreateCooldown()
   if(cooldown!=='READY')return cooldown==='WAIT'?'BUSY':'UNAVAILABLE'
   if (!serverConfig.piApiKey) return 'UNAVAILABLE'
   try {
-    const response = await fetch('https://api.minepi.com/v2/payments/incomplete_server_payments', {
+    const response = await tracedFinancialFetch('https://api.minepi.com/v2/payments/incomplete_server_payments', {
       method: 'GET',
       headers: { Authorization: `Key ${serverConfig.piApiKey}`, Accept: 'application/json' },
       cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(8000),
@@ -27,4 +30,6 @@ export async function readPiA2UQueueAdmission(): Promise<PiA2UQueueObservation> 
     // may turn an app-wide occupied provider slot into an empty observation.
     return entries.length === 0 ? 'EMPTY' : 'BUSY'
   } catch { return 'UNAVAILABLE' }
+
+});
 }

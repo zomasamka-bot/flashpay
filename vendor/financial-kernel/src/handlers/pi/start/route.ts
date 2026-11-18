@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "../../../lib/financial-trace"
 import {requiresTestnetIngress,testnetIngressEnabled,bindTestnetPayer} from "../../../lib/r36-testnet-ingress"
 import { type NextRequest, NextResponse } from "next/server"
 import { acquireSettlementU2AStartLease, query } from "../../../lib/db"
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 export async function POST(request: NextRequest) {
+return traceFinancial("u2a.start.POST",()=>({}),async()=>{
+
   if (requiresTestnetIngress() && !testnetIngressEnabled())
     return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
 
@@ -24,13 +27,14 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const paymentId = typeof body?.paymentId === "string" ? body.paymentId.trim() : ""
     const accessToken = typeof body?.accessToken === "string" ? body.accessToken.trim() : ""
+    bindFinancialTrace({paymentId})
     if (!paymentId) return NextResponse.json({ error: "Missing paymentId" }, { status: 400 })
     if (!accessToken) return NextResponse.json({ error: "Pi authentication required", code: "U2A_START_AUTH_REQUIRED" }, { status: 401 })
 
     // PRE-DR118 D-1: no caller may reserve the durable two-minute start lease
     // from knowledge of a public paymentId alone. Prove a live Pi identity first.
     // The bearer token is verification-only and is never persisted in the lease/checkpoint.
-    const identity = await measure('pi_identity', () => fetch("https://api.minepi.com/v2/me", {
+    const identity = await measure('pi_identity', () => tracedFinancialFetch("https://api.minepi.com/v2/me", {
       method: "GET",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
       cache: "no-store",redirect:"error",signal:AbortSignal.timeout(10000),
@@ -65,4 +69,6 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Payment start authority unavailable", code: "U2A_START_INDETERMINATE" }, { status: 503 })
   }
+
+});
 }

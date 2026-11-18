@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "../../../lib/financial-trace"
 import { timingSafeEqual } from 'crypto'
 import { type NextRequest, NextResponse } from 'next/server'
 import { serverConfig } from '../../../lib/server-config'
@@ -7,6 +8,8 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {
+return traceFinancial("refund.execute.POST",()=>({}),async()=>{
+
   const supplied = request.headers.get('x-refund-internal-secret')
   if (!serverConfig.refundInternalSecret || !supplied) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -26,4 +29,6 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ outcome: 'blocked', reason: 'unavailable' }, { status: 503 })
   }
+
+});
 }

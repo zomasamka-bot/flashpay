@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "../../../lib/financial-trace"
 import { timingSafeEqual } from 'crypto'
 import { type NextRequest, NextResponse } from 'next/server'
 import { isRedisConfigured } from '../../../lib/redis'
@@ -27,6 +28,8 @@ const corsHeaders = {
 }
 
 export async function POST(request: NextRequest) {
+return traceFinancial("refund.request.POST",()=>({}),async()=>{
+
   try {
     if (!hasInternalAuthorization(request)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: corsHeaders })
@@ -72,6 +75,8 @@ export async function POST(request: NextRequest) {
       { status: 500, headers: corsHeaders }
     )
   }
+
+});
 }
 
 export async function OPTIONS() {

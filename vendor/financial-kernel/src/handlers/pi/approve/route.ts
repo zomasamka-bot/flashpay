@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "../../../lib/financial-trace"
 import {financialNetwork} from '../../../lib/financial-network'
 import {requiresTestnetIngress,testnetIngressEnabled,verifyTestnetApproval} from "../../../lib/r36-testnet-ingress"
 import { readPiA2UQueueAdmission } from "../../../lib/pi-a2u-queue-admission"
@@ -38,6 +39,8 @@ interface PiPaymentDTO {
 // Security: Fetches canonical Pi payment, derives paymentId from canonical metadata, validates Redis record
 // Idempotent: Returns 200 for already-paid when piPaymentId matches identifier
 export async function POST(request: NextRequest) {
+return traceFinancial("u2a.approve.POST",()=>({}),async()=>{
+
   if (requiresTestnetIngress() && !testnetIngressEnabled())
     return new Response(JSON.stringify({error:"Testnet financial admission unavailable",code:"TESTNET_INGRESS_HELD"}), {status:503,headers:{"Content-Type":"application/json"}})
 
@@ -70,7 +73,7 @@ export async function POST(request: NextRequest) {
 
     // SECURITY: Fetch canonical Pi payment before any cache check or approval call
     console.log("[Pi Webhook] Fetching canonical Pi payment...")
-    const piGetResponse = await fetch(
+    const piGetResponse = await tracedFinancialFetch(
       `https://api.minepi.com/v2/payments/${identifier}`,
       {
         method: "GET",
@@ -115,6 +118,7 @@ export async function POST(request: NextRequest) {
       })
     }
     const paymentId = rawPaymentId
+    bindFinancialTrace({paymentId,piId:identifier})
     if (requiresTestnetIngress() && !await verifyTestnetApproval(canonicalPayment))
       return new Response(JSON.stringify({error:"Testnet payment admission mismatch",code:"TESTNET_INGRESS_HELD"}),{status:503,headers:{"Content-Type":"application/json"}})
 
@@ -261,7 +265,7 @@ export async function POST(request: NextRequest) {
     // have attempted Pi /approve and crashed before observing the result. Reconcile
     // canonical Pi state BEFORE considering any new external side effect.
     if (approvalClaim.outcome === "REPLAYED") {
-      const replayReconcile = await fetch(
+      const replayReconcile = await tracedFinancialFetch(
         `https://api.minepi.com/v2/payments/${identifier}`,
         { headers: { Authorization: `Key ${serverConfig.piApiKey}`, "Content-Type": "application/json" } },
       ).catch(() => null)
@@ -299,7 +303,7 @@ export async function POST(request: NextRequest) {
     // exact GET before deciding success/failure. Never blindly retry /approve here.
     let approvalPostOutcome: "ok" | "already_approved" | "non_ok" | "exception" = "non_ok"
     try {
-      const approvalResponse = await fetch(
+      const approvalResponse = await tracedFinancialFetch(
         `https://api.minepi.com/v2/payments/${identifier}/approve`,
         {
           method: "POST", signal: AbortSignal.timeout(12000),
@@ -341,7 +345,7 @@ export async function POST(request: NextRequest) {
     // Mandatory exact reconciliation for every POST outcome: OK, already-approved,
     // non-OK, or transport exception. Success is derived only from canonical Pi state.
     console.log("[Pi Webhook] Refetching Pi payment to verify developer_approved...", { approvalPostOutcome })
-    const piRefetchResponse = await fetch(
+    const piRefetchResponse = await tracedFinancialFetch(
       `https://api.minepi.com/v2/payments/${identifier}`,
       {
         method: "GET",
@@ -419,4 +423,6 @@ export async function POST(request: NextRequest) {
       headers: { "Content-Type": "application/json" },
     })
   }
+
+});
 }

@@ -1,3 +1,4 @@
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import "server-only"
 
 import { redis } from './redis'
@@ -12,6 +13,8 @@ import { verifyRefundOriginalCustomerBinding } from './refund-original-customer-
 export type RefundIntentInternalResult = { status: number; body: unknown }
 
 export async function createRefundIntentInternal(paymentId: string, idempotencyKey: string): Promise<RefundIntentInternalResult> {
+return traceFinancial("refund.intent.createRefundIntentInternal",()=>({paymentId}),async()=>{
+
   if (typeof paymentId !== 'string' || paymentId.length === 0) return { status: 400, body: { error: 'Missing or invalid paymentId' } }
   if (typeof idempotencyKey !== 'string' || idempotencyKey.length === 0) return { status: 400, body: { error: 'Missing or invalid idempotencyKey' } }
 
@@ -167,4 +170,6 @@ export async function createRefundIntentInternal(paymentId: string, idempotencyK
   if (!transitioned) return { status: 409, body: { error: 'Refund intent transition conflict', refundId } }
   console.log('[refunds/intent] Refund intent created successfully:', refundId)
   return { status: 201, body: { success: true, refund: { id: refundId, paymentId: payment.id, status: transitioned.status, stage: transitioned.stage, amount: transitioned.amount, currency: transitioned.currency, createdAt: transitioned.createdAt } } }
+
+});
 }

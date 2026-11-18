@@ -1,4 +1,5 @@
 'use server'
+import {traceFinancial,bindFinancialTrace,tracedFinancialFetch} from "./financial-trace"
 import {piCreateCooldown} from './pi-create-backpressure'
 import {claimPiFinalizationRecovery} from './pi-finalization-recovery'
 import {financialAmountsMatch,financialContractFromRow,netImpact,type MerchantFeeQuote} from './payment-financial-contract'
@@ -463,6 +464,8 @@ export type SettlementU2AStartLeaseResult =
   | { outcome: 'BLOCKED' | 'INDETERMINATE'; error: string }
 
 export async function acquireSettlementU2AStartLease(paymentId: string): Promise<SettlementU2AStartLeaseResult> {
+return traceFinancial("durable.acquireSettlementU2AStartLease",()=>({paymentId}),async()=>{
+
   if (typeof paymentId !== 'string' || paymentId.trim() === '' || paymentId !== paymentId.trim())
     return { outcome: 'INDETERMINATE', error: 'Invalid payment identity' }
   try {
@@ -490,6 +493,8 @@ export async function acquireSettlementU2AStartLease(paymentId: string): Promise
     console.error('[DR88 U2A START LEASE] uncertain:', error)
     return { outcome: 'INDETERMINATE', error: 'Payment start authority read/write uncertain' }
   }
+
+});
 }
 
 export type SettlementU2AStartApprovalClaimResult =
@@ -737,6 +742,8 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
   u2aTxid: string
   payerUid: string
 }): Promise<SettlementU2AIngressCheckpointResult> {
+return traceFinancial("durable.recordSettlementU2AVerifiedCheckpoint",()=>({paymentId:params.paymentId}),async()=>{
+
   const canonicalText = (value: string) => typeof value === 'string' && value.length > 0 && value === value.trim()
   if (
     !canonicalText(params.paymentId) ||
@@ -860,6 +867,8 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
     console.error('[DB] Settlement U2A verified checkpoint uncertain:', error)
     return { outcome: 'INDETERMINATE', error: 'Settlement U2A verified checkpoint uncertain' }
   }
+
+});
 }
 
 export async function recordSettlementU2ACompletedCheckpoint(params: {
@@ -871,6 +880,8 @@ export async function recordSettlementU2ACompletedCheckpoint(params: {
   u2aTxid: string
   payerUid: string
 }): Promise<SettlementU2AIngressCheckpointResult> {
+return traceFinancial("durable.recordSettlementU2ACompletedCheckpoint",()=>({paymentId:params.paymentId}),async()=>{
+
   const canonicalText = (value: string) => typeof value === 'string' && value.length > 0 && value === value.trim()
   if (
     !canonicalText(params.paymentId) || !canonicalText(params.merchantId) || !canonicalText(params.merchantUid) ||
@@ -913,6 +924,8 @@ export async function recordSettlementU2ACompletedCheckpoint(params: {
       return{outcome:'CONFLICT',error:'Settlement U2A completed durable identity mismatch'}
     return{outcome:'REPLAYED',version}
   }catch(error){console.error('[DB] Settlement U2A completed checkpoint uncertain:',error);return{outcome:'INDETERMINATE',error:'Settlement U2A completed checkpoint uncertain'}}
+
+});
 }
 
 export type DurableU2AIngressRead =
@@ -1568,6 +1581,8 @@ export async function recordSettlementPreparedCheckpoint(params: {
   a2uPaymentId:string; a2uFromAddress:string; a2uToAddress:string;
   preparedEnvelopeXdr:string; preparedTxHash:string; preparedSequence:string
 }, transactionClient?: any):Promise<SettlementDurableAdvanceResult>{
+return traceFinancial("durable.recordSettlementPreparedCheckpoint",()=>({paymentId:params.paymentId}),async()=>{
+
   if(!params.paymentId||!params.merchantId||!params.merchantUid||!params.a2uPaymentId||!params.a2uFromAddress||!params.a2uToAddress||
      !params.preparedEnvelopeXdr||params.preparedEnvelopeXdr!==params.preparedEnvelopeXdr.trim()||
      !/^[0-9a-f]{64}$/.test(params.preparedTxHash)||!/^[1-9][0-9]*$/.test(params.preparedSequence)||
@@ -1597,9 +1612,13 @@ export async function recordSettlementPreparedCheckpoint(params: {
       return{outcome:'CONFLICT',error:'Settlement prepared durable identity mismatch'}
     return{outcome:'REPLAYED',version:v}
   }catch(e){console.error('[DB] Settlement prepared checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement prepared checkpoint uncertain'}}
+
+});
 }
 
 export async function recordSettlementHorizonCheckpoint(params:{paymentId:string;a2uPaymentId:string;preparedTxHash:string;preparedSequence:string;a2uTxid:string;horizonFeeStroops:number}):Promise<SettlementDurableAdvanceResult>{
+return traceFinancial("durable.recordSettlementHorizonCheckpoint",()=>({paymentId:params.paymentId}),async()=>{
+
   if(!params.paymentId||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.preparedTxHash)||!/^[1-9][0-9]*$/.test(params.preparedSequence)||
     params.a2uTxid!==params.preparedTxHash||!Number.isSafeInteger(params.horizonFeeStroops)||params.horizonFeeStroops<0)
     return{outcome:'CONFLICT',error:'Settlement Horizon checkpoint input invalid'}
@@ -1624,9 +1643,13 @@ export async function recordSettlementHorizonCheckpoint(params:{paymentId:string
       return{outcome:'CONFLICT',error:'Settlement Horizon durable evidence mismatch'}
     return{outcome:'REPLAYED',version:v}
   }catch(e){console.error('[DB] Settlement Horizon checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement Horizon checkpoint uncertain'}}
+
+});
 }
 
 export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:string;a2uPaymentId:string;a2uTxid:string}):Promise<SettlementDurableAdvanceResult>{
+return traceFinancial("durable.recordSettlementPiCompletedCheckpoint",()=>({paymentId:params.paymentId}),async()=>{
+
   if(!params.paymentId||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid))
     return{outcome:'CONFLICT',error:'Settlement Pi checkpoint input invalid'}
   try{
@@ -1648,6 +1671,8 @@ export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:st
       return{outcome:'CONFLICT',error:'Settlement Pi durable evidence mismatch'}
     return{outcome:'REPLAYED',version:v}
   }catch(e){console.error('[DB] Settlement Pi checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement Pi checkpoint uncertain'}}
+
+});
 }
 
 function commissionNetImpact(commission:number,fee:number):number {
@@ -1665,6 +1690,8 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
   paymentId:string;u2aIdentifier:string;u2aTxid:string;a2uPaymentId:string;a2uTxid:string;merchantId:string;merchantUid:string;
   customerAmount:number;merchantAmount:number;horizonFeeCharged:number;appCommission:number
 }):Promise<SettlementDurableAdvanceResult>{
+return traceFinancial("durable.recordSettlementDbFinalizedCheckpoint",()=>({paymentId:params.paymentId}),async()=>{
+
   const feeStroops=exactHorizonFeeStroops(params.horizonFeeCharged)
   if(!params.paymentId||!params.u2aIdentifier||!/^[0-9a-f]{64}$/.test(params.u2aTxid)||!params.a2uPaymentId||!/^[0-9a-f]{64}$/.test(params.a2uTxid)||!params.merchantId||!params.merchantUid||
     numberToExactPositiveStroops(params.customerAmount)===null||(params.merchantAmount<=0||params.merchantAmount>params.customerAmount)||params.appCommission<0||params.appCommission>params.customerAmount||
@@ -1722,6 +1749,8 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
       return{outcome:'CONFLICT',error:'Settlement DB-finality replay accounting or XOR evidence missing'}
     return{outcome:'REPLAYED',version:v}
   }catch(e){console.error('[DB] Settlement DB-finality checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement DB-finality checkpoint uncertain'}}
+
+});
 }
 
 export async function ensureRefundCheckpointTables(): Promise<boolean> {
@@ -2320,6 +2349,8 @@ export async function recordA2UTransactionAtomic(params: {
   | { success: true; transactionId: string; transaction: { u2aIdentifier: string; u2aTxid: string; a2uIdentifier: string; a2uTxid: string; merchantId: string; merchantUid: string } }
   | { success: false; error: string }
 > {
+return traceFinancial("durable.recordA2UTransactionAtomic",()=>({paymentId:params.paymentId}),async()=>{
+
 
   if (typeof params.paymentId !== 'string' || !params.paymentId.trim() || params.paymentId !== params.paymentId.trim()) {
     throw new Error('Canonical paymentId is required for accounting authority')
@@ -2701,6 +2732,8 @@ export async function recordA2UTransactionAtomic(params: {
     console.error('[DB] A2U atomic transaction failed:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
   }
+
+});
 }
 
 export async function probeDurablePaymentIdentity(paymentId: string): Promise<'EXISTS' | 'ABSENT' | 'INDETERMINATE'> {
@@ -2768,6 +2801,8 @@ export async function recordPaymentCreateIntentAtomic(params: {
   createIntentId: string; paymentId: string; merchantUid: string; merchantId: string;
   amount: number; note: string; createdAt: string
 }): Promise<PaymentCreateIntentResult> {
+return traceFinancial("durable.recordPaymentCreateIntentAtomic",()=>({paymentId:params.paymentId}),async()=>{
+
   try {
     const client = await getPostgresClient()
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
@@ -2825,6 +2860,8 @@ export async function recordPaymentCreateIntentAtomic(params: {
     console.error('[FIN100B] Create-intent transaction indeterminate', error)
     return { outcome: 'INDETERMINATE', error: 'Create-intent transaction uncertain' }
   }
+
+});
 }
 
 export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
