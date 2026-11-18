@@ -9,12 +9,15 @@ import type { Payment } from "../../../lib/types"
 import { appendOperationalQueueAuditEvent } from "../../../lib/operational-audit"
 import { isTerminalNoMovementProjectionCandidate } from "../../../lib/operational-terminal-prune-rules"
 
+import {decodeReviewCursor,encodeReviewCursor,discoverDurableReviewIds,readDurableReview} from "../../../lib/operational-recovery-discovery"
+
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 type Verdict = "Final" | "Recovering" | "Manual Review" | "Conflict" | "Unknown"
 const ACTIVE_KEY = "flashpay:recovery:active-payments:v1"
-const DISMISSED_KEY = "flashpay:operations:review-dismissed:v1"
+const REMOVED_KEY = "flashpay:operations:review-dismissed:v1"
+
 
 function validPaymentId(value: string | null): value is string {
   return typeof value === "string" && value.length >= 8 && value.length <= 128 && value === value.trim() && /^[A-Za-z0-9_-]+$/.test(value)
@@ -29,11 +32,6 @@ function parsePageLimit(value: string | null): number | null {
   if (!/^[0-9]+$/.test(value)) return null
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_PAGE_LIMIT ? parsed : null
-}
-
-function parseScanCursor(value: string | null): string | null {
-  if (value === null || value === "") return "0"
-  return /^[0-9]+$/.test(value) ? value : null
 }
 
 async function scanActivePaymentIds(cursor: string, limit: number): Promise<{ nextCursor: string; ids: string[] }> {
@@ -113,12 +111,26 @@ async function buildReview(payment: Payment) {
   return { paymentId, verdict, reason, asOf: new Date().toISOString(), createdAt: payment.createdAt, updatedAt: payment.lastAttemptAt ?? payment.settledAt ?? payment.paidAt ?? payment.createdAt,
     parties: { merchantId: payment.merchantId, merchantUid: payment.merchantUid ?? dbEvidence.merchantUid ?? null, merchantAddress: payment.merchantAddress ?? null, payerUid: payment.payerUid ?? null, payerUsername: payment.payerUsername ?? dbEvidence.payerUsername ?? null },
     canonical: { status: payment.status, settlementFailureState: payment.settlementFailureState ?? null, piPaymentId: payment.piPaymentId ?? null, u2aTxid: payment.u2aTxid ?? null, a2uPaymentId: payment.a2uPaymentId ?? null, a2uTxid: payment.a2uTxid ?? null, horizonSuccessFlag: payment.horizonSuccessFlag === true, piCompleted: payment.piCompleted === true, dbRecorded: payment.dbRecorded === true, requiresDbReconciliation: payment.requiresDbReconciliation === true, piCompletionPending: payment.piCompletionPending === true, refundStatus: payment.refundStatus ?? null, refundPaymentId: payment.refundPaymentId ?? null, refundTxid: payment.refundTxid ?? null, customerAmount: payment.customerAmount ?? payment.amount ?? null, merchantAmount: payment.merchantAmount ?? null, horizonFeeCharged: payment.horizonFeeCharged ?? null, appNetImpact: payment.appNetImpact ?? null, retryCount: payment.retryCount ?? null, nextRetryAt: payment.nextRetryAt ?? null, lastErrorCode: payment.a2uErrorCode ?? payment.refundFailureCode ?? null, lastErrorMessage: payment.a2uErrorMessage ?? null },
-    database: dbEvidence, refund: refund.state === "present" ? { state: "present", status: refund.checkpoint.status, stage: refund.checkpoint.stage, refundId: refund.checkpoint.refundId, refundPaymentId: refund.checkpoint.refundPaymentId ?? null, refundTxid: refund.checkpoint.refundTxid ?? null, amount: refund.checkpoint.amount, attemptCount: refund.checkpoint.attemptCount, lastErrorCode: refund.checkpoint.lastErrorCode ?? null, lastErrorMessage: refund.checkpoint.lastErrorMessage ?? null, updatedAt: refund.checkpoint.updatedAt } : { state: refund.state },
+    database: dbEvidence, refund: refund.state === "present" ? { state: "present", status: refund.checkpoint.status, stage: refund.checkpoint.stage, refundId: refund.checkpoint.refundId, refundPaymentId: refund.checkpoint.refundPaymentId ?? null, refundTxid: refund.checkpoint.refundTxid ?? null, amount: refund.checkpoint.amount, attemptCount: refund.checkpoint.attemptCount, lastErrorCode: refund.checkpoint.lastErrorCode ?? null, lastErrorMessage: refund.checkpoint.lastErrorMessage ?? null, nextRetryAt: refund.checkpoint.nextRetryAt ?? null, updatedAt: refund.checkpoint.updatedAt } : { state: refund.state },
     action: {
       allowed: false,
+      canRequestRecovery: verdict !== "Final" && verdict !== "Conflict" && verdict !== "Unknown",
       canPruneFromQueue: isTerminalNoMovementProjectionCandidate(payment) && refund.state === "absent" && dbEvidence.state === "absent" && await proveNoCommittedFinancialRows(payment.id),
-      message: verdict === "Final" ? "No action required." : verdict === "Recovering" ? "Recovery is automatic. Manual execution is intentionally unavailable while the authoritative recovery path owns this payment." : "No financial action is exposed until the existing Plan 7 authority can prove a safe transition. Unknown/conflict always fails closed."
+      message: verdict === "Final" ? "No action required." : verdict === "Recovering" ? "Recovery is automatic. A guarded recheck may be requested; it cannot override certificates, cooldowns, or wallet ownership." : "No financial action is exposed until the existing Plan 7 authority can prove a safe transition. Unknown/conflict always fails closed."
     } }
+}
+
+function unavailableReview(paymentId:string,reason='Authoritative review unavailable; retain this case for inspection'){
+ return {paymentId,verdict:'Unknown',reason,asOf:new Date().toISOString(),parties:{},canonical:{},database:{state:'unknown'},refund:{state:'uncertain'},action:{allowed:false,canRequestRecovery:false,canPruneFromQueue:false,message:'No financial transition or removal is authorized by an incomplete read.'}}
+}
+async function reviewById(id:string){
+ const [payment,durable]=await Promise.all([readPayment(id),readDurableReview(id)])
+ if(payment)return {...await buildReview(payment),durable:durable??null}
+ const review=unavailableReview(id,durable?'Durable payment found; cached presentation is unavailable. Use the guarded recovery path.':'No readable payment presentation; indexed case retained for inspection')
+ return {...review,createdAt:durable?.created_at,updatedAt:durable?.created_at,
+  parties:{merchantId:durable?.merchant_id,merchantUid:durable?.merchant_uid,payerUid:durable?.payer_uid},
+  canonical:{status:'presentation_unavailable',customerAmount:durable?.customer_amount},durable:durable??null,
+  action:{...review.action,canRequestRecovery:Boolean(durable)}}
 }
 
 export async function GET(request: NextRequest) {
@@ -129,36 +141,26 @@ export async function GET(request: NextRequest) {
   try {
     if (paymentId) {
       if (!validPaymentId(paymentId)) return NextResponse.json({ error: "Invalid Payment ID" }, { status: 400 })
-      const payment = await readPayment(paymentId)
-      if (!payment) return NextResponse.json({ verdict: "Unknown", paymentId, reason: "Payment not found in canonical Redis" }, { status: 404 })
-      return NextResponse.json(await buildReview(payment), { headers: { "Cache-Control": "no-store" } })
+      return NextResponse.json(await reviewById(paymentId), { headers: { "Cache-Control": "no-store" } })
     }
     const limit = parsePageLimit(url.searchParams.get("limit"))
-    const cursor = parseScanCursor(url.searchParams.get("cursor"))
-    if (limit === null) return NextResponse.json({ error: `limit must be an integer between 1 and ${MAX_PAGE_LIMIT}` }, { status: 400 })
-    if (cursor === null) return NextResponse.json({ error: "cursor must be an unsigned Redis SSCAN cursor" }, { status: 400 })
-
-    const [activeIndexedRaw, scanned] = await Promise.all([
-      redis.scard(ACTIVE_KEY),
-      scanActivePaymentIds(cursor, limit),
+    const cursor = decodeReviewCursor(url.searchParams.get("cursor"))
+    if (limit === null || cursor === null) return NextResponse.json({error:'Invalid review page'}, {status:400})
+    const [durable,legacy] = await Promise.all([
+      cursor.dbDone ? Promise.resolve({ids:[] as string[],done:true}) : discoverDurableReviewIds(cursor.after,limit),
+      cursor.legacyDone ? Promise.resolve({ids:[] as string[],nextCursor:'0'}) : scanActivePaymentIds(cursor.legacy,limit),
     ])
-    const activeIndexed = Number(activeIndexedRaw)
-    if (!Number.isSafeInteger(activeIndexed) || activeIndexed < 0) throw new Error("Invalid active recovery cardinality")
-
-    const reviews = (await mapBounded(scanned.ids, REVIEW_CONCURRENCY, async id => {
-      try {
-        const payment = await readPayment(id)
-        return payment ? await buildReview(payment) : null
-      } catch {
-        return null
-      }
-    })).filter((review): review is NonNullable<typeof review> => Boolean(review))
-
-    // Dismissal is checked only for this bounded page; never materialize the full dismissed set.
-    const dismissalFlags = await mapBounded(reviews, REVIEW_CONCURRENCY, async review => {
-      try { return Number(await redis.sismember(DISMISSED_KEY, review.paymentId)) === 1 } catch { throw new Error("Dismissed review index unavailable") }
+    const ids=[...new Set([...durable.ids,...legacy.ids])]
+    const reviews=await mapBounded(ids,REVIEW_CONCURRENCY,async id=>{
+      try{return await reviewById(id)}catch{return unavailableReview(id)}
     })
-    const visible = reviews.filter((review, index) => !dismissalFlags[index] && (review.verdict !== "Final" || review.refund.state === "present")).sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    // Old dismissal flags cannot hide current financial work or uncertain reads.
+    const retained=await mapBounded(reviews,REVIEW_CONCURRENCY,async review=>{
+      if(!review.action.canPruneFromQueue)return review
+      try{return Number(await redis.sismember(REMOVED_KEY,review.paymentId))===1?null:review}catch{return review}
+    })
+    const visible=retained.filter((x):x is NonNullable<typeof x>=>x!==null).sort((a,b)=>String('updatedAt' in b?b.updatedAt:'').localeCompare(String('updatedAt' in a?a.updatedAt:'')))
+    const nextCursor=encodeReviewCursor({after:durable.ids.at(-1)??cursor.after,dbDone:durable.done,legacy:legacy.nextCursor,legacyDone:legacy.nextCursor==='0'})
     return NextResponse.json({
       available: true,
       asOf: new Date().toISOString(),
@@ -171,17 +173,8 @@ export async function GET(request: NextRequest) {
         unknown: visible.filter(x=>x.verdict==="Unknown").length,
         refunds: visible.filter(x=>x.refund.state==="present").length,
       },
-      visibility: {
-        activeIndexed,
-        scanned: scanned.ids.length,
-        pageVisible: visible.length,
-        cursor,
-        nextCursor: scanned.nextCursor,
-        complete: scanned.nextCursor === "0",
-        limit,
-        concurrency: REVIEW_CONCURRENCY,
-      },
-      note: scanned.nextCursor !== "0" ? "More active recovery records are available; continue with nextCursor." : null,
+      visibility: {scanned:ids.length,pageVisible:visible.length,nextCursor,complete:nextCursor===null,limit,concurrency:REVIEW_CONCURRENCY,sources:['financial_kernel','legacy_recovery']},
+      note:nextCursor?'More records are available. Load the next page.':null,
     }, { headers: { "Cache-Control": "no-store" } })
   } catch { return NextResponse.json({ error: "Operational review unavailable", available: false }, { status: 503 }) }
 }
@@ -191,6 +184,7 @@ export async function POST(request: NextRequest) {
   const auth = await verifyOwnerAuthorizationHeader(request.headers.get("authorization"))
   if (!auth.ok) return NextResponse.json({ error: "Unauthorized" }, { status: auth.status })
   if (!isRedisConfigured) return NextResponse.json({ error: "Canonical Redis unavailable" }, { status: 503 })
+  if(request.headers.get("origin") && request.headers.get("origin") !== new URL(request.url).origin) return NextResponse.json({error:"Origin rejected"},{status:403})
   try {
     const body = await request.json() as { action?: unknown; paymentId?: unknown }
     if ((body.action !== "prune_terminal" && body.action !== "dismiss_reviewed") || typeof body.paymentId !== "string" || !validPaymentId(body.paymentId)) {
@@ -222,10 +216,10 @@ local function same(a,b)
   return true
 end
 if not same(current,expected) then return -1 end
-local activeType=redis.call('TYPE',KEYS[1]).ok; local readyType=redis.call('TYPE',KEYS[2]).ok
-if (activeType~='none' and activeType~='set') or (readyType~='none' and readyType~='zset') then return -1 end
-local a=redis.call('SREM',KEYS[1],ARGV[1]); local r=redis.call('ZREM',KEYS[2],ARGV[1]); if a==1 or r==1 then return 1 end; return 0`,
-      [ACTIVE_KEY, "flashpay:settlement:ready:v1", `payment:${payment.id}`],
+local activeType=redis.call('TYPE',KEYS[1]).ok; local readyType=redis.call('TYPE',KEYS[2]).ok; local removedType=redis.call('TYPE',KEYS[4]).ok
+if (activeType~='none' and activeType~='set') or (readyType~='none' and readyType~='zset') or (removedType~='none' and removedType~='set') then return -1 end
+local hidden=redis.call('SADD',KEYS[4],ARGV[1]); local a=redis.call('SREM',KEYS[1],ARGV[1]); local r=redis.call('ZREM',KEYS[2],ARGV[1]); if hidden==1 or a==1 or r==1 then return 1 end; return 0`,
+      [ACTIVE_KEY, "flashpay:settlement:ready:v1", `payment:${payment.id}`, REMOVED_KEY],
       [payment.id, JSON.stringify(payment)],
     )
     if (removed === -1) return NextResponse.json({ error: "Payment changed during review; queue preserved" }, { status: 409 })
