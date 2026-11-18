@@ -1,6 +1,6 @@
 {
   "name": "@flashpay/financial-kernel",
-  "version": "0.1.0-kernel.34",
+  "version": "0.1.0-kernel.35",
   "private": true,
   "description": "FLASHpay guarded server kernel; source distribution compiled during application build.",
   "type": "commonjs",

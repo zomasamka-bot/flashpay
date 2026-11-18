@@ -143,6 +143,11 @@ async function observe(request: NextRequest, selectedId?:string):Promise<Respons
         const {preparePendingRefundEvidence}=await import("../../../lib/r36-scoped-recovery")
         const prepared=await preparePendingRefundEvidence(id??null)
         console.info('[Recovery refund evidence]',{scope:result.scope,result:prepared,fundsSubmission:false})
+        // No Pi identity/XDR exists on this exact preparation path. A proven
+        // provider wait cannot be resolved by a second preparation or certificate
+        // wake in this request. Durable retry remains; next wake rechecks all guards.
+        if(prepared==='refund_provider_wait')return NextResponse.json({scope:result.scope,mode:'admitted_new',dispatch:prepared,
+          executorInvoked:true,financialOutcome:'provider_deferred'}, {headers:{'Cache-Control':'no-store'}})
       }
       // Empty periodic wakes remain cheap. No rights or historical cursor change.
       if(dispatch==='no_confirmed_right'&&Number(counts.evidence_work)>0&&!await ensurePrivateTrustHost('recovery')) {

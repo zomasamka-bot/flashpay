@@ -341,7 +341,8 @@ return traceFinancial("refund.executeRefundCreation",()=>({refundId}),async()=>{
   if (checkpoint.stage === 'wallet_submission_started' && (checkpoint.refundPaymentId || checkpoint.refundTxid)) return { outcome: 'blocked', reason: 'submission_outcome_uncertain' }
   // Check app-wide provider readiness before consuming create authority. An
   // empty list alone never re-arms an already consumed attempt.
-  if (await readPiA2UQueueAdmission() !== 'EMPTY') return { outcome: 'blocked', reason: 'refund_provider_queue_held' }
+  const providerQueue = await readPiA2UQueueAdmission()
+  if (providerQueue !== 'EMPTY') return { outcome: 'blocked', reason: providerQueue === 'COOLDOWN' ? 'refund_provider_cooldown' : 'refund_provider_queue_held' }
   if (checkpoint.stage !== 'wallet_submission_started' && checkpoint.stage !== 'intent_created') return { outcome: 'blocked', reason: 'invalid_stage' }
   if (checkpoint.stage === 'intent_created') {
     const event: RefundAuditEvent = { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_submission_started', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { phase: 'refund_create' } }
@@ -362,10 +363,10 @@ return traceFinancial("refund.executeRefundCreation",()=>({refundId}),async()=>{
   }
   const response = await tracedFinancialFetch('https://api.minepi.com/v2/payments', { method: 'POST', signal:AbortSignal.timeout(12000), headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
   ;(response?.ok?console.info:console.warn)('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false })
-  const reconcileAfterUncertainty = async (): Promise<RefundExecutionResult> => {
+  const reconcileAfterUncertainty = async (confirmedNoneReason = 'refund_create_uncertain'): Promise<RefundExecutionResult> => {
     const recovered = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
     console.warn('[refunds/executor] reconcileAfterUncertainty:', { refundId, outcome: recovered.outcome })
-    if (recovered.outcome !== 'FOUND' || !recovered.payment || recovered.payment.status.cancelled || recovered.payment.status.user_cancelled) return { outcome: 'blocked', reason: recovered.payment?.status.cancelled || recovered.payment?.status.user_cancelled ? 'refund_cancelled' : 'refund_create_uncertain' }
+    if (recovered.outcome !== 'FOUND' || !recovered.payment || recovered.payment.status.cancelled || recovered.payment.status.user_cancelled) return { outcome: 'blocked', reason: recovered.payment?.status.cancelled || recovered.payment?.status.user_cancelled ? 'refund_cancelled' : recovered.outcome === 'CONFIRMED_NONE' ? confirmedNoneReason : 'refund_create_uncertain' }
     if (checkpoint.refundPaymentId && checkpoint.refundPaymentId !== recovered.payment.identifier) return { outcome: 'blocked', reason: 'refund_id_conflict' }
     const persisted = await persistRefundPaymentIdWithAudit(refundId, checkpoint.paymentId, checkpoint.idempotencyKey, recovered.payment.identifier, { eventId: crypto.randomUUID(), refundId, paymentId: checkpoint.paymentId, eventType: 'refund_payment_identified', actorType: 'system', idempotencyKey: checkpoint.idempotencyKey, createdAt: new Date().toISOString(), details: { refundPaymentId: recovered.payment.identifier, recovered: true } })
     return persisted ? { outcome: 'found', refundId, paymentId: checkpoint.paymentId, amount: checkpoint.amount, refundPaymentId: recovered.payment.identifier } : { outcome: 'blocked', reason: 'refund_id_persistence_conflict' }
@@ -376,7 +377,7 @@ return traceFinancial("refund.executeRefundCreation",()=>({refundId}),async()=>{
     const rateLimited=response?.status===429||failure?.error==='too_many_payments'||failure?.code==='too_many_payments'
     if(recoveryGeneration!==undefined)await observeRefundIdentityRecovery({refundId,paymentId:checkpoint.paymentId,generation:recoveryGeneration,httpStatus:response?.status??null,code:rateLimited?'too_many_payments':typeof failure?.error==='string'?failure.error.slice(0,100):response?'provider_rejected':'transport_unknown',requestId:(response?.headers.get('x-request-id')??'').slice(0,128),sha256:createHash('sha256').update(failureText).digest('hex')})
     if(rateLimited)await recordPiCreateCooldown(response?.headers.get('retry-after')??null)
-    return reconcileAfterUncertainty()
+    return reconcileAfterUncertainty(rateLimited ? 'refund_provider_rate_limited' : 'refund_create_uncertain')
   }
   const body: unknown = await response.json().catch(() => null)
   if (!isRecord(body) || typeof body.identifier !== 'string') return reconcileAfterUncertainty()

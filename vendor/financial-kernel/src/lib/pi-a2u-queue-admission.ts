@@ -3,7 +3,7 @@ import 'server-only'
 import {piCreateCooldown} from './pi-create-backpressure'
 import { serverConfig } from './server-config'
 
-export type PiA2UQueueObservation = 'EMPTY' | 'BUSY' | 'UNAVAILABLE'
+export type PiA2UQueueObservation = 'EMPTY' | 'BUSY' | 'COOLDOWN' | 'UNAVAILABLE'
 
 // Pi serializes server payments at app scope, including payments created under
 // a previous wallet. Wallet isolation alone cannot establish provider readiness.
@@ -13,7 +13,7 @@ export async function readPiA2UQueueAdmission(): Promise<PiA2UQueueObservation> 
 return traceFinancial("provider.queue.readPiA2UQueueAdmission",()=>({}),async()=>{
 
   const cooldown=await piCreateCooldown()
-  if(cooldown!=='READY')return cooldown==='WAIT'?'BUSY':'UNAVAILABLE'
+  if(cooldown!=='READY')return cooldown==='WAIT'?'COOLDOWN':'UNAVAILABLE'
   if (!serverConfig.piApiKey) return 'UNAVAILABLE'
   try {
     const response = await tracedFinancialFetch('https://api.minepi.com/v2/payments/incomplete_server_payments', {

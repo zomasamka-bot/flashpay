@@ -59,6 +59,10 @@ export async function bindTestnetPayer(paymentId:string,payerUid:string,payerWal
 return traceFinancial("trust.bindTestnetPayer",()=>({paymentId}),async()=>{
 
   await requestIngressReadiness(paymentId,payerUid,'payer')
+  // The original SQL function rechecks live policy/revocation, wallet activation,
+  // exact payer, prior closure and competing rights. A host wake is operational;
+  // like creation admission, renew only when that authoritative check is held.
+  if(await invoke('bind',{paymentId,payerUid,payerWallet:payerWallet??''}) === paymentId)return true
   if(!await ensurePrivateTrustHost('payer'))return false
   return await invoke('bind',{paymentId,payerUid,payerWallet:payerWallet??''}) === paymentId
 

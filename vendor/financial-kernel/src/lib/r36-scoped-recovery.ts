@@ -180,7 +180,7 @@ return traceFinancial("recovery.preparePendingRefundEvidence",()=>({paymentId:su
     // projection and one-shot Pi-create authority. It passes NULL send authority.
     // No reset or alternate identity is created when an earlier create is unclear.
     const prepared=await runAutomaticRefundPreparationStep(c.id,c.op)
-    if(prepared.state!=='ok'||prepared.result.outcome!=='success')return 'refund_preparation_held'
+    if(prepared.state!=='ok'||prepared.result.outcome!=='success')return prepared.state==='ok'&&['refund_provider_cooldown','refund_provider_rate_limited'].includes(prepared.result.reason??'')?'refund_provider_wait':'refund_preparation_held'
     const next=await select(c.id)
     // Another worker may have advanced the original right. Do not inherit it,
     // switch payments, or fall back to execution from this preparation-only path.

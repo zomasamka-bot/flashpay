@@ -33,6 +33,8 @@ const SHORT_RETRY_REASONS = new Set([
   // Provider/identity readiness is checked afresh before any create. Polling a
   // held gate must not add a separate 15-minute hold after that gate clears.
   "refund_provider_queue_held",
+  "refund_provider_cooldown",
+  "refund_provider_rate_limited",
   "refund_create_reconcile_only",
 ])
 
