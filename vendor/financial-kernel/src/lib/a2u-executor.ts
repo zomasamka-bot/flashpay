@@ -75,13 +75,11 @@ function isPiA2UPayment(value: unknown): value is PiA2UPayment {
   if (!isRecord(value)) return false
   const obj = value
 
-  // Required fields
   if (typeof obj.identifier !== 'string') return false
   if (typeof obj.from_address !== 'string') return false
   if (typeof obj.to_address !== 'string') return false
   if (typeof obj.amount !== 'number' || !Number.isFinite(obj.amount)) return false
 
-  // Optional status field with boolean flags
   if (obj.status !== undefined && obj.status !== null) {
     if (!isRecord(obj.status)) return false
     const statusObj = obj.status
@@ -92,7 +90,6 @@ function isPiA2UPayment(value: unknown): value is PiA2UPayment {
     if (statusObj.user_cancelled !== undefined && typeof statusObj.user_cancelled !== 'boolean') return false
   }
 
-  // Optional transaction field: txid and verified are optional strings/booleans
   if (obj.transaction !== undefined && obj.transaction !== null) {
     if (!isRecord(obj.transaction)) return false
     const txObj = obj.transaction
@@ -106,11 +103,11 @@ function isPiA2UPayment(value: unknown): value is PiA2UPayment {
 
 export interface ExecutorContext {
   paymentId: string
-  payment: Payment // Use canonical Payment type - REQUIRED
+  payment: Payment                                         
   merchantUid: string
   merchantAuthority: "durable_u2a"
-  customerAmount: number // REQUIRED - validated amount
-  piPaymentId?: string // Optional - provided for recovery flows, undefined for new payments
+  customerAmount: number                               
+  piPaymentId?: string                                                                      
   isRecovery: boolean
   recoveryOperation?: "SETTLEMENT_CREATE" | "SETTLEMENT_SUBMIT" | "SETTLEMENT_RECONCILE" | "SETTLEMENT_DISPATCH"
   schedulerWalletPaymentId?: string | null
@@ -122,7 +119,7 @@ type ExecutorResult =
 
 export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> {
   const executeA2UTimingStartedAt = Date.now()
-  // Validate required context fields - no optional coercion
+
   if (!ctx.paymentId || typeof ctx.paymentId !== 'string') {
     return { ok: false, status: "invalid_context", error: "paymentId required and must be string" }
   }
@@ -142,16 +139,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   if (typeof ctx.isRecovery !== 'boolean') {
     return { ok: false, status: "invalid_context", error: "isRecovery required and must be boolean" }
   }
-  // piPaymentId is optional for new payments, but MUST be present for recovery or stage 4 DB recording
-  // Validation below will enforce when needed
 
   console.log("[A2U Executor] ===== UNIFIED A2U EXECUTOR START =====")
   console.log("[A2U Executor] Payment ID:", ctx.paymentId)
   console.log("[A2U Executor] Is Recovery:", ctx.isRecovery)
   console.log("[A2U Executor] Current Status:", ctx.payment.status)
 
-  // STAGE 0: Check if already settled (terminal state)
-  // Executor returns ok:true; caller invokes buildA2USuccessResponse() to return final response
   if (ctx.payment.status === "settled_to_merchant") {
     console.log("[A2U Executor] ℹ️ Already settled - skipping execution")
     if (ctx.payment.id === ctx.paymentId && isPaymentFinal(ctx.payment) === true && isRedisConfigured) {
@@ -164,7 +157,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     return { ok: true, status: "settlement_pending" }
   }
 
-  // STAGE 1: Get/Create A2U payment (skip if already have a2uPaymentId)
   if (ctx.isRecovery && ctx.recoveryOperation === "SETTLEMENT_CREATE" && ctx.payment.a2uPaymentId) {
     return { ok: false, status: "settlement_pending", error: "Create target exists" }
   }
@@ -228,11 +220,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: stageResult.error,
       }
     }
-    // Discriminated union: ok: true includes a2uPaymentId
+
     a2uPaymentId = stageResult.data.a2uPaymentId
     ctx.payment.a2uPaymentId = a2uPaymentId
 
-    // Persist Stage 1: a2uPaymentId immediately after creation (crash-safe merge)
     if (stageResult.data.a2uPayment) {
       const stage1Updates: Partial<Payment> = {
         a2uPaymentId: a2uPaymentId,
@@ -242,8 +233,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         merchantAmount: Number(stageResult.data.a2uPayment.amount),
         settlementFailureState: "none",
       }
-      // Select the immutable identity in PostgreSQL before publishing it to Redis.
-      // A late or competing response cannot overwrite the selected identity.
+
       const durableStage1 = await recordSettlementA2UCreatedCheckpoint({
         paymentId: ctx.paymentId,
         merchantId: ctx.payment.merchantId,
@@ -265,7 +255,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   } else {
     console.log("[A2U Executor] STAGE 1: Reusing existing A2U payment:", a2uPaymentId)
 
-    // For reused a2uPaymentId, fetch from Pi API to validate state
     console.log("[A2U Executor] STAGE 1: Fetching and validating reused A2U from Pi API")
     const fetchedPayment = await fetchA2UPayment(a2uPaymentId)
     if (!fetchedPayment) {
@@ -275,7 +264,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (fetchedPayment.identifier !== a2uPaymentId) {
       return { ok: false, status: "error", error: "A2U identifier mismatch from Pi API" }
     }
-    // Normalize and check amount match exactly
+
     const fetchedAmount = Number(fetchedPayment.amount)
     if (!Number.isFinite(fetchedAmount) || fetchedAmount !== settlementTarget(ctx.payment)) {
       return { ok: false, status: "error", error: "A2U amount mismatch" }
@@ -287,7 +276,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return { ok: false, status: "settlement_pending", error: "A2U identity mismatch" }
     }
 
-    // Check if payment is cancelled
     if (fetchedPayment.status?.cancelled === true || fetchedPayment.status?.user_cancelled === true || fetchedPayment.cancelled === true || fetchedPayment.rejected === true) {
       const metadata = isRecord(fetchedPayment.metadata) ? fetchedPayment.metadata : null
       const exactCancelledIdentity = fetchedPayment.identifier === a2uPaymentId && fetchedPayment.network === financialNetwork() && fetchedPayment.direction === "app_to_user" && fetchedPayment.amount === settlementTarget(ctx.payment) && fetchedPayment.user_uid === ctx.merchantUid && metadata?.type === "a2u_settlement" && metadata?.paymentId === ctx.paymentId && typeof fetchedPayment.txid !== "string" && typeof fetchedPayment.transaction_id !== "string" && typeof fetchedPayment.transaction?.txid !== "string" && fetchedPayment.transaction?.verified !== true && fetchedPayment.status?.transaction_verified !== true && fetchedPayment.status?.developer_completed !== true
@@ -318,7 +306,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return { ok: false, status: "settlement_pending", error: "A2U identity mismatch" }
     }
 
-    // Extract state from PaymentDTO
     const isDevCompleted = fetchedPayment.status?.developer_completed === true
     const existingTxid = fetchedPayment.transaction?.txid
 
@@ -341,7 +328,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return { ok: false, status: "settlement_pending", error: "Existing A2U transfer evidence requires reconciliation" }
     }
 
-    // If any txid exists, preserve it and permanently skip Stage2
     if (typeof existingTxid === "string") {
       console.log("[A2U Executor] A2U has existing txid - preserving and skipping Stage 2")
       const preserveUpdates: Partial<Payment> = {
@@ -358,12 +344,12 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         ...(isDevCompleted && { paidAt: new Date().toISOString() }),
         requiresDbReconciliation: isDevCompleted,
       }
-      // Replace ctx.payment with fully merged record
+
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, preserveUpdates)
       console.log("[A2U Executor] ✓ Txid preserved - will skip Stage 2")
-      // txidFromHorizon is set, Stage 2 will be skipped
+
     } else {
-      // No txid: continue through normal flow (Stage 2 signing)
+
       console.log("[A2U Executor] A2U has no txid - will continue through Stage 2 for signing")
       const continueUpdates = {
         a2uFromAddress: fetchedPayment.from_address,
@@ -371,7 +357,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         customerAmount: ctx.customerAmount,
         merchantAmount: fetchedAmount,
       }
-      // Replace ctx.payment with fully merged record
+
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, continueUpdates)
     }
   }
@@ -380,7 +366,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     return { ok: true, status: "settlement_pending" }
   }
 
-  // STAGE 2: Sign (skip if already have a2uTxid)
   let txidFromHorizon = ctx.payment.a2uTxid
 
   if (!txidFromHorizon) {
@@ -401,10 +386,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: signResult.error,
       }
     }
-    // Discriminated union: ok: true includes txidFromHorizon and horizonFeeCharged
+
     txidFromHorizon = signResult.data.txidFromHorizon
 
-    // Persist Stage 2 and release the exact prepared wallet intent after confirmed Horizon success.
     const finalized = await finalizeStage2AfterMove(ctx, txidFromHorizon, signResult.data.horizonFeeCharged)
     if (!finalized.ok) return finalized
     console.log("[A2U Executor] ✓ Checkpoint persisted after Horizon success with fee:", signResult.data.horizonFeeCharged)
@@ -421,10 +405,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     }
   }
 
-  // STAGE 3: Complete Pi (skip if already piCompleted)
   if (!ctx.payment.piCompleted) {
     console.log("[A2U Executor] STAGE 3: Calling Pi /complete")
-    // Validate a2uPaymentId is present before calling Pi
+
     if (!a2uPaymentId || typeof a2uPaymentId !== 'string') {
       return { ok: false, status: "error", error: "a2uPaymentId missing before stage 3" }
     }
@@ -441,7 +424,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: piResult.error,
       }
     }
-    // Persist Stage 3: piCompleted and timestamp after confirmed or already-completed Pi state (crash-safe merge)
+
     const stage3Updates = {
       piCompleted: true,
       piCompletionPending: false,
@@ -450,7 +433,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     const durablePi = await recordSettlementPiCompletedCheckpoint({paymentId:ctx.paymentId,a2uPaymentId,a2uTxid:txidFromHorizon})
     if(durablePi.outcome!=="RECORDED"&&durablePi.outcome!=="REPLAYED")
       return {ok:false,status:"settlement_pending",error:"Pi-completed durable checkpoint not proven"}
-    // Replace ctx.payment with fully merged record only after durable Pi finality is proven.
+
     ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage3Updates)
     console.log("[A2U Executor] ✓ Pi /complete and durable finality succeeded")
   } else {
@@ -458,9 +441,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if (!a2uPaymentId || typeof a2uPaymentId !== "string" || !txidFromHorizon || typeof txidFromHorizon !== "string") {
       return { ok: false, status: "settlement_pending", error: "Pi-completed durable checkpoint identity missing" }
     }
-    // Never advance durable Pi finality from a Redis-only completion flag.
-    // An uncertain crash window requires independent Pi reconciliation, not
-    // a PostgreSQL stage promotion based on cached state.
+
     if (ctx.isRecovery) {
       const piAuthority = await getSettlementCheckpointAuthoritative(ctx.paymentId)
       if (piAuthority.outcome !== "FOUND" ||
@@ -481,8 +462,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[F2-7 DURABLE PI RESUME]", { paymentId: ctx.paymentId, a2uPaymentId, a2uTxid: txidFromHorizon, durableOutcome: durablePiReplay.outcome })
   }
 
-  // SHARED ACCOUNTING CHECKPOINT: Ensure appNetImpact and appCommission are persisted before Stage 4
-  // This runs for both new (post-Stage 2) and recovered (post-reload) payments
   if (
     typeof ctx.payment.appNetImpact !== "number" ||
     !Number.isFinite(ctx.payment.appNetImpact) ||
@@ -491,7 +470,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
   ) {
     console.log("[A2U Executor] Shared Accounting Checkpoint: Missing or invalid accounting fields, attempting to populate from verified data")
 
-    // Verify all required values exist and are valid
     if (
       typeof ctx.payment.customerAmount !== "number" ||
       !Number.isFinite(ctx.payment.customerAmount) ||
@@ -507,13 +485,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       }
     }
 
-    // Calculate appNetImpact from verified persisted values
     const calculatedAppNetImpact = netImpact(ctx.payment.customerAmount, ctx.payment.merchantAmount, ctx.payment.horizonFeeCharged, ctx.payment.financialContract)
 
-    // Set appCommission per FlashPay business rule: no commission charged at this stage (authoritative = 0)
     const appCommissionValue = contractCommission(ctx.payment)
 
-    // Persist accounting checkpoint
     const accountingUpdates = {
       appNetImpact: calculatedAppNetImpact,
       appCommission: appCommissionValue,
@@ -526,8 +501,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     console.log("[A2U Executor] Accounting checkpoint: Fields already present, skipping")
   }
 
-  // J12-G: Once the scheduler-selected A2U is Pi-complete, release the Pi A2U slot
-  // before DB reconciliation. The durable checkpoint keeps DB work recoverable via State 2.
   if (
     ctx.schedulerWalletPaymentId === ctx.paymentId &&
     ctx.payment.requiresDbReconciliation !== true &&
@@ -556,10 +529,9 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     return { ok: true, status: "settlement_pending" }
   }
 
-  // STAGE 4: DB Reconciliation (skip if already dbRecorded)
   if (!ctx.payment.dbRecorded) {
     console.log("[A2U Executor] STAGE 4: Reconciling in database")
-    // Validate txidFromHorizon exists for DB record
+
     if (!txidFromHorizon || typeof txidFromHorizon !== 'string') {
       return { ok: false, status: "error", error: "txidFromHorizon missing before stage 4 - cannot record in DB" }
     }
@@ -573,7 +545,7 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         error: dbResult.error,
       }
     }
-    // CRITICAL: Verify returned transaction record matches validated payment identifiers before persisting final markers
+
     if (!dbResult.transaction) {
       console.error("[A2U Executor] CRITICAL: DB returned no transaction identifiers - cannot verify reconciliation boundary")
       try {
@@ -591,7 +563,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       return { ok: false, status: "settlement_pending", error: "DB reconciliation verification failed - no transaction identifiers returned" }
     }
 
-    // Verify EVERY canonical identifier matches validated payment data (ownership verification)
     const identifierMismatches: string[] = []
     if (dbResult.transaction.u2aIdentifier !== ctx.payment.piPaymentId) {
       identifierMismatches.push(`u2aIdentifier: "${dbResult.transaction.u2aIdentifier}" !== "${ctx.payment.piPaymentId}"`)
@@ -641,8 +612,6 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
     if(durableDbFinality.outcome!=="RECORDED"&&durableDbFinality.outcome!=="REPLAYED")
       return {ok:false,status:"settlement_pending",error:"DB-finalized durable checkpoint not proven"}
 
-    // Only NOW persist final markers after successful DB and durable-authority verification
-
     const stage4Updates = {
       dbRecorded: true,
       status: "settled_to_merchant" as const,
@@ -650,23 +619,19 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
       settledAt: new Date().toISOString(),
     }
 
-    // Final Redis checkpoint after confirmed DB success - preserve all identifiers on failure
     try {
       ctx.payment = await persistCheckpointMerged(ctx.paymentId, stage4Updates)
       console.log("[A2U Executor] ✓ Final DB markers persisted (dbRecorded=true, settled_to_merchant)")
     } catch (finalPersistErr) {
       const persistError = finalPersistErr instanceof Error ? finalPersistErr.message : String(finalPersistErr)
       console.error("[A2U Executor] CRITICAL: Final Redis checkpoint failed after DB success - returning error without retry:", persistError)
-      // DO NOT attempt recovery checkpoint write - DB is already committed with verified transactionId
-      // On next invocation, isRecovery=true will use DB-only reconciliation to verify identifiers and write only final markers
+
       return { ok: false, status: "settlement_pending", error: "Final Redis checkpoint failed - DB committed successfully, retry only checkpoint" }
     }
   } else {
     console.log("[A2U Executor] STAGE 4: Skipping DB reconciliation - already recorded")
   }
 
-  // Executor completes all stages successfully
-  // Caller branches on result.ok, then invokes buildA2USuccessResponse() for final response
   console.log("[A2U Executor] ===== ALL STAGES COMPLETE - SETTLEMENT PENDING =====")
   console.log("[P7B TIMING] executeA2U total", { paymentId: ctx.paymentId, durationMs: Date.now() - executeA2UTimingStartedAt })
   return { ok: true, status: "settlement_pending" }
@@ -696,21 +661,14 @@ function parseRetryAfterMs(value: string | null, now: number): number | undefine
 
 async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
   try {
-    // R101-6: the shared locked executor has already re-proved the immutable
-    // merchant/U2A binding from PostgreSQL plus canonical Pi server evidence.
-    // No merchant bearer is needed or consulted after U2A completion.
+
     if (ctx.merchantAuthority !== "durable_u2a") {
       return { ok: false, error: "Durable merchant authority required", userFacingStatus: "error" }
     }
     console.log("[R101-6 A2U Stage1] ✓ Durable merchant/U2A authority verified upstream")
 
-    // Wait BEFORE consuming one-shot create authority. Reconciliation/completion
-    // of existing identities remains independent of this operational cooldown.
     if(await piCreateCooldown()!=='READY')return {ok:false,error:'Pi create temporarily deferred',userFacingStatus:'settlement_pending',retryable:true,retryAfterMs:60_000,errorCode:'pi_create_cooldown'}
 
-    // FIN-5: PostgreSQL must prove this payment was born under the guarded
-    // create generation and atomically claim its one allowed Pi create attempt.
-    // Legacy/replayed/uncertain claims fail closed before any network POST.
     const createAttempt = await claimSettlementA2UCreateAttempt({
       paymentId: ctx.paymentId,
       merchantUid: ctx.merchantUid,
@@ -729,7 +687,6 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       console.info('[Pi identity recovery] scheduled',{paymentId:ctx.paymentId,generation:recoveryGeneration,financialAuthority:false})
     }else console.log("[FIN-5 A2U CREATE ATTEMPT] durable one-shot claim recorded", { paymentId: ctx.paymentId, attemptedAt: createAttempt.attemptedAt })
 
-    // Create A2U payment
     const requestBody = {
       payment: {
         amount: settlementTarget(ctx.payment),
@@ -765,13 +722,11 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       if(recoveryGeneration!==undefined)await observeSettlementIdentityCreation({paymentId:ctx.paymentId,generation:recoveryGeneration,httpStatus:createResponse.status,code:typeof errorData.error==='string'?errorData.error.slice(0,100):typeof errorData.code==='string'?errorData.code.slice(0,100):'provider_error',requestId:(createResponse.headers.get('x-request-id')??'').slice(0,128),sha256:createHash('sha256').update(errorText).digest('hex')})
       if(rateLimited)await recordPiCreateCooldown(createResponse.headers.get('retry-after'))
       console.warn('[A2U provider response]',{paymentId:ctx.paymentId,httpStatus:createResponse.status,code:rateLimited?'too_many_payments':'provider_rejected',retryAfter:createResponse.headers.get('retry-after'),createClaimRetained:true})
-      // Handle ongoing_payment_found
+
       if (errorData.code === "ongoing_payment_found" || errorText.includes("ongoing_payment")) {
         const ongoingPaymentId = errorData.payment?.identifier || errorData.identifier || errorData.payment_id
         if (typeof ongoingPaymentId === "string" && ongoingPaymentId.trim() !== "" && ongoingPaymentId === ongoingPaymentId.trim()) {
-          // R4R: Pi's ongoing identifier is global to the app/user and can belong to a
-          // different FlashPay payment. Never attribute it to ctx.paymentId before exact
-          // server-side identity binding has been proved.
+
           const fetchResult = await fetchA2UPayment(ongoingPaymentId)
           const metadata = fetchResult && isRecord(fetchResult.metadata) ? fetchResult.metadata : null
           const exactOngoingIdentity = Boolean(fetchResult && isPiA2UPayment(fetchResult) && isReconciledPiA2UPayment(fetchResult) && metadata?.paymentId === ctx.paymentId && metadata.type === "a2u_settlement" && fetchResult.amount === settlementTarget(ctx.payment) && fetchResult.direction === "app_to_user" && fetchResult.user_uid === ctx.merchantUid && fetchResult.identifier === ongoingPaymentId && typeof fetchResult.txid !== "string" && typeof fetchResult.transaction_id !== "string" && fetchResult.completed !== true && fetchResult.cancelled !== true && fetchResult.rejected !== true && typeof fetchResult.transaction?.txid !== "string" && fetchResult.transaction?.verified !== true && fetchResult.status?.transaction_verified !== true && fetchResult.status?.developer_completed !== true && fetchResult.status?.cancelled !== true && fetchResult.status?.user_cancelled !== true)
@@ -788,9 +743,6 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
         return {ok:false,error:"Pi ongoing A2U requires reconciliation",userFacingStatus:"manual_review_required",retryable:false,errorCode:"a2u_precreate_found_requires_reconciliation"}
       }
 
-      // A failed POST is ambiguous: Pi may have created the A2U before the response was lost.
-      // Reconcile before exposing the failure or allowing a later retry. This is the only safe
-      // point to decide whether a new A2U may be created.
       const errorCode = typeof errorData.error === "string"
         ? errorData.error
         : typeof errorData.code === "string"
@@ -819,11 +771,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
         if (reconciled.outcome === "INDETERMINATE") {
           return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_ambiguous_reconciliation_indeterminate" }
         }
-        // DR-20: Pi documents what incomplete_server_payments contains, but does not
-        // document an immediate strong-consistency guarantee after an ambiguous failed
-        // POST. Therefore CONFIRMED_NONE is not authority to create a second A2U.
-        // Hold this payment fail-closed; a 429 still raises global fresh-create
-        // backpressure so other payments do not form a retry storm.
+
         const rateLimitedAmbiguous = createResponse.status === 429 || codeIsTooManyPayments(errorData, errorText)
         return {
           ok: false,
@@ -866,7 +814,6 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
       return { ok: false, error: 'A2U response could not be parsed; reconciliation did not produce a usable DTO', userFacingStatus: 'error', retryable: false, errorCode: reconciliation.outcome === 'CONFIRMED_NONE' ? 'unparseable_confirmed_none' : reconciliation.outcome === 'FOUND' ? 'unparseable_found_invalid' : 'unparseable_indeterminate' }
     }
 
-    // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
       console.error("[DR-22 FINANCIAL EVENT]", { event: "a2u_create_invalid_dto", paymentId: ctx.paymentId, stage: "pi_create_response", responseType: responseData === null ? "null" : Array.isArray(responseData) ? "array" : typeof responseData, failClosed: true })
       const reconciliation = await reconcileIncompleteA2UPayment(ctx.paymentId, settlementTarget(ctx.payment), ctx.merchantUid)
@@ -920,10 +867,7 @@ async function stage1CreateA2U(ctx: ExecutorContext): Promise<Stage1Result> {
     if (reconciled.outcome === "INDETERMINATE") {
       return { ok: false, error: reconciled.reason, userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_network_reconciliation_indeterminate", errorBody: String(error).slice(0, 2000) }
     }
-    // DR-20: transport failure means the POST outcome is ambiguous. Pi's public
-    // incomplete-server-payments contract does not establish that an immediate
-    // absence is a strongly consistent proof that creation did not happen. Never
-    // authorize a fresh create from that absence alone.
+
     return { ok: false, error: "A2U creation network outcome is ambiguous", userFacingStatus: "manual_review_required", retryable: false, errorCode: "a2u_network_reconciliation_confirmed_none", errorBody: String(error).slice(0, 2000) }
   }
 }
@@ -955,8 +899,7 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
     console.error("[DR41 STAGE2 DIAGNOSTIC] amount_rejected", { paymentId: ctx.paymentId, amount, stellarAmount: amount.toFixed(7) })
     return { ok: false, error: "Settlement amount is not an exact positive stroop value", userFacingStatus: "error" }
   }
-  // Persist the immutable signed intent for independent review BEFORE asking
-  // the original certificate-dependent claim. This grants no submission right.
+
   const candidate = await prepareR36EvidenceCandidate({network:financialNetwork(),sourceWallet:appPublicKey,
     destinationWallet:toAddress,paymentId:ctx.paymentId,operationKind:'settlement',
     operationId:a2uPaymentId,piPaymentId:a2uPaymentId,amountStroops:String(exactAmountStroops)},
@@ -974,8 +917,7 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
   const preparedSequence = transaction.sequence
   console.log("[DR41 STAGE2 DIAGNOSTIC] prepared_identity", { paymentId: ctx.paymentId, preparedHash, preparedSequence, envelopePresent: preparedEnvelopeXdr.length > 0 })
   if (!/^[0-9a-f]{64}$/.test(preparedHash) || !/^[1-9][0-9]*$/.test(preparedSequence)) return { ok: false, error: "Prepared A2U transaction intent is invalid", userFacingStatus: "error" }
-  // R36: claim and prepared evidence must share ONE PostgreSQL transaction.
-  // Redis is updated only AFTER this transaction commits successfully.
+
   const traceInput:WalletAuthorityClaim={network:financialNetwork(),sourceWallet:appPublicKey,paymentId:ctx.paymentId,operationKind:'settlement',operationId:a2uPaymentId,preparedHash,preparedSequence}
   if (process.env.FLASHPAY_RECOVERY_SCOPE === 'admitted_new' && !currentRecoveryRight() &&
       await hasPreparedCertificate(traceInput) === false) {
@@ -1002,8 +944,7 @@ async function prepareStage2UnderHeldWalletLock(ctx: ExecutorContext, appKeypair
    return result
   })
   console.log("[DR41 STAGE2 DIAGNOSTIC] durable_prepared_outcome", { paymentId: ctx.paymentId, outcome: durablePrepared?.outcome, preparedHash, preparedSequence })
-  // A re-entered fresh path must NOT turn an earlier PREPARED identity into
-  // another POST. The reconciliation path must inspect the stored XDR via GET.
+
   if (durablePrepared?.outcome !== "RECORDED")
     return {ok:false,error:durablePrepared?.outcome === 'REPLAYED'
       ? 'Prepared settlement already exists; reconcile without fresh submit'
@@ -1071,7 +1012,7 @@ async function finalizeStage2AfterMove(ctx: ExecutorContext, txidFromHorizon: st
 async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> {
   let walletLock: { release: () => Promise<void>; verifyOwned: () => Promise<boolean> } | null = null
   try {
-    // CRITICAL: Use ONLY Payment fields (never undefined a2uPayment object parameter)
+
     const toAddress = ctx.payment.a2uToAddress
     const amount = ctx.payment.merchantAmount
     const a2uPaymentId = ctx.payment.a2uPaymentId
@@ -1093,7 +1034,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const piPrivateSeed = getPiSigningSeed()
     if (!piPrivateSeed) {
       console.error("[A2U Stage2] Pi wallet signing configuration unavailable or invalid")
-      // DO NOT set horizonSuccessFlag=true or persist a2uTxid on failure
+
       return { ok: false, error: "Pi wallet signing configuration unavailable or invalid", userFacingStatus: "settlement_pending" }
     }
 
@@ -1121,10 +1062,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     console.log("[DR41 STAGE2 DIAGNOSTIC] prepare_succeeded", { paymentId: ctx.paymentId, preparedHash: prepared.preparedHash, preparedSequence: prepared.preparedSequence })
     const { transaction, preparedHash } = prepared
 
-    // Preparation deliberately runs without a scoped submission right. Return
-    // to resumeAdmittedRecovery, which immediately reselects THIS committed
-    // payment through the original SQL guard. Never manufacture a right here
-    // or attempt a send that claimFirstWalletSubmission must reject.
     if (process.env.FLASHPAY_RECOVERY_SCOPE === 'admitted_new' && !currentRecoveryRight()) {
       return {ok:false,userFacingStatus:'settlement_pending',
         error:'Settlement preparation recorded; scoped recovery selection required',
@@ -1142,9 +1079,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
         preparedHash, preparedSequence: transaction.sequence,
       })
     } catch (submitError) {
-      // R100-7: a transport exception after submit is ambiguous. Reconcile the exact
-      // prepared hash immediately via the existing GET-only Horizon proof path; never
-      // submit again from this branch. Anything short of exact movement proof stays pending.
+
       console.warn("[R100-7 SETTLEMENT HORIZON IMMEDIATE RECONCILIATION] submit exception", {
         paymentId: ctx.paymentId,
         preparedHash,
@@ -1189,14 +1124,11 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
     const txidFromHorizon = moved.txidFromHorizon
     console.log("[A2U Stage2] ✓ Horizon submission succeeded:", txidFromHorizon)
 
-    // Fetch the typed transaction record from Horizon to read actual fee_charged
     console.log("[A2U Stage2] Fetching transaction record for fee verification")
     const transactionRecord = reconciledSubmitFeeStroops === null
       ? await horizonServer.transactions().transaction(txidFromHorizon).call()
       : null
 
-    // Validate fee_charged is number or string (stroops). On the R100-7 ambiguity
-    // branch this fee already came from the exact GET-only Horizon proof above.
     const feeChargedStroops = reconciledSubmitFeeStroops ?? transactionRecord?.fee_charged
     if (typeof feeChargedStroops !== 'number' && typeof feeChargedStroops !== 'string') {
       return { ok: false, error: "Horizon transaction has invalid fee_charged type", userFacingStatus: "error" }
@@ -1207,7 +1139,6 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return { ok: false, error: "Horizon transaction fee_charged is not a finite nonnegative number", userFacingStatus: "error" }
     }
 
-    // Convert stroops to Pi (1 Pi = 10,000,000 stroops)
     if (!Number.isSafeInteger(feeChargedAsNumber)) {
       return { ok: false, error: "Horizon transaction fee_charged is not an exact integer stroop value", userFacingStatus: "error" }
     }
@@ -1220,7 +1151,7 @@ async function stage2SignAndSubmit(ctx: ExecutorContext): Promise<Stage2Result> 
       return {ok:false,error:"Horizon durable checkpoint not proven",userFacingStatus:"settlement_pending"}
 
     console.log("[A2U Stage2] ✓ Fee verified from Horizon:", horizonFeeCharged)
-    // Return txid and fee for persisting in executeA2U
+
     return { 
       ok: true,
       data: {
@@ -1367,7 +1298,7 @@ async function ensureRecoveredHorizonDurability(
     if (durableHorizon.outcome !== "RECORDED" && durableHorizon.outcome !== "REPLAYED") {
       return { ok: false, error: "Recovered Horizon durable checkpoint not proven" }
     }
-    // Recover the remote-complete/local-checkpoint gap using a fresh read, never Redis authority.
+
     if (d.stage === "horizon_confirmed") {
       const matchesCompletionProof = (value: unknown, completed: boolean): boolean => {
         if (!isReconciledPiA2UPayment(value) || !isPiA2UPayment(value)) return false
@@ -1381,8 +1312,7 @@ async function ensureRecoveredHorizonDurability(
           value.status?.cancelled === false && value.status?.user_cancelled === false
       }
       let proof = await fetchA2UPayment(a2uPaymentId)
-      // Pi can leave transaction=null until /complete binds the accepted Horizon txid.
-      // This DTO proves identity only; the exact durable XDR must be proven on Horizon.
+
       const unlinkedIncomplete = isReconciledPiA2UPayment(proof) && isPiA2UPayment(proof) &&
         proof.identifier === d.a2uPaymentId && proof.network === financialNetwork() &&
         proof.direction === "app_to_user" && proof.user_uid === d.merchantUid &&
@@ -1393,7 +1323,7 @@ async function ensureRecoveredHorizonDurability(
         proof.status?.developer_completed === false && proof.status?.cancelled === false &&
         proof.status?.user_cancelled === false
       if (matchesCompletionProof(proof, false) || unlinkedIncomplete) {
-        // An unproven monotonic Redis completion flag cannot authorize a new mutation.
+
         if (ctx.payment.piCompleted === true) {
           return { ok: false, error: "Recovered Pi completion conflicts with independent incomplete evidence" }
         }
@@ -1411,8 +1341,7 @@ async function ensureRecoveredHorizonDurability(
             return { ok: false, error: "Recovered Pi completion independent Horizon proof unavailable or mismatched" }
           }
         }
-        // Existing durable one-shot claim authorizes only a previously unattempted completion.
-        // A prior/ambiguous attempt is GET-only and fails closed until completion is proven.
+
         const resumed = await stage3CompletePi(ctx, a2uPaymentId, a2uTxid)
         if (!resumed.ok) return { ok: false, error: resumed.error }
         proof = await fetchA2UPayment(a2uPaymentId)
@@ -1439,9 +1368,7 @@ async function ensureRecoveredHorizonDurability(
       }
       d = refreshed.checkpoint
     }
-    // Redis is only a projection. A stale piCompleted=true must never promote
-    // horizon_confirmed to pi_completed through the Stage 3 replay branch.
-    // Fail closed rather than attempting to downgrade monotonic Redis evidence.
+
     if (d.stage === "horizon_confirmed" && ctx.payment.piCompleted === true) {
       return { ok: false, error: "Recovered Pi completion conflicts with durable PostgreSQL stage" }
     }
@@ -1466,21 +1393,40 @@ async function ensureRecoveredHorizonDurability(
 }
 
 async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txidFromHorizon: string): Promise<Stage3Result> {
-  const verifyCompletionIdentity = (value: unknown): boolean => {
+  const verifyCompletionIdentity = (value: unknown): value is PiA2UPayment => {
     if (!isReconciledPiA2UPayment(value) || !isPiA2UPayment(value)) return false
     const md = isRecord(value.metadata) ? value.metadata : null
-    const tx = isRecord(value.transaction) ? value.transaction : null
     const st = isRecord(value.status) ? value.status : null
-    return value.identifier === a2uPaymentId && value.amount === settlementTarget(ctx.payment) && value.direction === "app_to_user" && value.user_uid === ctx.merchantUid && md?.paymentId === ctx.paymentId && md?.type === "a2u_settlement" && tx?.txid === txidFromHorizon && tx?.verified === true && st?.transaction_verified === true && typeof st?.developer_completed === "boolean" && st?.cancelled === false && st?.user_cancelled === false
+    return value.identifier === a2uPaymentId && value.amount === settlementTarget(ctx.payment) && value.direction === "app_to_user" && value.user_uid === ctx.merchantUid && value.from_address === ctx.payment.a2uFromAddress && value.to_address === ctx.payment.a2uToAddress && md?.paymentId === ctx.paymentId && md?.type === "a2u_settlement" && st?.developer_approved === true && typeof st?.developer_completed === "boolean" && st?.cancelled === false && st?.user_cancelled === false
   }
 
-  const verifyCompletedDto=(value:unknown):boolean=>verifyCompletionIdentity(value)&&isRecord(value)&&isRecord(value.status)&&value.status.developer_completed===true
+  const verifyLinkedTransaction=(value:PiA2UPayment):boolean=>value.transaction?.txid===txidFromHorizon&&value.transaction?.verified===true&&value.status?.transaction_verified===true
+  const verifyCompletedDto=(value:unknown):boolean=>verifyCompletionIdentity(value)&&verifyLinkedTransaction(value)&&value.status?.developer_completed===true
   const refetchCompleted = async (): Promise<boolean> => verifyCompletedDto(await fetchA2UPayment(a2uPaymentId))
 
   try {
     const canonical=await fetchA2UPayment(a2uPaymentId)
     if(!verifyCompletionIdentity(canonical))return{ok:false,error:"Pi completion identity unavailable",userFacingStatus:"settlement_pending"}
     if (verifyCompletedDto(canonical)) return { ok: true }
+    if(canonical.status?.developer_completed!==false)return{ok:false,error:"Pi completion state inconsistent",userFacingStatus:"settlement_pending"}
+    if(!verifyLinkedTransaction(canonical)){
+
+      if(canonical.transaction!==null||canonical.status?.transaction_verified!==false)
+        return{ok:false,error:"Pi transaction identity inconsistent",userFacingStatus:"settlement_pending"}
+      const durable=await getSettlementCheckpointAuthoritative(ctx.paymentId)
+      if(durable.outcome!=="FOUND")return{ok:false,error:"Pi completion durable evidence unavailable",userFacingStatus:"settlement_pending"}
+      const d=durable.checkpoint
+      if(d.stage!=="horizon_confirmed"||d.paymentId!==ctx.paymentId||d.merchantId!==ctx.payment.merchantId||d.merchantUid!==ctx.merchantUid||
+        d.customerAmount!==ctx.customerAmount||d.merchantAmount!==settlementTarget(ctx.payment)||d.a2uPaymentId!==a2uPaymentId||
+        d.a2uFromAddress!==canonical.from_address||d.a2uToAddress!==canonical.to_address||d.preparedTxHash!==txidFromHorizon||d.a2uTxid!==txidFromHorizon||
+        typeof d.preparedSequence!=="string"||! /^[1-9][0-9]*$/.test(d.preparedSequence)||
+        typeof d.preparedEnvelopeXdr!=="string"||d.preparedEnvelopeXdr.trim()===""||
+        typeof d.horizonFeeStroops!=="number"||!Number.isSafeInteger(d.horizonFeeStroops)||d.horizonFeeStroops<0||numberToExactPositiveStroops(d.merchantAmount)===null)
+        return{ok:false,error:"Pi completion durable identity mismatch",userFacingStatus:"settlement_pending"}
+      const horizon=await readR36IndependentHorizonProof({network:financialNetwork(),preparedHash:d.preparedTxHash,preparedSequence:d.preparedSequence,
+        sourceWallet:d.a2uFromAddress,destinationWallet:d.a2uToAddress,amount:d.merchantAmount.toFixed(7),envelopeXdr:d.preparedEnvelopeXdr,expectedFeeStroops:String(d.horizonFeeStroops)})
+      if(horizon.outcome!=="PROVEN")return{ok:false,error:"Pi completion independent Horizon proof unavailable",userFacingStatus:"settlement_pending"}
+    }
     const completionAttempt = await claimSettlementPiMutationAttempt({ kind: "a2u_complete", paymentId: ctx.paymentId, externalPaymentId: a2uPaymentId, txid: txidFromHorizon })
     if (completionAttempt.outcome !== "RECORDED") {
       if (await refetchCompleted()) return { ok: true }
@@ -1499,9 +1445,7 @@ async function stage3CompletePi(ctx: ExecutorContext, a2uPaymentId: string, txid
 
     if (!response.ok) {
       const errorText = await response.text()
-      // Any failed /complete response can be ambiguous: Pi may have completed the payment
-      // before the error response was observed. Reconcile the exact payment/txid first;
-      // never retry /complete blindly.
+
       if (await refetchCompleted()) {
         console.log("[A2U Stage3] Pi /complete non-OK response reconciled as completed")
         return { ok: true }
@@ -1538,8 +1482,6 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
   try {
     console.log("[A2U Stage4] Reconciling database")
 
-    // CRITICAL: Reload latest payment record from Redis before validation
-    // Ensures every field is from the authoritative checkpoint where it was persisted
     const latestPaymentData = await redis.get(`payment:${ctx.paymentId}`)
     if (!latestPaymentData) {
       console.error("[A2U Stage4] Cannot reload payment record from Redis - checkpoint may be corrupted")
@@ -1556,11 +1498,10 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     console.log("[A2U Stage4] Reloaded latest payment record from Redis checkpoint")
 
-    // STRICT: Validate financial data first - will reject on missing values
     const validation = validateFinancialData(latestPayment)
     if (!validation.success) {
       console.error("[A2U Stage4] Financial validation failed:", validation.error)
-      // Preserve checkpoint for DB-only recovery by not updating stale ctx.payment
+
       return { ok: false, error: validation.error, userFacingStatus: "error" }
     }
 
@@ -1576,8 +1517,6 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     console.log("[A2U Stage4]   - horizonFeeCharged:", financialData.horizonFeeCharged)
     console.log("[A2U Stage4]   - appCommission:", financialData.appCommission)
 
-    // Call DB with VALIDATED financial data only
-    // CRITICAL: Pass ONLY validated identifiers from financialData
     const dbResult = await recordA2UTransactionAtomic({
       paymentId: ctx.paymentId,
       u2aIdentifier: financialData.piPaymentId,
@@ -1594,7 +1533,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
 
     if (!dbResult || !dbResult.success) {
       console.error("[A2U Stage4] DB reconciliation failed:", dbResult?.error)
-      // Preserve failure state for recovery using monotonic merge
+
       try {
         await persistCheckpointMerged(ctx.paymentId, {
           status: "settlement_pending",
@@ -1602,10 +1541,10 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
           requiresDbReconciliation: true,
         })
         console.log("[A2U Stage4] Persisted settlement_pending with dbRecorded=false and requiresDbReconciliation=true via persistCheckpointMerged")
-        // Only return settlement_pending if recovery checkpoint was successfully stored
+
         return { ok: false, error: dbResult?.error || "Unknown DB error", userFacingStatus: "settlement_pending" }
       } catch (persistErr) {
-        // Persistence failed - propagate error, do NOT return settlement_pending
+
         const persistError = persistErr instanceof Error ? persistErr.message : String(persistErr)
         console.error("[A2U Stage4] CRITICAL: Failed to persist recovery checkpoint on DB failure:", persistError)
         return { ok: false, error: `DB failure AND recovery checkpoint persistence failed: ${persistError}`, userFacingStatus: "error" }
@@ -1613,7 +1552,7 @@ async function stage4ReconcileDB(ctx: ExecutorContext, txidFromHorizon: string):
     }
 
     console.log("[A2U Stage4] ✓ DB reconciliation succeeded with transaction ID:", dbResult.transactionId)
-    // Return ok: true with transaction identifiers for boundary verification
+
     return { 
       ok: true, 
       transactionId: dbResult.transactionId,
@@ -1637,7 +1576,7 @@ export async function persistCheckpointMerged(
   }
 
   try {
-    // Reload latest record to merge with new evidence
+
     const latestData = await redis.get(`payment:${paymentId}`)
     if (!latestData) {
       const msg = "[A2U Checkpoint] Cannot reload payment after modification - data may be corrupted"
@@ -1649,11 +1588,8 @@ export async function persistCheckpointMerged(
     if (latest.id !== paymentId) throw new Error("[A2U Checkpoint] Payment identity mismatch")
     if (updates.id !== undefined && updates.id !== paymentId) throw new Error("[A2U Checkpoint] Payment identity mismatch")
 
-    // STRICT MONOTONICITY: Build merged record preserving all terminal evidence
     const merged: Payment = { ...latest }
 
-    // Enforce immutable terminal markers (never unset once true)
-    // Conflicting a2uPaymentId must fail immediately - stop workflow
     if (latest.a2uPaymentId && updates.a2uPaymentId && latest.a2uPaymentId !== updates.a2uPaymentId) {
       const msg = `[A2U Checkpoint] FATAL: Conflicting a2uPaymentId - existing="${latest.a2uPaymentId}" vs new="${updates.a2uPaymentId}" - workflow stopped`
       console.error(msg)
@@ -1663,7 +1599,6 @@ export async function persistCheckpointMerged(
       merged.a2uPaymentId = updates.a2uPaymentId
     }
 
-    // Conflicting a2uTxid must fail immediately - stop workflow
     if (latest.a2uPreparedEnvelopeXdr !== undefined && updates.a2uPreparedEnvelopeXdr !== undefined && latest.a2uPreparedEnvelopeXdr !== updates.a2uPreparedEnvelopeXdr) {
       throw new Error(`[A2U Checkpoint] FATAL: Conflicting a2uPreparedEnvelopeXdr`)
     }
@@ -1690,28 +1625,24 @@ export async function persistCheckpointMerged(
       merged.a2uTxid = updates.a2uTxid
     }
 
-    // Never unset proven success evidence once true - always preserve
     if (latest.horizonSuccessFlag === true) {
       merged.horizonSuccessFlag = true
     } else if (updates.horizonSuccessFlag) {
       merged.horizonSuccessFlag = true
     }
 
-    // Never unset piCompleted once true - always preserve
     if (latest.piCompleted === true) {
       merged.piCompleted = true
     } else if (updates.piCompleted) {
       merged.piCompleted = true
     }
 
-    // Never unset dbRecorded once true - always preserve
     if (latest.dbRecorded === true) {
       merged.dbRecorded = true
     } else if (updates.dbRecorded) {
       merged.dbRecorded = true
     }
 
-    // Preserve original success timestamps - never downgrade
     if (latest.horizonSuccessAt && !updates.horizonSuccessAt) {
       merged.horizonSuccessAt = latest.horizonSuccessAt
     } else if (updates.horizonSuccessAt) {
@@ -1730,7 +1661,6 @@ export async function persistCheckpointMerged(
       merged.settledAt = latest.settledAt || updates.settledAt
     }
 
-    // Never regress from settled_to_merchant - terminal state must not downgrade
     if (latest.status === "settled_to_merchant" && updates.status && updates.status !== "settled_to_merchant") {
       const msg = `[A2U Checkpoint] FATAL: Cannot regress from settled_to_merchant to ${updates.status} - workflow stopped`
       console.error(msg)
@@ -1740,15 +1670,11 @@ export async function persistCheckpointMerged(
       merged.status = updates.status
     }
 
-    // Merge all other allowed fields from updates while preserving protected checkpoint evidence
-    // Only assign fields that are explicitly allowed (not protected terminals or timestamps)
-    // Use explicit typed assignment to avoid unsafe casts
     if (updates.id !== undefined) merged.id = updates.id
     if (updates.merchantId !== undefined) merged.merchantId = updates.merchantId
     if (updates.merchantAddress !== undefined) merged.merchantAddress = updates.merchantAddress
     if (updates.merchantUid !== undefined) merged.merchantUid = updates.merchantUid
-    // DR-5: bearer material is legacy projection compatibility only, never durable or recovery authority.
-    // Every server checkpoint write scrubs any historical bearer instead of propagating or accepting one.
+
     merged.accessToken = ""
     if (updates.amount !== undefined) merged.amount = updates.amount
     if (updates.financialContract !== undefined) {
@@ -1786,9 +1712,6 @@ export async function persistCheckpointMerged(
     if (updates.refundFailureCode !== undefined) merged.refundFailureCode = updates.refundFailureCode
     if (updates.refundProof !== undefined) merged.refundProof = updates.refundProof
 
-    // F2-6: fence the projection. A stale GET->merge writer may never overwrite
-    // a newer Payment projection. On a benign race, re-read and re-merge a
-    // bounded number of times; any uncertainty remains fail-closed.
     console.log("[A2U Checkpoint] Persisting fenced monotonic checkpoint to Redis")
     const cas = await compareAndSwapPaymentProjection(paymentId, latest, merged)
     if (cas.outcome === "CONFLICT" && casAttempt < 4) {
@@ -1813,7 +1736,7 @@ export async function persistCheckpointMerged(
   } catch (error) {
     const msg = `[A2U Checkpoint] CRITICAL FAILURE: Checkpoint persistence failed - workflow stopped immediately: ${error instanceof Error ? error.message : String(error)}`
     console.error(msg)
-    // Throw immediately - caller must not proceed to Pi /complete or DB
+
     throw new Error(msg)
   }
 }
@@ -1835,7 +1758,6 @@ async function fetchA2UPayment(a2uPaymentId: string): Promise<PiA2UPayment | nul
 
     const responseData: unknown = await response.json()
 
-    // Validate response with type guard - NO CASTS
     if (!isPiA2UPayment(responseData)) {
       console.error("[DR-22 FINANCIAL EVENT]", { event: "a2u_fetch_invalid_dto", stage: "pi_fetch", a2uPaymentId, responseType: responseData === null ? "null" : Array.isArray(responseData) ? "array" : typeof responseData, failClosed: true })
       return null
