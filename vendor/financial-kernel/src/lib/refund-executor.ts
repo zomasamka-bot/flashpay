@@ -58,7 +58,6 @@ function guarded(checkpoint: RefundCheckpoint, payment: Payment): boolean {
   return !merchant && !refund && isRefundEligible(payment) && refundPreflight(checkpoint, payment, { paymentId: checkpoint.paymentId, payerUid: checkpoint.payerUid, amount: checkpoint.amount })
 }
 
-
 type RefundPaymentProjectionLoad =
   | { outcome: 'FOUND'; payment: Payment; rebuilt: boolean }
   | { outcome: 'BLOCKED'; reason: string }
@@ -129,7 +128,7 @@ async function neutralizeDr11OrphanA2UIdentifier(checkpoint: RefundCheckpoint, p
   let cancelResponse: Response | null = null
   try {
     cancelResponse = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(expected.a2uPaymentId)}/cancel`, {
-      method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, redirect: 'error',
+      method: 'POST', signal:AbortSignal.timeout(12000), headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, redirect: 'error',
     })
   } catch { return false }
   if (!cancelResponse.ok) return false
@@ -352,7 +351,7 @@ export async function executeRefundCreation(refundId: string, refundAuthority?: 
       console.info('[Refund identity recovery] scheduled',{refundId,generation:recoveryGeneration,financialAuthority:false})
     }
   }
-  const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
+  const response = await fetch('https://api.minepi.com/v2/payments', { method: 'POST', signal:AbortSignal.timeout(12000), headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ payment: { amount: checkpoint.amount, memo: `FlashPay refund for ${checkpoint.paymentId}`, metadata: { type: 'refund', paymentId: checkpoint.paymentId, refundId: checkpoint.refundId, idempotencyKey: checkpoint.idempotencyKey }, uid: checkpoint.payerUid } }) }).catch(() => null)
   ;(response?.ok?console.info:console.warn)('[refunds/executor] POST /v2/payments:', { refundId, stage: checkpoint.stage, responsePresent: response !== null, status: response?.status ?? null, ok: response?.ok ?? false })
   const reconcileAfterUncertainty = async (): Promise<RefundExecutionResult> => {
     const recovered = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId: checkpoint.refundPaymentId })
@@ -696,7 +695,7 @@ export async function executeRefundCompletion(refundId: string): Promise<RefundE
   if (needsCompletion) {
     const completionAttempt = await claimRefundPiMutationAttempt({ kind: 'refund_complete', refundId, paymentId: checkpoint.paymentId, externalPaymentId: refundPaymentId, txid: refundTxid })
     if (completionAttempt.outcome !== 'RECORDED') return { outcome: 'blocked', reason: completionAttempt.outcome === 'INDETERMINATE' ? 'completion_attempt_uncertain' : 'completion_reconcile_only' }
-    const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(refundPaymentId)}/complete`, { method: 'POST', headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ txid: refundTxid }) }).catch(() => null)
+    const response = await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(refundPaymentId)}/complete`, { method: 'POST', signal:AbortSignal.timeout(12000), headers: { Authorization: `Key ${serverConfig.piApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ txid: refundTxid }) }).catch(() => null)
     if (response === null || !response.ok) {
       const recovered = await reconcileRefundWithPi({ paymentId: checkpoint.paymentId, refundId, idempotencyKey: checkpoint.idempotencyKey, payerUid: checkpoint.payerUid, amount: checkpoint.amount, refundPaymentId })
       if (recovered.outcome !== 'FOUND' || !recovered.payment || recovered.payment.identifier !== refundPaymentId || recovered.payment.status.cancelled || recovered.payment.status.user_cancelled || recovered.payment.transaction === null || recovered.payment.transaction.txid !== refundTxid || !recovered.payment.transaction.verified || !recovered.payment.status.transaction_verified || recovered.payment.status.developer_completed !== true) return { outcome: 'blocked', reason: 'completion_uncertain' }

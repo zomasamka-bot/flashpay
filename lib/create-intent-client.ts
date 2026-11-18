@@ -1,12 +1,18 @@
 "use client"
 
 // FIN-100B: only the opaque UUID and request identity are stored; never Pi credentials.
-const KEY = "flashpay:pending-create-intent:v1"
+const LEGACY_KEY = "flashpay:pending-create-intent:v1"
+let KEY=LEGACY_KEY
+function selectMerchant(uid:string,id:string){
+ KEY=LEGACY_KEY+":"+encodeURIComponent(uid)
+ const old=window.localStorage.getItem(LEGACY_KEY)
+ if(old&&!window.localStorage.getItem(KEY)&&!window.localStorage.getItem(KEY+':migrated')){const p=JSON.parse(old);if(p.merchantUid===uid&&p.merchantId===id){window.localStorage.setItem(KEY,old);window.localStorage.setItem(KEY+':migrated','1')}}
+}
 const LOCK = "flashpay:create-intent:v1"
 const EPOCH_KEY = "flashpay:create-intent-epoch:v1"
 // Snapshot when this tab loads. Only this tab's Next Customer can advance it.
 // A stale tab must not inherit permission from another tab's Next Customer.
-let tabEpoch = readInitialEpoch()
+let tabEpoch: number | null = null
 
 function readInitialEpoch(): number {
   if (typeof window === "undefined") return 0
@@ -20,6 +26,7 @@ function readInitialEpoch(): number {
 }
 
 function assertCurrentEpoch(): number {
+  if(tabEpoch===null)tabEpoch=readInitialEpoch()
   const raw = window.localStorage.getItem(EPOCH_KEY)
   const epoch: unknown = raw === null ? 0 : JSON.parse(raw)
   if (!Number.isSafeInteger(epoch) || (epoch as number) < 0 || epoch !== tabEpoch) {
@@ -36,6 +43,7 @@ type Pending = { id: string; merchantUid: string; merchantId: string; amount: nu
 // Reading never acknowledges, retires or changes the original request.
 export async function readSavedCreateIntent(merchantUid: string, merchantId: string): Promise<Readonly<Pending> | null> {
   return withIntentLock(() => {
+    selectMerchant(merchantUid,merchantId)
     assertCurrentEpoch()
     const raw = window.localStorage.getItem(KEY)
     if (raw === null) return null
@@ -67,6 +75,7 @@ export async function acquireCreateIntent(merchantUid: string, merchantId: strin
   // The authenticated server POST remains the sole financial admission gate.
   // Persist the same intent before sending; do not add a redundant advisory GET.
   return withIntentLock(() => {
+    selectMerchant(merchantUid,merchantId)
     assertCurrentEpoch()
     // Storage failure is indeterminate: do not create a new durable identity.
     const raw = window.localStorage.getItem(KEY)

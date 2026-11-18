@@ -543,12 +543,19 @@ export default function PaymentContentWithId({
       async (error) => {
         try {
           const updated = await getPaymentFromServer(paymentId, true)
-          if (updated && ["settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
+          if (updated && ["paid_to_app", "settlement_pending", "settled_to_merchant", "settlement_failed", "refund_pending", "refunded"].includes(updated.status)) {
             setPayment(updated)
+            if(updated.status==='paid_to_app'||updated.status==='settlement_pending')startPostSubmitPolling('',updated.status)
+            else setIsPaying(false)
             return
           }
         } catch {
           // Preserve the existing generic failure handling below.
+        }
+        if(error==='PI_CONFIRMATION_PENDING'){
+          startPostSubmitPolling('')
+          toast({title:t('pay.confirming','Confirming payment'),description:t('pay.confirmingDescription','Payment confirmation is pending. Please keep this request open.')})
+          return
         }
         toast({
           title: t("pay.toast.failedTitle"),

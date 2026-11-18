@@ -1,7 +1,8 @@
 'use server'
+import {piCreateCooldown} from './pi-create-backpressure'
+import {claimPiFinalizationRecovery} from './pi-finalization-recovery'
 import {financialAmountsMatch,financialContractFromRow,netImpact,type MerchantFeeQuote} from './payment-financial-contract'
 import {verifyDatabaseUrl,verifyDatabaseBinding} from '../deployment'
-
 
 import { randomUUID } from 'crypto'
 import { financialPresentationIntegrityCTE } from './financial-presentation-integrity'
@@ -15,14 +16,6 @@ import type {
   RefundAuditEvent,
 } from './types'
 
-// Database layer - handles PostgreSQL/Neon integration via postgres client
-// Note: Functions that use database client are server-only
-
-/**
- * Normalize PostgreSQL NUMERIC value to validated number.
- * PostgreSQL NUMERIC is returned as string or finite number; must be validated.
- * @throws Error if value is not a finite number or fully valid numeric string
- */
 function normalizePostgresNumeric(value: unknown, fieldName: string): number {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
@@ -30,7 +23,7 @@ function normalizePostgresNumeric(value: unknown, fieldName: string): number {
     }
     return value
   }
-  
+
   if (typeof value === 'string') {
     const trimmed = value.trim()
     if (trimmed.length === 0) {
@@ -42,33 +35,28 @@ function normalizePostgresNumeric(value: unknown, fieldName: string): number {
     }
     return converted
   }
-  
+
   throw new Error(`${fieldName} has unsupported type: ${typeof value}`)
 }
 
-// Singleton connection instance
 let sqlClient: any = null
 let initializationAttempted = false
 let sqlInitialization: Promise<any | null> | null = null
 
-// Get or create the postgres client connection
 async function getPostgresClient() {
   if (sqlClient !== null) return sqlClient
   if (sqlInitialization !== null) return sqlInitialization
-  // Share only connection initialization, never a query result, transaction,
-  // certificate or financial authorization. Publish the promise before callers
-  // can cross the first asynchronous import/TLS/identity boundary.
+
   sqlInitialization = initializePostgresClient()
   try { return await sqlInitialization } finally { sqlInitialization = null }
 }
 
 async function initializePostgresClient() {
-  // Return cached client if already initialized
+
   if (sqlClient !== null) {
     return sqlClient
   }
 
-  // Return null if already tried and failed
   if (initializationAttempted) {
     return null
   }
@@ -81,7 +69,7 @@ async function initializePostgresClient() {
 
   try {
     console.log('[DB] Initializing postgres client...')
-    // Import the postgres client
+
     const postgres = await import('postgres')
     const sql = postgres.default
 
@@ -91,11 +79,8 @@ async function initializePostgresClient() {
       return null
     }
 
-    // Create client instance with connection URL
     verifyDatabaseUrl(process.env.DATABASE_URL)
-    // Bound each application instance independently of request concurrency.
-    // Keep connection capacity available for restricted runtime/issuer/signer
-    // roles; queries wait in the driver's pool without replaying financial work.
+
     const candidate = sql(process.env.DATABASE_URL, {ssl:{rejectUnauthorized:true},max:4,idle_timeout:20})
     try { await verifyDatabaseBinding(candidate as any) } catch (e) { await candidate.end({timeout:1});throw e }
     sqlClient = candidate
@@ -110,8 +95,6 @@ async function initializePostgresClient() {
   }
 }
 
-// R36 restricted DB identity. This connection must never use DATABASE_URL.
-// Fail closed until a separately provisioned runtime credential is present.
 let r36RestrictedClient: any = null
 let r36Initialization: Promise<any | null> | null = null
 export async function getR36RestrictedClient(): Promise<any | null> {
@@ -124,15 +107,13 @@ async function initializeR36RestrictedClient(): Promise<any | null> {
   const url = process.env.R36_RUNTIME_DATABASE_URL
   if (!url || url === process.env.DATABASE_URL) return null
   try {
-    // All package deployments use the same strict connection/ACL path.
+
     const { openProductionR36Runtime } = await import('./r36-production-runtime')
     r36RestrictedClient = await openProductionR36Runtime(url,process.env.DATABASE_URL)
     return r36RestrictedClient
   } catch { return null }
 }
 
-// For R36 atomic operations: advisory lock, checkpoint and protected claim
-// share the SAME restricted SQL transaction. Caller must use the provided tx.
 export async function withR36RestrictedPaymentTransaction<T>(
   paymentId: string, work: (tx: any) => Promise<T>
 ): Promise<T | null> {
@@ -164,10 +145,7 @@ export async function withPaymentAuthorityTransaction<T>(paymentId: string, work
   if (!client) return null
   try {
     return await client.begin(async (tx: any) => {
-      // DR-6/DR-7: PostgreSQL is the durable Settlement/Refund XOR serialization
-      // authority. Redis remains a fast coordination lock only. Both durable
-      // claim paths take this transaction-scoped lock before inspecting or
-      // creating the opposite authority.
+
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${paymentId}, 0))`
       return await work(tx)
     })
@@ -178,7 +156,7 @@ export async function withPaymentAuthorityTransaction<T>(paymentId: string, work
 }
 
 export async function query(text: string, values?: unknown[]) {
-  // Check if PostgreSQL is configured
+
   if (!process.env.DATABASE_URL) {
     console.warn('[DB] PostgreSQL not configured, query blocked')
     return null
@@ -193,11 +171,10 @@ export async function query(text: string, values?: unknown[]) {
 
     console.log('[DB] Executing query:', text.substring(0, 60) + '...')
 
-    // Use parameterized query with postgres client
     let result: any
 
     if (values && values.length > 0) {
-      // Postgres client handles parameterization automatically
+
       result = await client.unsafe(text, values)
     } else {
       result = await client.unsafe(text)
@@ -211,16 +188,6 @@ export async function query(text: string, values?: unknown[]) {
   }
 }
 
-/**
- * Initialize database schema on first run
- */
-/**
- * N-FIN-10A durable settlement authority schema.
- *
- * IMPORTANT: this stage is schema-only. No financial execution or recovery path
- * reads from or writes to this table yet. Later N-FIN-10 stages will add a single
- * monotonic CAS writer before any recovery cutover.
- */
 let settlementCheckpointSchemaReady = false
 let settlementCheckpointSchemaInitPromise: Promise<boolean> | null = null
 
@@ -239,7 +206,6 @@ export async function ensureSettlementCheckpointTable(): Promise<boolean> {
   }
 }
 
-/** R36 ACL: runtime schema probes are read-only and fail closed. Migration is separate. */
 async function r36VerifyColumns(table: string, columns: readonly string[]): Promise<boolean> {
   if (!process.env.DATABASE_URL) return false
   try {
@@ -355,7 +321,6 @@ export type Dr11CertificationHoldResult =
   | { outcome: 'RECORDED' | 'REPLAYED' }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/** DR60: durable, non-financial hold for the exact owner-armed DR11 payment. */
 export async function recordDr11RefundCertificationHold(params:{paymentId:string;merchantId:string;merchantUid:string;customerAmount:number}):Promise<Dr11CertificationHoldResult>{
   if(!params.paymentId||params.paymentId!==params.paymentId.trim()||!params.merchantId||!params.merchantUid||params.customerAmount!==0.1)
     return{outcome:'CONFLICT',error:'DR11 certification hold input invalid'}
@@ -400,8 +365,6 @@ export type SettlementU2APretransactionRecoveryCandidate =
   | { outcome: 'CANDIDATE'; customerAmount: number; approvalIdentifier: string }
   | { outcome: 'NOT_CANDIDATE' | 'INDETERMINATE'; error: string }
 
-/** R4J: read-only proof that the exact Pi identifier is still only the durable
- * approval owner. No U2A blockchain identity or settlement execution may exist. */
 export async function readSettlementU2APretransactionRecoveryCandidate(paymentId: string, piPaymentId: string): Promise<SettlementU2APretransactionRecoveryCandidate> {
   if (!paymentId || paymentId !== paymentId.trim() || !piPaymentId || piPaymentId !== piPaymentId.trim())
     return { outcome: 'NOT_CANDIDATE', error: 'Invalid recovery identity' }
@@ -429,9 +392,6 @@ export type SettlementU2AApprovalRetirementResult =
   | { outcome: 'RETIRED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/** R4J: retire the exact approval owner only after the caller has proven by
- * canonical Pi GET that Pi cancelled it with no transaction. The advisory lock
- * serializes this transition with all other payment authority changes. */
 export async function retireSettlementU2AApprovalAfterCanonicalCancellation(params: {
   paymentId: string; piPaymentId: string; piCancelledAt: string
 }): Promise<SettlementU2AApprovalRetirementResult> {
@@ -480,8 +440,6 @@ export type SettlementU2AApprovalOwnershipRead =
   | { outcome: 'CLAIMED' }
   | { outcome: 'INDETERMINATE'; error: string }
 
-/** DR87: public-safe durable readback of whether a Pi U2A approval owner exists.
- * Never returns the Pi identifier. PostgreSQL uncertainty fails closed. */
 export async function readSettlementU2AApprovalOwnership(paymentId: string): Promise<SettlementU2AApprovalOwnershipRead> {
   if (typeof paymentId !== 'string' || paymentId.trim() === '' || paymentId !== paymentId.trim())
     return { outcome: 'INDETERMINATE', error: 'Invalid payment identity' }
@@ -504,7 +462,6 @@ export type SettlementU2AStartLeaseResult =
   | { outcome: 'ACQUIRED'; token: string; expiresAt: string }
   | { outcome: 'BLOCKED' | 'INDETERMINATE'; error: string }
 
-/** DR88: atomic durable authority to enter Pi.createPayment. One active starter per Flash payment. */
 export async function acquireSettlementU2AStartLease(paymentId: string): Promise<SettlementU2AStartLeaseResult> {
   if (typeof paymentId !== 'string' || paymentId.trim() === '' || paymentId !== paymentId.trim())
     return { outcome: 'INDETERMINATE', error: 'Invalid payment identity' }
@@ -539,7 +496,6 @@ export type SettlementU2AStartApprovalClaimResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/** DR88: convert the exact active start lease into durable Pi approval ownership atomically. */
 export async function recordSettlementU2AApprovalClaimFromStartLease(params: {
   paymentId: string; merchantId: string; merchantUid: string; customerAmount: number; u2aIdentifier: string; startLeaseToken: string
 }): Promise<SettlementU2AStartApprovalClaimResult> {
@@ -571,10 +527,6 @@ export type SettlementU2AApprovalAttemptResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/** FIN7-S2: durable one-shot authorization for the externally visible Pi /approve POST.
- * Ownership and attempt are deliberately separate: a crash after ownership but before
- * this marker may still perform the first attempt; once this marker exists, recovery
- * must reconcile canonical Pi state and must never issue a second /approve POST. */
 export async function claimSettlementU2AApprovalAttempt(params: {
   paymentId: string; merchantId: string; merchantUid: string; customerAmount: number; u2aIdentifier: string
 }): Promise<SettlementU2AApprovalAttemptResult> {
@@ -612,6 +564,7 @@ export async function claimSettlementU2AApprovalAttempt(params: {
       const version = Number(row.version)
       if (!Number.isSafeInteger(version) || version < 1 || row.stage !== 'payment_identity' || row.merchant_id !== params.merchantId || row.merchant_uid !== params.merchantUid || ca !== params.customerAmount || !financialAmountsMatch(ca,ma,ac,row.financial_contract) || row.u2a_approval_identifier !== params.u2aIdentifier || row.u2a_approval_claimed_at == null || row.u2a_approval_guard_version !== 'fin7_v1' || row.u2a_approval_attempted_at == null || row.u2a_identifier != null)
         return { outcome: 'CONFLICT' as const, error: 'U2A approval attempt durable authority conflict' }
+      if(await claimPiFinalizationRecovery(tx,{kind:'u2a_approve',paymentId:params.paymentId,externalPaymentId:params.u2aIdentifier},row.u2a_approval_attempted_at))return{outcome:'RECORDED' as const,version}
       return { outcome: 'REPLAYED' as const, version }
     })
   } catch (error) {
@@ -624,14 +577,6 @@ export type SettlementU2AApprovalClaimResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/**
- * R101-2: durable one-payment -> one-Pi-U2A approval ownership.
- *
- * The claim is established only after canonical Pi validation and before Pi
- * /approve. It performs no Pi/Horizon/Redis mutation and stores no secret.
- * NULL -> A records atomically; A -> A is replay-safe; A -> B conflicts.
- * PostgreSQL uncertainty is INDETERMINATE so callers fail closed before Pi.
- */
 export async function recordSettlementU2AApprovalClaim(params: {
   paymentId: string
   merchantId: string
@@ -655,7 +600,7 @@ export async function recordSettlementU2AApprovalClaim(params: {
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
 
     const rows = await client.begin(async (tx: any) => {
-      // The F2-1 row must already exist. Never create payment identity here.
+
       const recorded = await tx`
         UPDATE settlement_checkpoints
         SET version=version+1,
@@ -730,10 +675,6 @@ export async function recordSettlementU2AApprovalClaim(params: {
       (laterStage && row.u2a_identifier !== params.u2aIdentifier)
     ) return { outcome:'CONFLICT', error:'Settlement U2A approval durable ownership conflict' }
 
-    // DR-12: the immutable approval owner remains replay-safe after the payment
-    // advances. Stage progression must not turn the same canonical Pi approval
-    // identifier into a false conflict; a different/missing later U2A identity
-    // remains fail-closed. This path is read-only and performs no Pi mutation.
     return { outcome:'REPLAYED', version }
   } catch (error) {
     console.error('[DB] Settlement U2A approval claim uncertain:', error)
@@ -745,9 +686,6 @@ export type SettlementPiMutationAttemptResult =
   | { outcome: 'RECORDED'; attemptedAt: string }
   | { outcome: 'REPLAYED' | 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/** FIN7-S3: one-shot Pi mutation claim for Settlement-owned lifecycles.
- * RECORDED is the only outcome that authorizes the caller's POST. REPLAYED means
- * a prior runtime crossed the attempt boundary and must reconcile only. */
 export async function claimSettlementPiMutationAttempt(params: {
   kind: 'u2a_cancel' | 'u2a_complete' | 'a2u_complete'
   paymentId: string
@@ -776,8 +714,11 @@ export async function claimSettlementPiMutationAttempt(params: {
       const inserted=await tx`INSERT INTO financial_pi_mutation_attempts(mutation_kind,payment_id,external_payment_id,txid)
         VALUES(${params.kind},${params.paymentId},${params.externalPaymentId},${params.txid??null}) ON CONFLICT DO NOTHING RETURNING attempted_at`
       if(inserted.length===1){const at=inserted[0].attempted_at;return{outcome:'RECORDED' as const,attemptedAt:at instanceof Date?at.toISOString():String(at)}}
-      const prior=await tx`SELECT txid FROM financial_pi_mutation_attempts WHERE mutation_kind=${params.kind} AND payment_id=${params.paymentId} AND external_payment_id=${params.externalPaymentId}`
-      if(prior.length===1&&prior[0].txid===(params.txid??null))return{outcome:'REPLAYED' as const,error:'Settlement Pi mutation attempt already recorded'}
+      const prior=await tx`SELECT txid,attempted_at FROM financial_pi_mutation_attempts WHERE mutation_kind=${params.kind} AND payment_id=${params.paymentId} AND external_payment_id=${params.externalPaymentId}`
+      if(prior.length===1&&prior[0].txid===(params.txid??null)){
+        if(params.kind!=='u2a_cancel'&&await claimPiFinalizationRecovery(tx,params,prior[0].attempted_at))return{outcome:'RECORDED' as const,attemptedAt:new Date().toISOString()}
+        return{outcome:'REPLAYED' as const,error:'Settlement Pi mutation attempt already recorded'}
+      }
       return{outcome:'CONFLICT' as const,error:'Settlement Pi mutation attempt conflict'}
     })
   }catch(error){console.error('[FIN7-S3 SETTLEMENT PI MUTATION] uncertain:',error);return{outcome:'INDETERMINATE',error:'Settlement Pi mutation attempt uncertain'}}
@@ -787,14 +728,6 @@ export type SettlementU2AIngressCheckpointResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/**
- * F2-2: persist authoritative U2A blockchain identity before Pi /complete.
- *
- * This checkpoint records no access token and authorizes no A2U/Refund movement.
- * New F2-1 rows advance from version 1 while legacy rows may be backfilled only
- * when the supplied payment/merchant/accounting identity is exact. Replays are
- * accepted only when the durable U2A identifier, txid and payer UID are exact.
- */
 export async function recordSettlementU2AVerifiedCheckpoint(params: {
   paymentId: string
   merchantId: string
@@ -822,7 +755,7 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
 
     const rows = await client.begin(async (tx: any) => {
-      // New F2-1 flow: bind the blockchain U2A identity to the immutable payment row.
+
       const advanced = await tx`
         UPDATE settlement_checkpoints
         SET version=version+1,
@@ -858,8 +791,6 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
       `
       if (advanced.length === 1) return [{ ...advanced[0], recorded: true }]
 
-      // Backward-compatible evidence enrichment for an older durable Settlement row.
-      // Only exact pre-existing U2A identity may gain the payer/verified timestamp.
       const enriched = await tx`
         UPDATE settlement_checkpoints
         SET version=version+1,
@@ -880,7 +811,6 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
       `
       if (enriched.length === 1) return [{ ...enriched[0], recorded: true }]
 
-      // Legacy pre-F2-1 payment: establish the durable identity at U2A verification.
       const inserted = await tx`
         INSERT INTO settlement_checkpoints (
           payment_id,version,stage,merchant_id,merchant_uid,
@@ -932,11 +862,6 @@ export async function recordSettlementU2AVerifiedCheckpoint(params: {
   }
 }
 
-/**
- * F2-2: acknowledge Pi developer completion durably before Redis projection.
- * The exact verified U2A identity must already exist; this function never
- * creates or changes blockchain movement and never invents a payment identity.
- */
 export async function recordSettlementU2ACompletedCheckpoint(params: {
   paymentId: string
   merchantId: string
@@ -999,13 +924,6 @@ export type DurableU2AIngressRead =
   | { outcome:'ABSENT' }
   | { outcome:'INDETERMINATE'; error:string }
 
-/**
- * F2-3 authoritative pre-A2U read.
- *
- * Only a payment_identity row with exact verified U2A evidence is exposed. A2U
- * movement fields must still be absent, so this authority can rebuild Redis
- * ingress state but can never prove or authorize merchant movement.
- */
 export async function getDurableU2AIngressAuthoritative(paymentId:string):Promise<DurableU2AIngressRead>{
   if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
     return{outcome:'INDETERMINATE',error:'Invalid durable U2A ingress payment identity'}
@@ -1022,7 +940,7 @@ export async function getDurableU2AIngressAuthoritative(paymentId:string):Promis
     if(rows.length===0)return{outcome:'ABSENT'}
     if(rows.length!==1)return{outcome:'INDETERMINATE',error:'Durable U2A ingress identity is ambiguous'}
     const r=rows[0] as Record<string,unknown>
-    // Once Stage1+ exists, the existing Settlement durable recovery lane is authoritative.
+
     if(r.stage!=='payment_identity')return{outcome:'ABSENT'}
     const text=(v:unknown)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
     const iso=(v:unknown):string|null=>{
@@ -1051,12 +969,6 @@ export type DurableU2AIngressOutstandingPage =
   | { outcome:'FOUND'; paymentIds:string[]; nextCursor:string|null; wrapped:boolean }
   | { outcome:'INDETERMINATE'; error:string }
 
-/**
- * F2-3 bounded PostgreSQL rotation over verified pre-A2U ingress rows. The
- * cursor is durable and independent of Redis, so loss of Redis keys/indexes
- * cannot make these rows undiscoverable and a large persistent head cannot
- * permanently starve later rows.
- */
 export async function listRecoverableU2AIngressCheckpointIds(limit:number):Promise<DurableU2AIngressOutstandingPage>{
   if(!Number.isSafeInteger(limit)||limit<1||limit>200)return{outcome:'INDETERMINATE',error:'Invalid U2A ingress recovery page limit'}
   try{
@@ -1109,15 +1021,6 @@ export type SettlementA2UCreateAttemptClaimResult =
   | { outcome: 'RECORDED'; attemptedAt: string }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/**
- * FIN-5: durable one-shot boundary immediately before the first Pi A2U create.
- *
- * Only payment identities born under the FIN-5 guard may claim this boundary.
- * Legacy rows deliberately remain unversioned and therefore fail closed: NULL
- * cannot prove that an older runtime never attempted Pi create. The claim is
- * monotonic and never replay-authorizes another POST; a crash after RECORDED
- * must reconcile/manual-review rather than create again.
- */
 export async function claimSettlementA2UCreateAttempt(params: {
   paymentId: string
   merchantUid: string
@@ -1180,15 +1083,11 @@ export async function claimSettlementA2UCreateAttempt(params: {
   }
 }
 
-// Identity creation is not a wallet submission. Recovery never resets FIN-5:
-// it schedules a bounded new identity attempt only while PostgreSQL proves no
-// identity/preparation/send/refund exists. The original immutable Stage1 writer
-// must select ONE canonical Pi ID before any signing or submission is possible.
-// Empty Pi lists and elapsed time alone never authorize movement.
 export async function recoverSettlementIdentityCreation(input: {
  paymentId:string;merchantUid:string;customerAmount:number;u2aIdentifier:string;u2aTxid:string;payerUid:string
 }, claim:boolean):Promise<{outcome:'READY'|'RECORDED'|'HELD';generation?:number}> {
  const held={outcome:'HELD' as const},policy=process.env.R36_SCOPED_POLICY_DIGEST
+ if(await piCreateCooldown()!=='READY')return held
  if(process.env.FLASHPAY_RECOVERY_SCOPE!=='admitted_new'||!policy||!/^[0-9a-f]{64}$/.test(policy)||
  Object.entries(input).some(([k,v])=>k!=='customerAmount'&&(typeof v!=='string'||!v||v!==v.trim()))||
  !/^[0-9a-f]{64}$/.test(input.u2aTxid)||!Number.isFinite(input.customerAmount)||input.customerAmount<=0)return held
@@ -1202,7 +1101,7 @@ export async function recoverSettlementIdentityCreation(input: {
     JOIN financial_wallet_activation w ON w.source_wallet=r.source_wallet AND w.network='Pi Testnet' AND w.state='enabled'
     WHERE s.payment_id=${input.paymentId} AND s.stage='payment_identity'
      AND s.a2u_create_guard_version='fin5_v1' AND s.a2u_create_attempted_at IS NOT NULL
-     AND s.a2u_create_attempted_at<=clock_timestamp()-interval '15 minutes'
+     AND s.a2u_create_attempted_at<=clock_timestamp()-interval '30 seconds'
      AND s.merchant_uid=${input.merchantUid} AND s.customer_amount=${input.customerAmount}
      AND s.customer_amount=s.merchant_amount+s.app_commission
      AND s.u2a_identifier=${input.u2aIdentifier} AND s.u2a_txid=${input.u2aTxid} AND s.payer_uid=${input.payerUid}
@@ -1213,7 +1112,7 @@ export async function recoverSettlementIdentityCreation(input: {
      AND s.pi_completed_at IS NULL AND s.db_finalized_at IS NULL AND s.certification_hold IS NULL
      AND r.policy_digest=${policy} AND r.retired_by_payment_id IS NULL AND r.payer_uid=s.payer_uid
      AND r.amount_stroops=s.customer_amount*10000000
-     AND p.enabled AND NOT p.revoked
+     AND p.enabled AND NOT p.revoked AND public.r36_policy_subject(p.worker_profile,r)
      AND extract(epoch FROM clock_timestamp()) BETWEEN p.valid_from AND least(p.valid_until,p.revocation_valid_until)-1
      AND NOT EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=s.payment_id)
      AND NOT EXISTS(SELECT 1 FROM financial_wallet_authorities WHERE owner_payment_id=s.payment_id)
@@ -1221,14 +1120,14 @@ export async function recoverSettlementIdentityCreation(input: {
      AND NOT EXISTS(SELECT 1 FROM transactions WHERE payment_id=s.u2a_identifier)
     FOR UPDATE OF s`
    if(rows.length!==1)return held
-   const previous=await tx`SELECT generation,attempted_at<=clock_timestamp()-interval '15 minutes' AS due FROM settlement_pi_identity_recovery WHERE payment_id=${input.paymentId} FOR UPDATE`
-   if(previous.length>1||(previous.length===1&&previous[0].due!==true))return held
+   const previous=await tx`SELECT generation,response_status,response_code,attempted_at<=clock_timestamp()-interval '30 seconds' AS due FROM settlement_pi_identity_recovery WHERE payment_id=${input.paymentId} FOR UPDATE`
+   if(previous.length>1||(previous.length===1&&(previous[0].due!==true||(previous[0].response_status!=null&&previous[0].response_status<500&&previous[0].response_status!==429&&previous[0].response_code!=='too_many_payments'))))return held
    if(!claim)return{outcome:'READY' as const}
    const written=await tx`INSERT INTO settlement_pi_identity_recovery(payment_id,generation,attempted_at)
     VALUES(${input.paymentId},1,clock_timestamp()) ON CONFLICT(payment_id) DO UPDATE
     SET generation=settlement_pi_identity_recovery.generation+1,attempted_at=clock_timestamp(),
      response_status=NULL,response_code=NULL,response_request_id=NULL,response_sha256=NULL,observed_at=NULL
-    WHERE settlement_pi_identity_recovery.attempted_at<=clock_timestamp()-interval '15 minutes'
+    WHERE settlement_pi_identity_recovery.attempted_at<=clock_timestamp()-interval '30 seconds'
     RETURNING generation`
    const generation=Number(written[0]?.generation)
    return written.length===1&&Number.isSafeInteger(generation)&&generation>0?{outcome:'RECORDED' as const,generation}:held
@@ -1249,13 +1148,6 @@ export type SettlementStage1CheckpointResult =
   | { outcome: 'RECORDED' | 'REPLAYED'; version: number }
   | { outcome: 'CONFLICT' | 'INDETERMINATE'; error: string }
 
-/**
- * N-FIN-10B: first monotonic durable writer.
- *
- * Scope is deliberately limited to the A2U-created boundary. It may create a
- * checkpoint or replay the exact same checkpoint; it can never replace durable
- * identity, regress/advance a later stage, or authorize blockchain movement.
- */
 export async function recordSettlementA2UCreatedCheckpoint(params: {
   paymentId: string
   merchantId: string
@@ -1293,8 +1185,7 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
 
     const rows = await client.begin(async (tx: any) => {
-      // DR-6/DR-7: serialize the durable XOR claim in PostgreSQL itself. This
-      // remains correct if the shared Redis operation lock expires or is lost.
+
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
       const hold = await tx`SELECT certification_hold,certification_hold_at,certification_hold_expires_at FROM settlement_checkpoints WHERE payment_id=${params.paymentId} FOR UPDATE`
       if(hold.length===1 && (hold[0]?.certification_hold!==null || hold[0]?.certification_hold_at!==null || hold[0]?.certification_hold_expires_at!==null)){
@@ -1307,9 +1198,6 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       if (opposite.length !== 1 || typeof opposite[0]?.active !== 'boolean') return [{ authorityIndeterminate: true }]
       if (opposite[0].active === true) return [{ authorityConflict: true }]
 
-      // F2-2: new flows may enter the movement-capable Settlement stage only after
-      // the exact U2A blockchain identity AND Pi developer completion are durable.
-      // Legacy pre-F2 rows are still handled by the fallback insert below.
       const advancedFromIdentity = await tx`
         UPDATE settlement_checkpoints
         SET version = version + 1,
@@ -1346,8 +1234,6 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       `
       if (advancedFromIdentity.length === 1) return [{ ...advancedFromIdentity[0], advancedFromIdentity: true }]
 
-      // Backward compatibility for a payment created before F2-1: if no durable
-      // payment_identity exists, retain the prior exact Stage1 insert behavior.
       const inserted = await tx`
         INSERT INTO settlement_checkpoints (
           payment_id, version, stage, merchant_id, merchant_uid,
@@ -1366,8 +1252,6 @@ export async function recordSettlementA2UCreatedCheckpoint(params: {
       `
       if (inserted.length === 1) return [{ ...inserted[0], inserted: true }]
 
-      // Replay is accepted only when every durable identity/accounting field is exact.
-      // A later stage is intentionally accepted only if it carries this exact Stage1 identity.
       return await tx`
         SELECT to_jsonb(settlement_checkpoints)->'financial_contract' AS financial_contract,version, stage, merchant_id, merchant_uid,
                customer_amount, merchant_amount, app_commission,
@@ -1539,7 +1423,6 @@ export type SettlementA2UStage1RetirementResult =
   | { outcome:'RETIRED'|'REPLAYED'; version:number }
   | { outcome:'CONFLICT'|'INDETERMINATE'; error:string }
 
-/** R4P: retire only an exact cancelled, unprepared, unmoved Stage1 under the same durable payment authority lock. */
 export async function retireCancelledSettlementA2UStage1(params:{paymentId:string;a2uPaymentId:string;piCancelledAt:string;horizonAbsenceProvenAt:string}):Promise<SettlementA2UStage1RetirementResult>{
   const exact=(v:string)=>typeof v==='string'&&v.trim()!==''&&v===v.trim()
   if(!exact(params.paymentId)||!exact(params.a2uPaymentId)||!Number.isFinite(Date.parse(params.piCancelledAt))||!Number.isFinite(Date.parse(params.horizonAbsenceProvenAt)))return{outcome:'CONFLICT',error:'R4P retirement input invalid'}
@@ -1572,19 +1455,10 @@ export type SettlementOutstandingPage =
   | { outcome:'FOUND'; paymentIds:string[]; nextCursor:string|null; wrapped:boolean }
   | { outcome:'INDETERMINATE'; error:string }
 
-/**
- * N-FIN-X1: bounded durable rotation over outstanding Settlement checkpoints.
- * Cursor authority is PostgreSQL, never Redis, so Redis loss cannot reset every
- * wake to the same first 200 rows. Advancement is serialized and wraps only
- * after the ordered outstanding set is exhausted.
- */
 export async function listOutstandingSettlementCheckpointIds(limit:number):Promise<SettlementOutstandingPage>{
   if(!Number.isSafeInteger(limit)||limit<1||limit>200)return{outcome:'INDETERMINATE',error:'Invalid Settlement outstanding page limit'}
   try{
-    // N-FIN-X1 production schema repair: initialize the already-defined durable
-    // settlement schema before the cursor is read. The helper is idempotent
-    // (CREATE/ALTER/INDEX IF NOT EXISTS + seed ON CONFLICT DO NOTHING).
-    // No financial state or payment status is mutated here.
+
     const schemaReady=await ensureSettlementCheckpointTable()
     if(!schemaReady)return{outcome:'INDETERMINATE',error:'Settlement durable schema unavailable'}
     const client=await getPostgresClient()
@@ -1634,14 +1508,6 @@ export type SettlementPaymentIdentityPresence =
   | { outcome:'ABSENT' }
   | { outcome:'INDETERMINATE'; error:string }
 
-/**
- * Pre-review public-read hardening: existence proof only.
- *
- * This read never authorizes Settlement/Refund movement and deliberately does
- * not derive a public payment status. It exists only so a missing Redis
- * projection cannot be mistaken for a globally absent payment. Callers must
- * use the dedicated Settlement/Refund durable authorities for status/finality.
- */
 export async function readSettlementPaymentIdentityPresence(paymentId:string):Promise<SettlementPaymentIdentityPresence>{
   if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
     return{outcome:'INDETERMINATE',error:'Invalid durable payment identity'}
@@ -1662,11 +1528,6 @@ export type SettlementRefundAuthorityCheck =
   | { outcome:'CLEAR'; settlementActive:boolean; refundActive:boolean }
   | { outcome:'CONFLICT'|'INDETERMINATE'; error:string }
 
-/**
- * N-FIN-X2 durable ownership read. This is deliberately descriptive: callers
- * decide which opposite authority must be absent for the operation they are
- * about to acquire/replay. Any unknown Refund status is treated as active.
- */
 export async function readSettlementRefundAuthority(paymentId:string):Promise<SettlementRefundAuthorityCheck>{
   if(typeof paymentId!=='string'||paymentId.trim()===''||paymentId!==paymentId.trim())
     return{outcome:'INDETERMINATE',error:'Invalid payment identity'}
@@ -1698,9 +1559,7 @@ export type SettlementDurableAdvanceResult =
 export async function withAtomicSettlementPreparedAuthority<T>(
   paymentId: string, work: (tx: any) => Promise<T>
 ): Promise<T | null> {
-  // The protected wallet claim and settlement checkpoint must share the
-  // same restricted transaction and payment-scoped advisory lock.
-  // Missing restricted credentials fail closed; never use DATABASE_URL here.
+
   return withR36RestrictedPaymentTransaction(paymentId, work)
 }
 
@@ -1791,8 +1650,6 @@ export async function recordSettlementPiCompletedCheckpoint(params:{paymentId:st
   }catch(e){console.error('[DB] Settlement Pi checkpoint uncertain:',e);return{outcome:'INDETERMINATE',error:'Settlement Pi checkpoint uncertain'}}
 }
 
-/** Convert a finite Pi fee to exact integer stroops without IEEE-754 multiplication noise.
- * Reject fractional stroops rather than silently rounding them into financial authority. */
 function commissionNetImpact(commission:number,fee:number):number {
  const c=commission===0?0:numberToExactPositiveStroops(commission),f=fee===0?0:numberToExactPositiveStroops(fee)
  if(c===null||f===null)throw Error('ACCOUNTING_COMMISSION_PRECISION')
@@ -1815,7 +1672,7 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
   try{
     const client=await getPostgresClient();if(!client)return{outcome:'INDETERMINATE',error:'PostgreSQL unavailable'}
     const rows=await client.begin(async(tx:any)=>{
-      // Serialize finality with accounting and refund authority on the same payment key.
+
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
       const a=await tx`UPDATE settlement_checkpoints SET version=version+1,stage='db_finalized',db_finalized_at=NOW(),updated_at=NOW()
         WHERE payment_id=${params.paymentId} AND stage='pi_completed' AND merchant_id=${params.merchantId} AND merchant_uid=${params.merchantUid}
@@ -1834,8 +1691,7 @@ export async function recordSettlementDbFinalizedCheckpoint(params:{
           AND r.horizon_fee_charged=${params.horizonFeeCharged} AND r.app_commission=${params.appCommission})
         RETURNING version,stage`
       if(a.length===1)return[{...a[0],advanced:true}]
-      // R36: replay evidence must be read under the SAME advisory lock and
-      // transaction snapshot as the checkpoint. No post-commit TOCTOU read.
+
       return await tx`SELECT to_jsonb(s)->'financial_contract' AS financial_contract,s.version,s.stage,s.merchant_id,s.merchant_uid,s.customer_amount,s.merchant_amount,s.app_commission,
         s.a2u_payment_id,s.a2u_txid,s.prepared_tx_hash,s.horizon_fee_stroops,s.pi_completed_at,s.db_finalized_at,
         EXISTS(SELECT 1 FROM receipts rc JOIN transactions t ON t.id=rc.transaction_id
@@ -1884,7 +1740,7 @@ export async function ensureRefundAccountingTable(): Promise<boolean> {
 }
 
 export async function initializeSchema() {
-  // R36: startup must never create or alter financial schema.
+
   const ready = await r36VerifyTables([
     ['transactions',['id','payment_id','merchant_id','amount','status']],
     ['receipts',['transaction_id','customer_amount','app_commission','merchant_amount','app_net_impact','settlement_status']],
@@ -1897,19 +1753,11 @@ export async function initializeSchema() {
   }
 }
 
-/**
- * Ensure receipts table has all required accounting columns before transaction
- * MUST fail explicitly if any column cannot be added - not wrapped in try-catch
- * This is called before client.begin() to guarantee schema readiness
- */
 export async function ensureReceiptsSchema() {
   const ready = await r36VerifyColumns('receipts', ['customer_amount','horizon_fee_charged','app_commission','merchant_amount','app_net_impact','settlement_status'])
   if (!ready) throw new Error('R36_RECEIPTS_SCHEMA_NOT_READY: offline migration required')
 }
 
-/**
- * Get transaction by ID
- */
 export async function getTransaction(transactionId: string): Promise<TransactionRow | null> {
   if (!process.env.DATABASE_URL) return null
 
@@ -1928,9 +1776,6 @@ export async function getTransaction(transactionId: string): Promise<Transaction
   }
 }
 
-/**
- * Get receipt by transaction ID (includes transaction reference and description)
- */
 export async function getReceipt(transactionId: string): Promise<ReceiptRow | null> {
   if (!process.env.DATABASE_URL) return null
 
@@ -1957,11 +1802,6 @@ export async function getReceipt(transactionId: string): Promise<ReceiptRow | nu
   }
 }
 
-/**
- * Get receipt by verified Pi U2A payment identifier.
- * This is an internal linkage helper only; the public/user-facing identifier
- * remains the FlashPay application payment ID.
- */
 export async function getReceiptByU2AIdentifier(u2aIdentifier: string): Promise<ReceiptRow | null> {
   if (!process.env.DATABASE_URL) return null
 
@@ -1988,9 +1828,6 @@ export async function getReceiptByU2AIdentifier(u2aIdentifier: string): Promise<
   }
 }
 
-/**
- * Get transactions by merchant with date range
- */
 export async function getTransactionsByMerchant(
   merchantId: string,
   options: {
@@ -2006,7 +1843,6 @@ export async function getTransactionsByMerchant(
     const limit = options.limit || 50
     const offset = options.offset || 0
 
-    // Build WHERE clause with date filters - qualify all with t
     let whereClause = 'WHERE t.merchant_id = $1'
     const params: any[] = [merchantId]
     let paramIndex = 2
@@ -2023,11 +1859,9 @@ export async function getTransactionsByMerchant(
       paramIndex++
     }
 
-    // Get total count
     const countQuery = `SELECT COUNT(*) as count FROM transactions t ${whereClause}`
     const countResult = await query(countQuery, params)
-    
-    // Validate and convert count
+
     let total = 0
     if (Array.isArray(countResult) && countResult.length > 0) {
       const row = countResult[0] as unknown
@@ -2040,7 +1874,6 @@ export async function getTransactionsByMerchant(
       }
     }
 
-    // Get paginated results with receipt LEFT JOIN
     const transactionsQuery = `
       SELECT 
         t.id,
@@ -2077,11 +1910,6 @@ export async function getTransactionsByMerchant(
   }
 }
 
-
-
-/**
- * Get merchant balance
- */
 export async function getMerchantBalance(merchantId: string): Promise<MerchantBalanceRow | null> {
   if (!process.env.DATABASE_URL) return null
 
@@ -2100,11 +1928,6 @@ export async function getMerchantBalance(merchantId: string): Promise<MerchantBa
   }
 }
 
-/**
- * Get merchant payment dashboard summary statistics
- * Read-only query: transactions LEFT JOIN receipts for settlement tracking
- * Returns 14 normalized numeric values or null on any error
- */
 export async function getMerchantPaymentDashboardSummary(
   merchantId: string
 ): Promise<{
@@ -2126,7 +1949,7 @@ export async function getMerchantPaymentDashboardSummary(
   if (!process.env.DATABASE_URL) return null
 
   try {
-    // Parameterized CTE: transactions LEFT JOIN receipts, use r.settlement_status as single source of truth
+
     const result = await query(
       `WITH ${financialPresentationIntegrityCTE}, payment_summary AS (
         SELECT 
@@ -2152,14 +1975,13 @@ export async function getMerchantPaymentDashboardSummary(
       [merchantId]
     )
 
-    // Require array length 1
     if (!Array.isArray(result) || result.length !== 1) {
       console.error('[DB] getMerchantPaymentDashboardSummary: query returned non-array or wrong length')
       return null
     }
 
     const candidate = result[0]
-    // Require row to be non-null object, not array
+
     if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
       console.error('[DB] getMerchantPaymentDashboardSummary: row is null, non-object, or array')
       return null
@@ -2167,7 +1989,6 @@ export async function getMerchantPaymentDashboardSummary(
 
     const row = candidate as Record<string, unknown>
 
-    // Normalize all 14 values via normalizePostgresNumeric
     try {
       return {
         total_requests: normalizePostgresNumeric(row.total_requests, 'total_requests'),
@@ -2195,10 +2016,6 @@ export async function getMerchantPaymentDashboardSummary(
   }
 }
 
-/**
- * Get merchant profile summary with transaction statistics
- * Read-only query: transactions LEFT JOIN receipts for settlement tracking
- */
 export async function getSettledPaymentIds(merchantId: string, piPaymentIds: string[]): Promise<Set<string>> {
   if (!process.env.DATABASE_URL || piPaymentIds.length === 0) return new Set()
 
@@ -2250,12 +2067,10 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
   if (!process.env.DATABASE_URL) return null
 
   try {
-    // Reuse the dashboard summary as the single raw accounting projection for
-    // Profile and Payment Dashboard so their all-time counts/amounts cannot drift.
+
     const dashboardSummary = await getMerchantPaymentDashboardSummary(merchantId)
     if (!dashboardSummary) return null
 
-    // Get latest transaction
     const latestResult = await query(
       `SELECT 
         t.id as transaction_id,
@@ -2282,7 +2097,7 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
     if (Array.isArray(latestResult) && latestResult.length > 0) {
       const latestRow = latestResult[0] as Record<string, unknown>
       if (typeof latestRow === 'object' && latestRow !== null) {
-        // Validate required string fields: transaction_id and reference
+
         if (
           typeof latestRow.transaction_id !== 'string' ||
           typeof latestRow.reference !== 'string'
@@ -2290,7 +2105,6 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
           return null
         }
 
-        // Validate and convert created_at: Date | string
         const createdAtValue = latestRow.created_at
         if (!(createdAtValue instanceof Date) && typeof createdAtValue !== 'string') {
           return null
@@ -2334,9 +2148,6 @@ export async function getMerchantProfileSummary(merchantId: string): Promise<{
   }
 }
 
-/**
- * Record a settlement transfer to merchant
- */
 export async function recordSettlementTransfer(
   merchantId: string,
   transactionId: string,
@@ -2365,10 +2176,6 @@ export async function recordSettlementTransfer(
   }
 }
 
-/**
- * Get pending settlements for a merchant
- * Validates and normalizes each row to SettlementRequest type
- */
 export async function getPendingSettlements(merchantId: string): Promise<SettlementRequest[]> {
   if (!process.env.DATABASE_URL) return []
 
@@ -2384,33 +2191,28 @@ export async function getPendingSettlements(merchantId: string): Promise<Settlem
 
     if (!result || result.length === 0) return []
 
-    // Validate and normalize each row
     const validated: SettlementRequest[] = []
     for (const row of result) {
       const unknown = row as unknown
-      
-      // Validate required string fields
+
       if (typeof unknown !== 'object' || unknown === null) continue
       const obj = unknown as Record<string, unknown>
-      
+
       if (typeof obj.id !== 'string') continue
       if (typeof obj.merchant_id !== 'string') continue
       if (typeof obj.transaction_id !== 'string') continue
       if (typeof obj.status !== 'string') continue
       if (typeof obj.created_at !== 'string') continue
-      
-      // Validate allowed status union
+
       const status = obj.status as string
       if (!['queued', 'processing', 'completed', 'failed'].includes(status)) continue
-      
-      // Convert amount with validation
+
       const amountNum = Number(obj.amount)
       if (!Number.isFinite(amountNum)) continue
-      
-      // Convert retry_count with validation
+
       const retryNum = Number(obj.retry_count ?? 0)
       if (!Number.isFinite(retryNum)) continue
-      
+
       validated.push({
         id: obj.id,
         merchant_id: obj.merchant_id,
@@ -2433,9 +2235,6 @@ export async function getPendingSettlements(merchantId: string): Promise<Settlem
   }
 }
 
-/**
- * Update settlement status and txid
- */
 export async function updateSettlementStatus(
   settlementId: string,
   status: 'queued' | 'processing' | 'completed' | 'failed',
@@ -2483,9 +2282,6 @@ export async function updateSettlementStatus(
   }
 }
 
-/**
- * Get settlement history for merchant
- */
 export async function getSettlementHistory(merchantId: string, limit: number = 50) {
   if (!process.env.DATABASE_URL) return []
 
@@ -2506,35 +2302,29 @@ export async function getSettlementHistory(merchantId: string, limit: number = 5
   }
 }
 
-/**
- * Record A2U transaction atomically after funds reach merchant wallet
- * Inserts transaction, receipt, updates merchant balance, and stores payment IDs/txids
- * Uses transaction-scoped client for true ACID guarantees - all or nothing
- */
 export async function recordA2UTransactionAtomic(params: {
-  paymentId: string          // Canonical internal payment ID; financial authority lock key
-  u2aIdentifier: string      // U2A identifier from Pi webhook (identifier field)
-  u2aTxid: string            // clientTxid from U2A flow
-  a2uIdentifier: string      // A2U identifier from A2U response
-  a2uTxid: string            // Horizon transaction ID from A2U flow
+  paymentId: string                                                                        
+  u2aIdentifier: string                                                          
+  u2aTxid: string                                       
+  a2uIdentifier: string                                         
+  a2uTxid: string                                                   
   merchantId: string
   merchantUid: string
-  customerAmount: number     // Verified U2A amount (what customer sent)
-  merchantAmount: number     // Actual amount in A2U blockchain transfer (what was sent on Stellar)
-  horizonFeeCharged: number  // Actual submitResult.fee_charged / 10_000_000 (in Pi)
-  appCommission: number      // REQUIRED: App commission (must be explicit, no fallback)
+  customerAmount: number                                                
+  merchantAmount: number                                                                           
+  horizonFeeCharged: number                                                         
+  appCommission: number                                                                 
   note?: string
   createdAt?: Date
 }): Promise<
   | { success: true; transactionId: string; transaction: { u2aIdentifier: string; u2aTxid: string; a2uIdentifier: string; a2uTxid: string; merchantId: string; merchantUid: string } }
   | { success: false; error: string }
 > {
-  // STRICT VALIDATION: Reject transaction if any required field is missing or invalid
-  
+
   if (typeof params.paymentId !== 'string' || !params.paymentId.trim() || params.paymentId !== params.paymentId.trim()) {
     throw new Error('Canonical paymentId is required for accounting authority')
   }
-  // Validate identifiers - must not be empty strings
+
   if (!params.u2aIdentifier || typeof params.u2aIdentifier !== 'string') {
     throw new Error('u2aIdentifier is required and must be a non-empty string')
   }
@@ -2547,21 +2337,18 @@ export async function recordA2UTransactionAtomic(params: {
   if (!params.a2uTxid || typeof params.a2uTxid !== 'string') {
     throw new Error('a2uTxid is required and must be a non-empty string')
   }
-  
-  // Validate merchant identifiers
+
   if (!params.merchantId || typeof params.merchantId !== 'string') {
     throw new Error('merchantId is required and must be a non-empty string')
   }
   if (!params.merchantUid || typeof params.merchantUid !== 'string') {
     throw new Error('merchantUid is required and must be a non-empty string')
   }
-  
-  // CRITICAL: Use actual amounts from blockchain, not calculated amounts
+
   const customerAmount = params.customerAmount
   const merchantAmount = params.merchantAmount
   const horizonFeeCharged = params.horizonFeeCharged
-  
-  // Validate all amounts are finite numbers (no NaN, Infinity, or null)
+
   if (typeof customerAmount !== 'number' || !Number.isFinite(customerAmount)) {
     throw new Error('customerAmount must be a finite number')
   }
@@ -2571,27 +2358,20 @@ export async function recordA2UTransactionAtomic(params: {
   if (typeof horizonFeeCharged !== 'number' || !Number.isFinite(horizonFeeCharged)) {
     throw new Error('horizonFeeCharged must be a finite number')
   }
-  
-  // CRITICAL: appCommission is REQUIRED, no fallback to 0
-  // Must be an explicit number (not undefined, not null, not || 0)
+
   if (typeof params.appCommission !== 'number' || !Number.isFinite(params.appCommission)) {
     throw new Error('appCommission is required and must be a finite number')
   }
   const appCommission = params.appCommission
 
-  // D: reject non-network precision before any SQL write. NUMERIC(18,8)
-  // must not round an invalid amount/fee and leave a committed partial result.
   if (numberToExactPositiveStroops(customerAmount) === null ||
       numberToExactPositiveStroops(merchantAmount) === null ||
       !Number.isSafeInteger(exactHorizonFeeStroops(horizonFeeCharged))) {
     throw new Error('Accounting amounts and fee must use exact network stroops')
   }
-  
-  // Calculate app net impact: what the app absorbs (may be negative if app bears fees)
-  // appNetImpact = customerAmount - merchantAmount - horizonFeeCharged
-  // The merchant is credited ONLY with merchantAmount (actual blockchain transfer)
+
   const appNetImpact = commissionNetImpact(appCommission,horizonFeeCharged)
-  
+
   console.log('[DB] Accounting breakdown:')
   console.log('[DB]   - customerAmount:', customerAmount, '(what customer sent)')
   console.log('[DB]   - merchantAmount:', merchantAmount, '(actual blockchain transfer to merchant)')
@@ -2618,7 +2398,6 @@ export async function recordA2UTransactionAtomic(params: {
     const reference = `PAY-${new Date().getFullYear()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`
     const createdAtDate = params.createdAt || new Date()
 
-    // Import postgres and create actual client from DATABASE_URL
     const postgres = await import('postgres')
     const sql = postgres.default
     if (!sql || !process.env.DATABASE_URL) {
@@ -2626,13 +2405,11 @@ export async function recordA2UTransactionAtomic(params: {
     }
 
     const client = sql(process.env.DATABASE_URL)
-    
+
     try {
-      // Use postgres transaction callback API (no manual BEGIN/COMMIT/ROLLBACK)
+
       const result = await client.begin(async (tx) => {
-        // G8-F3-R5: Authoritative accounting barrier. Same PostgreSQL transaction and
-        // same payment advisory lock as the settlement/refund authority writers.
-        // Never use Redis or a prior preflight as accounting authority.
+
         await tx`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentId}, 0))`
         const authority = await tx`
           SELECT to_jsonb(s)->'financial_contract' AS financial_contract,s.payment_id, s.stage, s.version, s.merchant_id, s.merchant_uid,
@@ -2664,12 +2441,11 @@ export async function recordA2UTransactionAtomic(params: {
           throw new Error('G8_ACCOUNTING_AUTHORITY_CONFLICT_OR_UNPROVEN_FINALITY')
         }
 
-        // 0. Check for existing transaction - if found, verify it matches identifiers and amounts (idempotency check)
         const existingTxCheck = await tx`
           SELECT id, merchant_id, merchant_uid, amount, status, currency FROM transactions WHERE payment_id = ${params.u2aIdentifier}
           LIMIT 1
         `
-        
+
         if (a.stage === 'db_finalized' && existingTxCheck.length !== 1) {
           throw new Error('Accounting evidence missing for finalized payment; SAFE_HOLD_NO_RESEND')
         }
@@ -2678,23 +2454,21 @@ export async function recordA2UTransactionAtomic(params: {
           if (existing.status !== 'completed' || existing.currency !== 'π') {
             throw new Error('Idempotency violation: transaction state or currency differs')
           }
-          // IDEMPOTENCY: Verify the existing transaction matches merchant identity and canonical amount
+
           if (existing.merchant_id !== params.merchantId) {
             throw new Error(`Idempotency violation: existing transaction has different merchantId: ${existing.merchant_id} vs ${params.merchantId}`)
           }
           if (existing.merchant_uid !== params.merchantUid) {
             throw new Error(`Idempotency violation: existing transaction has different merchantUid: ${existing.merchant_uid} vs ${params.merchantUid}`)
           }
-          // Normalize PostgreSQL NUMERIC to validated number for exact comparison
+
           const storedAmount = normalizePostgresNumeric(existing.amount, 'existing.amount')
           if (storedAmount !== merchantAmount) {
             throw new Error(`Idempotency violation: existing transaction has different amount: ${storedAmount} vs ${merchantAmount}`)
           }
           console.log('[DB] Idempotency check passed - existing transaction matches all fields, reusing transaction ID')
         }
-        
-        // 1. Upsert transaction with RETURNING id to get actual ID (new or existing)
-        // CRITICAL: Store merchantAmount (actual blockchain transfer), NOT customerAmount
+
         const txResult = await tx`
           INSERT INTO transactions (
             id, payment_id, merchant_id, merchant_uid, amount, currency, 
@@ -2705,14 +2479,9 @@ export async function recordA2UTransactionAtomic(params: {
           ON CONFLICT (payment_id) DO UPDATE SET completed_at = NOW()
           RETURNING id
         `
-        
-        // Get the actual transaction ID (new or existing)
+
         const actualTransactionId = txResult[0]?.id || transactionId
-        
-        // 2. Insert receipt idempotently with fee tracking using the actual transaction ID
-        // CRITICAL: Store customerAmount, merchantAmount (what was actually sent on blockchain), and horizonFeeCharged
-        // On conflict, verify amounts match (idempotency check)
-        // All required columns must exist before transaction begins
+
         const existingReceiptCheck = await tx`
           SELECT id, merchant_id, merchant_uid, amount, currency, txid, app_net_impact, settlement_status,
                  customer_amount, horizon_fee_charged, app_commission, merchant_amount,
@@ -2720,9 +2489,7 @@ export async function recordA2UTransactionAtomic(params: {
           FROM receipts
           WHERE transaction_id = ${actualTransactionId} LIMIT 1
         `
-        
-        // A committed transaction and its receipt were created atomically.
-        // Missing evidence is not a new credit opportunity; never repair it by guessing.
+
         if (existingTxCheck.length > 0 && existingReceiptCheck.length !== 1) {
           throw new Error('Accounting receipt missing; SAFE_HOLD_NO_RESEND')
         }
@@ -2735,15 +2502,12 @@ export async function recordA2UTransactionAtomic(params: {
               normalizePostgresNumeric(existing.app_net_impact, 'receipt.app_net_impact') !== appNetImpact) {
             throw new Error('Idempotency violation: receipt owner, state or accounting differs')
           }
-          // IDEMPOTENCY: Verify existing receipt matches every stored accounting amount exactly
-          // Normalize all PostgreSQL NUMERIC values to validated numbers for precise comparison
+
           const storedCustomerAmount = normalizePostgresNumeric(existing.customer_amount, 'existing.customer_amount')
           const storedMerchantAmount = normalizePostgresNumeric(existing.merchant_amount, 'existing.merchant_amount')
           const storedHorizonFeeCharged = normalizePostgresNumeric(existing.horizon_fee_charged, 'existing.horizon_fee_charged')
           const storedAppCommission = normalizePostgresNumeric(existing.app_commission, 'existing.app_commission')
 
-
-          // N-FIN-9: replay is valid only for the exact same durable financial identity.
           if (existing.u2a_identifier !== params.u2aIdentifier) {
             throw new Error('Idempotency violation: receipt has different u2aIdentifier')
           }
@@ -2756,7 +2520,7 @@ export async function recordA2UTransactionAtomic(params: {
           if (existing.a2u_txid !== params.a2uTxid) {
             throw new Error('Idempotency violation: receipt has different a2uTxid')
           }
-          
+
           if (storedCustomerAmount !== customerAmount) {
             throw new Error(`Idempotency violation: receipt has different customerAmount: ${storedCustomerAmount} vs ${customerAmount}`)
           }
@@ -2771,7 +2535,7 @@ export async function recordA2UTransactionAtomic(params: {
           }
           console.log('[DB] Idempotency check passed - existing receipt matches all financial fields exactly, no duplicate credit')
         }
-        
+
         const receiptResult = await tx`
           INSERT INTO receipts (
             transaction_id, merchant_id, merchant_uid, amount, currency, timestamp, txid,
@@ -2787,18 +2551,14 @@ export async function recordA2UTransactionAtomic(params: {
           RETURNING id
         `
 
-        // Only increment settled if receipt was newly inserted (RETURNING returned a row)
-        // This ensures merchantAmount credit is applied EXACTLY ONCE, never duplicated on retry
         const receiptWasInserted = receiptResult && receiptResult.length > 0
 
-        // 3. Update merchant balance - only increment if receipt is new
-        // CRITICAL: Credit ONLY the actual blockchain transfer amount (merchantAmount), NOT customerAmount
         if (receiptWasInserted) {
           console.log('[DB] Crediting merchant balance:')
           console.log('[DB]   - Merchant ID:', params.merchantId)
           console.log('[DB]   - Credit amount:', merchantAmount, '(actual blockchain transfer)')
           console.log('[DB]   - App absorbs:', appNetImpact)
-          
+
           await tx`
             INSERT INTO merchant_balances (merchant_id, settled, unsettled, last_updated)
             VALUES (${params.merchantId}, ${merchantAmount}, 0, NOW())
@@ -2806,21 +2566,17 @@ export async function recordA2UTransactionAtomic(params: {
             SET settled = merchant_balances.settled + EXCLUDED.settled,
                 last_updated = NOW()
           `
-          
+
           console.log('[DB] ✓ Merchant balance updated with actual blockchain transfer amount')
         } else {
           console.log('[DB] Receipt was not newly inserted (idempotent retry) - skipping duplicate merchant balance credit')
         }
-        
+
         return actualTransactionId
       })
-      
+
       console.log('[DB] A2U transaction committed successfully:', { transactionId: result })
-      
-      // Select the actual committed transaction row from database to verify and return its canonical identifiers
-      // This proves the transaction was actually persisted and returns evidence, not echoed params
-      // Join transactions to receipts to verify both are committed and retrieve accounting identifiers
-      // U2A/A2U identifiers and txids are stored in receipts table, not transactions
+
       const committedRowResult = await query(
         `SELECT 
            t.id, r.u2a_identifier, r.u2a_txid, r.a2u_identifier, r.a2u_txid, t.merchant_id, t.merchant_uid,
@@ -2830,16 +2586,14 @@ export async function recordA2UTransactionAtomic(params: {
          WHERE t.id = $1`,
         [result]
       )
-      
+
       if (!committedRowResult || committedRowResult.length !== 1) {
         console.error('[DB] CRITICAL: Committed transaction ID not found or multiple rows returned:', result)
         return { success: false, error: 'Transaction committed but not found in database - integrity error' }
       }
-      
+
       const committedRow = committedRowResult[0]
-      
-      // Type guard: validate row is non-null object with all required properties (strings and numerics)
-      // Using 'in' operator checks to narrow type and typeof checks to validate values
+
       if (
         typeof committedRow !== 'object' ||
         committedRow === null ||
@@ -2858,9 +2612,7 @@ export async function recordA2UTransactionAtomic(params: {
         console.error('[DB] CRITICAL: Committed row missing required fields:', committedRow)
         return { success: false, error: 'Transaction row validation failed - required fields missing' }
       }
-      
-      // After in-checks above, extract and validate each property type and value
-      // Use distinct names to avoid shadowing validated transaction variables
+
       const committedU2aIdentifier = committedRow['u2a_identifier']
       const committedU2aTxid = committedRow['u2a_txid']
       const committedA2uIdentifier = committedRow['a2u_identifier']
@@ -2872,8 +2624,7 @@ export async function recordA2UTransactionAtomic(params: {
       const committedAppCommissionRaw = committedRow['app_commission']
       const committedMerchantAmountRaw = committedRow['merchant_amount']
       const committedAppNetImpactRaw = committedRow['app_net_impact']
-      
-      // Validate transaction identifier strings are non-empty
+
       if (
         typeof committedU2aIdentifier !== 'string' || committedU2aIdentifier.trim().length === 0 ||
         typeof committedU2aTxid !== 'string' || committedU2aTxid.trim().length === 0 ||
@@ -2886,16 +2637,12 @@ export async function recordA2UTransactionAtomic(params: {
         return { success: false, error: 'Transaction row validation failed - identifier field types or values invalid' }
       }
 
-      // Validate accounting numeric fields are valid numbers (may be 0, null, or string representations from PostgreSQL)
       const normalizedCommittedCustomerAmount = normalizePostgresNumeric(committedCustomerAmountRaw, 'committedCustomerAmount')
       const normalizedCommittedHorizonFeeCharged = normalizePostgresNumeric(committedHorizonFeeChargedRaw, 'committedHorizonFeeCharged')
       const normalizedCommittedAppCommission = normalizePostgresNumeric(committedAppCommissionRaw, 'committedAppCommission')
       const normalizedCommittedMerchantAmount = normalizePostgresNumeric(committedMerchantAmountRaw, 'committedMerchantAmount')
       const normalizedCommittedAppNetImpact = normalizePostgresNumeric(committedAppNetImpactRaw, 'committedAppNetImpact')
 
-
-      // N-FIN-9: the authoritative post-COMMIT read must match the expected
-      // financial identity and accounting exactly; validity of field types alone is insufficient.
       if (
         committedU2aIdentifier !== params.u2aIdentifier ||
         committedU2aTxid !== params.u2aTxid ||
@@ -2917,7 +2664,7 @@ export async function recordA2UTransactionAtomic(params: {
         console.error('[DB] CRITICAL: Committed row accounting mismatch')
         return { success: false, error: 'Transaction row validation failed - committed accounting mismatch' }
       }
-      
+
       if (
         !Number.isFinite(normalizedCommittedCustomerAmount) ||
         !Number.isFinite(normalizedCommittedHorizonFeeCharged) ||
@@ -2934,7 +2681,7 @@ export async function recordA2UTransactionAtomic(params: {
         })
         return { success: false, error: 'Transaction row validation failed - accounting field types or values invalid' }
       }
-      
+
       return { 
         success: true, 
         transactionId: result,
@@ -2956,17 +2703,11 @@ export async function recordA2UTransactionAtomic(params: {
   }
 }
 
-
-/** B-D05-R2: read-only durable identity probe. Absence of a Redis projection
- * must not be represented as absence of a payment when PostgreSQL knows it.
- * This probe never synthesizes a financial status or writes any state.
- */
 export async function probeDurablePaymentIdentity(paymentId: string): Promise<'EXISTS' | 'ABSENT' | 'INDETERMINATE'> {
   try {
     const client = await getPostgresClient()
     if (!client) return 'INDETERMINATE'
-    // All three durable identity families must be readable before claiming ABSENT.
-    // A missing legacy table or any query failure is uncertainty, never a false 404.
+
     const rows = await client`
       SELECT (
         EXISTS (SELECT 1 FROM payment_create_intents WHERE payment_id = ${paymentId})
@@ -2981,17 +2722,14 @@ export async function probeDurablePaymentIdentity(paymentId: string): Promise<'E
   }
 }
 
-// FIN-100B: the create-intent and its financial identity commit atomically.
 export async function ensurePaymentCreateIntentTable(): Promise<boolean> {
-  // R36 ACL: schema changes belong to an offline migration, never the payment path.
+
   return r36VerifyColumns('payment_create_intents', [
     'merchant_uid', 'create_intent_id', 'payment_id', 'merchant_id',
     'customer_amount', 'note', 'created_at',
   ])
 }
 
-// B-D05-R1: read-only, verified replay classification before the new-flow limiter.
-// Never treat a missing/uncertain durable identity as proof of an existing payment.
 export async function classifyPaymentCreateIntentReplay(params: {
   createIntentId: string; merchantUid: string; merchantId: string; amount: number; note: string
 }): Promise<'NEW' | 'REPLAY' | 'CONFLICT' | 'INDETERMINATE'> {
@@ -3034,6 +2772,10 @@ export async function recordPaymentCreateIntentAtomic(params: {
     const client = await getPostgresClient()
     if (!client) return { outcome: 'INDETERMINATE', error: 'PostgreSQL unavailable' }
     return await client.begin(async (tx: any): Promise<PaymentCreateIntentResult> => {
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${'create:'+params.merchantUid+':'+params.createIntentId},0))`
+      const retired=await tx`SELECT 1 FROM payment_create_intent_retirements WHERE merchant_uid=${params.merchantUid} AND create_intent_id=${params.createIntentId}`
+      if(retired.length)return{outcome:'CONFLICT',error:'Create intent retired before creation'}
+
       const inserted = await tx`
         INSERT INTO payment_create_intents
           (merchant_uid, create_intent_id, payment_id, merchant_id, customer_amount, note, created_at)
@@ -3085,20 +2827,12 @@ export async function recordPaymentCreateIntentAtomic(params: {
   }
 }
 
-
-/** FIN100B B-D04: recovery of the initial Redis projection only. PostgreSQL
- * serializes this check against durable financial writers. No payment identity,
- * Pi mutation, or settlement/refund authority is created by this operation.
- * The callback performs the Redis NX+history write while the row is locked.
- */
 export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
   paymentId: string; merchantUid: string; merchantId: string; amount: number;
   note: string; createdAt: string; persist: () => Promise<'CREATED' | 'PRESENT' | 'CONFLICT'>
 }): Promise<'CREATED' | 'PRESENT' | 'CONFLICT' | 'INDETERMINATE'> {
   try {
-    // B-D04 clean-schema guard: recovery reads Refund authority below, so a
-    // clean database must establish that durable authority table before the
-    // evidence query. Failure remains fail-closed and performs no Redis write.
+
     if (!(await ensureRefundCheckpointTables())) return 'INDETERMINATE'
     const client = await getPostgresClient()
     if (!client) return 'INDETERMINATE'
@@ -3118,8 +2852,7 @@ export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
           !financialAmountsMatch(params.amount,Number(r.merchant_amount),Number(r.app_commission),r.financial_contract) ||
           r.stage !== 'payment_identity' || Number(r.version) !== 1 ||
           r.a2u_create_guard_version !== 'fin5_v1' || r.pi_mutation_guard_version !== 'fin7_v2') return 'CONFLICT' as const
-      // Stage=payment_identity alone is NOT sufficient: Pi start/approval,
-      // ingress, holds, or an external attempt may already exist.
+
       const mustBeEmpty = [
         'u2a_approval_identifier','u2a_approval_claimed_at','u2a_approval_guard_version',
         'u2a_approval_attempted_at','u2a_start_lease_token','u2a_start_lease_expires_at',
@@ -3130,11 +2863,7 @@ export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
         'certification_hold','certification_hold_at','certification_hold_expires_at',
       ]
       if (mustBeEmpty.some((field) => r[field] !== null && r[field] !== undefined)) return 'CONFLICT' as const
-      // FIN100B B-D05-R4: any append-only financial evidence invalidates an
-      // initial pending projection, even if the checkpoint still looks pristine.
-      // All evidence writers share this payment's durable advisory lock; query
-      // under the same transaction before the Redis persist callback executes.
-      // Missing evidence schema/query errors must fail closed (INDETERMINATE).
+
       const evidence = await tx`SELECT
         EXISTS(SELECT 1 FROM refund_checkpoints WHERE payment_id=${params.paymentId}) AS refund,
         EXISTS(SELECT 1 FROM financial_pi_mutation_attempts WHERE payment_id=${params.paymentId}) AS pi_attempt,
@@ -3153,9 +2882,6 @@ export async function recoverInitialPaymentProjectionUnderDurableGuard(params: {
   }
 }
 
-// Temporary trace observation only: runs AFTER the financial transaction ends.
-// PostgreSQL enforces read-only and a 1200ms statement deadline. No diagnostic
-// exception, query text or parameter values are logged or used for admission.
 export async function readPreparedTraceObservation(input: import('./financial-wallet-authority').WalletAuthorityClaim): Promise<unknown[]|null> {
  try {
   const client=await getPostgresClient();if(!client)return null
@@ -3196,8 +2922,6 @@ export async function readPreparedTraceObservation(input: import('./financial-wa
  }catch{return null}
 }
 
-/** Scheduling hint only: missing evidence waits before the atomic authority
- * transaction. Presence grants nothing; all current guards still run there. */
 export async function hasPreparedCertificate(input: import('./financial-wallet-authority').WalletAuthorityClaim):Promise<boolean|null> {
  try {
   const client=await getPostgresClient();if(!client)return null
@@ -3209,4 +2933,15 @@ export async function hasPreparedCertificate(input: import('./financial-wallet-a
   ) AS present`,[input.network,input.sourceWallet,input.paymentId,input.operationKind,input.operationId,input.preparedHash,input.preparedSequence,process.env.R36_SCOPED_POLICY_DIGEST??''])
   return rows.length===1&&typeof rows[0].present==='boolean'?rows[0].present:null
  }catch{return null}
+}
+
+export async function resolveUncreatedIntent(merchantUid:string,createIntentId:string):Promise<'RETIRED'|'EXISTS'|'UNAVAILABLE'>{
+ try{const db=await getPostgresClient();if(!db)return 'UNAVAILABLE'
+ return await db.begin(async(tx:any)=>{
+  await tx`SELECT pg_advisory_xact_lock(hashtextextended(${'create:'+merchantUid+':'+createIntentId},0))`
+  const rows=await tx`SELECT payment_id FROM payment_create_intents WHERE merchant_uid=${merchantUid} AND create_intent_id=${createIntentId}`
+  if(rows.length)return 'EXISTS' as const
+  await tx`INSERT INTO payment_create_intent_retirements(merchant_uid,create_intent_id) VALUES(${merchantUid},${createIntentId}) ON CONFLICT DO NOTHING`
+  return 'RETIRED' as const
+ })}catch{return 'UNAVAILABLE'}
 }

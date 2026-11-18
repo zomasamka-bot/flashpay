@@ -22,7 +22,6 @@ interface OperationResult<T> {
 }
 
 const RATE_LIMITS = {
-  CREATE_PAYMENT: { maxAttempts: 10, windowMs: 60000 },
   EXECUTE_PAYMENT: { maxAttempts: 5, windowMs: 60000 },
 }
 
@@ -35,12 +34,6 @@ export async function createPayment(amount: number, note: string, createIntentId
   CoreLogger.operation(operation, { amount, noteLength: note.length })
 
   try {
-    const rateLimitCheck = rateLimiter.check("create_payment", RATE_LIMITS.CREATE_PAYMENT)
-    if (!rateLimitCheck.allowed) {
-      const trackingId = errorTracker.logError(operation, "Rate limit exceeded.")
-      return { success: false, error: "Too many requests. Please wait a moment.", trackingId }
-    }
-
     const amountValidation = InputValidator.validateAmount(amount)
     if (!amountValidation.valid) {
       const trackingId = errorTracker.logError(operation, amountValidation.error!)
@@ -386,6 +379,7 @@ export function executePayment(
         }
       },
       async (error, isCancelled) => {
+        if(error==='PI_CONFIRMATION_PENDING'){onError(error);return}
         const status = isCancelled ? "cancelled" : "failed"
         const currentPayment = unifiedStore.getPayment(paymentId)
         const prevStatus = currentPayment?.status

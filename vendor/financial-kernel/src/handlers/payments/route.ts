@@ -15,7 +15,7 @@ import { isPaymentFinal } from "../../lib/payment-status"
 import { GET as readPaymentStatus } from "./[id]/route"
 import { verifyFinalPaymentPresentation } from "../../lib/payment-presentation-authority"
 import { readSystemState } from "../../lib/system-control"
-import { ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic, classifyPaymentCreateIntentReplay, recoverInitialPaymentProjectionUnderDurableGuard, probeDurablePaymentIdentity } from "../../lib/db"
+import { resolveUncreatedIntent, ensureSettlementCheckpointTable, ensurePaymentCreateIntentTable, recordPaymentCreateIntentAtomic, classifyPaymentCreateIntentReplay, recoverInitialPaymentProjectionUnderDurableGuard, probeDurablePaymentIdentity } from "../../lib/db"
 import { consumeFinancialRateLimit } from "../../lib/server-rate-limit"
 
 const PAYMENT_CREATE_LEASE_PREFIX = "flashpay:payment:create-active:"
@@ -142,9 +142,10 @@ export async function POST(request: NextRequest) {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-    })
+    }).catch(()=>null)
     
-    if (!verifyResponse.ok) {
+    if (!verifyResponse || !verifyResponse.ok) {
+      if(!verifyResponse || (verifyResponse.status!==401&&verifyResponse.status!==403))return NextResponse.json({error:"Pi identity verification temporarily unavailable",code:"PI_IDENTITY_UNAVAILABLE"},{status:503,headers:corsHeaders})
       return NextResponse.json(
         {
           error: "UID verification failed with Pi Network",
@@ -180,6 +181,12 @@ export async function POST(request: NextRequest) {
     // the rate limit for NEW flows. The final atomic record call below remains
     // authoritative against concurrent requests and mismatched payloads.
     // Uncertain reads fail closed; they never bypass the creation limiter.
+    if(body.action==='resolveUncreatedIntent'){
+      const limit=await consumeFinancialRateLimit({namespace:'payments-create',subject:verifiedMerchantUid,limit:30,windowSeconds:60})
+      if(limit.outcome!=='ALLOWED')return NextResponse.json({error:'Saved request resolution temporarily unavailable',code:limit.outcome==='LIMITED'?'RATE_LIMITED':'RATE_LIMIT_UNAVAILABLE'},{status:limit.outcome==='LIMITED'?429:503,headers:corsHeaders})
+      const resolution=await resolveUncreatedIntent(verifiedMerchantUid,createIntentId)
+      return NextResponse.json({resolution,intentId:createIntentId,merchantUid:verifiedMerchantUid},{status:resolution==='UNAVAILABLE'?503:200,headers:corsHeaders})
+    }
     const replayClassification = await classifyPaymentCreateIntentReplay({
       createIntentId, merchantUid: verifiedMerchantUid, merchantId: trustedMerchantId,
       amount, note: normalizedNote,
@@ -483,11 +490,10 @@ return 1
       
       return NextResponse.json(
         {
-          error: "Failed to store payment",
-          details: storageError instanceof Error ? storageError.message : String(storageError),
-          isKvConfigured: isKvConfigured,
+          error: "Payment saved; display preparation pending",
+          code: "PAYMENT_PROJECTION_PENDING",paymentId,
         },
-        { status: 500, headers: corsHeaders },
+        { status: 503, headers: corsHeaders },
       )
     }
 
@@ -514,8 +520,8 @@ return 1
   } catch (error) {
     console.error("[API] Error creating payment:", error)
     return NextResponse.json(
-      { error: "Failed to create payment", details: String(error) },
-      { status: 500, headers: corsHeaders },
+      { error: "Payment request outcome could not be confirmed", code: "PAYMENT_CREATE_UNCERTAIN" },
+      { status: 503, headers: corsHeaders },
     )
   } finally {
     if (createLeaseKey && createLeaseOwner) {

@@ -44,6 +44,20 @@ if (typeof window !== "undefined") {
   })
 }
 
+// Re-deliver the same callback identity; the server decides whether a Pi
+// transition is allowed. This helper never calls Pi.createPayment or submits funds.
+async function sendPiCallback(url:string,init:RequestInit):Promise<Response>{
+ for(let attempt=0;;attempt++){
+  let response:Response
+  try{response=await fetch(url,{...init,signal:AbortSignal.timeout(60000)})}
+  catch(error){if(attempt>=2)throw error;await new Promise(r=>setTimeout(r,attempt===0?1000:30000));continue}
+  let code='';if(response.status===409)try{code=String((await response.clone().json()).code||'')}catch{}
+  const retry=response.status===503||response.status===502||response.status===504||['U2A_COMPLETE_ATTEMPT_RECONCILE_ONLY','PI_APPROVAL_ATTEMPT_ALREADY_RECORDED'].includes(code)
+  if(!retry||attempt>=2)return response
+  await new Promise(r=>setTimeout(r,attempt===0?1000:30000))
+ }
+}
+
 export const createPiPayment = async (
   amount: number,
   memo: string,
@@ -113,7 +127,7 @@ export const createPiPayment = async (
 
         // Call approval endpoint - this marks payment as approved but does NOT complete it
         // The actual settlement happens in onReadyForServerCompletion
-        fetch(`${config.appUrl}/api/pi/approve`, {
+        sendPiCallback(`${config.appUrl}/api/pi/approve`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -129,11 +143,13 @@ export const createPiPayment = async (
               CoreLogger.info("Payment approved on backend", { piPaymentId, paymentId })
               onApproved?.()
             } else {
+              approvalSent=false
               CoreLogger.error("Approval failed", { status: response.status, piPaymentId })
               onError(`Approval failed: ${response.statusText}`, false)
             }
           })
           .catch((error) => {
+            approvalSent=false
             CoreLogger.error("Approval call failed", { error, piPaymentId })
             onError(`Approval request failed: ${error instanceof Error ? error.message : String(error)}`, false)
           })
@@ -152,7 +168,7 @@ export const createPiPayment = async (
         // Complete on backend and ONLY call onSuccess when status is settled_to_merchant
         // SECURITY: Send ONLY piPaymentId + txid (verified by Pi Wallet signature)
         // Server derives paymentId from canonical payment metadata
-        fetch(`${config.appUrl}/api/pi/complete`, {
+        sendPiCallback(`${config.appUrl}/api/pi/complete`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -160,6 +176,7 @@ export const createPiPayment = async (
           body: JSON.stringify({ piPaymentId, txid }),
         })
           .then(async (response) => {
+            if(!response.ok&&response.status>=500){completionSent=false;onError("PI_CONFIRMATION_PENDING",false);return}
             const completeData = await response.json()
 
             // CRITICAL: Processing states (paid_to_app, settlement_pending) are NOT errors
@@ -184,12 +201,14 @@ export const createPiPayment = async (
               // settlement_failed with a2uTxid and horizonSuccessFlag = terminal state requiring manual review
               onError("Settlement to merchant failed - requires manual review", false)
             } else {
-              onError("Unexpected payment status: " + completeData.status, false)
+              completionSent=false
+              onError(response.status===409?"PI_CONFIRMATION_PENDING":"Unexpected payment status: " + completeData.status, false)
             }
           })
           .catch((error) => {
+            completionSent=false
             CoreLogger.error("Failed to call /api/pi/complete", { error, piPaymentId, txid })
-            onError(`Backend completion failed: ${error instanceof Error ? error.message : String(error)}`, false)
+            onError("PI_CONFIRMATION_PENDING", false)
           })
       },
 

@@ -228,7 +228,7 @@ async function repopulateDurableU2AIngressWork():Promise<DurableU2AIngressRepopu
         if(completionAttempt.outcome!=='RECORDED'){result.piReadUncertain++;continue}
         try{
           await fetch(`https://api.minepi.com/v2/payments/${encodeURIComponent(ingress.u2aIdentifier)}/complete`,{
-            method:'POST',headers:{Authorization:`Key ${serverConfig.piApiKey}`,'Content-Type':'application/json'},body:JSON.stringify({txid:ingress.u2aTxid}),cache:'no-store',redirect:'error',
+            method:'POST',signal:AbortSignal.timeout(12000),headers:{Authorization:`Key ${serverConfig.piApiKey}`,'Content-Type':'application/json'},body:JSON.stringify({txid:ingress.u2aTxid}),cache:'no-store',redirect:'error',
           })
         }catch{}
         // A lost/non-2xx response is never treated as truth; refetch exact Pi state.
@@ -566,7 +566,7 @@ function scheduleTrustedTransientRequest(target: "drain" | "continuation-kick"):
         if (target === "continuation-kick") url.searchParams.set("mode", CONTINUATION_MODE)
         else url.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
         const response = await fetch(url.toString(), {
-          method: "POST",
+          method: "POST", signal: AbortSignal.timeout(12000),
           headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
           cache: "no-store",
           redirect: "error",

@@ -1,3 +1,4 @@
+import {claimPiFinalizationRecovery} from './pi-finalization-recovery'
 import { claimPreparedWalletAuthority, type WalletAuthorityClaim } from './financial-wallet-authority'
 import { randomUUID } from 'node:crypto'
 import { redis, isRedisConfigured } from './redis'
@@ -590,7 +591,9 @@ export async function claimRefundPiMutationAttempt(params: {
       const inserted=await tx`INSERT INTO financial_pi_mutation_attempts(mutation_kind,payment_id,external_payment_id,txid,refund_id)
         VALUES(${params.kind},${params.paymentId},${params.externalPaymentId},${params.txid??null},${params.refundId}) ON CONFLICT DO NOTHING RETURNING attempted_at`
       if(inserted.length===1)return[{recorded:true,attempted_at:inserted[0].attempted_at}]
-      return await tx`SELECT txid,refund_id FROM financial_pi_mutation_attempts WHERE mutation_kind=${params.kind} AND payment_id=${params.paymentId} AND external_payment_id=${params.externalPaymentId}`
+      const prior=await tx`SELECT txid,refund_id,attempted_at FROM financial_pi_mutation_attempts WHERE mutation_kind=${params.kind} AND payment_id=${params.paymentId} AND external_payment_id=${params.externalPaymentId}`
+      if(prior.length===1&&prior[0].refund_id===params.refundId&&prior[0].txid===(params.txid??null)&&params.kind==='refund_complete'&&await claimPiFinalizationRecovery(tx,params,prior[0].attempted_at))return[{recorded:true,attempted_at:new Date()}]
+      return prior
     })
     if(!Array.isArray(result)||result.length!==1)return{outcome:'CONFLICT',error:'Refund Pi mutation authority absent or ambiguous'}
     const r=result[0] as Record<string,unknown>

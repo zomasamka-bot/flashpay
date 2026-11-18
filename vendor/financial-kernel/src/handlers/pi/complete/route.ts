@@ -208,7 +208,7 @@ export async function POST(request: NextRequest) {
       // proof that Pi did not complete the payment, and must never trigger a blind POST retry.
       try {
         const completeResponse = await fetch(`https://api.minepi.com/v2/payments/${piPaymentId}/complete`, {
-          method: "POST",
+          method: "POST", signal: AbortSignal.timeout(12000),
           headers: {
             "Authorization": `Key ${serverConfig.piApiKey}`,
             "Content-Type": "application/json",
@@ -669,7 +669,7 @@ export async function POST(request: NextRequest) {
               else immediateDrainRequestUrl.searchParams.set("mode", IMMEDIATE_DRAIN_MODE)
               const immediateDrainUrl = immediateDrainRequestUrl.toString()
               const response = await fetch(immediateDrainUrl, {
-                method: "POST",
+                method: "POST", signal: AbortSignal.timeout(12000),
                 headers: { "x-flashpay-transient-recovery-secret": recoverySecret },
                 cache: "no-store",
                 redirect: "error",

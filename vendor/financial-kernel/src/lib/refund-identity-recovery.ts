@@ -22,7 +22,7 @@ export async function claimRefundIdentityRecovery(input:{refundId:string;payment
      AND c.status='pending' AND c.stage='wallet_submission_started' AND c.pi_mutation_guard_version='fin7_v2'
      AND c.refund_payment_id IS NULL AND c.refund_txid IS NULL
      AND (c.next_retry_at IS NULL OR c.next_retry_at AT TIME ZONE 'UTC'<=clock_timestamp())
-     AND a.attempted_at<=clock_timestamp()-interval '15 minutes'
+     AND a.attempted_at<=clock_timestamp()-interval '30 seconds'
      AND s.stage='payment_identity' AND s.payer_uid=c.payer_uid AND s.customer_amount=c.amount
      AND s.u2a_identifier IS NOT NULL AND s.u2a_txid IS NOT NULL AND s.u2a_verified_at IS NOT NULL AND s.u2a_completed_at IS NOT NULL
      AND public.r36_contract_valid(to_jsonb(s))
@@ -43,14 +43,14 @@ export async function claimRefundIdentityRecovery(input:{refundId:string;payment
      AND NOT EXISTS(SELECT 1 FROM refund_audit_events WHERE refund_id=c.refund_id AND event_type IN ('refund_blockchain_submission_started','refund_blockchain_submit_prepared','refund_blockchain_submit_authorized','refund_payment_identified'))
     FOR UPDATE OF c,s FOR SHARE OF r,p,w`
    if(rows.length!==1)return held
-   const previous=await tx`SELECT payment_id,generation,response_status,response_code,attempted_at<=clock_timestamp()-interval '15 minutes' AS due
+   const previous=await tx`SELECT payment_id,generation,response_status,response_code,attempted_at<=clock_timestamp()-interval '30 seconds' AS due
     FROM refund_pi_identity_recovery WHERE refund_id=${input.refundId} FOR UPDATE`
    if(previous.length>1||(previous.length===1&&(previous[0].payment_id!==input.paymentId||previous[0].due!==true||
     (previous[0].response_status!==null&&previous[0].response_status<500&&previous[0].response_status!==429&&previous[0].response_code!=='too_many_payments'))))return held
    const written=await tx`INSERT INTO refund_pi_identity_recovery(refund_id,payment_id,generation,attempted_at)
     VALUES(${input.refundId},${input.paymentId},1,clock_timestamp()) ON CONFLICT(refund_id) DO UPDATE
     SET generation=refund_pi_identity_recovery.generation+1,attempted_at=clock_timestamp(),response_status=NULL,response_code=NULL,response_request_id=NULL,response_sha256=NULL,observed_at=NULL
-    WHERE refund_pi_identity_recovery.payment_id=${input.paymentId} AND refund_pi_identity_recovery.attempted_at<=clock_timestamp()-interval '15 minutes'
+    WHERE refund_pi_identity_recovery.payment_id=${input.paymentId} AND refund_pi_identity_recovery.attempted_at<=clock_timestamp()-interval '30 seconds'
     RETURNING generation`
    const generation=Number(written[0]?.generation)
    return written.length===1&&Number.isSafeInteger(generation)&&generation>0?{outcome:'RECORDED' as const,generation}:held

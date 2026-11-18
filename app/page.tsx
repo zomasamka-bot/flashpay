@@ -307,15 +307,28 @@ export default function HomePage() {
       // This fresh button action may advance an acknowledged request. In-flight
       // and cross-tab epoch guards still prevent a queued click becoming a new one.
       const previous=await readSavedCreateIntent(merchant.uid || "",merchant.merchantId)
-      if(previous?.completed)await beginNextCustomerIntent()
+      if(previous&&!previous.completed&&(previous.amount!==amountNum||previous.note!==createNote)){
+        const response=await fetch('/api/payments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'resolveUncreatedIntent',accessToken:merchant.accessToken,createIntentId:previous.id,amount:previous.amount,note:previous.note})})
+        const resolved=await response.json()
+        if(!response.ok||resolved.intentId!==previous.id||resolved.merchantUid!==merchant.uid)throw Error('Saved request resolution unavailable; retry shortly')
+        if(resolved.resolution==='EXISTS'){
+          const restored=await createPayment(previous.amount,previous.note,previous.id)
+          if(!restored.success||!restored.data)throw Error(restored.error||'Saved request recovery pending')
+          setAmount(String(previous.amount));setDisplayAmount(String(previous.amount));setCreateNote(previous.note)
+          setCurrentPaymentId(restored.data.id);setShowQR(true)
+          await finishCreateIntent(previous.id);setSavedRequest(null);return
+        }
+        if(resolved.resolution!=='RETIRED')throw Error('Saved request remains unresolved')
+        await finishCreateIntent(previous.id);await beginNextCustomerIntent()
+      }else if(previous?.completed)await beginNextCustomerIntent()
       const intentId = await acquireCreateIntent(merchant.uid || "", merchant.merchantId, amountNum, createNote)
       const result = await createPayment(amountNum, createNote, intentId)
 
       if (result.success && result.data) {
-        await finishCreateIntent(intentId)
-        setSavedRequest(null)
         setCurrentPaymentId(result.data.id)
         setShowQR(true)
+        // Display a server-confirmed request even if local acknowledgement storage fails.
+        try{await finishCreateIntent(intentId);setSavedRequest(null)}catch{setSavedRequest(await readSavedCreateIntent(merchant.uid||"",merchant.merchantId).catch(()=>null))}
         hasShownSuccessRef.current = false
       } else {
         toast({

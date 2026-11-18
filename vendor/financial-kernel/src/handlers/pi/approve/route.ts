@@ -302,7 +302,7 @@ export async function POST(request: NextRequest) {
       const approvalResponse = await fetch(
         `https://api.minepi.com/v2/payments/${identifier}/approve`,
         {
-          method: "POST",
+          method: "POST", signal: AbortSignal.timeout(12000),
           headers: {
             Authorization: `Key ${serverConfig.piApiKey}`,
             "Content-Type": "application/json",
