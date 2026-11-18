@@ -29,6 +29,10 @@ const SHORT_RETRY_REASONS = new Set([
   "dr14_interruption",
   "intent_409",
   "intent_503",
+  // Provider/identity readiness is checked afresh before any create. Polling a
+  // held gate must not add a separate 15-minute hold after that gate clears.
+  "refund_provider_queue_held",
+  "refund_create_reconcile_only",
 ])
 
 function isIntentSuccess(result: unknown): boolean {

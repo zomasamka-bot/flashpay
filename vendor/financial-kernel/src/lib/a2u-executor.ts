@@ -200,7 +200,10 @@ export async function executeA2U(ctx: ExecutorContext): Promise<ExecutorResult> 
         }
       }
       const retryCount = ctx.payment.retryCount || 1
-      const exponentialBackoffMs = Math.min(30 * 60_000, 5_000 * 2 ** Math.max(0, retryCount - 1))
+      // Provider cooldown and identity scheduling already have shared/durable gates.
+      // A local wake is not another provider failure: do not compound its delay.
+      const scheduledWait = ["pi_create_cooldown", "identity_recovery_wait", "a2u_rate_limited_post_ambiguous", "too_many_payments"].includes(stageResult.errorCode ?? "")
+      const exponentialBackoffMs = scheduledWait ? 30_000 : Math.min(30 * 60_000, 5_000 * 2 ** Math.max(0, retryCount - 1))
       const nextRetryAt = retryable
         ? new Date(Date.now() + Math.max(exponentialBackoffMs, stageResult.retryAfterMs ?? 0)).toISOString()
         : undefined
