@@ -19,17 +19,9 @@ export async function GET(req:NextRequest){
   if(!validAddress(address)){
    const scopes=identity.credentials?.scopes
    if(Array.isArray(scopes)&&!scopes.includes('wallet_address'))return reply({error:'WALLET_PERMISSION_REQUIRED'},403)
-   // Read-only endpoint used by the official SDK's Wallet.getUserWalletAddresses.
-   // Never substitute a username, stored payment address or client-supplied owner.
-   const walletsResponse=await fetch('https://api.minepi.com/v2/user_wallets',{headers:{Authorization:auth},cache:'no-store',redirect:'error',signal:AbortSignal.timeout(8000)})
-   const wallets=await walletsResponse.json().catch(()=>null)
-   if(!walletsResponse.ok){
-    if(['missing_wallet_address_scope','missing_scope'].includes(wallets?.error))return reply({error:'WALLET_PERMISSION_REQUIRED'},403)
-    if(walletsResponse.status===401)return reply({error:'AUTH_REQUIRED'},401)
-    return reply({error:'WALLET_ADDRESS_UNAVAILABLE'},503)
-   }
-   const addresses=Array.isArray(wallets?.wallets)?Array.from(new Set(wallets.wallets.map((w:{public_key?:unknown})=>w?.public_key).filter(validAddress))):[]
-   return reply({uid:identity.uid,address:null,addresses,...network})
+   // /me may omit the address even with consent. Let Pi SDK resolve it in
+   // its authenticated Pi Browser context; do not guess its backend URL.
+   return reply({uid:identity.uid,address:null,...network})
   }
   const response=await fetch(`${financialHorizonOrigin()}/accounts/${address}`,{cache:"no-store",redirect:"error",signal:AbortSignal.timeout(8000)})
   // An unfunded or unavailable account is not silently presented as zero.

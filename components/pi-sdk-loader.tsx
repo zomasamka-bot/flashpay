@@ -14,6 +14,7 @@ declare global {
     Pi?: {
       init: (config: { version: string; sandbox: boolean }) => Promise<void>
       authenticate: (scopes: string[], onIncompletePaymentFound: (payment: any) => void) => Promise<any>
+      Wallet?: { getUserWalletAddresses: () => Promise<{ wallets: { publicKey: string }[] }> }
       createPayment: (
         paymentData: {
           amount: number
