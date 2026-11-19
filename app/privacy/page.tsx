@@ -57,7 +57,7 @@ export default function PrivacyPage() {
             <section aria-labelledby="section-7" className="space-y-3">
               <h2 id="section-7" className="text-xl font-semibold"><UIMessage text={"Contact and updates"} /></h2>
               <p className="text-muted-foreground leading-relaxed"><UIMessage text={"For privacy requests or service questions, contact Hazem Abo Ria at the email below. Changes to these pages are published with their revision date."} /></p>
-              <a className="inline-block break-all text-primary underline underline-offset-4" href="mailto:zoma-samka@yahoo.com"><bdi>zoma-samka@yahoo.com</bdi></a>
+              <a className="inline-block break-all text-primary underline underline-offset-4" href="mailto:zoma_samka@yahoo.com"><bdi>zoma_samka@yahoo.com</bdi></a>
             </section>
           <footer className="flex flex-wrap gap-5 border-t pt-5 text-primary underline underline-offset-4">
             <Link href="/terms"><UIMessage text={"Terms of Service"} /></Link>
