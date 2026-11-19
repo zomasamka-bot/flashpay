@@ -30,3 +30,9 @@ This repository contains application source. Production credentials and private 
 
 Developed by Hazem Abo Ria. FLASHpay is an independent application and is not an official Pi Network product.
 
+## License
+
+The FLASHpay-owned application and financial-kernel source in this repository are licensed under the [PiOS License](LICENSE), Copyright (C) 2026 Hazem Abo Ria. PiOS permits reuse and derivative works for the official Pi Network subject to its terms. Third-party dependencies retain their respective licenses. Credentials and private operational evidence are not part of this public source distribution.
+
+Pi, Pi Network and the Pi logo are trademarks of the Pi Community Company.
+
