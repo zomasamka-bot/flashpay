@@ -42,6 +42,9 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const [scriptLoaded, setScriptLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Public policy pages are readable without initializing the payment SDK.
+  const isPolicyRoute = pathname === "/privacy" || pathname === "/terms"
+
   // Routes that don't need Pi SDK initialization
   const skipSDKRoutes = ["/operations", "/control-panel", "/diagnostics"]
   const shouldSkipSDK = skipSDKRoutes.some((route) => pathname?.startsWith(route))
@@ -50,6 +53,7 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
   const isPayRoute = pathname?.startsWith("/pay/") || (typeof window !== "undefined" && /^#\/pay\/[0-9a-f-]{36}\/?(?:\?.*)?$/i.test(window.location.hash))
 
   useEffect(() => {
+    if (isPolicyRoute) return
     if (shouldSkipSDK) {
       setScriptLoaded(true)
       return
@@ -140,7 +144,9 @@ export function PiSDKLoader({ children }: { children: React.ReactNode }) {
       cancelled = true
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [isPayRoute, pathname, shouldSkipSDK])
+  }, [isPayRoute, isPolicyRoute, pathname, shouldSkipSDK])
+
+  if (isPolicyRoute) return <>{children}</>
 
   // For /pay/[id] routes, render children immediately but show error if SDK failed
   if (isPayRoute) {
