@@ -1,128 +1,70 @@
-
+import type { Metadata } from "next"
+import Link from "next/link"
 import { UIMessage } from "@/components/ui-message"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
-import { AlertCircle } from "lucide-react"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 
-export const metadata = {
-  title: "Terms of Service - FlashPay",
-  description: "FlashPay Terms of Service",
+export const metadata: Metadata = {
+  title: "Terms of Service - FLASHpay",
+  description: "FLASHpay Testnet terms of service",
+  alternates: { canonical: "https://flashpay-two.vercel.app/terms" },
 }
 
 export default function TermsPage() {
   return (
-    <div className="min-h-screen bg-background">
-      <div className="container max-w-3xl mx-auto px-4 py-8 md:py-12">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl md:text-3xl"> <UIMessage text={"Terms of Service"} /> </CardTitle>
-            <p className="text-sm text-muted-foreground"> <UIMessage text={"Last updated:"} /> {new Date().toLocaleDateString()}</p>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <Alert>
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle> <UIMessage text={"Testnet Only"} /> </AlertTitle>
-              <AlertDescription> <UIMessage text={"FlashPay operates exclusively on Pi Network Testnet for testing and development purposes only."} /> </AlertDescription>
-            </Alert>
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Agreement to Terms"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"By accessing and using FlashPay, you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the application."} /> </p>
+    <article className="container max-w-3xl mx-auto px-4 py-8 md:py-12 break-words">
+      <Card>
+        <CardHeader>
+          <h1 className="text-2xl md:text-3xl font-semibold"><UIMessage text={"Terms of Service"} /></h1>
+          <p className="text-sm text-muted-foreground"><UIMessage text={"Last updated:"} /> <time dateTime="2026-11-19">2026-11-19</time></p>
+          <p className="text-sm font-medium"><UIMessage text={"Testnet Only"} /></p>
+        </CardHeader>
+        <CardContent className="space-y-8">
+            <section aria-labelledby="section-0" className="space-y-3">
+              <h2 id="section-0" className="text-xl font-semibold"><UIMessage text={"Service and Testnet scope"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"FLASHpay, operated by Hazem Abo Ria, helps merchants create QR and shareable payment requests, including remote or delivery-order requests, and view sales, receipts and exports. This deployment uses Test-Pi on Pi Testnet only, not Mainnet Pi or fiat money. Test-Pi has no monetary value. Use it for testing, not payment for real goods. FLASHpay is independent of Pi Network and is not a delivery service."} /></p>
             </section>
 
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Testnet Environment"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed mb-3"> <UIMessage text={"FlashPay is provided for testing purposes only:"} /> </p>
-              <ul className="list-disc list-inside space-y-2 text-muted-foreground">
-                <li> <UIMessage text={"All payments are executed on Pi Network Testnet"} /> </li>
-                <li> <UIMessage text={"No real financial value is transferred"} /> </li>
-                <li> <UIMessage text={"Service may be interrupted or discontinued at any time"} /> </li>
-                <li> <UIMessage text={"Data may be reset without notice during testing phases"} /> </li>
-              </ul>
+            <section aria-labelledby="section-1" className="space-y-3">
+              <h2 id="section-1" className="text-xl font-semibold"><UIMessage text={"Payment and settlement"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"The customer confirms a payment in Pi Wallet. Test-Pi first enters the application's wallet; a separate verified transfer settles the eligible amount to the merchant. FLASHpay operates this application-wallet transfer flow: it is not merely a request generator. Customer payment confirmation alone does not prove merchant settlement. Check the verified final status and receipt. Identity, amount, network and transaction checks remain required before execution."} /></p>
             </section>
 
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"No Financial Guarantees"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed mb-3"> <UIMessage text={"FlashPay provides no warranties or guarantees regarding:"} /> </p>
-              <ul className="list-disc list-inside space-y-2 text-muted-foreground">
-                <li> <UIMessage text={"Service availability or uptime"} /> </li>
-                <li> <UIMessage text={"Transaction completion or accuracy"} /> </li>
-                <li> <UIMessage text={"Data persistence or backup"} /> </li>
-                <li> <UIMessage text={"Future functionality or features"} /> </li>
-              </ul>
-              <p className="text-muted-foreground leading-relaxed mt-3"> <UIMessage text={"The service is provided \"as is\" without warranty of any kind, express or implied."} /> </p>
+            <section aria-labelledby="section-2" className="space-y-3">
+              <h2 id="section-2" className="text-xl font-semibold"><UIMessage text={"Refunds and recovery"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"An eligible unsettled payment may be refunded automatically to the original payer after verification. The same payment cannot both settle and be refunded through this recovery flow. A completed merchant settlement is not automatically reversible or refundable through unfinished-payment recovery. A refund is a separate blockchain transfer, not deletion of the original transfer. Pending operations are resumed when their checks and services permit; do not create a replacement payment when the result is unclear."} /></p>
             </section>
 
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"User Responsibility"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed mb-3"> <UIMessage text={"As a user of FlashPay, you are responsible for:"} /> </p>
-              <ul className="list-disc list-inside space-y-2 text-muted-foreground">
-                <li> <UIMessage text={"Understanding that this is a testnet application"} /> </li>
-                <li> <UIMessage text={"Using the service in compliance with Pi Network policies"} /> </li>
-                <li> <UIMessage text={"Maintaining the security of your Pi Browser and wallet"} /> </li>
-                <li> <UIMessage text={"Any payment requests you create or process"} /> </li>
-                <li> <UIMessage text={"Verifying payment details before confirming transactions"} /> </li>
-              </ul>
+            <section aria-labelledby="section-3" className="space-y-3">
+              <h2 id="section-3" className="text-xl font-semibold"><UIMessage text={"Fees"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"The current Testnet application commission is zero. Network transaction fees are separate and may appear in Pi Wallet. Any future application commission must be disclosed before activation and charged to the merchant, not added as an application surcharge to the payer. Existing payment terms are not silently repriced. Mainnet activation and future fees require a separate announced change."} /></p>
             </section>
 
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"No Custody of Funds"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"FlashPay does not have custody of, control, or access to user funds. All payments are processed directly through the Pi Network protocol. FlashPay only facilitates the creation of payment requests and displays transaction status."} /> </p>
+            <section aria-labelledby="section-4" className="space-y-3">
+              <h2 id="section-4" className="text-xl font-semibold"><UIMessage text={"Accounts, wallets and merchant responsibility"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"Sign in through Pi and protect your account. Check the merchant, amount and network before approving a payment. A saved public address supports balance display only; its displayed balance is not proof of ownership or permission to spend. Merchants remain responsible for their products, delivery arrangements and customer disputes. Share payment links, receipts and exports only with intended recipients."} /></p>
             </section>
 
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Limitation of Liability"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"To the maximum extent permitted by law, FlashPay and its developers shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your use or inability to use the service, even if advised of the possibility of such damages."} /> </p>
+            <section aria-labelledby="section-5" className="space-y-3">
+              <h2 id="section-5" className="text-xl font-semibold"><UIMessage text={"Availability and safe use"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"Completion times depend on verification, Pi services, the blockchain and supporting infrastructure; no fixed completion time or uninterrupted availability is promised. Recovery does not override safeguards. Keep the payment reference and contact support if a status remains unclear. Do not impersonate others, misuse data, attempt unauthorized access, bypass safeguards or use the service unlawfully. Access may be restricted to protect users and the service."} /></p>
             </section>
 
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Service Modifications"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"We reserve the right to modify, suspend, or discontinue FlashPay at any time without notice. We may also update these terms as needed, with changes taking effect upon posting."} /> </p>
+            <section aria-labelledby="section-6" className="space-y-3">
+              <h2 id="section-6" className="text-xl font-semibold"><UIMessage text={"Changes, privacy and support"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"By using FLASHpay, you accept these terms. If you disagree, stop initiating new payments and contact us about unresolved transactions. The Privacy Policy explains data handling. Updates will be published here with a revision date; material changes to network, fees or data use should be reviewed before further use. Nothing here excludes rights or responsibilities that applicable law does not allow to be excluded. Contact Hazem Abo Ria using the email below; include the payment reference, never wallet secrets."} /></p>
             </section>
 
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Prohibited Uses"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed mb-3"> <UIMessage text={"You may not use FlashPay to:"} /> </p>
-              <ul className="list-disc list-inside space-y-2 text-muted-foreground">
-                <li> <UIMessage text={"Violate any laws or regulations"} /> </li>
-                <li> <UIMessage text={"Infringe on intellectual property rights"} /> </li>
-                <li> <UIMessage text={"Transmit malicious code or harmful content"} /> </li>
-                <li> <UIMessage text={"Attempt to gain unauthorized access to the system"} /> </li>
-                <li> <UIMessage text={"Interfere with other users' access to the service"} /> </li>
-              </ul>
+            <section aria-labelledby="section-7" className="space-y-3">
+              <h2 id="section-7" className="text-xl font-semibold"><UIMessage text={"Contact and updates"} /></h2>
+              <p className="text-muted-foreground leading-relaxed"><UIMessage text={"For privacy requests or service questions, contact Hazem Abo Ria at the email below. Changes to these pages are published with their revision date."} /></p>
+              <a className="inline-block break-all text-primary underline underline-offset-4" href="mailto:zoma-samka@yahoo.com"><bdi>zoma-samka@yahoo.com</bdi></a>
             </section>
-
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Governing Law"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"These terms shall be governed by and construed in accordance with applicable laws, without regard to conflict of law provisions."} /> </p>
-            </section>
-
-            <Separator />
-
-            <section>
-              <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Contact"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"For questions about these Terms of Service, please contact us through the Pi Network developer portal."} /> </p>
-            </section>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+          <footer className="flex flex-wrap gap-5 border-t pt-5 text-primary underline underline-offset-4">
+            <Link href="/privacy"><UIMessage text={"Privacy Policy"} /></Link>
+            <Link href="/"><UIMessage text={"Home"} /></Link>
+          </footer>
+        </CardContent>
+      </Card>
+    </article>
   )
 }
