@@ -22,8 +22,11 @@ export function DomainGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const [availability, setAvailability] = useState<Availability | null>(null)
+  const isPolicyRoute = pathname === "/privacy" || pathname === "/terms"
 
   const refreshAvailability = useCallback(async () => {
+    // Policy and contact information remain readable during maintenance.
+    if (isPolicyRoute) return
     if (isOperationalRoute(pathname)) {
       setAvailability({ available: true, message: "" })
       return
@@ -46,11 +49,13 @@ export function DomainGuard({ children }: { children: React.ReactNode }) {
 
     // Unknown control state fails closed for the user-facing application.
     setAvailability({ available: false, message: "Service temporarily unavailable. Please try again later." })
-  }, [pathname])
+  }, [pathname, isPolicyRoute])
 
   useEffect(() => {
     void refreshAvailability()
   }, [refreshAvailability])
+
+  if (isPolicyRoute) return <>{children}</>
 
   if (availability === null) {
     return (
