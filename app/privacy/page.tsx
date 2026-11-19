@@ -15,7 +15,7 @@ export default function PrivacyPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-2xl md:text-3xl"> <UIMessage text={"Privacy Policy"} /> </CardTitle>
-            <p className="text-sm text-muted-foreground"> <UIMessage text={"Last updated:"} /> {new Date().toLocaleDateString()}</p>
+            <p className="text-sm text-muted-foreground"> <UIMessage text={"Last updated:"} /> {"2026-11-19"}</p>
           </CardHeader>
           <CardContent className="space-y-6">
             <section>
@@ -41,9 +41,9 @@ export default function PrivacyPage() {
               <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Data Storage and Security"} /> </h2>
               <p className="text-muted-foreground leading-relaxed mb-3"> <UIMessage text={"We take your privacy seriously:"} /> </p>
               <ul className="list-disc list-inside space-y-2 text-muted-foreground">
-                <li> <UIMessage text={"No sensitive personal data is stored"} /> </li>
-                <li> <UIMessage text={"No financial information is retained"} /> </li>
-                <li> <UIMessage text={"Payment data is stored temporarily for transaction processing only"} /> </li>
+                <li> <UIMessage text={"FLASHpay stores Pi identity, public wallet addresses, payment details and operational records needed to provide the service."} /> </li>
+                <li> <UIMessage text={"Payment, refund and accounting records are retained for receipts, verification, protection of rights and recovery of unfinished operations."} /> </li>
+                <li> <UIMessage text={"Retention depends on the data category. Completing a transaction or signing out does not automatically erase its records."} /> </li>
                 <li> <UIMessage text={"All data is encrypted in transit"} /> </li>
               </ul>
             </section>
@@ -52,7 +52,7 @@ export default function PrivacyPage() {
 
             <section>
               <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Data Sharing"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"FlashPay does not share, sell, or distribute your data to third parties. Your information is used solely for processing payment requests within the Pi Network ecosystem."} /> </p>
+              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"Data needed to operate the service is processed by Pi Network and our hosting, database, queue and evidence service providers. FLASHpay does not sell personal data. Blockchain transaction data is public."} /> </p>
             </section>
 
             <Separator />
@@ -72,7 +72,7 @@ export default function PrivacyPage() {
 
             <section>
               <h2 className="text-xl font-semibold mb-3"> <UIMessage text={"Your Rights"} /> </h2>
-              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"You have the right to access, correct, or delete your payment request data at any time. Since we collect minimal information and operate on a testnet, most data is ephemeral and automatically cleared after transaction completion."} /> </p>
+              <p className="text-muted-foreground leading-relaxed"> <UIMessage text={"You may contact the developer to request access, correction or deletion. Records needed for accounting, security or unresolved operations may need to be retained. FLASHpay cannot erase data already recorded on the blockchain."} /> </p>
             </section>
 
             <Separator />
